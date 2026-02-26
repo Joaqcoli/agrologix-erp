@@ -1,11 +1,11 @@
 # AgroLogix ERP
 
-Logistics ERP system for a produce distribution company. Built with React + Vite (frontend) and Express + TypeScript (backend), using Drizzle ORM with PostgreSQL.
+Logistics ERP system for a produce distribution company (Vegetales Argentinos). Built with React + Vite (frontend) and Express + TypeScript (backend), using Drizzle ORM with PostgreSQL.
 
 ## Stack
 
 - **Frontend**: React 18, Vite, TypeScript, Tailwind CSS, shadcn/ui, TanStack Query, wouter
-- **Backend**: Express.js, TypeScript
+- **Backend**: Express.js, TypeScript, xlsx (XLSX export)
 - **Database**: PostgreSQL (Replit built-in, Neon-backed) via Drizzle ORM
 - **Auth**: Email/password with bcryptjs, express-session + connect-pg-simple
 - **ORM**: Drizzle ORM with drizzle-zod for schema validation
@@ -17,22 +17,28 @@ client/src/
   pages/
     login.tsx          - Login page
     dashboard.tsx      - Main dashboard with stats
-    customers.tsx      - Customer CRUD
+    customers.tsx      - Customer CRUD (includes has_iva toggle)
     products.tsx       - Product CRUD
+    load-list.tsx      - Consolidated load list by date
     purchases/
       index.tsx        - Purchase list
       new.tsx          - Create purchase form
       detail.tsx       - Purchase detail view
+    orders/
+      index.tsx        - Orders list with date filter, Resumen del Día, export
+      new.tsx          - Create order form (margin warnings, suggested price)
+      detail.tsx       - Order detail with Excel-like IVA-aware table
   components/
     app-sidebar.tsx    - Navigation sidebar
     layout.tsx         - Authenticated page layout wrapper
   lib/
     auth.tsx           - AuthContext + useAuth hook
     queryClient.ts     - TanStack Query client + apiRequest
+    pdf.ts             - jsPDF remito PDF generation
 
 server/
   index.ts             - Express entry point, session setup, startup
-  routes.ts            - All API endpoints
+  routes.ts            - All API endpoints (includes export endpoints)
   storage.ts           - Database access layer
   db.ts                - Drizzle + pg pool setup
   migrate.ts           - Manual SQL migrations
@@ -45,26 +51,50 @@ shared/
 ## Database Schema
 
 - **users**: id, name, email, password_hash, role (admin|operator), active
-- **customers**: id, name, rfc, email, phone, address, city, notes, active
+- **customers**: id, name, rfc, email, phone, address, city, notes, has_iva, active
 - **products**: id, name, sku, description, unit, average_cost, current_stock, active
-- **purchases**: id, folio, supplier_name, purchase_date, total, notes, created_by
+- **purchases**: id, folio (OC-00001), supplier_name, purchase_date, total, notes, created_by
 - **purchase_items**: id, purchase_id, product_id, quantity, unit, cost_per_unit, subtotal
 - **stock_movements**: id, product_id, movement_type (in|out), quantity, unit_cost, reference_id, reference_type
 - **product_cost_history**: id, product_id, average_cost, previous_cost, purchase_id
+- **orders**: id, folio (PV-00001), customer_id, order_date, status (draft|approved|cancelled), total, notes, low_margin_confirmed, remito_id, created_by, approved_by, approved_at
+- **order_items**: id, order_id, product_id, quantity, unit, price_per_unit, cost_per_unit, margin, subtotal
+- **price_history**: id, customer_id, product_id, price_per_unit, order_id (last sale price per customer+product)
+- **remitos**: id, folio (VA-000001), order_id, customer_id, issued_at
 
-## Features Implemented (MVP)
+## Features Implemented
 
 1. **Authentication** - Email/password login, bcrypt hashing, session management, roles (admin/operator)
 2. **SaaS Layout** - Sidebar with navigation, header with sidebar toggle, user info with role badge
-3. **Customers CRUD** - Create, view, edit, deactivate customers with search
+3. **Customers CRUD** - Create, view, edit, deactivate customers; has_iva flag for IVA billing
 4. **Products CRUD** - Create, view, edit, deactivate products with unit selection and search
-5. **Purchases Module**:
-   - Create purchase orders with auto-generated folio (OC-00001...)
-   - Add multiple items (product, quantity, unit, cost per unit)
-   - Real-time subtotal and grand total calculation
-   - Projected weighted average cost preview per item
-   - On save: creates stock movement (IN), recalculates weighted average cost, saves cost history
-6. **Product Cost History** - Saves average cost snapshots per purchase in `product_cost_history`
+5. **Purchases Module** - Create POs with weighted average cost, stock IN movements, cost history
+6. **Orders Module (full)**:
+   - Date-filtered list view with Resumen del Día (Total Vendido, Costo, Margen)
+   - Resumen uses IVA-adjusted totals for Con IVA customers
+   - Order cards show suggested next remito folio
+   - Create orders with multi-item entry, last-price suggestion, low-margin warning (<30%)
+   - Excel-like detail table: IVA-aware columns (appears only for Con IVA customers)
+     - IVA: 10.5% default, 21% for products containing "HUEVO" in name
+     - Columns: Cant, Unidad, Producto, P.Venta, Total, [Total+IVA], P.Compra, T.Compra, Diferencia, %
+   - Approve order: creates stock OUT movements, saves price_history, generates remito
+   - Remito PDF (jsPDF, A4, folio VA-000001 format)
+   - Export day XLSX (all orders for selected date, per-customer blocks, IVA-aware columns)
+   - Export single order XLSX
+7. **Load List** - Consolidated view of approved orders by date, summed by product+unit
+
+## IVA Rules
+
+- customers.has_iva = false → NO IVA columns in UI or exports
+- customers.has_iva = true → Show "Total + IVA" column
+  - Default rate: 10.5%
+  - Products with "HUEVO" in name: 21%
+
+## Margin Rules
+
+- Low margin threshold: 30%
+- At order creation: rows below 30% show warning, require checkbox confirmation
+- At order detail: rows below 30% highlighted red, "Margen bajo" badge, checkbox required before approving
 
 ## Seed Credentials
 
@@ -74,19 +104,27 @@ shared/
 ## API Endpoints
 
 - `POST /api/auth/login` — login
-- `POST /api/auth/logout` — logout
 - `GET /api/auth/me` — current user
 - `GET/POST /api/customers` — list/create customers
-- `PATCH/DELETE /api/customers/:id` — update/deactivate customer
+- `PATCH/DELETE /api/customers/:id` — update/deactivate
 - `GET/POST /api/products` — list/create products
-- `PATCH/DELETE /api/products/:id` — update/deactivate product
-- `GET /api/purchases` — list purchases
-- `GET /api/purchases/next-folio` — generate next folio
-- `GET /api/purchases/:id` — purchase detail with items
-- `POST /api/purchases` — create purchase (also creates stock movements and cost history)
-- `GET /api/stock-movements` — list stock movements
+- `PATCH/DELETE /api/products/:id` — update/deactivate
+- `GET /api/purchases` — list
+- `GET /api/purchases/next-folio` — next OC folio
+- `GET /api/purchases/:id` — detail with items
+- `POST /api/purchases` — create (stock IN + cost history)
+- `GET /api/stock-movements` — list movements
+- `GET /api/price-history/:customerId/:productId` — last sale price
+- `GET /api/orders?date=YYYY-MM-DD` — list orders (filtered by date)
+- `GET /api/orders/next-folio` — next PV folio
+- `GET /api/orders/:id` — detail with customer + items + products
+- `POST /api/orders` — create order
+- `POST /api/orders/:id/approve` — approve (stock OUT + price history + remito)
+- `GET /api/orders/export?date=YYYY-MM-DD` — export day as XLSX
+- `GET /api/orders/:id/export` — export single order as XLSX
+- `GET /api/remitos/:id` — remito detail
+- `GET /api/load-list?date=YYYY-MM-DD` — consolidated load list
 
 ## Running
 
-The app runs via `npm run dev` which starts both the Express server and Vite dev server on port 5000.
-Migrations and seeding run automatically on startup.
+`npm run dev` starts both Express and Vite on port 5000. Migrations run automatically on startup.

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -15,7 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Pencil, Trash2, Users, Building2, Phone, Mail } from "lucide-react";
 import type { Customer } from "@shared/schema";
 
-const EMPTY: Partial<Customer> = { name: "", rfc: "", email: "", phone: "", address: "", city: "", notes: "" };
+const EMPTY: Partial<Customer> = { name: "", rfc: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false };
 
 export default function CustomersPage() {
   const { toast } = useToast();
@@ -118,9 +119,12 @@ export default function CustomersPage() {
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-foreground truncate" title={c.name}>{c.name}</p>
                         {c.rfc && <p className="text-xs text-muted-foreground mt-0.5">{c.rfc}</p>}
-                        {c.city && (
-                          <Badge variant="secondary" className="mt-1.5 text-[10px]">{c.city}</Badge>
-                        )}
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {c.city && <Badge variant="secondary" className="text-[10px]">{c.city}</Badge>}
+                          <Badge variant={c.hasIva ? "default" : "outline"} className="text-[10px]">
+                            {c.hasIva ? "Con IVA" : "Sin IVA"}
+                          </Badge>
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
@@ -188,6 +192,19 @@ export default function CustomersPage() {
               <div className="sm:col-span-2 space-y-1.5">
                 <Label htmlFor="notes">Notas</Label>
                 <Textarea id="notes" value={form.notes ?? ""} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2} data-testid="input-customer-notes" />
+              </div>
+              <div className="sm:col-span-2">
+                <div className="flex items-center justify-between rounded-md border border-border p-3">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Factura con IVA</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Aplica IVA en pedidos y exportaciones (10.5% general, 21% para huevo)</p>
+                  </div>
+                  <Switch
+                    checked={!!form.hasIva}
+                    onCheckedChange={(v) => setForm({ ...form, hasIva: v })}
+                    data-testid="switch-has-iva"
+                  />
+                </div>
               </div>
             </div>
             <DialogFooter className="gap-2">

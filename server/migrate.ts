@@ -44,9 +44,14 @@ export async function runMigrations() {
       address TEXT,
       city TEXT,
       notes TEXT,
+      has_iva BOOLEAN NOT NULL DEFAULT false,
       active BOOLEAN NOT NULL DEFAULT true,
       created_at TIMESTAMP NOT NULL DEFAULT now()
     )
+  `);
+
+  await db.execute(sql`
+    ALTER TABLE customers ADD COLUMN IF NOT EXISTS has_iva BOOLEAN NOT NULL DEFAULT false
   `);
 
   await db.execute(sql`

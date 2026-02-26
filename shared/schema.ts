@@ -27,6 +27,7 @@ export const customers = pgTable("customers", {
   address: text("address"),
   city: text("city"),
   notes: text("notes"),
+  hasIva: boolean("has_iva").notNull().default(false),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });

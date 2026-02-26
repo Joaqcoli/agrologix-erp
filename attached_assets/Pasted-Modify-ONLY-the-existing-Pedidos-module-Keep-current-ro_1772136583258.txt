@@ -1,0 +1,110 @@
+Modify ONLY the existing “Pedidos” module. Keep current routes and do not break Purchases/Stock/Remitos.
+
+REFERENCE FORMAT:
+Use the uploaded Excel “11. NOVIEMBRE 2025 (1) (1).xlsx” as the source of truth for:
+- the daily layout (blocks per customer)
+- the “customer with IVA” vs “customer without IVA” column layout
+- the export structure
+
+CRITICAL VAT DISPLAY RULE (IMPORTANT):
+Customers can be “Con IVA” or “Sin IVA”.
+- If customer is SIN IVA: the UI and exports MUST NOT show any IVA columns at all (the IVA column disappears, not 0%).
+- If customer is CON IVA: show “Total + IVA” like the Excel. IVA rates:
+  - Default: 10.5%
+  - BUT products containing “HUEVO” in name use 21%
+Do NOT hardcode a single IVA for all.
+
+If the customer record does not already include this flag, add minimal additive field:
+- customers.has_iva (boolean)
+No other schema changes unless strictly necessary.
+
+========================================================
+A) /orders  (Pedidos) -> ADD “Vista por Fecha”
+========================================================
+
+1) Add a Date Picker / Dropdown at top of /orders (default today).
+2) Filter the orders list by the selected date.
+
+3) Keep the list visually similar to the current cards (like image 1), BUT enhance each card:
+   - Replace the emphasis on “PV-0000X” with showing:
+     “Remito sugerido: VA-0000XX”
+   - Suggested remito number logic:
+     For each customer, find the latest remito number already generated for that customer (in remitos table or existing data),
+     then +1. If none exists, start at VA-000001 (or follow system start).
+   - Still show customer name, status, and total.
+
+4) Add a “Resumen del Día” section above the list containing:
+   - Total vendido del día (sum across all orders)
+     If customer has IVA: use “Total + IVA” for that customer (like Excel)
+     If customer has no IVA: use “Total” (net) for that customer (like Excel)
+   - Total costo del día (sum of avg_cost * qty for all items, based on weighted avg cost logic)
+   - Margen total del día ($ and %):
+       margen$ = Total vendido del día - Total costo del día
+       margen% = margen$ / Total vendido del día
+   - Count of customers/orders included
+This must match the way the Excel summarizes blocks.
+
+5) Add a button on /orders:
+   - “Exportar día” that exports ALL customers for the selected date to a file like the Excel:
+     - Prefer XLSX (one sheet per day OR one sheet with customer blocks), but CSV is acceptable as a first version.
+     - The exported data must replicate the same column logic:
+       For customers CON IVA: include columns Total + IVA (and compute accordingly).
+       For customers SIN IVA: do NOT include Total + IVA columns anywhere in that customer section.
+     - Each customer must appear as its own block/section like the Excel.
+
+========================================================
+B) /orders/:id  (Order detail) -> KEEP header, REPLACE bottom table to match Excel for that customer
+========================================================
+
+Keep the top “Información General” section (like image 2), but show:
+- Customer name
+- Date
+- Total (net)
+And if customer has IVA:
+- also show Total + IVA
+If customer has NO IVA:
+- do NOT show any IVA values/labels.
+
+Replace the bottom “Productos” section with an Excel-like table for this customer/order only.
+
+For customer CON IVA, table columns must match the Excel:
+- Cantidad
+- Unidad
+- Producto
+- Precio (venta)
+- Total
+- Total + IVA  (computed with product IVA rules: default 10.5, HUEVO 21)
+- (Compra side) Precio (compra/costo unitario avg)
+- Total (compra)
+- Diferencia = (Total + IVA) - (Total compra)
+- % = Diferencia / (Total + IVA)
+
+For customer SIN IVA, table columns must match Excel “sin IVA” layout (IVA columns disappear):
+- Cantidad
+- Unidad
+- Producto
+- Precio (venta)
+- Total
+- (Compra side) Precio (compra/costo unitario avg)
+- Total (compra)
+- Diferencia = Total - (Total compra)
+- % = Diferencia / Total
+
+Margin alert:
+- If % margin < 30% for a row => highlight row soft red + badge “Margen bajo”
+- If any row < 30%, require a checkbox confirmation before allowing remito generation.
+
+Actions on the detail page:
+- “Generar Remito” (must reuse existing remito generation flow)
+- “Remito PDF” download (keep existing)
+- “Exportar este cliente” (export this order in the same column layout rules)
+
+Idempotency:
+- Generating remito twice for same order must NOT duplicate; return existing remito.
+
+========================================================
+C) STOP RULE
+========================================================
+
+Implement (A) and (B) only. Do NOT build WhatsApp AI parsing yet.
+After finishing, show me the updated /orders (date view + resumen + export) and /orders/:id (excel-like table) so I can confirm.

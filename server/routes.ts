@@ -1,8 +1,22 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
+import * as XLSX from "xlsx";
 import { storage } from "./storage";
 import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema } from "@shared/schema";
 import { z } from "zod";
+
+// IVA helpers
+const IVA_HUEVO = 0.21;
+const IVA_DEFAULT = 0.105;
+function getIvaRate(productName: string): number {
+  return productName.toUpperCase().includes("HUEVO") ? IVA_HUEVO : IVA_DEFAULT;
+}
+function calcTotalConIva(items: { productName: string; pricePerUnit: string; quantity: string }[]): number {
+  return items.reduce((sum, item) => {
+    const subtotal = parseFloat(item.quantity) * parseFloat(item.pricePerUnit);
+    return sum + subtotal * (1 + getIvaRate(item.productName));
+  }, 0);
+}
 
 declare module "express-session" {
   interface SessionData {
@@ -153,7 +167,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Orders ────────────────────────────────────────────────────────────────
   app.get("/api/orders", requireAuth, async (req, res) => {
-    return res.json(await storage.getOrders());
+    const date = req.query.date as string | undefined;
+    return res.json(await storage.getOrders(date));
   });
 
   app.get("/api/orders/next-folio", requireAuth, async (req, res) => {
@@ -187,6 +202,126 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const order = await storage.approveOrder(Number(req.params.id), req.session.userId!);
       return res.json(order);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  // ─── Export ────────────────────────────────────────────────────────────────
+  // Export all orders for a date as XLSX
+  app.get("/api/orders/export", requireAuth, async (req, res) => {
+    const date = req.query.date as string;
+    if (!date) return res.status(400).json({ error: "date required" });
+
+    const dayOrders = await storage.getOrders(date);
+    const wb = XLSX.utils.book_new();
+    const rows: any[][] = [];
+
+    const headerBase = ["Cantidad", "Unidad", "Producto", "Precio Venta", "Total"];
+    const headerIva = [...headerBase, "Total + IVA"];
+    const headerPurchase = ["Precio Compra", "Total Compra", "Diferencia", "%"];
+
+    for (const order of dayOrders) {
+      const fullOrder = await storage.getOrder(order.id);
+      if (!fullOrder) continue;
+      const hasIva = fullOrder.customer.hasIva;
+
+      rows.push([`Cliente: ${fullOrder.customer.name}`, hasIva ? "Con IVA" : "Sin IVA", `Pedido: ${order.folio}`, `Fecha: ${new Date(fullOrder.orderDate).toLocaleDateString("es-MX")}`]);
+      rows.push(hasIva ? [...headerIva, ...headerPurchase] : [...headerBase, ...headerPurchase]);
+
+      for (const item of fullOrder.items) {
+        const qty = parseFloat(item.quantity as string);
+        const price = parseFloat(item.pricePerUnit as string);
+        const cost = parseFloat(item.costPerUnit as string);
+        const subtotal = qty * price;
+        const ivaRate = getIvaRate(item.product.name);
+        const totalConIva = subtotal * (1 + ivaRate);
+        const totalCompra = qty * cost;
+        const base = hasIva ? subtotal * (1 + ivaRate) : subtotal;
+        const diff = base - totalCompra;
+        const pct = base > 0 ? ((diff / base) * 100).toFixed(1) + "%" : "0%";
+
+        if (hasIva) {
+          rows.push([qty, item.unit, item.product.name, price, subtotal, totalConIva, cost, totalCompra, diff, pct]);
+        } else {
+          rows.push([qty, item.unit, item.product.name, price, subtotal, cost, totalCompra, diff, pct]);
+        }
+      }
+
+      const total = parseFloat(fullOrder.total);
+      if (hasIva) {
+        const totalIva = calcTotalConIva(fullOrder.items.map(i => ({ productName: i.product.name, pricePerUnit: i.pricePerUnit as string, quantity: i.quantity as string })));
+        const totalCosto = fullOrder.items.reduce((s, i) => s + parseFloat(i.quantity as string) * parseFloat(i.costPerUnit as string), 0);
+        const diff = totalIva - totalCosto;
+        rows.push(["TOTAL", "", "", "", total, totalIva, "", totalCosto, diff, totalIva > 0 ? ((diff / totalIva) * 100).toFixed(1) + "%" : "0%"]);
+      } else {
+        const totalCosto = fullOrder.items.reduce((s, i) => s + parseFloat(i.quantity as string) * parseFloat(i.costPerUnit as string), 0);
+        const diff = total - totalCosto;
+        rows.push(["TOTAL", "", "", "", total, "", totalCosto, diff, total > 0 ? ((diff / total) * 100).toFixed(1) + "%" : "0%"]);
+      }
+      rows.push([]); // blank separator
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, `Pedidos ${date}`);
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Disposition", `attachment; filename="Pedidos-${date}.xlsx"`);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    return res.send(buf);
+  });
+
+  // Export single order
+  app.get("/api/orders/:id/export", requireAuth, async (req, res) => {
+    const fullOrder = await storage.getOrder(Number(req.params.id));
+    if (!fullOrder) return res.status(404).json({ error: "Not found" });
+
+    const hasIva = fullOrder.customer.hasIva;
+    const wb = XLSX.utils.book_new();
+    const rows: any[][] = [];
+
+    rows.push([`Cliente: ${fullOrder.customer.name}`, hasIva ? "Con IVA" : "Sin IVA"]);
+    rows.push([`Pedido: ${fullOrder.folio}`, `Fecha: ${new Date(fullOrder.orderDate).toLocaleDateString("es-MX")}`]);
+    rows.push([]);
+
+    const headerBase = ["Cantidad", "Unidad", "Producto", "Precio Venta", "Total"];
+    const headerIva = [...headerBase, "Total + IVA"];
+    const headerPurchase = ["Precio Compra", "Total Compra", "Diferencia", "%"];
+    rows.push(hasIva ? [...headerIva, ...headerPurchase] : [...headerBase, ...headerPurchase]);
+
+    for (const item of fullOrder.items) {
+      const qty = parseFloat(item.quantity as string);
+      const price = parseFloat(item.pricePerUnit as string);
+      const cost = parseFloat(item.costPerUnit as string);
+      const subtotal = qty * price;
+      const ivaRate = getIvaRate(item.product.name);
+      const totalConIva = subtotal * (1 + ivaRate);
+      const totalCompra = qty * cost;
+      const base = hasIva ? totalConIva : subtotal;
+      const diff = base - totalCompra;
+      const pct = base > 0 ? ((diff / base) * 100).toFixed(1) + "%" : "0%";
+
+      if (hasIva) {
+        rows.push([qty, item.unit, item.product.name, price, subtotal, totalConIva, cost, totalCompra, diff, pct]);
+      } else {
+        rows.push([qty, item.unit, item.product.name, price, subtotal, cost, totalCompra, diff, pct]);
+      }
+    }
+
+    const total = parseFloat(fullOrder.total);
+    if (hasIva) {
+      const totalIva = calcTotalConIva(fullOrder.items.map(i => ({ productName: i.product.name, pricePerUnit: i.pricePerUnit as string, quantity: i.quantity as string })));
+      const totalCosto = fullOrder.items.reduce((s, i) => s + parseFloat(i.quantity as string) * parseFloat(i.costPerUnit as string), 0);
+      const diff = totalIva - totalCosto;
+      rows.push(["TOTAL", "", "", "", total, totalIva, "", totalCosto, diff, totalIva > 0 ? ((diff / totalIva) * 100).toFixed(1) + "%" : "0%"]);
+    } else {
+      const totalCosto = fullOrder.items.reduce((s, i) => s + parseFloat(i.quantity as string) * parseFloat(i.costPerUnit as string), 0);
+      const diff = total - totalCosto;
+      rows.push(["TOTAL", "", "", "", total, "", totalCosto, diff, total > 0 ? ((diff / total) * 100).toFixed(1) + "%" : "0%"]);
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, fullOrder.customer.name.slice(0, 31));
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Disposition", `attachment; filename="Pedido-${fullOrder.folio}.xlsx"`);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    return res.send(buf);
   });
 
   // ─── Remitos ───────────────────────────────────────────────────────────────

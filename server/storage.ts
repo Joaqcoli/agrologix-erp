@@ -221,13 +221,62 @@ export const storage = {
   },
 
   // ─── Orders ───────────────────────────────────────────────────────────────
-  async getOrders(): Promise<(Order & { customerName: string; itemCount: number })[]> {
-    const all = await db.select().from(orders).orderBy(desc(orders.createdAt));
+  async getNextRemitoFolio(): Promise<string> {
+    const [last] = await db.select().from(remitos).orderBy(desc(remitos.id)).limit(1);
+    const num = last ? parseInt(last.folio.replace("VA-", "")) + 1 : 1;
+    return `VA-${String(num).padStart(6, "0")}`;
+  },
+
+  async getOrders(date?: string): Promise<(Order & { customerName: string; itemCount: number; suggestedRemito: string; hasIva: boolean; totalConIva: string; totalCosto: string })[]> {
+    let all: Order[];
+    if (date) {
+      const startOfDay = new Date(date);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(date);
+      endOfDay.setHours(23, 59, 59, 999);
+      all = await db
+        .select()
+        .from(orders)
+        .where(drizzleSql`${orders.orderDate} >= ${startOfDay} AND ${orders.orderDate} <= ${endOfDay}`)
+        .orderBy(desc(orders.createdAt));
+    } else {
+      all = await db.select().from(orders).orderBy(desc(orders.createdAt));
+    }
+    // Compute the global next remito folio base (we'll increment per order in draft status for display)
+    const [lastRemito] = await db.select().from(remitos).orderBy(desc(remitos.id)).limit(1);
+    let nextRemitoNum = lastRemito ? parseInt(lastRemito.folio.replace("VA-", "")) + 1 : 1;
+
+    // Pre-fetch all products for IVA calculation
+    const allProducts = await db.select().from(products);
+    const products_cache = new Map(allProducts.map((p) => [p.id, p]));
+
     const result = await Promise.all(
       all.map(async (o) => {
         const [customer] = await db.select().from(customers).where(eq(customers.id, o.customerId)).limit(1);
         const items = await db.select().from(orderItems).where(eq(orderItems.orderId, o.id));
-        return { ...o, customerName: customer?.name ?? "", itemCount: items.length };
+        // For approved orders with a remito, show existing remito folio
+        let suggestedRemito = `VA-${String(nextRemitoNum).padStart(6, "0")}`;
+        if (o.remitoId) {
+          const [existingRemito] = await db.select().from(remitos).where(eq(remitos.id, o.remitoId)).limit(1);
+          suggestedRemito = existingRemito?.folio ?? suggestedRemito;
+        } else if (o.status === "draft") {
+          nextRemitoNum++;
+        }
+        // Compute IVA total and costo for this order
+        let totalConIva = parseFloat(o.total as string);
+        let totalCosto = 0;
+        if (customer?.hasIva) {
+          totalConIva = items.reduce((sum, item) => {
+            const subtotal = parseFloat(item.quantity as string) * parseFloat(item.pricePerUnit as string);
+            const productRow = products_cache.get(item.productId);
+            const productName = productRow?.name ?? "";
+            const rate = productName.toUpperCase().includes("HUEVO") ? 0.21 : 0.105;
+            return sum + subtotal * (1 + rate);
+          }, 0);
+        }
+        totalCosto = items.reduce((sum, item) => sum + parseFloat(item.quantity as string) * parseFloat(item.costPerUnit as string), 0);
+
+        return { ...o, customerName: customer?.name ?? "", itemCount: items.length, suggestedRemito, hasIva: customer?.hasIva ?? false, totalConIva: totalConIva.toFixed(2), totalCosto: totalCosto.toFixed(2) };
       })
     );
     return result;
