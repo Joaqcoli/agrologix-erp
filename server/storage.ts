@@ -2,12 +2,13 @@ import { db } from "./db";
 import {
   users, customers, products, purchases, purchaseItems,
   stockMovements, productCostHistory, orders, orderItems,
-  priceHistory, remitos,
+  priceHistory, remitos, productUnits,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
-  type OrderItem, type PriceHistory, type Remito,
+  type OrderItem, type PriceHistory, type Remito, type ProductUnit,
 } from "@shared/schema";
 import { eq, desc, asc, and, sql as drizzleSql } from "drizzle-orm";
+import { dbEnumToCanonical } from "@shared/units";
 import bcrypt from "bcryptjs";
 
 export const storage = {
@@ -169,16 +170,38 @@ export const storage = {
       const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
       if (!product) continue;
 
-      const currentStock = parseFloat(product.currentStock as string);
-      const currentAvgCost = parseFloat(product.averageCost as string);
       const newQty = parseFloat(item.quantity);
       const newCost = parseFloat(item.costPerUnit);
 
-      const newAvgCost =
-        currentStock + newQty === 0
-          ? newCost
-          : (currentStock * currentAvgCost + newQty * newCost) / (currentStock + newQty);
+      // ── Update product_units (canonical unit stock + cost) ──────────────────
+      const canonicalUnit = dbEnumToCanonical(item.unit);
+      const [existingPU] = await db.select().from(productUnits)
+        .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+        .limit(1);
 
+      if (existingPU) {
+        const puStock = parseFloat(existingPU.stockQty as string);
+        const puCost = parseFloat(existingPU.avgCost as string);
+        const newPuAvgCost = puStock + newQty === 0 ? newCost : (puStock * puCost + newQty * newCost) / (puStock + newQty);
+        await db.update(productUnits).set({
+          stockQty: (puStock + newQty).toFixed(4),
+          avgCost: newPuAvgCost.toFixed(4),
+        }).where(eq(productUnits.id, existingPU.id));
+      } else {
+        await db.insert(productUnits).values({
+          productId: item.productId,
+          unit: canonicalUnit,
+          avgCost: newCost.toFixed(4),
+          stockQty: newQty.toFixed(4),
+        });
+      }
+
+      // ── Keep products.currentStock + averageCost for backward compat ─────────
+      const currentStock = parseFloat(product.currentStock as string);
+      const currentAvgCost = parseFloat(product.averageCost as string);
+      const newAvgCost = currentStock + newQty === 0
+        ? newCost
+        : (currentStock * currentAvgCost + newQty * newCost) / (currentStock + newQty);
       const previousCost = product.averageCost as string;
 
       await db.update(products).set({
@@ -294,9 +317,9 @@ export const storage = {
     const items = await db.select().from(orderItems).where(eq(orderItems.orderId, id));
     const itemsWithProducts = await Promise.all(
       items.map(async (item) => {
-        if (!item.productId) return { ...item, product: null };
+        if (!item.productId) return { ...item, product: null as unknown as Product };
         const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
-        return { ...item, product: product ?? null };
+        return { ...item, product: (product ?? null) as unknown as Product };
       })
     );
     return { ...o, customer, items: itemsWithProducts };
@@ -346,8 +369,18 @@ export const storage = {
       data.items.map(async (item) => {
         let costPerUnit = "0";
         if (item.productId) {
-          const [p] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
-          if (p) costPerUnit = p.averageCost as string;
+          // Try product_units first (canonical unit lookup)
+          const canonicalUnit = dbEnumToCanonical(item.unit ?? "kg");
+          const [pu] = await db.select().from(productUnits)
+            .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+            .limit(1);
+          if (pu) {
+            costPerUnit = pu.avgCost as string;
+          } else {
+            // Fallback to products.averageCost
+            const [p] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
+            if (p) costPerUnit = p.averageCost as string;
+          }
         }
         return {
           orderId: order.id,
@@ -529,7 +562,17 @@ export const storage = {
           notes: `Pedido ${order.folio}`,
         });
 
-        // Update product stock
+        // Deduct from product_units (canonical unit)
+        const canonicalUnit = dbEnumToCanonical(item.unit as string);
+        const [pu] = await db.select().from(productUnits)
+          .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+          .limit(1);
+        if (pu) {
+          const puStock = parseFloat(pu.stockQty as string) - qty;
+          await db.update(productUnits).set({ stockQty: puStock.toFixed(4) }).where(eq(productUnits.id, pu.id));
+        }
+
+        // Update product.currentStock for backward compat
         const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
         if (product) {
           const newStock = parseFloat(product.currentStock as string) - qty;
@@ -606,6 +649,7 @@ export const storage = {
     for (const oid of orderIds) {
       const items = await db.select().from(orderItems).where(eq(orderItems.orderId, oid));
       for (const item of items) {
+        if (!item.productId) continue;
         const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
         if (product) allItems.push({ ...item, product });
       }
@@ -621,7 +665,7 @@ export const storage = {
         existing.orderCount += 1;
       } else {
         map.set(key, {
-          productId: item.productId,
+          productId: item.productId as number,
           productName: item.product.name,
           sku: item.product.sku,
           unit: item.unit,
@@ -632,5 +676,98 @@ export const storage = {
     }
 
     return Array.from(map.values()).sort((a, b) => a.productName.localeCompare(b.productName));
+  },
+
+  // ─── Product Units ──────────────────────────────────────────────────────────
+
+  async getProductUnits(productId: number): Promise<ProductUnit[]> {
+    return db.select().from(productUnits)
+      .where(and(eq(productUnits.productId, productId), eq(productUnits.isActive, true)));
+  },
+
+  async getAllProductUnitsStock(): Promise<(ProductUnit & { product: Product })[]> {
+    const all = await db.select().from(productUnits);
+    const result = await Promise.all(
+      all.map(async (pu) => {
+        const [product] = await db.select().from(products).where(eq(products.id, pu.productId)).limit(1);
+        return { ...pu, product };
+      })
+    );
+    return result.filter((r) => r.product?.active);
+  },
+
+  async upsertProductUnit(productId: number, unit: string): Promise<ProductUnit> {
+    const [existing] = await db.select().from(productUnits)
+      .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, unit)))
+      .limit(1);
+    if (existing) {
+      // Just activate it if inactive
+      if (!existing.isActive) {
+        const [updated] = await db.update(productUnits).set({ isActive: true }).where(eq(productUnits.id, existing.id)).returning();
+        return updated;
+      }
+      return existing;
+    }
+    const [created] = await db.insert(productUnits).values({ productId, unit, avgCost: "0", stockQty: "0" }).returning();
+    return created;
+  },
+
+  async deactivateProductUnit(id: number): Promise<void> {
+    await db.update(productUnits).set({ isActive: false }).where(eq(productUnits.id, id));
+  },
+
+  async adjustProductUnitStock(id: number, adjustment: number, _notes?: string): Promise<ProductUnit> {
+    const [pu] = await db.select().from(productUnits).where(eq(productUnits.id, id)).limit(1);
+    if (!pu) throw new Error("ProductUnit not found");
+    const newStock = parseFloat(pu.stockQty as string) + adjustment;
+    const [updated] = await db.update(productUnits).set({ stockQty: newStock.toFixed(4) }).where(eq(productUnits.id, id)).returning();
+    // Sync products.currentStock (pick first active unit as primary)
+    const allPu = await db.select().from(productUnits).where(eq(productUnits.productId, pu.productId));
+    const totalStock = allPu.reduce((s, p) => s + parseFloat(p.stockQty as string), 0);
+    await db.update(products).set({ currentStock: totalStock.toFixed(4) }).where(eq(products.id, pu.productId));
+    return updated;
+  },
+
+  async bulkImportProducts(lines: { name: string; unit: string }[]): Promise<{ created: number; unitsAdded: number }> {
+    let created = 0;
+    let unitsAdded = 0;
+    for (const line of lines) {
+      const normalizedName = line.name.trim().toUpperCase();
+      const canonicalUnit = line.unit.trim().toUpperCase(); // already canonicalized by caller
+
+      // Find or create product
+      let [existing] = await db.select().from(products)
+        .where(drizzleSql`upper(${products.name}) = ${normalizedName}`)
+        .limit(1);
+
+      if (!existing) {
+        // Generate a safe SKU from name
+        const sku = normalizedName.replace(/\s+/g, "-").slice(0, 20) + "-" + Date.now().toString().slice(-4);
+        const [created_] = await db.insert(products).values({
+          name: normalizedName,
+          sku,
+          description: "",
+          unit: "kg" as any, // default enum value for backward compat
+          averageCost: "0",
+          currentStock: "0",
+        }).returning();
+        existing = created_;
+        created++;
+      }
+
+      // Upsert product_unit
+      const [existingPu] = await db.select().from(productUnits)
+        .where(and(eq(productUnits.productId, existing.id), eq(productUnits.unit, canonicalUnit)))
+        .limit(1);
+
+      if (!existingPu) {
+        await db.insert(productUnits).values({ productId: existing.id, unit: canonicalUnit, avgCost: "0", stockQty: "0" });
+        unitsAdded++;
+      } else if (!existingPu.isActive) {
+        await db.update(productUnits).set({ isActive: true }).where(eq(productUnits.id, existingPu.id));
+        unitsAdded++;
+      }
+    }
+    return { created, unitsAdded };
   },
 };

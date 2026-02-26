@@ -18,7 +18,7 @@ client/src/
     login.tsx          - Login page
     dashboard.tsx      - Main dashboard with stats
     customers.tsx      - Customer CRUD (includes has_iva toggle)
-    products.tsx       - Product CRUD
+    products.tsx       - Product CRUD + Stock tab (2-tab: Products cards / Stock table with adjust)
     load-list.tsx      - Consolidated load list by date
     purchases/
       index.tsx        - Purchase list
@@ -62,6 +62,7 @@ shared/
 - **order_items**: id, order_id, product_id (nullable), quantity, unit, price_per_unit (nullable), cost_per_unit, margin, subtotal, raw_product_name, parse_status
 - **price_history**: id, customer_id, product_id, price_per_unit, order_id (last sale price per customer+product)
 - **remitos**: id, folio (VA-000001), order_id, customer_id, issued_at
+- **product_units**: id, product_id, unit (canonical: KG/CAJON/BOLSA/UNIDAD/ATADO/LITRO/TONELADA/PZ), avg_cost, stock_qty, is_active — multi-unit stock tracking per product
 
 ## Features Implemented
 
@@ -98,6 +99,18 @@ shared/
    - Hover any priced row in draft orders to reveal pencil edit icon
    - PATCH /api/orders/:id/items/:itemId → updates price, recalculates subtotal/margin/order total
    - Approval blocked until all items have prices > 0
+10. **Product Units & Multi-Unit Stock** (product_units table):
+    - Each product can have multiple active units (KG, CAJON, BOLSA, UNIDAD, ATADO, LITRO, TONELADA, PZ)
+    - Unit canonicalization via shared/units.ts (handles aliases: caja=CAJON, saco=BOLSA, kilo=KG, etc.)
+    - Products page rewritten with 2-tab UI:
+      - Tab 1 "Productos": cards with unit badges, per-unit stock/cost summary, add/remove units inline
+      - Tab 2 "Stock": filterable table with stock levels, cost, value, negative stock alerts, stock adjust modal
+    - Bulk import dialog: paste product lines "NOMBRE UNIDAD", preview, idempotent import
+    - API: GET /api/products/stock, GET /api/products/:id/units, POST /api/products/:id/units,
+           DELETE /api/product-units/:id, PATCH /api/product-units/:id/adjust, POST /api/products/import
+    - Intake unit validation: warns if parsed product+unit combo not registered in product_units
+    - createOrderFromIntake uses product_units.avg_cost as the cost basis
+    - approveOrder deducts from product_units stock in addition to products.current_stock
 
 ## IVA Rules
 

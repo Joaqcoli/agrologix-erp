@@ -16,7 +16,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { ArrowLeft, Sparkles, CheckCircle2, AlertTriangle, XCircle, Search, ChevronRight } from "lucide-react";
 import { parseOrderTextLocal, type ParsedLine } from "@/lib/orderParser";
-import type { Customer, Product } from "@shared/schema";
+import type { Customer, Product, ProductUnit } from "@shared/schema";
+import { canonicalizeUnit } from "@shared/units";
 
 const STATUS_ICON = {
   ok: <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400 shrink-0" />,
@@ -63,6 +64,7 @@ export default function IntakePage() {
 
   const { data: customers } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
+  const { data: stockData } = useQuery<(ProductUnit & { product: Product })[]>({ queryKey: ["/api/products/stock"] });
 
   const activeCustomers = (customers ?? []).filter((c) => c.active);
   const filteredCustomers = useMemo(() =>
@@ -156,6 +158,24 @@ export default function IntakePage() {
   const hasAmbiguous = validLines.some((l) => l.status === "ambiguous" && !overrides[parsed.indexOf(l)]);
   const okCount = validLines.filter((l) => (overrides[parsed.indexOf(l)] !== undefined && overrides[parsed.indexOf(l)] > 0) || l.status === "ok").length;
   const unresolved = validLines.filter((l) => !l.resolvedProductId).length;
+
+  // Unit validation: check if resolved product has the requested unit in product_units
+  // We iterate `parsed` (same index as render) so the Set stores parsed indices
+  const unitMismatchIndices = useMemo<Set<number>>(() => {
+    if (!stockData || stockData.length === 0) return new Set();
+    const bad = new Set<number>();
+    parsed.forEach((line, idx) => {
+      if (line.status === "no_qty" || !line.unit) return;
+      const resolvedProductId = overrides[idx] !== undefined ? overrides[idx] : line.productId;
+      if (!resolvedProductId) return;
+      const canonical = canonicalizeUnit(line.unit);
+      const hasUnit = stockData.some(
+        (pu) => pu.productId === resolvedProductId && pu.unit === canonical
+      );
+      if (!hasUnit) bad.add(idx);
+    });
+    return bad;
+  }, [parsed, overrides, stockData]);
 
   return (
     <Layout title="Carga Pedido">
@@ -265,6 +285,9 @@ export default function IntakePage() {
                   <div className="flex items-center gap-2 flex-wrap text-right">
                     <Badge variant="default">{okCount} OK</Badge>
                     {unresolved > 0 && <Badge variant="secondary">{unresolved} sin producto</Badge>}
+                    {unitMismatchIndices.size > 0 && (
+                      <Badge variant="outline" className="text-yellow-600 border-yellow-500/40">{unitMismatchIndices.size} unidad sin registrar</Badge>
+                    )}
                     {parsed.filter((l) => l.status === "no_qty").length > 0 && (
                       <Badge variant="destructive">{parsed.filter((l) => l.status === "no_qty").length} ignoradas</Badge>
                     )}
@@ -310,6 +333,11 @@ export default function IntakePage() {
                               {line.quantity !== null && (
                                 <span className="text-xs font-semibold text-foreground">
                                   {line.quantity} {line.unit ?? "—"}
+                                  {unitMismatchIndices.has(idx) && (
+                                    <Badge variant="outline" className="ml-2 text-[10px] text-yellow-600 border-yellow-500/40 align-middle">
+                                      unidad sin registrar
+                                    </Badge>
+                                  )}
                                 </span>
                               )}
 

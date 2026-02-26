@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import { storage } from "./storage";
 import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema } from "@shared/schema";
 import { z } from "zod";
+import { canonicalizeUnit } from "@shared/units";
 
 // IVA helpers
 const IVA_HUEVO = 0.21;
@@ -98,6 +99,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(await storage.getProducts());
   });
 
+  // Specific sub-routes MUST come before /api/products/:id to avoid capture
+  app.get("/api/products/units", requireAuth, async (req, res) => {
+    return res.json(await storage.getAllProductUnitsStock());
+  });
+
+  app.get("/api/products/stock", requireAuth, async (req, res) => {
+    return res.json(await storage.getAllProductUnitsStock());
+  });
+
+  app.post("/api/products/import", requireAuth, async (req, res) => {
+    try {
+      const { lines } = z.object({
+        lines: z.array(z.object({ name: z.string(), unit: z.string() })).min(1),
+      }).parse(req.body);
+      const result = await storage.bulkImportProducts(lines);
+      return res.status(201).json(result);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   app.get("/api/products/:id", requireAuth, async (req, res) => {
     const p = await storage.getProduct(Number(req.params.id));
     if (!p) return res.status(404).json({ error: "Not found" });
@@ -107,7 +127,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/products", requireAuth, async (req, res) => {
     try {
       const data = insertProductSchema.parse(req.body);
-      return res.status(201).json(await storage.createProduct(data));
+      const product = await storage.createProduct(data);
+      // Also create the default product_unit row for the product's default unit
+      const canonical = canonicalizeUnit(data.unit ?? "kg");
+      await storage.upsertProductUnit(product.id, canonical);
+      return res.status(201).json(product);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
@@ -121,6 +145,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.delete("/api/products/:id", requireAuth, async (req, res) => {
     await storage.deleteProduct(Number(req.params.id));
     return res.json({ ok: true });
+  });
+
+  // ─── Product Units ─────────────────────────────────────────────────────────
+
+  app.get("/api/products/:id/units", requireAuth, async (req, res) => {
+    return res.json(await storage.getProductUnits(Number(req.params.id)));
+  });
+
+  app.post("/api/products/:id/units", requireAuth, async (req, res) => {
+    try {
+      const { unit } = z.object({ unit: z.string().min(1) }).parse(req.body);
+      const canonical = canonicalizeUnit(unit);
+      const pu = await storage.upsertProductUnit(Number(req.params.id), canonical);
+      return res.status(201).json(pu);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.delete("/api/product-units/:id", requireAuth, async (req, res) => {
+    await storage.deactivateProductUnit(Number(req.params.id));
+    return res.json({ ok: true });
+  });
+
+  app.patch("/api/product-units/:id/adjust", requireAuth, async (req, res) => {
+    try {
+      const { adjustment, notes } = z.object({ adjustment: z.number(), notes: z.string().optional() }).parse(req.body);
+      const pu = await storage.adjustProductUnitStock(Number(req.params.id), adjustment, notes);
+      return res.json(pu);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   // ─── Price History ─────────────────────────────────────────────────────────

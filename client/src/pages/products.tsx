@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Layout } from "@/components/layout";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,58 +12,463 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, Pencil, Trash2, Package, Scale } from "lucide-react";
-import type { Product } from "@shared/schema";
+import {
+  Plus, Search, Pencil, Trash2, Package, Upload, X, CheckCircle2,
+  AlertTriangle, TrendingDown, ArrowUpDown, ChevronUp, ChevronDown,
+} from "lucide-react";
+import type { Product, ProductUnit } from "@shared/schema";
+import { canonicalizeUnit, ALL_CANONICAL_UNITS, CANONICAL_UNIT_LABEL } from "@shared/units";
 
-const UNITS = ["kg", "pz", "caja", "saco", "litro", "tonelada"] as const;
-const UNIT_LABELS: Record<string, string> = { kg: "Kilogramo", pz: "Pieza", caja: "Caja", saco: "Saco", litro: "Litro", tonelada: "Tonelada" };
+const fmt = (v: number) => Math.round(v).toLocaleString("es-MX");
+const fmtStock = (v: number) => v.toLocaleString("es-MX", { maximumFractionDigits: 2 });
 
-const EMPTY = { name: "", sku: "", description: "", unit: "kg" as const };
+type ProductUnitWithProduct = ProductUnit & { product: Product };
+
+// ─── Import Dialog ────────────────────────────────────────────────────────────
+type PreviewLine = {
+  raw: string;
+  name: string;
+  unit: string;
+  productExists: boolean;
+  unitExists: boolean;
+};
+
+function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const [text, setText] = useState("");
+  const [preview, setPreview] = useState<PreviewLine[] | null>(null);
+
+  const { data: allUnits } = useQuery<ProductUnitWithProduct[]>({ queryKey: ["/api/products/stock"] });
+  const { data: allProducts } = useQuery<Product[]>({ queryKey: ["/api/products"] });
+
+  const importMutation = useMutation({
+    mutationFn: async (lines: { name: string; unit: string }[]) => {
+      const res = await apiRequest("POST", "/api/products/import", { lines });
+      return res.json();
+    },
+    onSuccess: (data: { created: number; unitsAdded: number }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
+      toast({ title: "Importación completa", description: `${data.created} productos creados, ${data.unitsAdded} unidades agregadas` });
+      setText("");
+      setPreview(null);
+      onClose();
+    },
+    onError: (e: any) => toast({ title: "Error al importar", description: e.message, variant: "destructive" }),
+  });
+
+  const handlePreview = () => {
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const result: PreviewLine[] = lines.map((raw) => {
+      const parts = raw.split(/\s+/);
+      // Last token is likely unit, rest is product name
+      const unitCandidate = canonicalizeUnit(parts[parts.length - 1]);
+      const isValidUnit = ALL_CANONICAL_UNITS.includes(unitCandidate as any);
+      let name: string;
+      let unit: string;
+      if (isValidUnit && parts.length > 1) {
+        name = parts.slice(0, -1).join(" ").toUpperCase().trim();
+        unit = unitCandidate;
+      } else {
+        // Try all known units from the end
+        name = raw.toUpperCase().trim();
+        unit = "KG";
+      }
+
+      const productExists = (allProducts ?? []).some(
+        (p) => p.name.toUpperCase().trim() === name
+      );
+      const unitExists = (allUnits ?? []).some(
+        (pu) => pu.product.name.toUpperCase().trim() === name && pu.unit === unit
+      );
+
+      return { raw, name, unit, productExists, unitExists };
+    });
+    setPreview(result);
+  };
+
+  const handleImport = () => {
+    if (!preview) return;
+    const lines = preview.map((l) => ({ name: l.name, unit: l.unit }));
+    importMutation.mutate(lines);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) { setPreview(null); onClose(); } }}>
+      <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Importar Productos</DialogTitle>
+          <DialogDescription>
+            Pegá una lista de productos, uno por línea. Formato: <code className="bg-muted px-1 rounded text-xs">NOMBRE UNIDAD</code>
+            <br />
+            Ej: <code className="bg-muted px-1 rounded text-xs">ACELGA CAJON</code> o <code className="bg-muted px-1 rounded text-xs">JITOMATE KG</code>
+          </DialogDescription>
+        </DialogHeader>
+
+        {!preview ? (
+          <div className="space-y-3 mt-2">
+            <Textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder={"ACELGA CAJON\nACELGA UNIDAD\nLECHUGA CAPUCCINA KG\nPAPA CEPILLADA BOLSA"}
+              rows={10}
+              className="font-mono text-sm"
+              data-testid="textarea-import-text"
+            />
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>Cancelar</Button>
+              <Button onClick={handlePreview} disabled={!text.trim()} data-testid="button-preview-import">
+                Previsualizar
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <div className="space-y-3 mt-2">
+            <div className="overflow-x-auto border border-border rounded-md">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border bg-muted/40">
+                    <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Producto</th>
+                    <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Unidad</th>
+                    <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Producto</th>
+                    <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Unidad</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.map((line, i) => (
+                    <tr key={i} className="border-b border-border last:border-0">
+                      <td className="py-2 px-3 font-medium text-foreground">{line.name}</td>
+                      <td className="py-2 px-3">
+                        <Badge variant="secondary" className="text-[10px]">{line.unit}</Badge>
+                      </td>
+                      <td className="py-2 px-3">
+                        {line.productExists ? (
+                          <Badge variant="outline" className="text-[10px] text-green-600 border-green-600/30">Existe</Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px] text-primary border-primary/30">Crear</Badge>
+                        )}
+                      </td>
+                      <td className="py-2 px-3">
+                        {line.unitExists ? (
+                          <Badge variant="secondary" className="text-[10px]">Existe</Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px] text-primary border-primary/30">Agregar</Badge>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {preview.filter((l) => !l.productExists).length} productos nuevos ·{" "}
+              {preview.filter((l) => !l.unitExists).length} unidades nuevas · La importación es idempotente
+            </p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPreview(null)}>Volver</Button>
+              <Button onClick={handleImport} disabled={importMutation.isPending} data-testid="button-confirm-import">
+                {importMutation.isPending ? "Importando..." : `Importar ${preview.length} líneas`}
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Adjust Stock Modal ───────────────────────────────────────────────────────
+function AdjustStockDialog({
+  pu,
+  onClose,
+}: {
+  pu: ProductUnitWithProduct | null;
+  onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const [adjustment, setAdjustment] = useState("");
+  const [notes, setNotes] = useState("");
+
+  const adjustMutation = useMutation({
+    mutationFn: async (data: { adjustment: number; notes?: string }) => {
+      const res = await apiRequest("PATCH", `/api/product-units/${pu!.id}/adjust`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      toast({ title: "Stock ajustado" });
+      onClose();
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  if (!pu) return null;
+
+  const adj = parseFloat(adjustment);
+  const currentStock = parseFloat(pu.stockQty as string);
+  const newStock = isNaN(adj) ? currentStock : currentStock + adj;
+
+  return (
+    <Dialog open={!!pu} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Ajustar Stock</DialogTitle>
+          <DialogDescription>{pu.product.name} · {pu.unit}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 mt-2">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Stock actual:</span>
+            <span className="font-semibold">{fmtStock(currentStock)} {pu.unit}</span>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Ajuste (+/-)</Label>
+            <Input
+              type="number"
+              value={adjustment}
+              onChange={(e) => setAdjustment(e.target.value)}
+              placeholder="Ej: 10 o -3"
+              data-testid="input-adjustment"
+            />
+            <p className="text-xs text-muted-foreground">
+              Nuevo stock: <strong>{fmtStock(newStock)}</strong> {pu.unit}
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Motivo (opcional)</Label>
+            <Input
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Ej: inventario, merma..."
+              data-testid="input-adjust-notes"
+            />
+          </div>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button
+            onClick={() => adjustMutation.mutate({ adjustment: adj, notes: notes || undefined })}
+            disabled={!adjustment || isNaN(adj) || adjustMutation.isPending}
+            data-testid="button-confirm-adjust"
+          >
+            {adjustMutation.isPending ? "Ajustando..." : "Confirmar ajuste"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Product Card (Tab 1) ─────────────────────────────────────────────────────
+function ProductCard({
+  product,
+  productUnitMap,
+  onEdit,
+  onDelete,
+}: {
+  product: Product;
+  productUnitMap: Map<number, ProductUnitWithProduct[]>;
+  onEdit: (p: Product) => void;
+  onDelete: (id: number) => void;
+}) {
+  const units = productUnitMap.get(product.id) ?? [];
+
+  return (
+    <Card className="hover-elevate" data-testid={`card-product-${product.id}`}>
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-start gap-3 flex-1 min-w-0">
+            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 shrink-0">
+              <Package className="h-5 w-5 text-primary" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-foreground truncate" title={product.name}>{product.name}</p>
+              <p className="text-xs text-muted-foreground">{product.sku}</p>
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {units.length === 0 ? (
+                  <Badge variant="outline" className="text-[10px] text-muted-foreground">Sin unidades</Badge>
+                ) : (
+                  units.map((pu) => (
+                    <Badge key={pu.id} variant="secondary" className="text-[10px]">{pu.unit}</Badge>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => onEdit(product)} data-testid={`button-edit-product-${product.id}`}>
+              <Pencil className="h-3.5 w-3.5" />
+            </Button>
+            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => onDelete(product.id)} data-testid={`button-delete-product-${product.id}`}>
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+
+        {units.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-border space-y-1.5">
+            {units.map((pu) => {
+              const stock = parseFloat(pu.stockQty as string);
+              const cost = parseFloat(pu.avgCost as string);
+              return (
+                <div key={pu.id} className="flex items-center justify-between text-xs">
+                  <span className="font-medium text-muted-foreground w-14 shrink-0">{pu.unit}</span>
+                  <span className={`font-semibold ${stock < 0 ? "text-destructive" : "text-foreground"}`}>
+                    {fmtStock(stock)}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {cost > 0 ? `$${fmt(cost)}` : "—"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
+const EMPTY_FORM = { name: "", sku: "", description: "", unit: "kg" as const };
 
 export default function ProductsPage() {
   const { toast } = useToast();
+  const [tab, setTab] = useState("products");
   const [search, setSearch] = useState("");
+  const [stockSearch, setStockSearch] = useState("");
+  const [stockUnitFilter, setStockUnitFilter] = useState("all");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [editing, setEditing] = useState<Product | null>(null);
-  const [form, setForm] = useState<typeof EMPTY>(EMPTY);
+  const [form, setForm] = useState<typeof EMPTY_FORM>(EMPTY_FORM);
+  const [adjustTarget, setAdjustTarget] = useState<ProductUnitWithProduct | null>(null);
+
+  // Unit management in edit dialog
+  const [newUnit, setNewUnit] = useState("");
+  const [editProductUnits, setEditProductUnits] = useState<ProductUnit[]>([]);
 
   const { data: products, isLoading } = useQuery<Product[]>({ queryKey: ["/api/products"] });
+  const { data: stockData, isLoading: stockLoading } = useQuery<ProductUnitWithProduct[]>({
+    queryKey: ["/api/products/stock"],
+  });
+
+  // Map productId → units
+  const productUnitMap = useMemo(() => {
+    const map = new Map<number, ProductUnitWithProduct[]>();
+    (stockData ?? []).forEach((pu) => {
+      if (!map.has(pu.productId)) map.set(pu.productId, []);
+      map.get(pu.productId)!.push(pu);
+    });
+    return map;
+  }, [stockData]);
+
+  // Tab 1: filtered products
+  const filteredProducts = useMemo(() =>
+    (products ?? []).filter((p) =>
+      p.active && (p.name.toLowerCase().includes(search.toLowerCase()) || p.sku.toLowerCase().includes(search.toLowerCase()))
+    ), [products, search]
+  );
+
+  // Tab 2: filtered stock rows
+  const filteredStock = useMemo(() =>
+    (stockData ?? []).filter((pu) => {
+      const matchName = pu.product.name.toLowerCase().includes(stockSearch.toLowerCase());
+      const matchUnit = stockUnitFilter === "all" || pu.unit === stockUnitFilter;
+      return matchName && matchUnit;
+    }).sort((a, b) => a.product.name.localeCompare(b.product.name)),
+    [stockData, stockSearch, stockUnitFilter]
+  );
+
+  const availableUnits = useMemo(() => {
+    const set = new Set((stockData ?? []).map((pu) => pu.unit));
+    return Array.from(set).sort();
+  }, [stockData]);
 
   const createMutation = useMutation({
-    mutationFn: (data: typeof EMPTY) => apiRequest("POST", "/api/products", data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/products"] }); toast({ title: "Producto creado" }); setDialogOpen(false); },
+    mutationFn: async (data: typeof EMPTY_FORM) => {
+      const res = await apiRequest("POST", "/api/products", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
+      toast({ title: "Producto creado" });
+      setDialogOpen(false);
+    },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: Partial<typeof EMPTY> }) => apiRequest("PATCH", `/api/products/${id}`, data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/products"] }); toast({ title: "Producto actualizado" }); setDialogOpen(false); },
+    mutationFn: async ({ id, data }: { id: number; data: Partial<typeof EMPTY_FORM> }) => {
+      const res = await apiRequest("PATCH", `/api/products/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
+      toast({ title: "Producto actualizado" });
+      setDialogOpen(false);
+    },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/products/${id}`),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/products"] }); toast({ title: "Producto eliminado" }); setDeleteId(null); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
+      toast({ title: "Producto desactivado" });
+      setDeleteId(null);
+    },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
-  const openCreate = () => { setEditing(null); setForm(EMPTY); setDialogOpen(true); };
-  const openEdit = (p: Product) => { setEditing(p); setForm({ name: p.name, sku: p.sku, description: p.description ?? "", unit: p.unit as any }); setDialogOpen(true); };
+  const addUnitMutation = useMutation({
+    mutationFn: async ({ productId, unit }: { productId: number; unit: string }) => {
+      const res = await apiRequest("POST", `/api/products/${productId}/units`, { unit });
+      return res.json();
+    },
+    onSuccess: (pu: ProductUnit) => {
+      setEditProductUnits((prev) => [...prev.filter((u) => u.unit !== pu.unit), pu]);
+      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
+      setNewUnit("");
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const removeUnitMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/product-units/${id}`),
+    onSuccess: (_: unknown, id: number) => {
+      setEditProductUnits((prev) => prev.filter((u) => u.id !== id));
+      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const openCreate = () => {
+    setEditing(null);
+    setForm(EMPTY_FORM);
+    setEditProductUnits([]);
+    setDialogOpen(true);
+  };
+
+  const openEdit = (p: Product) => {
+    setEditing(p);
+    setForm({ name: p.name, sku: p.sku, description: p.description ?? "", unit: p.unit as any });
+    setEditProductUnits(productUnitMap.get(p.id) ?? []);
+    setDialogOpen(true);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (editing) updateMutation.mutate({ id: editing.id, data: form });
     else createMutation.mutate(form);
   };
-
-  const filtered = (products ?? []).filter((p) =>
-    p.active && (
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.sku.toLowerCase().includes(search.toLowerCase())
-    )
-  );
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
@@ -73,91 +478,183 @@ export default function ProductsPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold text-foreground">Productos</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">{filtered.length} producto{filtered.length !== 1 ? "s" : ""} activo{filtered.length !== 1 ? "s" : ""}</p>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              {(products ?? []).filter((p) => p.active).length} productos activos
+            </p>
           </div>
-          <Button onClick={openCreate} data-testid="button-add-product">
-            <Plus className="mr-2 h-4 w-4" /> Nuevo Producto
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setImportOpen(true)} data-testid="button-import-products">
+              <Upload className="mr-2 h-4 w-4" /> Importar
+            </Button>
+            <Button onClick={openCreate} data-testid="button-add-product">
+              <Plus className="mr-2 h-4 w-4" /> Nuevo Producto
+            </Button>
+          </div>
         </div>
 
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar por nombre o SKU..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-            data-testid="input-search-products"
-          />
-        </div>
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList>
+            <TabsTrigger value="products" data-testid="tab-products">Productos</TabsTrigger>
+            <TabsTrigger value="stock" data-testid="tab-stock">Stock</TabsTrigger>
+          </TabsList>
 
-        {isLoading ? (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {[1, 2, 3, 4, 5, 6].map((i) => <Skeleton key={i} className="h-36 w-full rounded-lg" />)}
-          </div>
-        ) : filtered.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-16 gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-                <Package className="h-6 w-6 text-muted-foreground" />
+          {/* ── TAB 1: Products ── */}
+          <TabsContent value="products" className="mt-4 space-y-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Buscar por nombre o SKU..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-9"
+                data-testid="input-search-products"
+              />
+            </div>
+
+            {isLoading ? (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {[1, 2, 3, 4, 5, 6].map((i) => <Skeleton key={i} className="h-36 w-full rounded-lg" />)}
               </div>
-              <p className="text-sm font-medium text-foreground">Sin productos</p>
-              <p className="text-sm text-muted-foreground text-center">Agrega tu primer producto para comenzar.</p>
-              <Button size="sm" onClick={openCreate}>
-                <Plus className="mr-2 h-4 w-4" /> Agregar Producto
-              </Button>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {filtered.map((p) => {
-              const stock = parseFloat(p.currentStock as string);
-              const avgCost = parseFloat(p.averageCost as string);
-              return (
-                <Card key={p.id} className="hover-elevate" data-testid={`card-product-${p.id}`}>
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-start gap-3 flex-1 min-w-0">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 shrink-0">
-                          <Package className="h-5 w-5 text-primary" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-foreground truncate" title={p.name}>{p.name}</p>
-                          <p className="text-xs text-muted-foreground">{p.sku}</p>
-                          <Badge variant="secondary" className="mt-1.5 text-[10px]">{UNIT_LABELS[p.unit] ?? p.unit}</Badge>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openEdit(p)} data-testid={`button-edit-product-${p.id}`}>
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setDeleteId(p.id)} data-testid={`button-delete-product-${p.id}`}>
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="mt-3 pt-3 border-t border-border grid grid-cols-2 gap-2">
-                      <div>
-                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Stock</p>
-                        <p className="text-sm font-semibold text-foreground mt-0.5">
-                          {stock.toLocaleString("es-MX", { maximumFractionDigits: 2 })} {p.unit}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Costo Prom.</p>
-                        <p className="text-sm font-semibold text-foreground mt-0.5">
-                          ${avgCost.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        )}
+            ) : filteredProducts.length === 0 ? (
+              <Card>
+                <CardContent className="flex flex-col items-center justify-center py-16 gap-3">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+                    <Package className="h-6 w-6 text-muted-foreground" />
+                  </div>
+                  <p className="text-sm font-medium text-foreground">Sin productos</p>
+                  <p className="text-sm text-muted-foreground text-center">Agrega tu primer producto para comenzar.</p>
+                  <Button size="sm" onClick={openCreate}>
+                    <Plus className="mr-2 h-4 w-4" /> Agregar Producto
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {filteredProducts.map((p) => (
+                  <ProductCard
+                    key={p.id}
+                    product={p}
+                    productUnitMap={productUnitMap}
+                    onEdit={openEdit}
+                    onDelete={(id) => setDeleteId(id)}
+                  />
+                ))}
+              </div>
+            )}
+          </TabsContent>
+
+          {/* ── TAB 2: Stock ── */}
+          <TabsContent value="stock" className="mt-4 space-y-4">
+            <div className="flex flex-wrap gap-3">
+              <div className="relative flex-1 min-w-48">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Buscar producto..."
+                  value={stockSearch}
+                  onChange={(e) => setStockSearch(e.target.value)}
+                  className="pl-9"
+                  data-testid="input-search-stock"
+                />
+              </div>
+              <Select value={stockUnitFilter} onValueChange={setStockUnitFilter}>
+                <SelectTrigger className="w-40" data-testid="select-unit-filter">
+                  <SelectValue placeholder="Todas las unidades" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas las unidades</SelectItem>
+                  {availableUnits.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {stockLoading ? (
+              <Skeleton className="h-64 w-full" />
+            ) : (
+              <Card>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b-2 border-border bg-muted/40">
+                          <th className="text-left py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Producto</th>
+                          <th className="text-left py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Unidad</th>
+                          <th className="text-right py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Stock</th>
+                          <th className="text-right py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Costo prom.</th>
+                          <th className="text-right py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Valor stock</th>
+                          <th className="py-2.5 px-4"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredStock.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="py-12 text-center text-sm text-muted-foreground">
+                              Sin resultados
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredStock.map((pu) => {
+                            const stock = parseFloat(pu.stockQty as string);
+                            const cost = parseFloat(pu.avgCost as string);
+                            const valorStock = stock * cost;
+                            const isNegative = stock < 0;
+                            const noCost = stock > 0 && cost === 0;
+                            return (
+                              <tr
+                                key={pu.id}
+                                className={`border-b border-border last:border-0 transition-colors ${
+                                  isNegative ? "bg-destructive/5" : noCost ? "bg-yellow-50/30 dark:bg-yellow-900/10" : "hover:bg-muted/30"
+                                }`}
+                                data-testid={`row-stock-${pu.id}`}
+                              >
+                                <td className="py-2.5 px-4">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium text-foreground">{pu.product.name}</span>
+                                    {isNegative && (
+                                      <Badge variant="destructive" className="text-[9px] py-0 px-1">Stock negativo</Badge>
+                                    )}
+                                    {noCost && (
+                                      <Badge variant="outline" className="text-[9px] py-0 px-1 text-yellow-600 border-yellow-500/40">Sin costo</Badge>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-4">
+                                  <Badge variant="secondary" className="text-[10px]">{pu.unit}</Badge>
+                                </td>
+                                <td className={`py-2.5 px-4 text-right font-semibold whitespace-nowrap ${isNegative ? "text-destructive" : "text-foreground"}`}>
+                                  {fmtStock(stock)}
+                                </td>
+                                <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">
+                                  {cost > 0 ? `$${fmt(cost)}` : "—"}
+                                </td>
+                                <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">
+                                  {cost > 0 ? `$${fmt(valorStock)}` : "—"}
+                                </td>
+                                <td className="py-2.5 px-4">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-7 text-xs"
+                                    onClick={() => setAdjustTarget(pu)}
+                                    data-testid={`button-adjust-${pu.id}`}
+                                  >
+                                    Ajustar
+                                  </Button>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+        </Tabs>
       </div>
 
+      {/* ── Product Create/Edit Dialog ── */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -177,21 +674,67 @@ export default function ProductsPage() {
                 <Input id="psku" value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} required data-testid="input-product-sku" />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="punit">Unidad</Label>
+                <Label htmlFor="punit">Unidad principal</Label>
                 <Select value={form.unit} onValueChange={(v) => setForm({ ...form, unit: v as any })}>
                   <SelectTrigger id="punit" data-testid="select-product-unit">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {UNITS.map((u) => <SelectItem key={u} value={u}>{UNIT_LABELS[u]}</SelectItem>)}
+                    {(["kg", "pz", "caja", "saco", "litro", "tonelada"] as const).map((u) => (
+                      <SelectItem key={u} value={u}>{u.toUpperCase()}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="pdesc">Descripción</Label>
-              <Textarea id="pdesc" value={form.description ?? ""} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2} data-testid="input-product-description" />
-            </div>
+
+            {/* Unit management (only when editing) */}
+            {editing && (
+              <div className="space-y-2">
+                <Label>Unidades disponibles</Label>
+                <div className="flex flex-wrap gap-1.5">
+                  {editProductUnits.map((pu) => (
+                    <div key={pu.id} className="flex items-center gap-1 bg-muted rounded px-2 py-0.5">
+                      <span className="text-xs font-medium">{pu.unit}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeUnitMutation.mutate(pu.id)}
+                        className="text-muted-foreground hover:text-destructive transition-colors ml-1"
+                        data-testid={`button-remove-unit-${pu.id}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                  {editProductUnits.length === 0 && (
+                    <span className="text-xs text-muted-foreground">Sin unidades activas</span>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <Select value={newUnit} onValueChange={setNewUnit}>
+                    <SelectTrigger className="flex-1" data-testid="select-new-unit">
+                      <SelectValue placeholder="Agregar unidad..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ALL_CANONICAL_UNITS.map((u) => (
+                        <SelectItem key={u} value={u}>{u} — {CANONICAL_UNIT_LABEL[u]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={!newUnit || addUnitMutation.isPending}
+                    onClick={() => newUnit && addUnitMutation.mutate({ productId: editing.id, unit: newUnit })}
+                    data-testid="button-add-unit"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
+
             <DialogFooter className="gap-2">
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>
               <Button type="submit" disabled={isPending} data-testid="button-save-product">
@@ -205,8 +748,8 @@ export default function ProductsPage() {
       <AlertDialog open={deleteId !== null} onOpenChange={(o) => !o && setDeleteId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>¿Eliminar producto?</AlertDialogTitle>
-            <AlertDialogDescription>Esta acción desactivará el producto.</AlertDialogDescription>
+            <AlertDialogTitle>¿Desactivar producto?</AlertDialogTitle>
+            <AlertDialogDescription>El producto dejará de aparecer en compras y pedidos.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
@@ -215,11 +758,14 @@ export default function ProductsPage() {
               className="bg-destructive text-destructive-foreground"
               data-testid="button-confirm-delete-product"
             >
-              Eliminar
+              Desactivar
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <ImportDialog open={importOpen} onClose={() => setImportOpen(false)} />
+      <AdjustStockDialog pu={adjustTarget} onClose={() => setAdjustTarget(null)} />
     </Layout>
   );
 }

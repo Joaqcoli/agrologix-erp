@@ -118,6 +118,16 @@ export const orderItems = pgTable("order_items", {
   parseStatus: text("parse_status"),
 });
 
+// ─── Product Units (stock + cost per unit per product) ─────────────────────────
+export const productUnits = pgTable("product_units", {
+  id: serial("id").primaryKey(),
+  productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+  unit: text("unit").notNull(),         // canonical: KG, CAJON, BOLSA, UNIDAD, ATADO, LITRO, TONELADA, PZ
+  isActive: boolean("is_active").notNull().default(true),
+  avgCost: numeric("avg_cost", { precision: 12, scale: 4 }).notNull().default("0"),
+  stockQty: numeric("stock_qty", { precision: 12, scale: 4 }).notNull().default("0"),
+});
+
 // Stores the last sale price per customer+product (price history)
 export const priceHistory = pgTable("price_history", {
   id: serial("id").primaryKey(),
@@ -181,5 +191,6 @@ export type ProductCostHistory = typeof productCostHistory.$inferSelect;
 export type Order = typeof orders.$inferSelect;
 export type OrderItem = typeof orderItems.$inferSelect;
 export type InsertOrder = z.infer<typeof insertOrderSchema>;
+export type ProductUnit = typeof productUnits.$inferSelect;
 export type PriceHistory = typeof priceHistory.$inferSelect;
 export type Remito = typeof remitos.$inferSelect;

@@ -187,5 +187,38 @@ export async function runMigrations() {
     )
   `);
 
+  // ─── Product Units (multi-unit stock + cost per product) ─────────────────────
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS product_units (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      unit TEXT NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      avg_cost NUMERIC(12,4) NOT NULL DEFAULT 0,
+      stock_qty NUMERIC(12,4) NOT NULL DEFAULT 0,
+      UNIQUE(product_id, unit)
+    )
+  `);
+
+  // Populate product_units from existing products (idempotent: INSERT ... ON CONFLICT DO NOTHING)
+  await db.execute(sql`
+    INSERT INTO product_units (product_id, unit, is_active, avg_cost, stock_qty)
+    SELECT id,
+      CASE unit::text
+        WHEN 'caja' THEN 'CAJON'
+        WHEN 'saco' THEN 'BOLSA'
+        WHEN 'kg'   THEN 'KG'
+        WHEN 'pz'   THEN 'PZ'
+        WHEN 'litro' THEN 'LITRO'
+        WHEN 'tonelada' THEN 'TONELADA'
+        ELSE upper(unit::text)
+      END,
+      active,
+      average_cost,
+      current_stock
+    FROM products
+    ON CONFLICT (product_id, unit) DO NOTHING
+  `);
+
   console.log("Migrations complete.");
 }

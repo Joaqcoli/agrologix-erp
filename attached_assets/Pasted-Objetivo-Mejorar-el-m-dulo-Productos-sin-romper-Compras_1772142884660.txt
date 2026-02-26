@@ -1,0 +1,238 @@
+Objetivo: Mejorar el módulo Productos sin romper Compras/Pedidos/Intake/Remitos. Necesito stock y costo promedio ponderado por unidad, soporte de doble unidad por producto, e importación masiva pegando una lista (producto + unidad).
+
+Reglas clave
+
+NO romper: Compras, Pedidos, Carga Pedido (intake), Remitos PDF, cálculo de costo promedio ponderado.
+
+Mantener UI y estilos actuales.
+
+Migraciones seguras e idempotentes.
+
+Formato moneda en ARS sin decimales en UI.
+
+1) MODELO DE DATOS: stock/costo por unidad (doble unidad por producto)
+A) Mantener products
+
+products se mantiene como maestro:
+
+id
+
+name
+
+sku (opcional)
+
+active
+
+B) Crear product_units (nuevo)
+
+Tabla nueva product_units:
+
+id
+
+product_id (FK products)
+
+unit (TEXT o ENUM) ej: KG, CAJON, BOLSA, UNIDAD, ATADO, LITRO, TONELADA, PZ
+
+is_active boolean default true
+
+avg_cost numeric default 0
+
+stock_qty numeric default 0
+
+UNIQUE(product_id, unit)
+
+C) Migración desde el estado actual
+
+Para cada producto existente: crear al menos 1 fila en product_units usando su unidad actual.
+
+Migrar stock y costo promedio actual hacia product_units.stock_qty y product_units.avg_cost.
+
+No bloquear por valores negativos: migrar igual.
+
+2) ADAPTAR LÓGICA EXISTENTE (Compras / Pedidos) a product_units
+Compras
+
+Cuando se registra una compra con (product_id + unit):
+
+Impactar product_units.stock_qty sumando cantidad comprada
+
+Recalcular product_units.avg_cost usando promedio ponderado para ESA unidad:
+
+new_avg = (old_stockold_avg + qtyunit_cost) / (old_stock + qty)
+
+Guardar histórico como hoy (si existe).
+
+Pedidos (aprobación / descuento)
+
+Al aprobar pedido:
+
+Descontar stock desde product_units.stock_qty según unidad del ítem.
+
+Usar product_units.avg_cost como costo para margen.
+
+Si stock queda negativo: permitir (como hoy), pero marcar alertas en Stock tab.
+
+Intake (Carga Pedido)
+
+Si el parser detecta producto + unidad:
+
+Validar que exista product_units para esa unidad.
+
+Si el producto existe pero esa unidad no existe → marcar “Unidad no válida” y pedir corrección en preview.
+
+Si el producto no matchea, continúa como “No Product Found” como hoy.
+
+3) NORMALIZACIÓN / EQUIVALENCIAS DE UNIDADES (muy importante)
+
+Implementar canonicalización de unidades en todos lados (import, compras, intake, UI):
+
+"CAJA" -> "CAJON"
+
+"CAJÓN" -> "CAJON"
+
+"SACO" -> "BOLSA"
+
+"UN" -> "UNIDAD"
+
+"U" -> "UNIDAD"
+
+"PZ" queda como "PZ" (si aparece)
+
+Trim + uppercase
+
+Esto es para evitar duplicados por escritura distinta.
+
+4) IMPORTACIÓN MASIVA DE PRODUCTOS (pegando lista)
+
+Crear en /products un botón “Importar productos”.
+
+UI
+
+Textarea grande “Pegar lista”
+
+Botón “Previsualizar”
+
+Tabla preview:
+
+Producto
+
+Unidad (canonical)
+
+Estado: “Crear producto” / “Producto existe” + “Crear unidad” / “Unidad existe”
+
+Botón “Importar”
+
+Formato de entrada
+
+Cada línea:
+NOMBRE_PRODUCTO<TAB o espacios>UNIDAD
+
+Ej:
+ACELGA CAJON
+ACELGA UNIDAD
+LECHUGA CAPUCCINA KG
+
+Comportamiento
+
+Normalizar nombre producto: trim, colapsar espacios, mantener mayúsculas consistentes.
+
+Si producto no existe -> crear products.
+
+Upsert product_units(product_id, unit):
+
+si no existe -> crear con stock_qty=0 y avg_cost=0
+
+si existe -> no tocar stock ni avg_cost
+
+Import idempotente (pegar 2 veces no duplica nada).
+
+Crear endpoint:
+
+POST /api/products/import
+
+5) MEJORAS UI EN /PRODUCTS: 2 pestañas
+
+Agregar tabs:
+
+TAB 1: “Productos” (tarjetas como hoy)
+
+Cada tarjeta:
+
+Nombre
+
+Chips con unidades disponibles (CAJON, KG, etc)
+
+Mostrar stock y costo por unidad:
+
+“Stock: 10 CAJON | 120 KG”
+
+“Costo prom: $18.000 (CAJON) | $1.200 (KG)” (si no hay: “—”)
+
+Editar producto:
+
+name, active
+
+administrar unidades (agregar/quitar unidades)
+
+TAB 2: “Stock” (vista lista tipo planilla)
+
+Tabla:
+
+Producto
+
+Unidad
+
+Stock
+
+Costo prom
+
+Valor stock (stock * costo)
+
+Alertas:
+
+stock < 0 (rojo)
+
+stock > 0 y costo = 0 (amarillo)
+
+Filtros:
+
+Buscar producto
+
+Filtro por unidad
+
+Acción por fila:
+
+“Ajustar stock” (modal):
+
+Campo ajuste (+ / -)
+
+Motivo opcional
+
+Si ajuste es positivo y no hay costo, permitir costo 0 (para “sobrante”)
+Endpoint:
+
+PATCH /api/product-units/:id/adjust
+
+Endpoint list:
+
+GET /api/products/stock
+
+6) FORMATO NUMÉRICO (como pedimos)
+
+Precios ARS sin decimales (redondear y mostrar como $25.000)
+
+Stock puede tener decimales (kg), pero no bloquear.
+
+7) TESTS / VERIFICACIÓN
+
+Probar import masivo con una parte del listado.
+
+Probar compra de un producto en CAJON y en KG: debe actualizar stock/costo de su unidad.
+
+Probar pedido: debe descontar stock de la unidad correcta.
+
+Probar intake: si unidad inválida debe pedir corrección.
+
+Asegurar que nada de Pedidos/Compras/Remitos rompe.
+
+Importante: No crear nuevas features fuera de esto (nada de WhatsApp/IA ahora). Solo ajustar productos/stock/units/import.
