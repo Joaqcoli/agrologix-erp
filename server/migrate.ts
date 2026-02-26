@@ -147,15 +147,24 @@ export async function runMigrations() {
     CREATE TABLE IF NOT EXISTS order_items (
       id SERIAL PRIMARY KEY,
       order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-      product_id INTEGER NOT NULL REFERENCES products(id),
+      product_id INTEGER REFERENCES products(id),
       quantity NUMERIC(12,4) NOT NULL,
-      unit unit NOT NULL,
-      price_per_unit NUMERIC(12,4) NOT NULL,
-      cost_per_unit NUMERIC(12,4) NOT NULL,
+      unit unit NOT NULL DEFAULT 'kg',
+      price_per_unit NUMERIC(12,4),
+      cost_per_unit NUMERIC(12,4) NOT NULL DEFAULT 0,
       margin NUMERIC(8,4),
-      subtotal NUMERIC(12,2) NOT NULL
+      subtotal NUMERIC(12,2) NOT NULL DEFAULT 0,
+      raw_product_name TEXT,
+      parse_status TEXT
     )
   `);
+
+  await db.execute(sql`ALTER TABLE order_items ALTER COLUMN product_id DROP NOT NULL`);
+  await db.execute(sql`ALTER TABLE order_items ALTER COLUMN price_per_unit DROP NOT NULL`);
+  await db.execute(sql`ALTER TABLE order_items ALTER COLUMN cost_per_unit SET DEFAULT 0`);
+  await db.execute(sql`ALTER TABLE order_items ALTER COLUMN subtotal SET DEFAULT 0`);
+  await db.execute(sql`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS raw_product_name TEXT`);
+  await db.execute(sql`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS parse_status TEXT`);
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS price_history (

@@ -4,16 +4,17 @@ import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle, Pencil, Check, X } from "lucide-react";
 import { generateRemitoPDF } from "@/lib/pdf";
 import { useState } from "react";
-import type { Order, Customer, Product, OrderItem, Remito } from "@shared/schema";
+import type { Customer, Product, Remito } from "@shared/schema";
+import type { Order, OrderItem } from "@shared/schema";
 
 const IVA_DEFAULT = 0.105;
 const IVA_HUEVO = 0.21;
@@ -25,8 +26,102 @@ function getIvaRate(productName: string) {
 
 const fmt = (v: number, dec = 2) => v.toLocaleString("es-MX", { minimumFractionDigits: dec, maximumFractionDigits: dec });
 const fmtPct = (v: number) => (v * 100).toFixed(1) + "%";
+const fmtInt = (v: number) => Math.round(v).toLocaleString("es-MX");
 
-type FullOrder = Order & { customer: Customer; items: (OrderItem & { product: Product })[] };
+type FullOrderItem = OrderItem & {
+  product?: (Product & { [key: string]: any }) | null;
+};
+
+type FullOrder = Order & {
+  customer: Customer;
+  items: FullOrderItem[];
+};
+
+// Inline price editor component for a single item
+function PriceCell({
+  item,
+  orderId,
+  isDraft,
+}: {
+  item: FullOrderItem;
+  orderId: number;
+  isDraft: boolean;
+}) {
+  const { toast } = useToast();
+  const hasPrice = item.pricePerUnit != null && parseFloat(item.pricePerUnit as string) > 0;
+  const [editing, setEditing] = useState(!hasPrice && isDraft);
+  const [draft, setDraft] = useState(hasPrice ? String(Math.round(parseFloat(item.pricePerUnit as string))) : "");
+
+  const patchMutation = useMutation({
+    mutationFn: (price: string) => apiRequest("PATCH", `/api/orders/${orderId}/items/${item.id}`, { pricePerUnit: price }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders", orderId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      setEditing(false);
+      toast({ title: "Precio guardado" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const handleSave = () => {
+    const val = parseFloat(draft);
+    if (!draft || isNaN(val) || val <= 0) {
+      toast({ title: "Precio inválido", description: "Ingresá un precio mayor a 0", variant: "destructive" });
+      return;
+    }
+    patchMutation.mutate(String(val));
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1">
+        <span className="text-muted-foreground text-xs">$</span>
+        <Input
+          type="number"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") setEditing(false); }}
+          className="h-6 w-24 text-xs px-1.5 py-0"
+          placeholder="0"
+          autoFocus
+          data-testid={`input-price-${item.id}`}
+        />
+        <button
+          onClick={handleSave}
+          disabled={patchMutation.isPending}
+          className="p-0.5 rounded hover:bg-green-100 dark:hover:bg-green-900 text-green-600"
+          data-testid={`button-save-price-${item.id}`}
+        >
+          <Check className="h-3.5 w-3.5" />
+        </button>
+        {hasPrice && (
+          <button onClick={() => setEditing(false)} className="p-0.5 rounded hover:bg-muted">
+            <X className="h-3.5 w-3.5 text-muted-foreground" />
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-1 group">
+      {!hasPrice ? (
+        <Badge variant="destructive" className="text-[9px]">Sin precio</Badge>
+      ) : (
+        <span className="text-foreground whitespace-nowrap">${fmtInt(parseFloat(item.pricePerUnit as string))}</span>
+      )}
+      {isDraft && (
+        <button
+          onClick={() => { setDraft(hasPrice ? String(Math.round(parseFloat(item.pricePerUnit as string))) : ""); setEditing(true); }}
+          className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted ml-1"
+          data-testid={`button-edit-price-${item.id}`}
+        >
+          <Pencil className="h-3 w-3 text-muted-foreground" />
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function OrderDetailPage({ id }: { id: number }) {
   const [, setLocation] = useLocation();
@@ -119,20 +214,26 @@ export default function OrderDetailPage({ id }: { id: number }) {
   };
   const sc = statusConfig[order.status] ?? { label: order.status, variant: "secondary" as const };
 
-  // Per-item calculations
+  // Helper: get display name for an item (may come from intake with no product linked)
+  const getItemName = (item: FullOrderItem) =>
+    item.product?.name ?? (item as any).rawProductName ?? "Producto sin nombre";
+
+  // Per-item calculations (handles null pricePerUnit gracefully)
   type ItemCalc = {
     id: number;
+    orderId: number;
+    item: FullOrderItem;
     name: string;
-    sku: string;
     qty: number;
     unit: string;
-    pricePerUnit: number;
+    pricePerUnit: number | null;
+    hasPrice: boolean;
     subtotal: number;
     totalConIva: number;
     ivaRate: number;
     costPerUnit: number;
     totalCompra: number;
-    base: number;    // totalConIva if hasIva else subtotal
+    base: number;
     diferencia: number;
     pct: number;
     isLowMargin: boolean;
@@ -140,10 +241,12 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const calcs: ItemCalc[] = order.items.map((item) => {
     const qty = parseFloat(item.quantity as string);
-    const price = parseFloat(item.pricePerUnit as string);
-    const cost = parseFloat(item.costPerUnit as string);
+    const hasPrice = item.pricePerUnit != null && parseFloat(item.pricePerUnit as string) > 0;
+    const price = hasPrice ? parseFloat(item.pricePerUnit as string) : 0;
+    const cost = parseFloat((item.costPerUnit as string) ?? "0");
+    const name = getItemName(item);
     const subtotal = qty * price;
-    const ivaRate = getIvaRate(item.product.name);
+    const ivaRate = getIvaRate(name);
     const totalConIva = subtotal * (1 + ivaRate);
     const totalCompra = qty * cost;
     const base = hasIva ? totalConIva : subtotal;
@@ -151,11 +254,13 @@ export default function OrderDetailPage({ id }: { id: number }) {
     const pct = base > 0 ? diferencia / base : 0;
     return {
       id: item.id,
-      name: item.product.name,
-      sku: item.product.sku,
+      orderId: order.id,
+      item,
+      name,
       qty,
       unit: item.unit,
-      pricePerUnit: price,
+      pricePerUnit: hasPrice ? price : null,
+      hasPrice,
       subtotal,
       totalConIva,
       ivaRate,
@@ -164,10 +269,11 @@ export default function OrderDetailPage({ id }: { id: number }) {
       base,
       diferencia,
       pct,
-      isLowMargin: pct < LOW_MARGIN,
+      isLowMargin: hasPrice && pct < LOW_MARGIN,
     };
   });
 
+  const unpricedCount = calcs.filter((c) => !c.hasPrice).length;
   const hasAnyLowMargin = calcs.some((c) => c.isLowMargin);
 
   const grandTotal = calcs.reduce((s, c) => s + c.subtotal, 0);
@@ -177,7 +283,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const grandDiff = grandBase - grandTotalCompra;
   const grandPct = grandBase > 0 ? grandDiff / grandBase : 0;
 
-  const canApprove = isDraft && (!hasAnyLowMargin || lowMarginOk);
+  const canApprove = isDraft && unpricedCount === 0 && (!hasAnyLowMargin || lowMarginOk);
 
   return (
     <Layout title={`Pedido ${order.folio}`}>
@@ -203,7 +309,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
           <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
             <Button variant="outline" size="sm" onClick={handleExportXlsx} disabled={exporting} data-testid="button-export-order">
-              <Download className="mr-2 h-4 w-4" /> {exporting ? "..." : "Exportar cliente"}
+              <Download className="mr-2 h-4 w-4" /> {exporting ? "..." : "Exportar"}
             </Button>
             {isApproved && order.remitoId && (
               <Button variant="outline" size="sm" onClick={handleDownloadRemito} data-testid="button-download-remito">
@@ -223,6 +329,16 @@ export default function OrderDetailPage({ id }: { id: number }) {
             )}
           </div>
         </div>
+
+        {/* Unpriced items warning */}
+        {isDraft && unpricedCount > 0 && (
+          <Alert>
+            <AlertTriangle className="h-4 w-4 text-yellow-600" />
+            <AlertDescription className="text-sm">
+              <strong>{unpricedCount} producto(s) sin precio.</strong> Hacé clic en la celda de precio para editar. Completá todos los precios antes de generar el remito.
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Low margin warning */}
         {isDraft && hasAnyLowMargin && (
@@ -265,16 +381,16 @@ export default function OrderDetailPage({ id }: { id: number }) {
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Neto</p>
               <p className="text-lg font-bold text-foreground mt-0.5">
-                ${fmt(grandTotal)}
+                ${fmtInt(grandTotal)}
               </p>
             </div>
             {hasIva && (
               <div>
                 <p className="text-xs text-muted-foreground uppercase tracking-wide">Total + IVA</p>
                 <p className="text-lg font-bold text-primary mt-0.5">
-                  ${fmt(grandTotalConIva)}
+                  ${fmtInt(grandTotalConIva)}
                 </p>
-                <p className="text-[10px] text-muted-foreground">IVA: ${fmt(grandTotalConIva - grandTotal)}</p>
+                <p className="text-[10px] text-muted-foreground">IVA: ${fmtInt(grandTotalConIva - grandTotal)}</p>
               </div>
             )}
             {order.notes && (
@@ -286,12 +402,13 @@ export default function OrderDetailPage({ id }: { id: number }) {
           </CardContent>
         </Card>
 
-        {/* Products table - Excel style */}
+        {/* Products table */}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold">
               Detalle de Productos ({order.items?.length ?? 0})
-              {hasIva && <span className="text-xs text-muted-foreground font-normal ml-2">· IVA aplicado por producto (10.5% / 21% huevo)</span>}
+              {isDraft && <span className="text-xs text-muted-foreground font-normal ml-2">· Clic en precio para editar</span>}
+              {hasIva && <span className="text-xs text-muted-foreground font-normal ml-2">· IVA 10.5% / 21% huevo</span>}
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
@@ -305,7 +422,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
                     <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">P. Venta</th>
                     <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Total</th>
                     {hasIva && (
-                      <th className="text-right py-2.5 px-3 font-semibold text-primary uppercase tracking-wide whitespace-nowrap">Total + IVA</th>
+                      <th className="text-right py-2.5 px-3 font-semibold text-primary uppercase tracking-wide whitespace-nowrap">+ IVA</th>
                     )}
                     <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap border-l border-border">P. Compra</th>
                     <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">T. Compra</th>
@@ -317,49 +434,58 @@ export default function OrderDetailPage({ id }: { id: number }) {
                   {calcs.map((c) => (
                     <tr
                       key={c.id}
-                      className={`border-b border-border last:border-0 ${c.isLowMargin ? "bg-destructive/5" : "hover:bg-muted/30"} transition-colors`}
+                      className={`border-b border-border last:border-0 ${
+                        !c.hasPrice ? "bg-yellow-50/30 dark:bg-yellow-900/10"
+                        : c.isLowMargin ? "bg-destructive/5"
+                        : "hover:bg-muted/30"
+                      } transition-colors`}
                       data-testid={`row-item-${c.id}`}
                     >
                       <td className="py-2.5 px-3 font-medium text-foreground whitespace-nowrap">{fmt(c.qty, 4).replace(/\.?0+$/, '')}</td>
                       <td className="py-2.5 px-3 text-muted-foreground whitespace-nowrap">{c.unit}</td>
                       <td className="py-2.5 px-3">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium text-foreground">{c.name}</span>
-                          {c.isLowMargin && (
-                            <Badge variant="destructive" className="text-[9px] py-0 px-1">Margen bajo</Badge>
-                          )}
-                          {hasIva && (
+                          <span className={`font-medium ${c.item.product ? "text-foreground" : "text-muted-foreground italic"}`}>{c.name}</span>
+                          {!c.item.product && <Badge variant="outline" className="text-[9px]">Sin producto</Badge>}
+                          {c.isLowMargin && <Badge variant="destructive" className="text-[9px] py-0 px-1">Margen bajo</Badge>}
+                          {hasIva && c.hasPrice && (
                             <span className="text-[10px] text-muted-foreground">IVA {(c.ivaRate * 100).toFixed(1)}%</span>
                           )}
                         </div>
                       </td>
-                      <td className="py-2.5 px-3 text-right text-foreground whitespace-nowrap">${fmt(c.pricePerUnit, 4)}</td>
-                      <td className="py-2.5 px-3 text-right text-foreground whitespace-nowrap">${fmt(c.subtotal)}</td>
-                      {hasIva && (
-                        <td className="py-2.5 px-3 text-right font-semibold text-primary whitespace-nowrap">${fmt(c.totalConIva)}</td>
-                      )}
-                      <td className="py-2.5 px-3 text-right text-muted-foreground whitespace-nowrap border-l border-border">${fmt(c.costPerUnit, 4)}</td>
-                      <td className="py-2.5 px-3 text-right text-muted-foreground whitespace-nowrap">${fmt(c.totalCompra)}</td>
-                      <td className={`py-2.5 px-3 text-right font-semibold whitespace-nowrap ${c.diferencia >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
-                        ${fmt(c.diferencia)}
+                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                        <PriceCell item={c.item} orderId={order.id} isDraft={isDraft} />
                       </td>
-                      <td className={`py-2.5 px-3 text-right font-bold whitespace-nowrap ${c.isLowMargin ? "text-destructive" : "text-green-600 dark:text-green-400"}`}>
-                        {fmtPct(c.pct)}
+                      <td className="py-2.5 px-3 text-right text-foreground whitespace-nowrap">
+                        {c.hasPrice ? `$${fmtInt(c.subtotal)}` : <span className="text-muted-foreground">—</span>}
+                      </td>
+                      {hasIva && (
+                        <td className="py-2.5 px-3 text-right font-semibold text-primary whitespace-nowrap">
+                          {c.hasPrice ? `$${fmtInt(c.totalConIva)}` : <span className="text-muted-foreground">—</span>}
+                        </td>
+                      )}
+                      <td className="py-2.5 px-3 text-right text-muted-foreground whitespace-nowrap border-l border-border">${fmtInt(c.costPerUnit)}</td>
+                      <td className="py-2.5 px-3 text-right text-muted-foreground whitespace-nowrap">${fmtInt(c.totalCompra)}</td>
+                      <td className={`py-2.5 px-3 text-right font-semibold whitespace-nowrap ${!c.hasPrice ? "text-muted-foreground" : c.diferencia >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
+                        {c.hasPrice ? `$${fmtInt(c.diferencia)}` : "—"}
+                      </td>
+                      <td className={`py-2.5 px-3 text-right font-bold whitespace-nowrap ${!c.hasPrice ? "text-muted-foreground" : c.isLowMargin ? "text-destructive" : "text-green-600 dark:text-green-400"}`}>
+                        {c.hasPrice ? fmtPct(c.pct) : "—"}
                       </td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-border bg-muted/20">
-                    <td colSpan={hasIva ? 4 : 4} className="py-3 px-3 font-bold text-foreground uppercase tracking-wide text-xs">Total</td>
-                    <td className="py-3 px-3 text-right font-bold text-foreground whitespace-nowrap">${fmt(grandTotal)}</td>
+                    <td colSpan={4} className="py-3 px-3 font-bold text-foreground uppercase tracking-wide text-xs">Total</td>
+                    <td className="py-3 px-3 text-right font-bold text-foreground whitespace-nowrap">${fmtInt(grandTotal)}</td>
                     {hasIva && (
-                      <td className="py-3 px-3 text-right font-bold text-primary whitespace-nowrap">${fmt(grandTotalConIva)}</td>
+                      <td className="py-3 px-3 text-right font-bold text-primary whitespace-nowrap">${fmtInt(grandTotalConIva)}</td>
                     )}
                     <td className="py-3 px-3 border-l border-border"></td>
-                    <td className="py-3 px-3 text-right font-bold text-muted-foreground whitespace-nowrap">${fmt(grandTotalCompra)}</td>
+                    <td className="py-3 px-3 text-right font-bold text-muted-foreground whitespace-nowrap">${fmtInt(grandTotalCompra)}</td>
                     <td className={`py-3 px-3 text-right font-bold whitespace-nowrap ${grandDiff >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
-                      ${fmt(grandDiff)}
+                      ${fmtInt(grandDiff)}
                     </td>
                     <td className={`py-3 px-3 text-right font-bold whitespace-nowrap ${grandPct < LOW_MARGIN ? "text-destructive" : "text-green-600 dark:text-green-400"}`}>
                       {fmtPct(grandPct)}

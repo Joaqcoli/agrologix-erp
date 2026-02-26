@@ -15,6 +15,7 @@ import OrdersPage from "@/pages/orders/index";
 import NewOrderPage from "@/pages/orders/new";
 import OrderDetailPage from "@/pages/orders/detail";
 import LoadListPage from "@/pages/load-list";
+import IntakePage from "@/pages/intake";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -35,6 +36,7 @@ function Router() {
         {(params) => <OrderDetailPage id={Number(params.id)} />}
       </Route>
       <Route path="/load-list" component={LoadListPage} />
+      <Route path="/intake" component={IntakePage} />
       <Route component={NotFound} />
     </Switch>
   );

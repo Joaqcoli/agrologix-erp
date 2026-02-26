@@ -1,0 +1,111 @@
+Quiero implementar un flujo “tipo Excel” para cargar pedidos sin IA por ahora, pero dejando todo listo para conectar IA después.
+
+Objetivo
+
+Crear una nueva pantalla /intake (Carga Pedido) que permita:
+
+seleccionar Cliente
+
+seleccionar Fecha
+
+pegar texto crudo (como WhatsApp)
+
+al tocar Procesar, crear/actualizar un pedido en Borrador y redirigir a /orders/:id (detalle) para editar y aprobar.
+
+1) Nueva página: /intake (Carga Pedido)
+
+UI simple:
+
+Select Cliente (buscable)
+
+Date Picker (default hoy)
+
+Textarea grande “Pegar pedido”
+
+Botón primario: Procesar pedido
+
+Estado de loading tipo “IA analizando…” (pero sin usar OpenAI; solo parse local)
+
+2) Parseo LOCAL (sin OpenAI, sin gastar créditos)
+
+Implementar un parser determinístico para el texto:
+
+Soportar líneas separadas por salto de línea.
+
+Cada línea puede venir en formatos flexibles:
+
+“5 cajon limon”
+
+“2 kg tomate perita”
+
+“1 bolsa papa”
+
+“lechuga francesa 2 cajon”
+
+Reglas:
+
+Detectar cantidad (primer número que aparezca). Si no hay cantidad, marcar error y no crear esa línea.
+
+Detectar unidad por palabras clave: cajon/caja, bolsa/saco, kg/kilo, unidad/un, atado/at.
+
+El resto del texto = nombre producto “raw”.
+
+Mapear producto contra tabla Products:
+
+Normalizar mayúsculas/minúsculas, tildes, espacios dobles.
+
+Primero intentar match exacto por nombre.
+
+Si no, match por “contiene” o similitud simple (sin IA). Si hay más de 1 candidato, marcar “Ambiguo” y requerir selección manual luego.
+
+Si no se encuentra producto → la línea se crea con estado “Producto no encontrado” para que yo lo corrija en el detalle.
+
+3) Crear pedido y líneas
+
+Al procesar:
+
+Si existe un pedido borrador del mismo cliente+fecha, agregar/mergear líneas (preguntar si reemplazar o sumar).
+
+Si no existe, crear order con status=Borrador.
+
+Crear order_items con producto_id, unidad, cantidad.
+
+4) Precios y costos al crear líneas
+
+Costo: siempre desde costo promedio ponderado del producto (ya existente).
+
+Precio sugerido:
+
+Buscar último precio en price_history para (cliente + producto + unidad).
+
+Si existe → prellenar en order_item.price_sale.
+
+Si NO existe → dejar price_sale = NULL (en blanco) para completar manual.
+
+Recalcular margen en vivo en el detalle.
+
+5) Redirección
+
+Luego de procesar exitosamente:
+
+Redirigir automáticamente a /orders/:id para revisar/editar y aprobar.
+
+6) Ajustes al detalle /orders/:id (para que sea Excel-like)
+
+price_sale debe ser editable.
+
+Si price_sale es NULL, mostrar input vacío (placeholder “Completar precio”).
+
+Formateo ARS sin decimales en UI.
+
+Al aprobar, guardar price_history con el precio final editado (cliente+producto+unidad).
+
+7) Preparar para futuro “IA WhatsApp”
+
+No implementar OpenAI todavía, pero estructurar el código para que el parser sea un “strategy” reemplazable:
+
+parseOrderTextLocal(text) ahora
+
+parseOrderTextAI(text) futuro
+
+Entregar con tests básicos del parser y sin romper el módulo de compras/stock/remitos existente.

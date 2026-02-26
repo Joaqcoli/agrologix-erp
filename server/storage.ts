@@ -267,14 +267,19 @@ export const storage = {
         let totalCosto = 0;
         if (customer?.hasIva) {
           totalConIva = items.reduce((sum, item) => {
+            if (!item.pricePerUnit) return sum;
             const subtotal = parseFloat(item.quantity as string) * parseFloat(item.pricePerUnit as string);
-            const productRow = products_cache.get(item.productId);
+            const productRow = item.productId ? products_cache.get(item.productId) : null;
             const productName = productRow?.name ?? "";
             const rate = productName.toUpperCase().includes("HUEVO") ? 0.21 : 0.105;
             return sum + subtotal * (1 + rate);
           }, 0);
         }
-        totalCosto = items.reduce((sum, item) => sum + parseFloat(item.quantity as string) * parseFloat(item.costPerUnit as string), 0);
+        totalCosto = items.reduce((sum, item) => {
+          const qty = parseFloat(item.quantity as string);
+          const cost = item.costPerUnit ? parseFloat(item.costPerUnit as string) : 0;
+          return sum + qty * cost;
+        }, 0);
 
         return { ...o, customerName: customer?.name ?? "", itemCount: items.length, suggestedRemito, hasIva: customer?.hasIva ?? false, totalConIva: totalConIva.toFixed(2), totalCosto: totalCosto.toFixed(2) };
       })
@@ -289,11 +294,152 @@ export const storage = {
     const items = await db.select().from(orderItems).where(eq(orderItems.orderId, id));
     const itemsWithProducts = await Promise.all(
       items.map(async (item) => {
+        if (!item.productId) return { ...item, product: null };
         const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
-        return { ...item, product };
+        return { ...item, product: product ?? null };
       })
     );
     return { ...o, customer, items: itemsWithProducts };
+  },
+
+  async getDraftOrderByCustomerAndDate(customerId: number, date: string): Promise<Order | undefined> {
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+    const [o] = await db
+      .select()
+      .from(orders)
+      .where(
+        drizzleSql`${orders.customerId} = ${customerId} AND ${orders.status} = 'draft' AND ${orders.orderDate} >= ${startOfDay} AND ${orders.orderDate} <= ${endOfDay}`
+      )
+      .limit(1);
+    return o;
+  },
+
+  async createOrderFromIntake(data: {
+    folio: string;
+    customerId: number;
+    orderDate: Date;
+    notes?: string;
+    createdBy: number;
+    items: {
+      productId: number | null;
+      quantity: string;
+      unit: string;
+      rawProductName?: string;
+      parseStatus?: string;
+    }[];
+  }): Promise<Order> {
+    const [order] = await db.insert(orders).values({
+      folio: data.folio,
+      customerId: data.customerId,
+      orderDate: data.orderDate,
+      notes: data.notes,
+      createdBy: data.createdBy,
+      total: "0",
+      status: "draft",
+      lowMarginConfirmed: false,
+    }).returning();
+
+    const itemsToInsert = await Promise.all(
+      data.items.map(async (item) => {
+        let costPerUnit = "0";
+        if (item.productId) {
+          const [p] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
+          if (p) costPerUnit = p.averageCost as string;
+        }
+        return {
+          orderId: order.id,
+          productId: item.productId ?? null,
+          quantity: item.quantity,
+          unit: (item.unit as any) ?? "kg",
+          pricePerUnit: null as any,
+          costPerUnit,
+          margin: null as any,
+          subtotal: "0",
+          rawProductName: item.rawProductName ?? null,
+          parseStatus: item.parseStatus ?? "ok",
+        };
+      })
+    );
+
+    if (itemsToInsert.length > 0) {
+      await db.insert(orderItems).values(itemsToInsert);
+    }
+
+    return order;
+  },
+
+  async addItemsToOrder(orderId: number, items: {
+    productId: number | null;
+    quantity: string;
+    unit: string;
+    rawProductName?: string;
+    parseStatus?: string;
+  }[]): Promise<void> {
+    const itemsToInsert = await Promise.all(
+      items.map(async (item) => {
+        let costPerUnit = "0";
+        if (item.productId) {
+          const [p] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
+          if (p) costPerUnit = p.averageCost as string;
+        }
+        return {
+          orderId,
+          productId: item.productId ?? null,
+          quantity: item.quantity,
+          unit: (item.unit as any) ?? "kg",
+          pricePerUnit: null as any,
+          costPerUnit,
+          margin: null as any,
+          subtotal: "0",
+          rawProductName: item.rawProductName ?? null,
+          parseStatus: item.parseStatus ?? "ok",
+        };
+      })
+    );
+    if (itemsToInsert.length > 0) {
+      await db.insert(orderItems).values(itemsToInsert);
+    }
+  },
+
+  async replaceOrderItems(orderId: number, items: {
+    productId: number | null;
+    quantity: string;
+    unit: string;
+    rawProductName?: string;
+    parseStatus?: string;
+  }[]): Promise<void> {
+    await db.delete(orderItems).where(eq(orderItems.orderId, orderId));
+    await this.addItemsToOrder(orderId, items);
+    await db.update(orders).set({ total: "0" }).where(eq(orders.id, orderId));
+  },
+
+  async updateOrderItemPrice(orderId: number, itemId: number, pricePerUnit: string): Promise<OrderItem> {
+    const [item] = await db.select().from(orderItems).where(
+      and(eq(orderItems.id, itemId), eq(orderItems.orderId, orderId))
+    ).limit(1);
+    if (!item) throw new Error("Item not found");
+
+    const qty = parseFloat(item.quantity as string);
+    const price = parseFloat(pricePerUnit);
+    const cost = parseFloat(item.costPerUnit as string);
+    const subtotal = qty * price;
+    const margin = price > 0 ? (price - cost) / price : 0;
+
+    const [updated] = await db.update(orderItems).set({
+      pricePerUnit,
+      subtotal: subtotal.toFixed(2),
+      margin: margin.toFixed(4),
+    }).where(eq(orderItems.id, itemId)).returning();
+
+    // Recalculate order total (only items with price)
+    const allItems = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+    const total = allItems.reduce((s, i) => s + parseFloat(i.subtotal as string), 0);
+    await db.update(orders).set({ total: total.toFixed(2) }).where(eq(orders.id, orderId));
+
+    return updated;
   },
 
   async generateOrderFolio(): Promise<string> {
@@ -361,34 +507,43 @@ export const storage = {
     if (!order) throw new Error("Order not found");
     if (order.status !== "draft") throw new Error("Order is not in draft status");
 
+    // Guard: all items must have a price before approval
+    const unpricedItems = order.items.filter((i) => !i.pricePerUnit || parseFloat(i.pricePerUnit as string) === 0);
+    if (unpricedItems.length > 0) {
+      throw new Error(`${unpricedItems.length} producto(s) sin precio. Completá los precios antes de aprobar.`);
+    }
+
     // Create stock OUT movements and save price history
     for (const item of order.items) {
       const qty = parseFloat(item.quantity as string);
 
-      await db.insert(stockMovements).values({
-        productId: item.productId,
-        movementType: "out",
-        quantity: item.quantity as string,
-        unitCost: item.costPerUnit as string,
-        referenceId: id,
-        referenceType: "order",
-        notes: `Pedido ${order.folio}`,
-      });
+      // Only create stock movements for items with a linked product
+      if (item.productId) {
+        await db.insert(stockMovements).values({
+          productId: item.productId,
+          movementType: "out",
+          quantity: item.quantity as string,
+          unitCost: item.costPerUnit as string,
+          referenceId: id,
+          referenceType: "order",
+          notes: `Pedido ${order.folio}`,
+        });
 
-      // Update product stock
-      const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
-      if (product) {
-        const newStock = parseFloat(product.currentStock as string) - qty;
-        await db.update(products).set({ currentStock: newStock.toFixed(4) }).where(eq(products.id, item.productId));
+        // Update product stock
+        const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
+        if (product) {
+          const newStock = parseFloat(product.currentStock as string) - qty;
+          await db.update(products).set({ currentStock: newStock.toFixed(4) }).where(eq(products.id, item.productId));
+        }
+
+        // Save final price to price_history
+        await db.insert(priceHistory).values({
+          customerId: order.customerId,
+          productId: item.productId,
+          pricePerUnit: item.pricePerUnit as string,
+          orderId: id,
+        });
       }
-
-      // Save final price to price_history
-      await db.insert(priceHistory).values({
-        customerId: order.customerId,
-        productId: item.productId,
-        pricePerUnit: item.pricePerUnit as string,
-        orderId: id,
-      });
     }
 
     // Generate remito

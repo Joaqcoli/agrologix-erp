@@ -107,13 +107,15 @@ export const orders = pgTable("orders", {
 export const orderItems = pgTable("order_items", {
   id: serial("id").primaryKey(),
   orderId: integer("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
-  productId: integer("product_id").notNull().references(() => products.id),
+  productId: integer("product_id").references(() => products.id),
   quantity: numeric("quantity", { precision: 12, scale: 4 }).notNull(),
-  unit: unitEnum("unit").notNull(),
-  pricePerUnit: numeric("price_per_unit", { precision: 12, scale: 4 }).notNull(),
-  costPerUnit: numeric("cost_per_unit", { precision: 12, scale: 4 }).notNull(),
+  unit: unitEnum("unit").notNull().default("kg"),
+  pricePerUnit: numeric("price_per_unit", { precision: 12, scale: 4 }),
+  costPerUnit: numeric("cost_per_unit", { precision: 12, scale: 4 }).notNull().default("0"),
   margin: numeric("margin", { precision: 8, scale: 4 }),
-  subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull(),
+  subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
+  rawProductName: text("raw_product_name"),
+  parseStatus: text("parse_status"),
 });
 
 // Stores the last sale price per customer+product (price history)

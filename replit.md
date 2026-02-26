@@ -35,6 +35,7 @@ client/src/
     auth.tsx           - AuthContext + useAuth hook
     queryClient.ts     - TanStack Query client + apiRequest
     pdf.ts             - jsPDF remito PDF generation
+    orderParser.ts     - Deterministic order text parser (strategy pattern)
 
 server/
   index.ts             - Express entry point, session setup, startup
@@ -58,7 +59,7 @@ shared/
 - **stock_movements**: id, product_id, movement_type (in|out), quantity, unit_cost, reference_id, reference_type
 - **product_cost_history**: id, product_id, average_cost, previous_cost, purchase_id
 - **orders**: id, folio (PV-00001), customer_id, order_date, status (draft|approved|cancelled), total, notes, low_margin_confirmed, remito_id, created_by, approved_by, approved_at
-- **order_items**: id, order_id, product_id, quantity, unit, price_per_unit, cost_per_unit, margin, subtotal
+- **order_items**: id, order_id, product_id (nullable), quantity, unit, price_per_unit (nullable), cost_per_unit, margin, subtotal, raw_product_name, parse_status
 - **price_history**: id, customer_id, product_id, price_per_unit, order_id (last sale price per customer+product)
 - **remitos**: id, folio (VA-000001), order_id, customer_id, issued_at
 
@@ -82,6 +83,21 @@ shared/
    - Export day XLSX (all orders for selected date, per-customer blocks, IVA-aware columns)
    - Export single order XLSX
 7. **Load List** - Consolidated view of approved orders by date, summed by product+unit
+8. **Intake (Carga Pedido) Module**:
+   - Text-based order entry: paste raw text (e.g. "5 cajon limon") and parse client-side
+   - Deterministic parser (orderParser.ts): accent-normalize, unit-alias mapping, word-overlap scoring
+   - Strategy pattern — ready to swap in AI parser (parseOrderTextAI stub included)
+   - Preview step: shows parsed lines with OK/Ambiguous/No product/No qty statuses
+   - Ambiguous lines: dropdown to select from candidates
+   - Missing product lines: full product dropdown to assign manually
+   - Draft detection: if draft exists for same customer+date, offers Merge / Replace / New
+   - POST /api/orders/intake → creates order with null pricePerUnit for all items
+   - Redirect to order detail for price completion
+9. **Inline Price Editing** (order detail):
+   - Items with no price show "Sin precio" badge and editable input immediately
+   - Hover any priced row in draft orders to reveal pencil edit icon
+   - PATCH /api/orders/:id/items/:itemId → updates price, recalculates subtotal/margin/order total
+   - Approval blocked until all items have prices > 0
 
 ## IVA Rules
 
@@ -124,6 +140,9 @@ shared/
 - `GET /api/orders/:id/export` — export single order as XLSX
 - `GET /api/remitos/:id` — remito detail
 - `GET /api/load-list?date=YYYY-MM-DD` — consolidated load list
+- `GET /api/orders/draft?customerId&date` — check for existing draft order
+- `POST /api/orders/intake` — create order from text intake (items without prices, modes: new/merge/replace)
+- `PATCH /api/orders/:id/items/:itemId` — update item price, recalculate totals
 
 ## Running
 

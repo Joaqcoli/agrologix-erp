@@ -20,6 +20,7 @@ import {
   Truck,
   FileText,
   ClipboardList,
+  MessageSquarePlus,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +33,7 @@ const navItems = [
   { title: "Productos", url: "/products", icon: Package },
   { title: "Compras", url: "/purchases", icon: ShoppingCart },
   { title: "Pedidos", url: "/orders", icon: FileText },
+  { title: "Carga Pedido", url: "/intake", icon: MessageSquarePlus },
   { title: "Lista de Carga", url: "/load-list", icon: ClipboardList },
 ];
 

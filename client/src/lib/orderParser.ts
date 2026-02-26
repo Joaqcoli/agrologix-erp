@@ -1,0 +1,274 @@
+/**
+ * orderParser.ts — Deterministic order text parser (strategy pattern)
+ *
+ * Strategy interface:
+ *   type ParseStrategy = (text: string, products: Product[]) => ParsedLine[]
+ *
+ * Current implementation: parseOrderTextLocal (no AI)
+ * Future:                 parseOrderTextAI   (OpenAI)
+ */
+
+export type ParseStatus = "ok" | "no_qty" | "no_product" | "ambiguous";
+
+export type ParsedLine = {
+  raw: string;
+  quantity: number | null;
+  unit: string | null;
+  rawProductName: string;
+  productId: number | null;
+  productName: string | null;
+  status: ParseStatus;
+  candidates: { id: number; name: string; sku: string }[];
+  selectedProductId?: number;
+};
+
+// Valid units for the enum (must match DB enum)
+const VALID_UNITS = ["kg", "pz", "caja", "saco", "litro", "tonelada"] as const;
+type ValidUnit = typeof VALID_UNITS[number];
+
+// Map of keyword aliases → canonical unit
+const UNIT_MAP: Record<string, ValidUnit> = {
+  cajon: "caja",
+  cajones: "caja",
+  caja: "caja",
+  cajas: "caja",
+  bolsa: "saco",
+  bolsas: "saco",
+  saco: "saco",
+  sacos: "saco",
+  kg: "kg",
+  kilo: "kg",
+  kilos: "kg",
+  kilogramo: "kg",
+  kilogramos: "kg",
+  pz: "pz",
+  pieza: "pz",
+  piezas: "pz",
+  unidad: "pz",
+  unidades: "pz",
+  und: "pz",
+  un: "pz",
+  litro: "litro",
+  litros: "litro",
+  lt: "litro",
+  lts: "litro",
+  tonelada: "tonelada",
+  toneladas: "tonelada",
+  ton: "tonelada",
+  tons: "tonelada",
+  atado: "pz",
+  at: "pz",
+};
+
+// Strip accents and normalize
+function normalize(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Tokenize a string
+function words(s: string): string[] {
+  return normalize(s).split(" ").filter(Boolean);
+}
+
+// Check if all words of `needle` appear in `haystack`
+function containsAllWords(haystack: string[], needle: string[]): boolean {
+  return needle.every((w) => haystack.includes(w));
+}
+
+type SimpleProduct = { id: number; name: string; sku: string; unit: string };
+
+function matchProduct(
+  rawName: string,
+  products: SimpleProduct[]
+): { id: number; name: string; sku: string }[] {
+  const normRaw = normalize(rawName);
+  const rawWords = words(rawName);
+
+  const matches: { id: number; name: string; sku: string; score: number }[] = [];
+
+  for (const p of products) {
+    const normName = normalize(p.name);
+    const pWords = words(p.name);
+
+    if (normName === normRaw) {
+      // Exact match — best possible score
+      return [{ id: p.id, name: p.name, sku: p.sku }];
+    }
+
+    let score = 0;
+
+    // All raw words appear in product name
+    if (containsAllWords(pWords, rawWords)) score += 3;
+    // All product words appear in raw query
+    else if (containsAllWords(rawWords, pWords)) score += 2;
+    // Any word overlap
+    else {
+      const overlap = rawWords.filter((w) => pWords.includes(w));
+      if (overlap.length > 0) score += overlap.length;
+    }
+
+    // SKU match
+    if (normalize(p.sku) === normRaw) score += 5;
+
+    if (score > 0) {
+      matches.push({ id: p.id, name: p.name, sku: p.sku, score });
+    }
+  }
+
+  // Sort by score descending
+  matches.sort((a, b) => b.score - a.score);
+
+  if (matches.length === 0) return [];
+
+  // Return all matches with max score (could be multiple if tied)
+  const maxScore = matches[0].score;
+  return matches
+    .filter((m) => m.score === maxScore)
+    .map(({ id, name, sku }) => ({ id, name, sku }));
+}
+
+/**
+ * Parse a single line of text into a ParsedLine.
+ */
+function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  const tokens = trimmed.split(/\s+/);
+
+  let quantity: number | null = null;
+  let unit: string | null = null;
+  const remainingTokens: string[] = [];
+
+  // Pass 1: find quantity (first number)
+  let quantityFound = false;
+  for (const token of tokens) {
+    if (!quantityFound && /^[\d]+([.,]\d+)?$/.test(token)) {
+      quantity = parseFloat(token.replace(",", "."));
+      quantityFound = true;
+    } else {
+      remainingTokens.push(token);
+    }
+  }
+
+  // Pass 2: find unit from remaining tokens
+  const productTokens: string[] = [];
+  for (const token of remainingTokens) {
+    const normToken = normalize(token);
+    if (UNIT_MAP[normToken]) {
+      unit = UNIT_MAP[normToken];
+    } else {
+      productTokens.push(token);
+    }
+  }
+
+  const rawProductName = productTokens.join(" ").trim();
+
+  // No quantity found
+  if (quantity === null) {
+    return {
+      raw: trimmed,
+      quantity: null,
+      unit,
+      rawProductName,
+      productId: null,
+      productName: null,
+      status: "no_qty",
+      candidates: [],
+    };
+  }
+
+  // Try to match product
+  if (!rawProductName) {
+    return {
+      raw: trimmed,
+      quantity,
+      unit,
+      rawProductName: "",
+      productId: null,
+      productName: null,
+      status: "no_product",
+      candidates: [],
+    };
+  }
+
+  const matched = matchProduct(rawProductName, products);
+
+  if (matched.length === 0) {
+    return {
+      raw: trimmed,
+      quantity,
+      unit,
+      rawProductName,
+      productId: null,
+      productName: null,
+      status: "no_product",
+      candidates: [],
+    };
+  }
+
+  if (matched.length === 1) {
+    // Use product's default unit if none provided
+    const product = products.find((p) => p.id === matched[0].id);
+    if (!unit && product) unit = product.unit;
+
+    return {
+      raw: trimmed,
+      quantity,
+      unit: unit ?? "kg",
+      rawProductName,
+      productId: matched[0].id,
+      productName: matched[0].name,
+      status: "ok",
+      candidates: matched,
+    };
+  }
+
+  // Multiple candidates — ambiguous
+  return {
+    raw: trimmed,
+    quantity,
+    unit: unit ?? "kg",
+    rawProductName,
+    productId: null,
+    productName: null,
+    status: "ambiguous",
+    candidates: matched,
+  };
+}
+
+/**
+ * Main local parser strategy.
+ * Splits text by newlines and parses each line.
+ */
+export function parseOrderTextLocal(
+  text: string,
+  products: SimpleProduct[]
+): ParsedLine[] {
+  const lines = text.split(/\n/).map((l) => l.trim()).filter(Boolean);
+  const results: ParsedLine[] = [];
+
+  for (const line of lines) {
+    const parsed = parseLine(line, products);
+    if (parsed) results.push(parsed);
+  }
+
+  return results;
+}
+
+/**
+ * Placeholder for future AI strategy.
+ * Signature intentionally matches parseOrderTextLocal.
+ */
+export async function parseOrderTextAI(
+  _text: string,
+  _products: SimpleProduct[]
+): Promise<ParsedLine[]> {
+  throw new Error("AI parser not yet implemented");
+}

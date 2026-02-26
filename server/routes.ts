@@ -175,6 +175,68 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ folio: await storage.generateOrderFolio() });
   });
 
+  // Check if a draft order exists for customer+date (for intake merge flow)
+  app.get("/api/orders/draft", requireAuth, async (req, res) => {
+    const { customerId, date } = req.query;
+    if (!customerId || !date) return res.status(400).json({ error: "customerId and date required" });
+    const draft = await storage.getDraftOrderByCustomerAndDate(Number(customerId), date as string);
+    return res.json(draft ?? null);
+  });
+
+  // Create order from intake (no prices required)
+  app.post("/api/orders/intake", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({
+        customerId: z.number(),
+        orderDate: z.string(),
+        notes: z.string().optional(),
+        mode: z.enum(["new", "merge", "replace"]).default("new"),
+        existingOrderId: z.number().optional(),
+        items: z.array(z.object({
+          productId: z.number().nullable(),
+          quantity: z.string(),
+          unit: z.string(),
+          rawProductName: z.string().optional(),
+          parseStatus: z.string().optional(),
+        })).min(1),
+      }).parse(req.body);
+
+      let order;
+      if (body.mode === "merge" && body.existingOrderId) {
+        await storage.addItemsToOrder(body.existingOrderId, body.items);
+        order = { id: body.existingOrderId };
+      } else if (body.mode === "replace" && body.existingOrderId) {
+        await storage.replaceOrderItems(body.existingOrderId, body.items);
+        order = { id: body.existingOrderId };
+      } else {
+        const folio = await storage.generateOrderFolio();
+        order = await storage.createOrderFromIntake({
+          folio,
+          customerId: body.customerId,
+          orderDate: new Date(body.orderDate),
+          notes: body.notes,
+          createdBy: req.session.userId!,
+          items: body.items,
+        });
+      }
+
+      return res.status(201).json({ orderId: order.id });
+    } catch (e: any) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  // Update a single order item's price
+  app.patch("/api/orders/:id/items/:itemId", requireAuth, async (req, res) => {
+    try {
+      const { pricePerUnit } = z.object({ pricePerUnit: z.string() }).parse(req.body);
+      const item = await storage.updateOrderItemPrice(Number(req.params.id), Number(req.params.itemId), pricePerUnit);
+      return res.json(item);
+    } catch (e: any) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
   app.get("/api/orders/:id", requireAuth, async (req, res) => {
     const o = await storage.getOrder(Number(req.params.id));
     if (!o) return res.status(404).json({ error: "Not found" });
