@@ -18,7 +18,8 @@ import {
   ShoppingCart,
   LogOut,
   Truck,
-  ChevronRight,
+  FileText,
+  ClipboardList,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +31,8 @@ const navItems = [
   { title: "Clientes", url: "/customers", icon: Users },
   { title: "Productos", url: "/products", icon: Package },
   { title: "Compras", url: "/purchases", icon: ShoppingCart },
+  { title: "Pedidos", url: "/orders", icon: FileText },
+  { title: "Lista de Carga", url: "/load-list", icon: ClipboardList },
 ];
 
 export function AppSidebar() {
@@ -72,7 +75,7 @@ export function AppSidebar() {
                       asChild
                       isActive={isActive}
                       className="mx-2 rounded-md"
-                      data-testid={`nav-${item.title.toLowerCase()}`}
+                      data-testid={`nav-${item.title.toLowerCase().replace(/\s/g, "-")}`}
                     >
                       <Link href={item.url}>
                         <item.icon className="h-4 w-4 shrink-0" />

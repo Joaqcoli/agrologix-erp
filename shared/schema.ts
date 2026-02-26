@@ -6,6 +6,7 @@ import { sql } from "drizzle-orm";
 export const roleEnum = pgEnum("role", ["admin", "operator"]);
 export const movementTypeEnum = pgEnum("movement_type", ["in", "out"]);
 export const unitEnum = pgEnum("unit", ["kg", "pz", "caja", "saco", "litro", "tonelada"]);
+export const orderStatusEnum = pgEnum("order_status", ["draft", "approved", "cancelled"]);
 
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
@@ -84,6 +85,56 @@ export const productCostHistory = pgTable("product_cost_history", {
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 
+// ─── Orders ───────────────────────────────────────────────────────────────────
+
+export const orders = pgTable("orders", {
+  id: serial("id").primaryKey(),
+  folio: text("folio").notNull().unique(),
+  customerId: integer("customer_id").notNull().references(() => customers.id),
+  orderDate: timestamp("order_date").notNull().default(sql`now()`),
+  status: orderStatusEnum("status").notNull().default("draft"),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
+  notes: text("notes"),
+  lowMarginConfirmed: boolean("low_margin_confirmed").notNull().default(false),
+  remitoId: integer("remito_id"),
+  createdBy: integer("created_by").references(() => users.id),
+  approvedBy: integer("approved_by").references(() => users.id),
+  approvedAt: timestamp("approved_at"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
+export const orderItems = pgTable("order_items", {
+  id: serial("id").primaryKey(),
+  orderId: integer("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+  productId: integer("product_id").notNull().references(() => products.id),
+  quantity: numeric("quantity", { precision: 12, scale: 4 }).notNull(),
+  unit: unitEnum("unit").notNull(),
+  pricePerUnit: numeric("price_per_unit", { precision: 12, scale: 4 }).notNull(),
+  costPerUnit: numeric("cost_per_unit", { precision: 12, scale: 4 }).notNull(),
+  margin: numeric("margin", { precision: 8, scale: 4 }),
+  subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull(),
+});
+
+// Stores the last sale price per customer+product (price history)
+export const priceHistory = pgTable("price_history", {
+  id: serial("id").primaryKey(),
+  customerId: integer("customer_id").notNull().references(() => customers.id),
+  productId: integer("product_id").notNull().references(() => products.id),
+  pricePerUnit: numeric("price_per_unit", { precision: 12, scale: 4 }).notNull(),
+  orderId: integer("order_id").references(() => orders.id),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
+export const remitos = pgTable("remitos", {
+  id: serial("id").primaryKey(),
+  folio: text("folio").notNull().unique(),
+  orderId: integer("order_id").notNull().references(() => orders.id),
+  customerId: integer("customer_id").notNull().references(() => customers.id),
+  issuedAt: timestamp("issued_at").notNull().default(sql`now()`),
+});
+
+// ─── Schemas ──────────────────────────────────────────────────────────────────
+
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, passwordHash: true }).extend({
   password: z.string().min(6),
 });
@@ -98,6 +149,20 @@ export const insertPurchaseSchema = createInsertSchema(purchases).omit({ id: tru
     costPerUnit: z.string(),
   })).min(1, "Must have at least one item"),
 });
+export const insertOrderSchema = z.object({
+  customerId: z.number(),
+  orderDate: z.union([z.string(), z.date()]),
+  notes: z.string().optional(),
+  lowMarginConfirmed: z.boolean().default(false),
+  items: z.array(z.object({
+    productId: z.number(),
+    quantity: z.string(),
+    unit: z.enum(["kg", "pz", "caja", "saco", "litro", "tonelada"]),
+    pricePerUnit: z.string(),
+  })).min(1, "Must have at least one item"),
+});
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -110,3 +175,8 @@ export type PurchaseItem = typeof purchaseItems.$inferSelect;
 export type InsertPurchase = z.infer<typeof insertPurchaseSchema>;
 export type StockMovement = typeof stockMovements.$inferSelect;
 export type ProductCostHistory = typeof productCostHistory.$inferSelect;
+export type Order = typeof orders.$inferSelect;
+export type OrderItem = typeof orderItems.$inferSelect;
+export type InsertOrder = z.infer<typeof insertOrderSchema>;
+export type PriceHistory = typeof priceHistory.$inferSelect;
+export type Remito = typeof remitos.$inferSelect;

@@ -11,6 +11,10 @@ import ProductsPage from "@/pages/products";
 import PurchasesPage from "@/pages/purchases/index";
 import NewPurchasePage from "@/pages/purchases/new";
 import PurchaseDetailPage from "@/pages/purchases/detail";
+import OrdersPage from "@/pages/orders/index";
+import NewOrderPage from "@/pages/orders/new";
+import OrderDetailPage from "@/pages/orders/detail";
+import LoadListPage from "@/pages/load-list";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -25,6 +29,12 @@ function Router() {
       <Route path="/purchases/:id">
         {(params) => <PurchaseDetailPage id={Number(params.id)} />}
       </Route>
+      <Route path="/orders" component={OrdersPage} />
+      <Route path="/orders/new" component={NewOrderPage} />
+      <Route path="/orders/:id">
+        {(params) => <OrderDetailPage id={Number(params.id)} />}
+      </Route>
+      <Route path="/load-list" component={LoadListPage} />
       <Route component={NotFound} />
     </Switch>
   );

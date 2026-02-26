@@ -113,5 +113,65 @@ export async function runMigrations() {
     )
   `);
 
+  // ─── Orders ─────────────────────────────────────────────────────────────────
+  await db.execute(sql`
+    DO $$ BEGIN
+      CREATE TYPE order_status AS ENUM ('draft', 'approved', 'cancelled');
+    EXCEPTION WHEN duplicate_object THEN null; END $$;
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS orders (
+      id SERIAL PRIMARY KEY,
+      folio TEXT NOT NULL UNIQUE,
+      customer_id INTEGER NOT NULL REFERENCES customers(id),
+      order_date TIMESTAMP NOT NULL DEFAULT now(),
+      status order_status NOT NULL DEFAULT 'draft',
+      total NUMERIC(12,2) NOT NULL DEFAULT 0,
+      notes TEXT,
+      low_margin_confirmed BOOLEAN NOT NULL DEFAULT false,
+      remito_id INTEGER,
+      created_by INTEGER REFERENCES users(id),
+      approved_by INTEGER REFERENCES users(id),
+      approved_at TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT now()
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS order_items (
+      id SERIAL PRIMARY KEY,
+      order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES products(id),
+      quantity NUMERIC(12,4) NOT NULL,
+      unit unit NOT NULL,
+      price_per_unit NUMERIC(12,4) NOT NULL,
+      cost_per_unit NUMERIC(12,4) NOT NULL,
+      margin NUMERIC(8,4),
+      subtotal NUMERIC(12,2) NOT NULL
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS price_history (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES customers(id),
+      product_id INTEGER NOT NULL REFERENCES products(id),
+      price_per_unit NUMERIC(12,4) NOT NULL,
+      order_id INTEGER REFERENCES orders(id),
+      created_at TIMESTAMP NOT NULL DEFAULT now()
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS remitos (
+      id SERIAL PRIMARY KEY,
+      folio TEXT NOT NULL UNIQUE,
+      order_id INTEGER NOT NULL REFERENCES orders(id),
+      customer_id INTEGER NOT NULL REFERENCES customers(id),
+      issued_at TIMESTAMP NOT NULL DEFAULT now()
+    )
+  `);
+
   console.log("Migrations complete.");
 }

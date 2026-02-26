@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema } from "@shared/schema";
+import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema } from "@shared/schema";
 import { z } from "zod";
 
 declare module "express-session" {
@@ -15,12 +15,6 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.session.userId) {
     return res.status(401).json({ error: "Not authenticated" });
   }
-  next();
-}
-
-function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  if (!req.session.userId) return res.status(401).json({ error: "Not authenticated" });
-  if (req.session.userRole !== "admin") return res.status(403).json({ error: "Admin required" });
   next();
 }
 
@@ -57,8 +51,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Customers ─────────────────────────────────────────────────────────────
   app.get("/api/customers", requireAuth, async (req, res) => {
-    const list = await storage.getCustomers();
-    return res.json(list);
+    return res.json(await storage.getCustomers());
   });
 
   app.get("/api/customers/:id", requireAuth, async (req, res) => {
@@ -70,16 +63,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/customers", requireAuth, async (req, res) => {
     try {
       const data = insertCustomerSchema.parse(req.body);
-      const c = await storage.createCustomer(data);
-      return res.status(201).json(c);
+      return res.status(201).json(await storage.createCustomer(data));
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   app.patch("/api/customers/:id", requireAuth, async (req, res) => {
     try {
       const data = insertCustomerSchema.partial().parse(req.body);
-      const c = await storage.updateCustomer(Number(req.params.id), data);
-      return res.json(c);
+      return res.json(await storage.updateCustomer(Number(req.params.id), data));
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
@@ -90,8 +81,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Products ──────────────────────────────────────────────────────────────
   app.get("/api/products", requireAuth, async (req, res) => {
-    const list = await storage.getProducts();
-    return res.json(list);
+    return res.json(await storage.getProducts());
   });
 
   app.get("/api/products/:id", requireAuth, async (req, res) => {
@@ -103,16 +93,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/products", requireAuth, async (req, res) => {
     try {
       const data = insertProductSchema.parse(req.body);
-      const p = await storage.createProduct(data);
-      return res.status(201).json(p);
+      return res.status(201).json(await storage.createProduct(data));
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   app.patch("/api/products/:id", requireAuth, async (req, res) => {
     try {
       const data = insertProductSchema.partial().parse(req.body);
-      const p = await storage.updateProduct(Number(req.params.id), data);
-      return res.json(p);
+      return res.json(await storage.updateProduct(Number(req.params.id), data));
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
@@ -121,15 +109,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ ok: true });
   });
 
+  // ─── Price History ─────────────────────────────────────────────────────────
+  app.get("/api/price-history/:customerId/:productId", requireAuth, async (req, res) => {
+    const record = await storage.getLastPrice(Number(req.params.customerId), Number(req.params.productId));
+    return res.json(record ?? null);
+  });
+
   // ─── Purchases ─────────────────────────────────────────────────────────────
   app.get("/api/purchases", requireAuth, async (req, res) => {
-    const list = await storage.getPurchases();
-    return res.json(list);
+    return res.json(await storage.getPurchases());
   });
 
   app.get("/api/purchases/next-folio", requireAuth, async (req, res) => {
-    const folio = await storage.generateFolio();
-    return res.json({ folio });
+    return res.json({ folio: await storage.generatePurchaseFolio() });
   });
 
   app.get("/api/purchases/:id", requireAuth, async (req, res) => {
@@ -156,8 +148,59 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Stock Movements ───────────────────────────────────────────────────────
   app.get("/api/stock-movements", requireAuth, async (req, res) => {
     const productId = req.query.productId ? Number(req.query.productId) : undefined;
-    const list = await storage.getStockMovements(productId);
-    return res.json(list);
+    return res.json(await storage.getStockMovements(productId));
+  });
+
+  // ─── Orders ────────────────────────────────────────────────────────────────
+  app.get("/api/orders", requireAuth, async (req, res) => {
+    return res.json(await storage.getOrders());
+  });
+
+  app.get("/api/orders/next-folio", requireAuth, async (req, res) => {
+    return res.json({ folio: await storage.generateOrderFolio() });
+  });
+
+  app.get("/api/orders/:id", requireAuth, async (req, res) => {
+    const o = await storage.getOrder(Number(req.params.id));
+    if (!o) return res.status(404).json({ error: "Not found" });
+    return res.json(o);
+  });
+
+  app.post("/api/orders", requireAuth, async (req, res) => {
+    try {
+      const data = insertOrderSchema.parse(req.body);
+      const order = await storage.createOrder({
+        folio: await storage.generateOrderFolio(),
+        customerId: data.customerId,
+        orderDate: new Date(data.orderDate as unknown as string),
+        notes: data.notes,
+        lowMarginConfirmed: data.lowMarginConfirmed,
+        createdBy: req.session.userId!,
+        items: data.items as any,
+      });
+      return res.status(201).json(order);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.post("/api/orders/:id/approve", requireAuth, async (req, res) => {
+    try {
+      const order = await storage.approveOrder(Number(req.params.id), req.session.userId!);
+      return res.json(order);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  // ─── Remitos ───────────────────────────────────────────────────────────────
+  app.get("/api/remitos/:id", requireAuth, async (req, res) => {
+    const r = await storage.getRemito(Number(req.params.id));
+    if (!r) return res.status(404).json({ error: "Not found" });
+    return res.json(r);
+  });
+
+  // ─── Load List ─────────────────────────────────────────────────────────────
+  app.get("/api/load-list", requireAuth, async (req, res) => {
+    const date = req.query.date as string;
+    if (!date) return res.status(400).json({ error: "date query param required" });
+    return res.json(await storage.getLoadList(date));
   });
 
   return httpServer;

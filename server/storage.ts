@@ -1,11 +1,13 @@
 import { db } from "./db";
 import {
   users, customers, products, purchases, purchaseItems,
-  stockMovements, productCostHistory,
+  stockMovements, productCostHistory, orders, orderItems,
+  priceHistory, remitos,
   type User, type Customer, type Product, type Purchase,
-  type PurchaseItem, type StockMovement,
+  type PurchaseItem, type StockMovement, type Order,
+  type OrderItem, type PriceHistory, type Remito,
 } from "@shared/schema";
-import { eq, desc, asc, and } from "drizzle-orm";
+import { eq, desc, asc, and, sql as drizzleSql } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 
 export const storage = {
@@ -86,6 +88,21 @@ export const storage = {
 
   async deleteProduct(id: number): Promise<void> {
     await db.update(products).set({ active: false }).where(eq(products.id, id));
+  },
+
+  // ─── Price History ─────────────────────────────────────────────────────────
+  async getLastPrice(customerId: number, productId: number): Promise<PriceHistory | undefined> {
+    const [record] = await db
+      .select()
+      .from(priceHistory)
+      .where(and(eq(priceHistory.customerId, customerId), eq(priceHistory.productId, productId)))
+      .orderBy(desc(priceHistory.createdAt))
+      .limit(1);
+    return record;
+  },
+
+  async savePriceHistory(customerId: number, productId: number, pricePerUnit: string, orderId: number): Promise<void> {
+    await db.insert(priceHistory).values({ customerId, productId, pricePerUnit, orderId });
   },
 
   // ─── Purchases ────────────────────────────────────────────────────────────
@@ -190,7 +207,7 @@ export const storage = {
     return purchase;
   },
 
-  async generateFolio(): Promise<string> {
+  async generatePurchaseFolio(): Promise<string> {
     const [last] = await db.select().from(purchases).orderBy(desc(purchases.id)).limit(1);
     const num = last ? parseInt(last.folio.replace("OC-", "")) + 1 : 1;
     return `OC-${String(num).padStart(5, "0")}`;
@@ -201,5 +218,215 @@ export const storage = {
       return db.select().from(stockMovements).where(eq(stockMovements.productId, productId)).orderBy(desc(stockMovements.createdAt));
     }
     return db.select().from(stockMovements).orderBy(desc(stockMovements.createdAt));
+  },
+
+  // ─── Orders ───────────────────────────────────────────────────────────────
+  async getOrders(): Promise<(Order & { customerName: string; itemCount: number })[]> {
+    const all = await db.select().from(orders).orderBy(desc(orders.createdAt));
+    const result = await Promise.all(
+      all.map(async (o) => {
+        const [customer] = await db.select().from(customers).where(eq(customers.id, o.customerId)).limit(1);
+        const items = await db.select().from(orderItems).where(eq(orderItems.orderId, o.id));
+        return { ...o, customerName: customer?.name ?? "", itemCount: items.length };
+      })
+    );
+    return result;
+  },
+
+  async getOrder(id: number): Promise<(Order & { customer: Customer; items: (OrderItem & { product: Product })[] }) | undefined> {
+    const [o] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);
+    if (!o) return undefined;
+    const [customer] = await db.select().from(customers).where(eq(customers.id, o.customerId)).limit(1);
+    const items = await db.select().from(orderItems).where(eq(orderItems.orderId, id));
+    const itemsWithProducts = await Promise.all(
+      items.map(async (item) => {
+        const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
+        return { ...item, product };
+      })
+    );
+    return { ...o, customer, items: itemsWithProducts };
+  },
+
+  async generateOrderFolio(): Promise<string> {
+    const [last] = await db.select().from(orders).orderBy(desc(orders.id)).limit(1);
+    const num = last ? parseInt(last.folio.replace("PV-", "")) + 1 : 1;
+    return `PV-${String(num).padStart(5, "0")}`;
+  },
+
+  async createOrder(data: {
+    folio: string;
+    customerId: number;
+    orderDate: Date;
+    notes?: string;
+    lowMarginConfirmed: boolean;
+    createdBy: number;
+    items: { productId: number; quantity: string; unit: string; pricePerUnit: string }[];
+  }): Promise<Order> {
+    let total = 0;
+    const itemsEnriched = await Promise.all(
+      data.items.map(async (item) => {
+        const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
+        const costPerUnit = product ? parseFloat(product.averageCost as string) : 0;
+        const price = parseFloat(item.pricePerUnit);
+        const margin = price > 0 ? (price - costPerUnit) / price : 0;
+        const subtotal = parseFloat(item.quantity) * price;
+        total += subtotal;
+        return {
+          ...item,
+          costPerUnit: costPerUnit.toFixed(4),
+          margin: margin.toFixed(4),
+          subtotal: subtotal.toFixed(2),
+        };
+      })
+    );
+
+    const [order] = await db.insert(orders).values({
+      folio: data.folio,
+      customerId: data.customerId,
+      orderDate: data.orderDate,
+      notes: data.notes,
+      lowMarginConfirmed: data.lowMarginConfirmed,
+      createdBy: data.createdBy,
+      total: total.toFixed(2),
+      status: "draft",
+    }).returning();
+
+    await db.insert(orderItems).values(
+      itemsEnriched.map((item) => ({
+        orderId: order.id,
+        productId: item.productId,
+        quantity: item.quantity,
+        unit: item.unit as any,
+        pricePerUnit: item.pricePerUnit,
+        costPerUnit: item.costPerUnit,
+        margin: item.margin,
+        subtotal: item.subtotal,
+      }))
+    );
+
+    return order;
+  },
+
+  async approveOrder(id: number, userId: number): Promise<Order> {
+    const order = await this.getOrder(id);
+    if (!order) throw new Error("Order not found");
+    if (order.status !== "draft") throw new Error("Order is not in draft status");
+
+    // Create stock OUT movements and save price history
+    for (const item of order.items) {
+      const qty = parseFloat(item.quantity as string);
+
+      await db.insert(stockMovements).values({
+        productId: item.productId,
+        movementType: "out",
+        quantity: item.quantity as string,
+        unitCost: item.costPerUnit as string,
+        referenceId: id,
+        referenceType: "order",
+        notes: `Pedido ${order.folio}`,
+      });
+
+      // Update product stock
+      const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
+      if (product) {
+        const newStock = parseFloat(product.currentStock as string) - qty;
+        await db.update(products).set({ currentStock: newStock.toFixed(4) }).where(eq(products.id, item.productId));
+      }
+
+      // Save final price to price_history
+      await db.insert(priceHistory).values({
+        customerId: order.customerId,
+        productId: item.productId,
+        pricePerUnit: item.pricePerUnit as string,
+        orderId: id,
+      });
+    }
+
+    // Generate remito
+    const [lastRemito] = await db.select().from(remitos).orderBy(desc(remitos.id)).limit(1);
+    const remitoNum = lastRemito ? parseInt(lastRemito.folio.replace("VA-", "")) + 1 : 1;
+    const remitoFolio = `VA-${String(remitoNum).padStart(6, "0")}`;
+
+    const [remito] = await db.insert(remitos).values({
+      folio: remitoFolio,
+      orderId: id,
+      customerId: order.customerId,
+    }).returning();
+
+    // Update order status
+    const [updated] = await db.update(orders).set({
+      status: "approved",
+      approvedBy: userId,
+      approvedAt: new Date(),
+      remitoId: remito.id,
+    }).where(eq(orders.id, id)).returning();
+
+    return updated;
+  },
+
+  async getRemito(id: number): Promise<(Remito & { order: Order & { customer: Customer; items: (OrderItem & { product: Product })[] } }) | undefined> {
+    const [r] = await db.select().from(remitos).where(eq(remitos.id, id)).limit(1);
+    if (!r) return undefined;
+    const order = await this.getOrder(r.orderId);
+    if (!order) return undefined;
+    return { ...r, order };
+  },
+
+  async getRemitoByOrderId(orderId: number): Promise<Remito | undefined> {
+    const [r] = await db.select().from(remitos).where(eq(remitos.orderId, orderId)).limit(1);
+    return r;
+  },
+
+  // ─── Load List ─────────────────────────────────────────────────────────────
+  async getLoadList(date: string): Promise<{ productId: number; productName: string; sku: string; unit: string; totalQuantity: number; orderCount: number }[]> {
+    // Get all approved orders for the date
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const dayOrders = await db
+      .select()
+      .from(orders)
+      .where(and(
+        eq(orders.status, "approved"),
+        drizzleSql`${orders.orderDate} >= ${startOfDay} AND ${orders.orderDate} <= ${endOfDay}`
+      ));
+
+    if (dayOrders.length === 0) return [];
+
+    const orderIds = dayOrders.map((o) => o.id);
+
+    // Get all items for those orders
+    const allItems: (OrderItem & { product: Product })[] = [];
+    for (const oid of orderIds) {
+      const items = await db.select().from(orderItems).where(eq(orderItems.orderId, oid));
+      for (const item of items) {
+        const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
+        if (product) allItems.push({ ...item, product });
+      }
+    }
+
+    // Consolidate by product + unit
+    const map = new Map<string, { productId: number; productName: string; sku: string; unit: string; totalQuantity: number; orderCount: number }>();
+    for (const item of allItems) {
+      const key = `${item.productId}-${item.unit}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.totalQuantity += parseFloat(item.quantity as string);
+        existing.orderCount += 1;
+      } else {
+        map.set(key, {
+          productId: item.productId,
+          productName: item.product.name,
+          sku: item.product.sku,
+          unit: item.unit,
+          totalQuantity: parseFloat(item.quantity as string),
+          orderCount: 1,
+        });
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => a.productName.localeCompare(b.productName));
   },
 };
