@@ -7,7 +7,7 @@ import {
   type PurchaseItem, type StockMovement, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
 } from "@shared/schema";
-import { eq, desc, asc, and, sql as drizzleSql } from "drizzle-orm";
+import { eq, desc, asc, and, sql as drizzleSql, ne } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
 import bcrypt from "bcryptjs";
 
@@ -68,8 +68,13 @@ export const storage = {
   },
 
   // ─── Products ─────────────────────────────────────────────────────────────
-  async getProducts(): Promise<Product[]> {
-    return db.select().from(products).orderBy(asc(products.name));
+  async getProducts(filters?: { category?: string; search?: string }): Promise<Product[]> {
+    const conditions = [eq(products.active, true)];
+    if (filters?.category) conditions.push(drizzleSql`${products.category} = ${filters.category}`);
+    if (filters?.search) conditions.push(drizzleSql`upper(${products.name}) LIKE ${'%' + filters.search.toUpperCase() + '%'}`);
+    return db.select().from(products)
+      .where(conditions.length === 1 ? conditions[0] : and(...conditions as any))
+      .orderBy(asc(products.name));
   },
 
   async getProduct(id: number): Promise<Product | undefined> {
@@ -78,7 +83,7 @@ export const storage = {
   },
 
   async createProduct(data: Omit<typeof products.$inferInsert, "id" | "createdAt" | "averageCost" | "currentStock">): Promise<Product> {
-    const [p] = await db.insert(products).values({ ...data, averageCost: "0", currentStock: "0" }).returning();
+    const [p] = await db.insert(products).values({ ...data, sku: null, averageCost: "0", currentStock: "0" }).returning();
     return p;
   },
 
@@ -667,7 +672,7 @@ export const storage = {
         map.set(key, {
           productId: item.productId as number,
           productName: item.product.name,
-          sku: item.product.sku,
+          sku: item.product.sku ?? "",
           unit: item.unit,
           totalQuantity: parseFloat(item.quantity as string),
           orderCount: 1,
@@ -685,15 +690,27 @@ export const storage = {
       .where(and(eq(productUnits.productId, productId), eq(productUnits.isActive, true)));
   },
 
-  async getAllProductUnitsStock(): Promise<(ProductUnit & { product: Product })[]> {
-    const all = await db.select().from(productUnits);
+  async getAllProductUnitsStock(filters?: { category?: string; search?: string; onlyInStock?: boolean }): Promise<(ProductUnit & { product: Product })[]> {
+    const onlyInStock = filters?.onlyInStock !== false; // default true
+    const puConditions: any[] = [eq(productUnits.isActive, true)];
+    if (onlyInStock) puConditions.push(drizzleSql`${productUnits.stockQty} > 0`);
+
+    const all = await db.select().from(productUnits)
+      .where(and(...puConditions));
+
     const result = await Promise.all(
       all.map(async (pu) => {
         const [product] = await db.select().from(products).where(eq(products.id, pu.productId)).limit(1);
         return { ...pu, product };
       })
     );
-    return result.filter((r) => r.product?.active);
+
+    return result.filter((r) => {
+      if (!r.product?.active) return false;
+      if (filters?.category && r.product.category !== filters.category) return false;
+      if (filters?.search && !r.product.name.toUpperCase().includes(filters.search.toUpperCase())) return false;
+      return true;
+    }).sort((a, b) => a.product.name.localeCompare(b.product.name));
   },
 
   async upsertProductUnit(productId: number, unit: string): Promise<ProductUnit> {
@@ -735,19 +752,18 @@ export const storage = {
       const normalizedName = line.name.trim().toUpperCase();
       const canonicalUnit = line.unit.trim().toUpperCase(); // already canonicalized by caller
 
-      // Find or create product
+      // Find or create product (no SKU)
       let [existing] = await db.select().from(products)
         .where(drizzleSql`upper(${products.name}) = ${normalizedName}`)
         .limit(1);
 
       if (!existing) {
-        // Generate a safe SKU from name
-        const sku = normalizedName.replace(/\s+/g, "-").slice(0, 20) + "-" + Date.now().toString().slice(-4);
         const [created_] = await db.insert(products).values({
           name: normalizedName,
-          sku,
+          sku: null,
           description: "",
-          unit: "kg" as any, // default enum value for backward compat
+          unit: "kg" as any,
+          category: "Verdura",
           averageCost: "0",
           currentStock: "0",
         }).returning();
@@ -769,5 +785,55 @@ export const storage = {
       }
     }
     return { created, unitsAdded };
+  },
+
+  // B) Set units for a product (idempotent diff: add new, soft-delete removed)
+  async setProductUnits(productId: number, desiredUnits: string[]): Promise<ProductUnit[]> {
+    const normalized = desiredUnits.map((u) => u.trim().toUpperCase());
+
+    // Get currently active units
+    const currentActive = await db.select().from(productUnits)
+      .where(and(eq(productUnits.productId, productId), eq(productUnits.isActive, true)));
+
+    const currentUnitSet = new Set(currentActive.map((pu) => pu.unit));
+    const desiredSet = new Set(normalized);
+
+    // Units to add (desired but not currently active)
+    for (const unit of normalized) {
+      if (!currentUnitSet.has(unit)) {
+        // Check if exists but inactive
+        const [inactive] = await db.select().from(productUnits)
+          .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, unit)))
+          .limit(1);
+        if (inactive) {
+          await db.update(productUnits).set({ isActive: true }).where(eq(productUnits.id, inactive.id));
+        } else {
+          await db.insert(productUnits).values({ productId, unit, avgCost: "0", stockQty: "0" });
+        }
+      }
+    }
+
+    // Units to remove (currently active but not in desired)
+    for (const pu of currentActive) {
+      if (!desiredSet.has(pu.unit)) {
+        const stock = parseFloat(pu.stockQty as string);
+        // Check if has stock movements
+        const movements = await db.select().from(stockMovements)
+          .where(eq(stockMovements.productId, productId))
+          .limit(1);
+        const hasHistory = stock !== 0 || movements.length > 0;
+        if (hasHistory) {
+          // Soft disable
+          await db.update(productUnits).set({ isActive: false }).where(eq(productUnits.id, pu.id));
+        } else {
+          // Safe to delete
+          await db.delete(productUnits).where(eq(productUnits.id, pu.id));
+        }
+      }
+    }
+
+    // Return updated active units
+    return db.select().from(productUnits)
+      .where(and(eq(productUnits.productId, productId), eq(productUnits.isActive, true)));
   },
 };

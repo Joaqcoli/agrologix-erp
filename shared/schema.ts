@@ -8,6 +8,9 @@ export const movementTypeEnum = pgEnum("movement_type", ["in", "out"]);
 export const unitEnum = pgEnum("unit", ["kg", "pz", "caja", "saco", "litro", "tonelada"]);
 export const orderStatusEnum = pgEnum("order_status", ["draft", "approved", "cancelled"]);
 
+export const PRODUCT_CATEGORIES = ["Fruta", "Verdura", "Hortaliza Liviana", "Hortaliza Pesada", "Hongos/Hierbas", "Huevos"] as const;
+export type ProductCategory = typeof PRODUCT_CATEGORIES[number];
+
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
@@ -35,9 +38,10 @@ export const customers = pgTable("customers", {
 export const products = pgTable("products", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
-  sku: text("sku").notNull().unique(),
+  sku: text("sku").unique(),                                        // now nullable — kept for compat but not shown
   description: text("description"),
   unit: unitEnum("unit").notNull().default("kg"),
+  category: text("category").default("Verdura"),                    // NEW
   averageCost: numeric("average_cost", { precision: 12, scale: 4 }).notNull().default("0"),
   currentStock: numeric("current_stock", { precision: 12, scale: 4 }).notNull().default("0"),
   active: boolean("active").notNull().default(true),
@@ -152,7 +156,11 @@ export const insertUserSchema = createInsertSchema(users).omit({ id: true, creat
   password: z.string().min(6),
 });
 export const insertCustomerSchema = createInsertSchema(customers).omit({ id: true, createdAt: true });
-export const insertProductSchema = createInsertSchema(products).omit({ id: true, createdAt: true, averageCost: true, currentStock: true });
+export const insertProductSchema = createInsertSchema(products)
+  .omit({ id: true, createdAt: true, averageCost: true, currentStock: true, sku: true })
+  .extend({
+    category: z.enum(PRODUCT_CATEGORIES).default("Verdura"),
+  });
 export const insertPurchaseSchema = createInsertSchema(purchases).omit({ id: true, createdAt: true, createdBy: true, total: true }).extend({
   purchaseDate: z.union([z.string(), z.date()]),
   items: z.array(z.object({

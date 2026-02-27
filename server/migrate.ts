@@ -220,5 +220,20 @@ export async function runMigrations() {
     ON CONFLICT (product_id, unit) DO NOTHING
   `);
 
+  // A) Make SKU nullable (drop NOT NULL constraint)
+  await db.execute(sql`
+    ALTER TABLE products ALTER COLUMN sku DROP NOT NULL
+  `);
+
+  // D) Add category column to products
+  await db.execute(sql`
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Verdura'
+  `);
+
+  // Backfill existing products with default category
+  await db.execute(sql`
+    UPDATE products SET category = 'Verdura' WHERE category IS NULL
+  `);
+
   console.log("Migrations complete.");
 }

@@ -1,0 +1,224 @@
+Contexto (NO cambiar)
+
+App: AgroLogix (ERP distribuidora)
+
+Base actual: productos + product_units (doble unidad por producto), compras y pedidos ya funcionando.
+
+NO tocar lógica de stock/avg cost, compras, pedidos, remitos, intake.
+
+Solo modificar: módulo Productos + endpoints relacionados.
+
+OBJETIVOS
+A) Quitar SKU en toda la app (productos)
+
+En UI:
+
+En /products no mostrar SKU en cards ni en modales.
+
+En pestaña “Stock”, no mostrar SKU en tabla.
+
+En formularios (crear/editar): eliminar campo SKU o esconderlo.
+
+En DB:
+
+Dejar de usar SKU como identificador visible.
+
+Si existe columna sku en products, no borrarla por ahora (para no romper nada), pero:
+
+No exigirla (nullable)
+
+No generarla automáticamente
+
+No usarla para búsquedas (usar id + name)
+
+En código:
+
+Quitar cualquier render “{product.sku}”.
+
+En búsquedas: que el search input filtre por name solamente (o name + normalized_name). No por sku.
+
+B) Arreglar guardado de unidades de medida en editar producto
+
+Ahora falla “agregar/quitar unidad”. Quiero que funcione perfecto e idempotente.
+
+Reglas
+
+Un producto puede tener varias unidades asociadas en product_units.
+
+Editar producto debe permitir:
+
+Agregar unidad (crear product_units si no existe)
+
+Quitar unidad (eliminar o desactivar el product_units correspondiente)
+
+Importante: no perder data si ya tiene movimientos:
+
+Si una unidad tiene stock ≠ 0 o tiene movimientos asociados, NO borrar físicamente.
+
+En ese caso: marcar como is_active=false (soft disable) y ocultarla en UI por defecto.
+
+Si stock = 0 y no hay movimientos, se puede hard delete si querés, pero preferible también soft disable para simplificar.
+
+Implementación recomendada
+
+Agregar en tabla product_units campos:
+
+is_active boolean default true
+
+(si ya existe “active” usar ese, no duplicar)
+
+Endpoints:
+
+PATCH /api/products/:id
+
+actualiza name, category, etc.
+
+PUT /api/products/:id/units
+
+recibe lista final de unidades seleccionadas (ej: ["CAJON","KG"])
+
+backend calcula diff:
+
+unidades nuevas → create product_units (stock 0, avg_cost 0)
+
+unidades removidas:
+
+si tiene stock != 0 o stock_movements → set is_active=false
+
+si no tiene nada → opcional delete o is_active=false
+
+respuesta devuelve unidades activas actualizadas.
+
+UI
+
+Modal editar producto:
+
+checkboxes o multi-select de unidades
+
+botón “Guardar”
+
+al guardar:
+
+primero PATCH producto (si cambió)
+
+luego PUT unidades
+
+al volver a abrir, debe reflejar EXACTO lo guardado.
+
+C) En solapa “Stock” mostrar SOLO productos con stock
+
+En pestaña “Stock” (tabla product×unit):
+
+Mostrar solo filas donde stock_qty > 0
+
+Opcional: toggle “Mostrar stock 0” (off por defecto)
+
+Mantener alertas de costo 0 si stock > 0.
+
+Backend:
+
+Ajustar query del endpoint de stock para filtrar:
+
+WHERE stock_qty > 0 AND is_active=true
+
+Si el filtro se hace frontend, igual hacer el filtro server-side para performance.
+
+D) Categorías por producto + filtros en Productos y Stock
+Categorías requeridas (enum fijo)
+
+Fruta
+
+Verdura
+
+Hortaliza Liviana
+
+Hortaliza Pesada
+
+Hongos/Hierbas
+
+Huevos
+
+DB
+
+En products agregar:
+
+category text (o enum si ya manejan enums)
+
+default = Verdura (o null y obligar a elegir en UI)
+
+Backfill:
+
+Los productos actuales sin category → set default “Verdura” (para no romper).
+
+UI: crear/editar producto
+
+Agregar campo obligatorio “Categoría” (dropdown con esas opciones)
+
+En editar debe mostrar la categoría actual
+
+Guardar con PATCH /api/products/:id
+
+Filtros
+
+En /products:
+
+Tab “Productos”:
+
+Barra arriba con:
+
+search (por nombre)
+
+filtro por categoría (dropdown “Todas” + las 6)
+
+chips rápidos (opcional) para elegir 1 categoría
+
+El listado de cards debe reflejar:
+
+search + category filter combinados
+
+Tab “Stock”:
+
+Mismos filtros:
+
+search por nombre
+
+category filter
+
+Aplicar sobre la tabla filtrada (stock>0)
+
+Backend:
+
+Mejor que el endpoint de productos y stock acepte query params:
+
+/api/products?category=Fruta&search=limon
+
+/api/stock?category=Fruta&search=limon&onlyInStock=true
+
+Si ya tienen storage methods, agregar variantes con filtros.
+
+VALIDACIONES / CHECKLIST
+
+✅ No se ve SKU en ningún lado.
+
+✅ Editar unidades:
+
+agregar unidad -> aparece y se guarda
+
+quitar unidad -> desaparece (y queda inactive si tenía historial)
+
+refrescar página no “revive” unidades que quité
+
+✅ Stock tab:
+
+muestra solo stock > 0 por defecto
+
+✅ Categorías:
+
+crear/editar obliga a seleccionar categoría
+
+filtros funcionan en ambas tabs
+
+PEDIDO FINAL
+
+Implementar lo anterior con migración DB + cambios en storage + routes + UI.
+Luego correr TypeScript check + e2e smoke test (crear producto, asignar 2 unidades, cargar compra, ver stock, filtrar por categoría).

@@ -18,7 +18,7 @@ export type ParsedLine = {
   productId: number | null;
   productName: string | null;
   status: ParseStatus;
-  candidates: { id: number; name: string; sku: string }[];
+  candidates: { id: number; name: string; sku?: string | null }[];
   selectedProductId?: number;
 };
 
@@ -81,16 +81,16 @@ function containsAllWords(haystack: string[], needle: string[]): boolean {
   return needle.every((w) => haystack.includes(w));
 }
 
-type SimpleProduct = { id: number; name: string; sku: string; unit: string };
+type SimpleProduct = { id: number; name: string; sku?: string | null; unit: string };
 
 function matchProduct(
   rawName: string,
   products: SimpleProduct[]
-): { id: number; name: string; sku: string }[] {
+): { id: number; name: string; sku?: string | null }[] {
   const normRaw = normalize(rawName);
   const rawWords = words(rawName);
 
-  const matches: { id: number; name: string; sku: string; score: number }[] = [];
+  const matches: { id: number; name: string; sku?: string | null; score: number }[] = [];
 
   for (const p of products) {
     const normName = normalize(p.name);
@@ -113,8 +113,8 @@ function matchProduct(
       if (overlap.length > 0) score += overlap.length;
     }
 
-    // SKU match
-    if (normalize(p.sku) === normRaw) score += 5;
+    // SKU match (only if sku exists — sku is optional)
+    if (p.sku && normalize(p.sku) === normRaw) score += 5;
 
     if (score > 0) {
       matches.push({ id: p.id, name: p.name, sku: p.sku, score });

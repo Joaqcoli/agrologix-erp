@@ -96,16 +96,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Products ──────────────────────────────────────────────────────────────
   app.get("/api/products", requireAuth, async (req, res) => {
-    return res.json(await storage.getProducts());
+    const { category, search } = req.query as { category?: string; search?: string };
+    return res.json(await storage.getProducts({
+      category: category || undefined,
+      search: search || undefined,
+    }));
   });
 
   // Specific sub-routes MUST come before /api/products/:id to avoid capture
   app.get("/api/products/units", requireAuth, async (req, res) => {
-    return res.json(await storage.getAllProductUnitsStock());
+    const { category, search, onlyInStock } = req.query as { category?: string; search?: string; onlyInStock?: string };
+    return res.json(await storage.getAllProductUnitsStock({
+      category: category || undefined,
+      search: search || undefined,
+      onlyInStock: onlyInStock !== "false",
+    }));
   });
 
   app.get("/api/products/stock", requireAuth, async (req, res) => {
-    return res.json(await storage.getAllProductUnitsStock());
+    const { category, search, onlyInStock } = req.query as { category?: string; search?: string; onlyInStock?: string };
+    return res.json(await storage.getAllProductUnitsStock({
+      category: category || undefined,
+      search: search || undefined,
+      onlyInStock: onlyInStock !== "false",
+    }));
   });
 
   app.post("/api/products/import", requireAuth, async (req, res) => {
@@ -126,19 +140,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/products", requireAuth, async (req, res) => {
     try {
-      const data = insertProductSchema.parse(req.body);
+      const body = insertProductSchema.parse(req.body);
+      const { units, ...data } = body as any;
       const product = await storage.createProduct(data);
-      // Also create the default product_unit row for the product's default unit
-      const canonical = canonicalizeUnit(data.unit ?? "kg");
-      await storage.upsertProductUnit(product.id, canonical);
+      // Create initial units: from units array if provided, or from product.unit
+      const initialUnits: string[] = Array.isArray(units) && units.length > 0
+        ? units.map((u: string) => canonicalizeUnit(u))
+        : [canonicalizeUnit(data.unit ?? "kg")];
+      await storage.setProductUnits(product.id, initialUnits);
       return res.status(201).json(product);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   app.patch("/api/products/:id", requireAuth, async (req, res) => {
     try {
-      const data = insertProductSchema.partial().parse(req.body);
-      return res.json(await storage.updateProduct(Number(req.params.id), data));
+      const { units, ...rest } = req.body as any;
+      const data = insertProductSchema.partial().parse(rest);
+      const product = await storage.updateProduct(Number(req.params.id), data);
+      return res.json(product);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
@@ -151,6 +170,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/products/:id/units", requireAuth, async (req, res) => {
     return res.json(await storage.getProductUnits(Number(req.params.id)));
+  });
+
+  // PUT /api/products/:id/units — replace unit set (idempotent diff)
+  app.put("/api/products/:id/units", requireAuth, async (req, res) => {
+    try {
+      const { units } = z.object({ units: z.array(z.string()).min(0) }).parse(req.body);
+      const canonical = units.map((u) => canonicalizeUnit(u));
+      const updated = await storage.setProductUnits(Number(req.params.id), canonical);
+      return res.json(updated);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   app.post("/api/products/:id/units", requireAuth, async (req, res) => {
