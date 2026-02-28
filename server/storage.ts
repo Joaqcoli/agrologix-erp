@@ -740,57 +740,131 @@ export const storage = {
   },
 
   // ─── Load List ─────────────────────────────────────────────────────────────
-  async getLoadList(date: string): Promise<{ productId: number; productName: string; sku: string; unit: string; totalQuantity: number; orderCount: number }[]> {
-    // Get all approved orders for the date
+  async getLoadListByDate(date: string, includeDrafts: boolean): Promise<{
+    summary: { date: string; ordersCount: number; customersCount: number; rowsCount: number; shortagesCount: number };
+    rows: Array<{ productId: number; productName: string; unit: string; totalQty: number; stockQty: number; diffQty: number; customersCount: number; customerNames: string[] }>;
+    pending: Array<{ orderId: number; orderFolio: string; customerName: string; rawText: string; qty: number | null; unit: string | null }>;
+  }> {
     const startOfDay = new Date(date);
     startOfDay.setHours(0, 0, 0, 0);
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
-    const dayOrders = await db
-      .select()
-      .from(orders)
-      .where(and(
-        eq(orders.status, "approved"),
-        drizzleSql`${orders.orderDate} >= ${startOfDay} AND ${orders.orderDate} <= ${endOfDay}`
-      ));
+    const statusFilter = includeDrafts
+      ? drizzleSql`${orders.status} IN ('approved','draft')`
+      : eq(orders.status, "approved");
 
-    if (dayOrders.length === 0) return [];
+    const dayOrders = await db
+      .select({ id: orders.id, folio: orders.folio, customerId: orders.customerId, status: orders.status })
+      .from(orders)
+      .where(and(statusFilter, drizzleSql`${orders.orderDate} >= ${startOfDay} AND ${orders.orderDate} <= ${endOfDay}`));
+
+    if (dayOrders.length === 0) {
+      return { summary: { date, ordersCount: 0, customersCount: 0, rowsCount: 0, shortagesCount: 0 }, rows: [], pending: [] };
+    }
+
+    const customerIds = Array.from(new Set(dayOrders.map((o) => o.customerId)));
+    const allCustomers = await db.select({ id: customers.id, name: customers.name }).from(customers)
+      .where(drizzleSql`${customers.id} = ANY(ARRAY[${drizzleSql.join(customerIds.map(id => drizzleSql`${id}`), drizzleSql`, `)}]::int[])`);
+    const customerMap = new Map(allCustomers.map((c) => [c.id, c.name]));
 
     const orderIds = dayOrders.map((o) => o.id);
+    const orderCustomerMap = new Map(dayOrders.map((o) => [o.id, o.customerId]));
+    const orderFolioMap = new Map(dayOrders.map((o) => [o.id, o.folio]));
 
-    // Get all items for those orders
-    const allItems: (OrderItem & { product: Product })[] = [];
-    for (const oid of orderIds) {
-      const items = await db.select().from(orderItems).where(eq(orderItems.orderId, oid));
-      for (const item of items) {
-        if (!item.productId) continue;
-        const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
-        if (product) allItems.push({ ...item, product });
-      }
-    }
+    const allItems = await db.select().from(orderItems)
+      .where(drizzleSql`${orderItems.orderId} = ANY(ARRAY[${drizzleSql.join(orderIds.map(id => drizzleSql`${id}`), drizzleSql`, `)}]::int[])`);
 
-    // Consolidate by product + unit
-    const map = new Map<string, { productId: number; productName: string; sku: string; unit: string; totalQuantity: number; orderCount: number }>();
-    for (const item of allItems) {
-      const key = `${item.productId}-${item.unit}`;
-      const existing = map.get(key);
-      if (existing) {
-        existing.totalQuantity += parseFloat(item.quantity as string);
-        existing.orderCount += 1;
-      } else {
-        map.set(key, {
-          productId: item.productId as number,
-          productName: item.product.name,
-          sku: item.product.sku ?? "",
-          unit: item.unit,
-          totalQuantity: parseFloat(item.quantity as string),
-          orderCount: 1,
+    // Pending: items with no productId
+    const pending: Array<{ orderId: number; orderFolio: string; customerName: string; rawText: string; qty: number | null; unit: string | null }> = [];
+    const resolvedItems = allItems.filter((item) => {
+      if (!item.productId) {
+        const cid = orderCustomerMap.get(item.orderId);
+        pending.push({
+          orderId: item.orderId,
+          orderFolio: orderFolioMap.get(item.orderId) ?? "",
+          customerName: cid ? (customerMap.get(cid) ?? "?") : "?",
+          rawText: item.rawProductName ?? "?",
+          qty: item.quantity ? parseFloat(item.quantity as string) : null,
+          unit: item.unit ?? null,
         });
+        return false;
+      }
+      return true;
+    });
+
+    // Load product names
+    const productIds = Array.from(new Set(resolvedItems.map((i) => i.productId as number)));
+    const allProducts = productIds.length > 0
+      ? await db.select({ id: products.id, name: products.name }).from(products)
+          .where(drizzleSql`${products.id} = ANY(ARRAY[${drizzleSql.join(productIds.map(id => drizzleSql`${id}`), drizzleSql`, `)}]::int[])`)
+      : [];
+    const productNameMap = new Map(allProducts.map((p) => [p.id, p.name]));
+
+    // Load stock from product_units
+    const allPU = productIds.length > 0
+      ? await db.select({ productId: productUnits.productId, unit: productUnits.unit, stockQty: productUnits.stockQty })
+          .from(productUnits)
+          .where(drizzleSql`${productUnits.productId} = ANY(ARRAY[${drizzleSql.join(productIds.map(id => drizzleSql`${id}`), drizzleSql`, `)}]::int[])`)
+      : [];
+    const stockMap = new Map<string, number>();
+    for (const pu of allPU) {
+      stockMap.set(`${pu.productId}-${pu.unit}`, parseFloat(pu.stockQty as string));
+    }
+
+    // Consolidate by productId + unit
+    type Row = { productId: number; productName: string; unit: string; totalQty: number; stockQty: number; diffQty: number; customerSet: Set<number>; customerNames: string[] };
+    const rowMap = new Map<string, Row>();
+    for (const item of resolvedItems) {
+      const pid = item.productId as number;
+      const key = `${pid}-${item.unit}`;
+      const qty = item.quantity ? parseFloat(item.quantity as string) : 0;
+      const cid = orderCustomerMap.get(item.orderId);
+      if (!rowMap.has(key)) {
+        const stock = stockMap.get(key) ?? 0;
+        rowMap.set(key, {
+          productId: pid,
+          productName: productNameMap.get(pid) ?? "?",
+          unit: item.unit,
+          totalQty: qty,
+          stockQty: stock,
+          diffQty: stock - qty,
+          customerSet: new Set(cid !== undefined ? [cid] : []),
+          customerNames: [],
+        });
+      } else {
+        const row = rowMap.get(key)!;
+        row.totalQty += qty;
+        row.diffQty = row.stockQty - row.totalQty;
+        if (cid !== undefined) row.customerSet.add(cid);
       }
     }
 
-    return Array.from(map.values()).sort((a, b) => a.productName.localeCompare(b.productName));
+    const rows = Array.from(rowMap.values()).map((r) => ({
+      productId: r.productId,
+      productName: r.productName,
+      unit: r.unit,
+      totalQty: r.totalQty,
+      stockQty: r.stockQty,
+      diffQty: r.diffQty,
+      customersCount: r.customerSet.size,
+      customerNames: Array.from(r.customerSet).map((id) => customerMap.get(id) ?? "?"),
+    }));
+
+    rows.sort((a, b) => {
+      if (a.diffQty < 0 && b.diffQty >= 0) return -1;
+      if (a.diffQty >= 0 && b.diffQty < 0) return 1;
+      return a.productName.localeCompare(b.productName);
+    });
+
+    const shortagesCount = rows.filter((r) => r.diffQty < 0).length;
+    const uniqueCustomers = new Set(dayOrders.map((o) => o.customerId));
+
+    return {
+      summary: { date, ordersCount: dayOrders.length, customersCount: uniqueCustomers.size, rowsCount: rows.length, shortagesCount },
+      rows,
+      pending,
+    };
   },
 
   // ─── Product Units ──────────────────────────────────────────────────────────

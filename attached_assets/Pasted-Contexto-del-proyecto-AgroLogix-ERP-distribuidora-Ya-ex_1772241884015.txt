@@ -1,0 +1,198 @@
+Contexto del proyecto: AgroLogix (ERP distribuidora). Ya existen módulos: Pedidos (/orders), Carga Pedido (/intake), Productos (/products), Lista de Carga (/load-list). Ya existe product_units (stock por producto×unidad), movimientos de stock y costos promedio. Ya existen pedidos por fecha y consolidación parcial.
+
+OBJETIVO
+
+Modificar el módulo Lista de Carga para que funcione como en una distribuidora real:
+
+La lista de carga se arma automáticamente a medida que se crean pedidos en Carga Pedido para una fecha X.
+
+Debe consolidar por Producto + Unidad, sumando cantidades de todos los pedidos aprobados o borrador (preferible: incluir ambos con toggle).
+
+Debe mostrar el stock disponible (lo que quedó del día anterior / stock actual registrado en product_units) y calcular faltante o sobrante.
+
+Debe permitir exportar a Excel (XLSX) una vista “galpón”.
+
+REQUERIMIENTOS FUNCIONALES
+A) Vista principal: /load-list
+
+Arriba: selector de fecha (default hoy).
+
+Debajo: un Resumen del día con tarjetas:
+
+Pedidos (cantidad) = cantidad de pedidos para esa fecha
+
+Clientes = cantidad de clientes únicos
+
+Productos/ítems = cantidad de filas consolidadas (producto×unidad)
+
+Faltantes totales = cantidad de filas donde faltante > 0
+
+Luego una tabla consolidada con columnas:
+
+Tabla “Lista de carga (Galpón)”
+
+Producto
+
+Unidad
+
+Total pedido (sumatoria cantidades de todos los pedidos del día para ese producto+unidad)
+
+Stock disponible (desde product_units.current_stock para ese producto+unidad)
+
+Diferencia (Stock - Pedido)
+
+si es negativo → mostrar como FALTANTE (en rojo)
+
+si es positivo → mostrar como SOBRANTE (en verde)
+
+“Clientes” (conteo de cuántos clientes piden ese ítem)
+
+(opcional) Botón “Ver detalle” que abre modal con desglose por cliente.
+
+Reglas:
+
+Agrupar estrictamente por product_id + unit (no solo por nombre).
+
+Si hay items de intake sin productId (sin producto confirmado), crear una sección aparte arriba:
+
+“Pendientes de asignación” con filas: texto original + cantidad + unidad + cliente.
+
+No deben contaminar la consolidación.
+
+B) Toggle de estado de pedidos a incluir
+
+Arriba de la tabla:
+
+Toggle: Incluir Borradores (ON por defecto).
+
+Toggle: Solo Aprobados (si está ON, desactiva “borradores”).
+
+C) Export
+
+Agregar botón arriba:
+
+Exportar Lista de Carga (XLSX)
+
+El XLSX debe tener:
+
+Hoja 1: “Carga” con la tabla consolidada (Producto, Unidad, Total, Stock, Diferencia, Clientes).
+
+Hoja 2: “Detalle por cliente” (opcional simple): Cliente, Producto, Unidad, Cantidad.
+
+Sin SKU.
+
+D) Performance / costo de cambios (importante por créditos)
+
+NO reestructurar todo.
+
+Reusar storage.ts y routes.ts existentes.
+
+Agregar 1 método nuevo en storage:
+
+getLoadListByDate(date: string, includeDrafts: boolean): { summary, rows, pending }
+
+REQUERIMIENTOS DE BACKEND
+Endpoint nuevo o ajustar existente
+
+Si ya existe /api/load-list?date=YYYY-MM-DD, extenderlo.
+Si no existe, crear:
+
+GET /api/load-list?date=YYYY-MM-DD&includeDrafts=1
+
+Retorna:
+
+{
+  summary: {
+    date: string,
+    ordersCount: number,
+    customersCount: number,
+    rowsCount: number,
+    shortagesCount: number
+  },
+  rows: Array<{
+    productId: number,
+    productName: string,
+    unit: string,
+    totalQty: number,
+    stockQty: number,
+    diffQty: number,
+    customersCount: number
+  }>,
+  pending: Array<{
+    orderId: number,
+    customerName: string,
+    rawText: string,
+    qty: number | null,
+    unit: string | null
+  }>
+}
+Cómo calcular stock disponible
+
+Usar product_units.current_stock como stock disponible actual.
+
+No inventar “stock del día anterior”: el stock vigente ya representa “lo que quedó”.
+
+Cómo agrupar
+
+Query:
+
+traer order_items de orders filtrados por date
+
+incluir status según toggles
+
+agrupar por product_id + unit
+
+totalQty = sum(quantity)
+
+stockQty = product_units.current_stock (si no existe esa combinación, stock=0)
+
+diffQty = stockQty - totalQty
+
+REQUERIMIENTOS DE UI
+Diseño
+
+Similar a los otros módulos (cards + tabla limpia).
+
+Números sin decimales si la unidad no lo requiere:
+
+Para KG mostrar hasta 2 decimales si hay fracción, si no, entero.
+
+Para CAJON, BOLSA, UNIDAD, SACO → entero.
+
+Orden y filtros
+
+Ordenar filas así:
+
+primero faltantes (diffQty < 0)
+
+luego el resto
+
+Agregar filtro simple “Buscar producto”.
+
+Agregar filtro por Unidad (dropdown).
+
+CAMBIOS EN CARGA PEDIDO (intake) – mínimos
+
+Cuando se crea un pedido desde intake, ya queda con fecha: eso debe reflejarse automáticamente en /load-list al elegir esa fecha.
+
+NO hacer integración con WhatsApp ni OpenAI.
+
+VALIDACIONES IMPORTANTES
+
+Evitar NaN si falta quantity.
+
+Evitar crash si falta productId (pendiente).
+
+No modificar lógica de remitos ni aprobaciones.
+
+ENTREGA
+
+Implementar:
+
+storage method
+
+route GET
+
+UI /load-list completa con resumen + tabla + export
+
+Probar manualmente con pedidos existentes.

@@ -494,10 +494,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── Load List ─────────────────────────────────────────────────────────────
+  app.get("/api/load-list/export", requireAuth, async (req, res) => {
+    const date = req.query.date as string;
+    if (!date) return res.status(400).json({ error: "date query param required" });
+    const includeDrafts = req.query.includeDrafts !== "0";
+    const data = await storage.getLoadListByDate(date, includeDrafts);
+    const XLSX = await import("xlsx");
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Carga
+    const cargaData = [
+      ["Producto", "Unidad", "Total Pedido", "Stock Disponible", "Diferencia", "Clientes"],
+      ...data.rows.map((r) => [r.productName, r.unit, r.totalQty, r.stockQty, r.diffQty, r.customersCount]),
+    ];
+    const ws1 = XLSX.utils.aoa_to_sheet(cargaData);
+    XLSX.utils.book_append_sheet(wb, ws1, "Carga");
+
+    // Sheet 2: Detalle por cliente
+    const detailRows: (string | number)[][] = [["Cliente", "Pedido", "Producto", "Unidad", "Cantidad"]];
+    for (const p of data.pending) {
+      detailRows.push([p.customerName, p.orderFolio, p.rawText, p.unit ?? "", p.qty ?? ""]);
+    }
+    const ws2 = XLSX.utils.aoa_to_sheet(detailRows);
+    XLSX.utils.book_append_sheet(wb, ws2, "Detalle por Cliente");
+
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Disposition", `attachment; filename="lista-carga-${date}.xlsx"`);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    return res.send(buf);
+  });
+
   app.get("/api/load-list", requireAuth, async (req, res) => {
     const date = req.query.date as string;
     if (!date) return res.status(400).json({ error: "date query param required" });
-    return res.json(await storage.getLoadList(date));
+    const includeDrafts = req.query.includeDrafts !== "0";
+    return res.json(await storage.getLoadListByDate(date, includeDrafts));
   });
 
   // ─── Cuentas Corrientes ─────────────────────────────────────────────────────
