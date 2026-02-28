@@ -307,12 +307,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // Update a single order item's price
+  // Update a single order item (price, cost override, and structural fields in draft)
   app.patch("/api/orders/:id/items/:itemId", requireAuth, async (req, res) => {
     try {
-      const { pricePerUnit } = z.object({ pricePerUnit: z.string() }).parse(req.body);
-      const item = await storage.updateOrderItemPrice(Number(req.params.id), Number(req.params.itemId), pricePerUnit);
-      return res.json(item);
+      const orderId = Number(req.params.id);
+      const itemId = Number(req.params.itemId);
+      const order = await storage.getOrder(orderId);
+      if (!order) return res.status(404).json({ error: "Order not found" });
+
+      const schema = z.object({
+        quantity: z.string().optional(),
+        unit: z.string().optional(),
+        productId: z.number().nullable().optional(),
+        pricePerUnit: z.string().nullable().optional(),
+        overrideCostPerUnit: z.string().nullable().optional(),
+      });
+      const patch = schema.parse(req.body);
+
+      // Block structural edits on approved orders
+      if (order.status === "approved" &&
+        (patch.quantity !== undefined || patch.unit !== undefined || patch.productId !== undefined)) {
+        return res.status(403).json({ error: "Para cambiar cantidades/unidades/productos, revertí a borrador primero." });
+      }
+
+      const result = await storage.updateOrderItem(orderId, itemId, patch, order.customerId);
+      return res.json(result);
     } catch (e: any) {
       return res.status(400).json({ error: e.message });
     }

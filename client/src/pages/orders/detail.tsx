@@ -8,13 +8,17 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle, Pencil, Check, X } from "lucide-react";
+import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle, Pencil, Check, X, Lock, ChevronsUpDown } from "lucide-react";
 import { generateRemitoPDF } from "@/lib/pdf";
 import { useState } from "react";
-import type { Customer, Product, Remito } from "@shared/schema";
+import type { Customer, Product, ProductUnit } from "@shared/schema";
 import type { Order, OrderItem } from "@shared/schema";
+import { canonicalToDbEnum, dbEnumToCanonical, CANONICAL_UNIT_LABEL } from "@shared/units";
 
 const IVA_DEFAULT = 0.105;
 const IVA_HUEVO = 0.21;
@@ -29,6 +33,7 @@ const fmtPct = (v: number) => (v * 100).toFixed(1) + "%";
 const fmtInt = (v: number) => Math.round(v).toLocaleString("es-MX");
 
 type FullOrderItem = OrderItem & {
+  overrideCostPerUnit?: string | null;
   product?: (Product & { [key: string]: any }) | null;
 };
 
@@ -37,92 +42,413 @@ type FullOrder = Order & {
   items: FullOrderItem[];
 };
 
-// Inline price editor component for a single item
-function PriceCell({
-  item,
-  orderId,
-  isDraft,
+// DB enum values that can appear in order_items
+const DB_UNITS = ["kg", "pz", "caja", "saco", "litro", "tonelada"] as const;
+type DbUnit = typeof DB_UNITS[number];
+
+const DB_UNIT_LABEL: Record<DbUnit, string> = {
+  kg: "KG", pz: "PZ", caja: "CAJÓN", saco: "BOLSA/SACO", litro: "LITRO", tonelada: "TONELADA",
+};
+
+function canonicalToDb(canonical: string): DbUnit | null {
+  const db = canonicalToDbEnum(canonical) as DbUnit;
+  return DB_UNITS.includes(db) ? db : null;
+}
+
+// ─── ProductCombobox ───────────────────────────────────────────────────────────
+function ProductCombobox({
+  value,
+  onSelect,
+  allProducts,
 }: {
-  item: FullOrderItem;
-  orderId: number;
-  isDraft: boolean;
+  value: number | null;
+  onSelect: (id: number | null, name: string) => void;
+  allProducts: Product[];
 }) {
-  const { toast } = useToast();
-  const hasPrice = item.pricePerUnit != null && parseFloat(item.pricePerUnit as string) > 0;
-  const [editing, setEditing] = useState(!hasPrice && isDraft);
-  const [draft, setDraft] = useState(hasPrice ? String(Math.round(parseFloat(item.pricePerUnit as string))) : "");
-
-  const patchMutation = useMutation({
-    mutationFn: (price: string) => apiRequest("PATCH", `/api/orders/${orderId}/items/${item.id}`, { pricePerUnit: price }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/orders", orderId] });
-      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
-      setEditing(false);
-      toast({ title: "Precio guardado" });
-    },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
-  });
-
-  const handleSave = () => {
-    const val = parseFloat(draft);
-    if (!draft || isNaN(val) || val <= 0) {
-      toast({ title: "Precio inválido", description: "Ingresá un precio mayor a 0", variant: "destructive" });
-      return;
-    }
-    patchMutation.mutate(String(val));
-  };
-
-  if (editing) {
-    return (
-      <div className="flex items-center gap-1">
-        <span className="text-muted-foreground text-xs">$</span>
-        <Input
-          type="number"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") setEditing(false); }}
-          className="h-6 w-24 text-xs px-1.5 py-0"
-          placeholder="0"
-          autoFocus
-          data-testid={`input-price-${item.id}`}
-        />
-        <button
-          onClick={handleSave}
-          disabled={patchMutation.isPending}
-          className="p-0.5 rounded hover:bg-green-100 dark:hover:bg-green-900 text-green-600"
-          data-testid={`button-save-price-${item.id}`}
-        >
-          <Check className="h-3.5 w-3.5" />
-        </button>
-        {hasPrice && (
-          <button onClick={() => setEditing(false)} className="p-0.5 rounded hover:bg-muted">
-            <X className="h-3.5 w-3.5 text-muted-foreground" />
-          </button>
-        )}
-      </div>
-    );
-  }
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const selected = allProducts.find((p) => p.id === value);
+  const filtered = allProducts
+    .filter((p) => p.active && p.name.toLowerCase().includes(search.toLowerCase()))
+    .slice(0, 30);
 
   return (
-    <div className="flex items-center justify-end gap-1 group">
-      {!hasPrice ? (
-        <Badge variant="destructive" className="text-[9px]">Sin precio</Badge>
-      ) : (
-        <span className="text-foreground whitespace-nowrap">${fmtInt(parseFloat(item.pricePerUnit as string))}</span>
-      )}
-      {isDraft && (
-        <button
-          onClick={() => { setDraft(hasPrice ? String(Math.round(parseFloat(item.pricePerUnit as string))) : ""); setEditing(true); }}
-          className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted ml-1"
-          data-testid={`button-edit-price-${item.id}`}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="h-7 text-xs justify-between px-2 min-w-[140px] max-w-[200px]"
+          data-testid="combobox-product"
         >
-          <Pencil className="h-3 w-3 text-muted-foreground" />
-        </button>
-      )}
-    </div>
+          <span className="truncate">{selected?.name ?? "Sin producto"}</span>
+          <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[240px] p-0" align="start">
+        <Command shouldFilter={false}>
+          <CommandInput
+            placeholder="Buscar producto..."
+            value={search}
+            onValueChange={setSearch}
+            className="h-8 text-xs"
+          />
+          <CommandList className="max-h-48">
+            <CommandEmpty className="py-2 text-xs text-center text-muted-foreground">Sin resultados</CommandEmpty>
+            {filtered.map((p) => (
+              <CommandItem
+                key={p.id}
+                value={p.name}
+                onSelect={() => {
+                  onSelect(p.id, p.name);
+                  setOpen(false);
+                  setSearch("");
+                }}
+                className="text-xs"
+                data-testid={`product-option-${p.id}`}
+              >
+                {p.name}
+              </CommandItem>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 
+// ─── ItemRow ───────────────────────────────────────────────────────────────────
+function ItemRow({
+  calc,
+  order,
+  allProducts,
+  hasIva,
+  isDraft,
+  isApproved,
+}: {
+  calc: {
+    id: number;
+    item: FullOrderItem;
+    name: string;
+    qty: number;
+    unit: string;
+    pricePerUnit: number | null;
+    hasPrice: boolean;
+    subtotal: number;
+    totalConIva: number;
+    ivaRate: number;
+    costPerUnit: number;
+    effectiveCostPerUnit: number;
+    hasOverride: boolean;
+    totalCompra: number;
+    base: number;
+    diferencia: number;
+    pct: number;
+    isLowMargin: boolean;
+  };
+  order: FullOrder;
+  allProducts: Product[];
+  hasIva: boolean;
+  isDraft: boolean;
+  isApproved: boolean;
+}) {
+  const { toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [draftQty, setDraftQty] = useState("");
+  const [draftUnit, setDraftUnit] = useState<string>("kg");
+  const [draftProductId, setDraftProductId] = useState<number | null>(null);
+  const [draftPrice, setDraftPrice] = useState("");
+  const [draftOverride, setDraftOverride] = useState("");
+
+  const canEditStructural = isDraft;
+  const canEdit = isDraft || isApproved;
+
+  const { data: productUnitsList = [] } = useQuery<ProductUnit[]>({
+    queryKey: [`/api/products/${draftProductId}/units`],
+    enabled: editing && draftProductId != null,
+  });
+
+  const availableDbUnits: DbUnit[] = editing && draftProductId != null
+    ? productUnitsList
+        .filter((pu) => pu.isActive)
+        .map((pu) => canonicalToDb(pu.unit))
+        .filter((u): u is DbUnit => u !== null)
+    : DB_UNITS.filter(() => true);
+
+  const enterEdit = () => {
+    setDraftQty(fmt(calc.qty, 4).replace(/\.?0+$/, ""));
+    setDraftUnit(calc.unit as DbUnit);
+    setDraftProductId(calc.item.productId);
+    setDraftPrice(calc.hasPrice ? String(Math.round(calc.pricePerUnit!)) : "");
+    const override = calc.item.overrideCostPerUnit;
+    setDraftOverride(override && parseFloat(override) > 0 ? String(Math.round(parseFloat(override))) : "");
+    setEditing(true);
+  };
+
+  const cancelEdit = () => setEditing(false);
+
+  const patchMutation = useMutation({
+    mutationFn: (data: Record<string, any>) =>
+      apiRequest("PATCH", `/api/orders/${order.id}/items/${calc.id}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders", order.id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      setEditing(false);
+      toast({ title: "Línea guardada" });
+    },
+    onError: (e: any) => toast({ title: "Error al guardar", description: e.message, variant: "destructive" }),
+  });
+
+  const handleProductSelect = async (productId: number | null, name: string) => {
+    setDraftProductId(productId);
+    // Auto-fill override cost from product_units for current unit
+    if (productId) {
+      try {
+        const res = await fetch(`/api/products/${productId}/units`, { credentials: "include" });
+        if (res.ok) {
+          const units: ProductUnit[] = await res.json();
+          const canonical = dbEnumToCanonical(draftUnit);
+          const pu = units.find((u) => u.unit === canonical && u.isActive);
+          if (pu && parseFloat(pu.avgCost as string) > 0) {
+            setDraftOverride(String(Math.round(parseFloat(pu.avgCost as string))));
+          }
+        }
+      } catch { /* noop */ }
+      // Try to fetch last price for this customer + product
+      try {
+        const res = await fetch(`/api/price-history/${order.customerId}/${productId}`, { credentials: "include" });
+        if (res.ok) {
+          const history = await res.json();
+          if (history?.pricePerUnit && !draftPrice) {
+            setDraftPrice(String(Math.round(parseFloat(history.pricePerUnit))));
+          }
+        }
+      } catch { /* noop */ }
+    }
+  };
+
+  const handleSave = () => {
+    const qtyNum = parseFloat(draftQty);
+    if (canEditStructural && (isNaN(qtyNum) || qtyNum <= 0)) {
+      toast({ title: "Cantidad inválida", variant: "destructive" });
+      return;
+    }
+
+    const patch: Record<string, any> = {};
+    if (canEditStructural) {
+      if (draftQty && !isNaN(qtyNum)) patch.quantity = String(qtyNum);
+      if (draftUnit !== calc.unit) patch.unit = draftUnit;
+      if (draftProductId !== calc.item.productId) patch.productId = draftProductId;
+    }
+    if (draftPrice !== "") patch.pricePerUnit = draftPrice;
+    patch.overrideCostPerUnit = draftOverride !== "" ? draftOverride : null;
+
+    patchMutation.mutate(patch);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") { e.preventDefault(); handleSave(); }
+    if (e.key === "Escape") cancelEdit();
+  };
+
+  const allowDecimals = draftUnit === "kg" || draftUnit === "litro";
+
+  // ── Display mode ──────────────────────────────────────────────────────────
+  if (!editing) {
+    return (
+      <tr
+        className={`border-b border-border last:border-0 group ${
+          !calc.hasPrice ? "bg-yellow-50/30 dark:bg-yellow-900/10"
+          : calc.isLowMargin ? "bg-destructive/5"
+          : "hover:bg-muted/30"
+        } transition-colors`}
+        data-testid={`row-item-${calc.id}`}
+      >
+        <td className="py-2 px-2 font-medium text-foreground whitespace-nowrap text-xs">
+          {fmt(calc.qty, 4).replace(/\.?0+$/, "")}
+        </td>
+        <td className="py-2 px-2 text-muted-foreground whitespace-nowrap text-xs">{calc.unit}</td>
+        <td className="py-2 px-2 text-xs">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className={`font-medium ${calc.item.product ? "text-foreground" : "text-muted-foreground italic"}`}>
+              {calc.name}
+            </span>
+            {!calc.item.product && <Badge variant="outline" className="text-[9px] py-0">Sin producto</Badge>}
+            {calc.isLowMargin && <Badge variant="destructive" className="text-[9px] py-0 px-1">Margen bajo</Badge>}
+            {hasIva && calc.hasPrice && (
+              <span className="text-[10px] text-muted-foreground">IVA {(calc.ivaRate * 100).toFixed(1)}%</span>
+            )}
+          </div>
+        </td>
+        <td className="py-2 px-2 text-right whitespace-nowrap text-xs">
+          {!calc.hasPrice ? (
+            <Badge variant="destructive" className="text-[9px]">Sin precio</Badge>
+          ) : (
+            <span className="text-foreground">${fmtInt(calc.pricePerUnit!)}</span>
+          )}
+        </td>
+        <td className="py-2 px-2 text-right text-foreground whitespace-nowrap text-xs">
+          {calc.hasPrice ? `$${fmtInt(calc.subtotal)}` : <span className="text-muted-foreground">—</span>}
+        </td>
+        {hasIva && (
+          <td className="py-2 px-2 text-right font-semibold text-primary whitespace-nowrap text-xs">
+            {calc.hasPrice ? `$${fmtInt(calc.totalConIva)}` : <span className="text-muted-foreground">—</span>}
+          </td>
+        )}
+        <td className="py-2 px-2 text-right text-muted-foreground whitespace-nowrap border-l border-border text-xs">
+          <span>${fmtInt(calc.effectiveCostPerUnit)}</span>
+          {calc.hasOverride && (
+            <Badge variant="outline" className="text-[8px] py-0 px-1 ml-1 text-orange-600 border-orange-300">Manual</Badge>
+          )}
+        </td>
+        <td className="py-2 px-2 text-right text-muted-foreground whitespace-nowrap text-xs">${fmtInt(calc.totalCompra)}</td>
+        <td className={`py-2 px-2 text-right font-semibold whitespace-nowrap text-xs ${!calc.hasPrice ? "text-muted-foreground" : calc.diferencia >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
+          {calc.hasPrice ? `$${fmtInt(calc.diferencia)}` : "—"}
+        </td>
+        <td className={`py-2 px-2 text-right font-bold whitespace-nowrap text-xs ${!calc.hasPrice ? "text-muted-foreground" : calc.isLowMargin ? "text-destructive" : "text-green-600 dark:text-green-400"}`}>
+          {calc.hasPrice ? fmtPct(calc.pct) : "—"}
+        </td>
+        <td className="py-2 px-2 text-center w-8">
+          {canEdit && (
+            <button
+              onClick={enterEdit}
+              className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted"
+              data-testid={`button-edit-row-${calc.id}`}
+            >
+              <Pencil className="h-3 w-3 text-muted-foreground" />
+            </button>
+          )}
+        </td>
+      </tr>
+    );
+  }
+
+  // ── Edit mode ─────────────────────────────────────────────────────────────
+  return (
+    <tr className="border-b border-border bg-blue-50/30 dark:bg-blue-900/10" data-testid={`row-item-${calc.id}-editing`}>
+      {/* Qty */}
+      <td className="py-1.5 px-2">
+        {canEditStructural ? (
+          <Input
+            type="number"
+            value={draftQty}
+            onChange={(e) => setDraftQty(e.target.value)}
+            onKeyDown={handleKeyDown}
+            step={allowDecimals ? "0.01" : "1"}
+            min="0"
+            className="h-7 w-16 text-xs px-1.5 py-0"
+            autoFocus
+            data-testid={`input-qty-${calc.id}`}
+          />
+        ) : (
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Lock className="h-3 w-3" />
+            <span>{fmt(calc.qty, 4).replace(/\.?0+$/, "")}</span>
+          </div>
+        )}
+      </td>
+      {/* Unit */}
+      <td className="py-1.5 px-2">
+        {canEditStructural ? (
+          <Select value={draftUnit} onValueChange={(v) => setDraftUnit(v)}>
+            <SelectTrigger className="h-7 text-xs px-1.5 w-24" data-testid={`select-unit-${calc.id}`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(availableDbUnits.length > 0 ? availableDbUnits : DB_UNITS).map((u) => (
+                <SelectItem key={u} value={u} className="text-xs">
+                  {DB_UNIT_LABEL[u]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Lock className="h-3 w-3" />
+            <span>{calc.unit}</span>
+          </div>
+        )}
+      </td>
+      {/* Product */}
+      <td className="py-1.5 px-2">
+        {canEditStructural ? (
+          <ProductCombobox value={draftProductId} onSelect={handleProductSelect} allProducts={allProducts} />
+        ) : (
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Lock className="h-3 w-3" />
+            <span className="font-medium text-foreground">{calc.name}</span>
+          </div>
+        )}
+      </td>
+      {/* P. Venta */}
+      <td className="py-1.5 px-2">
+        <div className="flex items-center gap-0.5">
+          <span className="text-xs text-muted-foreground">$</span>
+          <Input
+            type="number"
+            value={draftPrice}
+            onChange={(e) => setDraftPrice(e.target.value)}
+            onKeyDown={handleKeyDown}
+            step="1"
+            min="0"
+            className="h-7 w-24 text-xs px-1.5 py-0"
+            placeholder="Precio"
+            data-testid={`input-price-${calc.id}`}
+          />
+        </div>
+      </td>
+      {/* Total preview */}
+      <td className="py-1.5 px-2 text-right text-xs text-muted-foreground whitespace-nowrap">
+        {draftPrice && draftQty ? `$${fmtInt(parseFloat(draftQty) * parseFloat(draftPrice))}` : "—"}
+      </td>
+      {hasIva && <td className="py-1.5 px-2 text-xs text-muted-foreground">—</td>}
+      {/* P. Compra override */}
+      <td className="py-1.5 px-2 border-l border-border">
+        <div className="flex items-center gap-0.5">
+          <span className="text-xs text-muted-foreground">$</span>
+          <Input
+            type="number"
+            value={draftOverride}
+            onChange={(e) => setDraftOverride(e.target.value)}
+            onKeyDown={handleKeyDown}
+            step="1"
+            min="0"
+            className="h-7 w-24 text-xs px-1.5 py-0"
+            placeholder={String(Math.round(calc.costPerUnit))}
+            data-testid={`input-cost-${calc.id}`}
+          />
+        </div>
+      </td>
+      {/* Blanks for T.Compra, Dif, % */}
+      <td className="py-1.5 px-2 text-xs text-muted-foreground text-right">—</td>
+      <td className="py-1.5 px-2 text-xs text-muted-foreground text-right">—</td>
+      <td className="py-1.5 px-2 text-xs text-muted-foreground text-right">—</td>
+      {/* Actions */}
+      <td className="py-1.5 px-2">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={handleSave}
+            disabled={patchMutation.isPending}
+            className="p-1 rounded hover:bg-green-100 dark:hover:bg-green-900 text-green-600"
+            data-testid={`button-save-row-${calc.id}`}
+          >
+            <Check className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={cancelEdit}
+            className="p-1 rounded hover:bg-muted text-muted-foreground"
+            data-testid={`button-cancel-row-${calc.id}`}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function OrderDetailPage({ id }: { id: number }) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -131,6 +457,10 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const { data: order, isLoading } = useQuery<FullOrder>({
     queryKey: ["/api/orders", id],
+  });
+
+  const { data: allProducts = [] } = useQuery<Product[]>({
+    queryKey: ["/api/products"],
   });
 
   const approveMutation = useMutation({
@@ -181,7 +511,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   if (isLoading) {
     return (
       <Layout title="Detalle de Pedido">
-        <div className="p-6 max-w-4xl mx-auto space-y-4">
+        <div className="p-6 max-w-5xl mx-auto space-y-4">
           <Skeleton className="h-8 w-48" />
           <Skeleton className="h-48 w-full" />
           <Skeleton className="h-64 w-full" />
@@ -214,57 +544,40 @@ export default function OrderDetailPage({ id }: { id: number }) {
   };
   const sc = statusConfig[order.status] ?? { label: order.status, variant: "secondary" as const };
 
-  // Helper: get display name for an item (may come from intake with no product linked)
   const getItemName = (item: FullOrderItem) =>
     item.product?.name ?? (item as any).rawProductName ?? "Producto sin nombre";
 
-  // Per-item calculations (handles null pricePerUnit gracefully)
-  type ItemCalc = {
-    id: number;
-    orderId: number;
-    item: FullOrderItem;
-    name: string;
-    qty: number;
-    unit: string;
-    pricePerUnit: number | null;
-    hasPrice: boolean;
-    subtotal: number;
-    totalConIva: number;
-    ivaRate: number;
-    costPerUnit: number;
-    totalCompra: number;
-    base: number;
-    diferencia: number;
-    pct: number;
-    isLowMargin: boolean;
-  };
-
-  const calcs: ItemCalc[] = order.items.map((item) => {
+  // Per-item calculations using effectiveCostPerUnit (override ?? stored cost)
+  const calcs = order.items.map((item) => {
     const qty = parseFloat(item.quantity as string);
     const hasPrice = item.pricePerUnit != null && parseFloat(item.pricePerUnit as string) > 0;
     const price = hasPrice ? parseFloat(item.pricePerUnit as string) : 0;
-    const cost = parseFloat((item.costPerUnit as string) ?? "0");
+    const storedCost = parseFloat((item.costPerUnit as string) ?? "0");
+    const override = item.overrideCostPerUnit;
+    const hasOverride = override != null && parseFloat(override as string) > 0;
+    const effectiveCostPerUnit = hasOverride ? parseFloat(override as string) : storedCost;
     const name = getItemName(item);
     const subtotal = qty * price;
     const ivaRate = getIvaRate(name);
     const totalConIva = subtotal * (1 + ivaRate);
-    const totalCompra = qty * cost;
+    const totalCompra = qty * effectiveCostPerUnit;
     const base = hasIva ? totalConIva : subtotal;
     const diferencia = base - totalCompra;
     const pct = base > 0 ? diferencia / base : 0;
     return {
       id: item.id,
-      orderId: order.id,
       item,
       name,
       qty,
-      unit: item.unit,
+      unit: item.unit as string,
       pricePerUnit: hasPrice ? price : null,
       hasPrice,
       subtotal,
       totalConIva,
       ivaRate,
-      costPerUnit: cost,
+      costPerUnit: storedCost,
+      effectiveCostPerUnit,
+      hasOverride,
       totalCompra,
       base,
       diferencia,
@@ -285,9 +598,15 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const canApprove = isDraft && unpricedCount === 0 && (!hasAnyLowMargin || lowMarginOk);
 
+  const editHint = isDraft
+    ? "· Hover → lápiz para editar fila"
+    : isApproved
+    ? "· Aprobado: solo P.Venta y P.Compra editables"
+    : "";
+
   return (
     <Layout title={`Pedido ${order.folio}`}>
-      <div className="p-6 max-w-4xl mx-auto space-y-5">
+      <div className="p-6 max-w-5xl mx-auto space-y-5">
         {/* Header */}
         <div className="flex items-start gap-3">
           <Button variant="ghost" size="icon" onClick={() => setLocation("/orders")}>
@@ -330,17 +649,15 @@ export default function OrderDetailPage({ id }: { id: number }) {
           </div>
         </div>
 
-        {/* Unpriced items warning */}
+        {/* Alerts */}
         {isDraft && unpricedCount > 0 && (
           <Alert>
             <AlertTriangle className="h-4 w-4 text-yellow-600" />
             <AlertDescription className="text-sm">
-              <strong>{unpricedCount} producto(s) sin precio.</strong> Hacé clic en la celda de precio para editar. Completá todos los precios antes de generar el remito.
+              <strong>{unpricedCount} producto(s) sin precio.</strong> Pasá el mouse sobre la fila y hacé clic en el lápiz para editar.
             </AlertDescription>
           </Alert>
         )}
-
-        {/* Low margin warning */}
         {isDraft && hasAnyLowMargin && (
           <Alert variant="destructive">
             <AlertTriangle className="h-4 w-4" />
@@ -357,6 +674,14 @@ export default function OrderDetailPage({ id }: { id: number }) {
                   Confirmo el margen bajo y autorizo la aprobación
                 </label>
               </div>
+            </AlertDescription>
+          </Alert>
+        )}
+        {isApproved && (
+          <Alert>
+            <Lock className="h-4 w-4" />
+            <AlertDescription className="text-sm">
+              Pedido aprobado. Podés editar <strong>P. Venta</strong> y <strong>P. Compra</strong> en cada fila. Para cambiar cantidades, unidades o productos, revertí a borrador.
             </AlertDescription>
           </Alert>
         )}
@@ -380,16 +705,12 @@ export default function OrderDetailPage({ id }: { id: number }) {
             </div>
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Neto</p>
-              <p className="text-lg font-bold text-foreground mt-0.5">
-                ${fmtInt(grandTotal)}
-              </p>
+              <p className="text-lg font-bold text-foreground mt-0.5">${fmtInt(grandTotal)}</p>
             </div>
             {hasIva && (
               <div>
                 <p className="text-xs text-muted-foreground uppercase tracking-wide">Total + IVA</p>
-                <p className="text-lg font-bold text-primary mt-0.5">
-                  ${fmtInt(grandTotalConIva)}
-                </p>
+                <p className="text-lg font-bold text-primary mt-0.5">${fmtInt(grandTotalConIva)}</p>
                 <p className="text-[10px] text-muted-foreground">IVA: ${fmtInt(grandTotalConIva - grandTotal)}</p>
               </div>
             )}
@@ -407,7 +728,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold">
               Detalle de Productos ({order.items?.length ?? 0})
-              {isDraft && <span className="text-xs text-muted-foreground font-normal ml-2">· Clic en precio para editar</span>}
+              {editHint && <span className="text-xs text-muted-foreground font-normal ml-2">{editHint}</span>}
               {hasIva && <span className="text-xs text-muted-foreground font-normal ml-2">· IVA 10.5% / 21% huevo</span>}
             </CardTitle>
           </CardHeader>
@@ -416,80 +737,50 @@ export default function OrderDetailPage({ id }: { id: number }) {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b-2 border-border bg-muted/40">
-                    <th className="text-left py-2.5 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Cant.</th>
-                    <th className="text-left py-2.5 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">U.</th>
-                    <th className="text-left py-2.5 px-3 font-semibold text-muted-foreground uppercase tracking-wide">Producto</th>
-                    <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">P. Venta</th>
-                    <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Total</th>
+                    <th className="text-left py-2 px-2 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Cant.</th>
+                    <th className="text-left py-2 px-2 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">U.</th>
+                    <th className="text-left py-2 px-2 font-semibold text-muted-foreground uppercase tracking-wide">Producto</th>
+                    <th className="text-right py-2 px-2 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">P. Venta</th>
+                    <th className="text-right py-2 px-2 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Total</th>
                     {hasIva && (
-                      <th className="text-right py-2.5 px-3 font-semibold text-primary uppercase tracking-wide whitespace-nowrap">+ IVA</th>
+                      <th className="text-right py-2 px-2 font-semibold text-primary uppercase tracking-wide whitespace-nowrap">+ IVA</th>
                     )}
-                    <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap border-l border-border">P. Compra</th>
-                    <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">T. Compra</th>
-                    <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Dif.</th>
-                    <th className="text-right py-2.5 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">%</th>
+                    <th className="text-right py-2 px-2 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap border-l border-border">P. Compra</th>
+                    <th className="text-right py-2 px-2 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">T. Compra</th>
+                    <th className="text-right py-2 px-2 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Dif.</th>
+                    <th className="text-right py-2 px-2 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">%</th>
+                    <th className="w-8"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {calcs.map((c) => (
-                    <tr
+                    <ItemRow
                       key={c.id}
-                      className={`border-b border-border last:border-0 ${
-                        !c.hasPrice ? "bg-yellow-50/30 dark:bg-yellow-900/10"
-                        : c.isLowMargin ? "bg-destructive/5"
-                        : "hover:bg-muted/30"
-                      } transition-colors`}
-                      data-testid={`row-item-${c.id}`}
-                    >
-                      <td className="py-2.5 px-3 font-medium text-foreground whitespace-nowrap">{fmt(c.qty, 4).replace(/\.?0+$/, '')}</td>
-                      <td className="py-2.5 px-3 text-muted-foreground whitespace-nowrap">{c.unit}</td>
-                      <td className="py-2.5 px-3">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`font-medium ${c.item.product ? "text-foreground" : "text-muted-foreground italic"}`}>{c.name}</span>
-                          {!c.item.product && <Badge variant="outline" className="text-[9px]">Sin producto</Badge>}
-                          {c.isLowMargin && <Badge variant="destructive" className="text-[9px] py-0 px-1">Margen bajo</Badge>}
-                          {hasIva && c.hasPrice && (
-                            <span className="text-[10px] text-muted-foreground">IVA {(c.ivaRate * 100).toFixed(1)}%</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                        <PriceCell item={c.item} orderId={order.id} isDraft={isDraft} />
-                      </td>
-                      <td className="py-2.5 px-3 text-right text-foreground whitespace-nowrap">
-                        {c.hasPrice ? `$${fmtInt(c.subtotal)}` : <span className="text-muted-foreground">—</span>}
-                      </td>
-                      {hasIva && (
-                        <td className="py-2.5 px-3 text-right font-semibold text-primary whitespace-nowrap">
-                          {c.hasPrice ? `$${fmtInt(c.totalConIva)}` : <span className="text-muted-foreground">—</span>}
-                        </td>
-                      )}
-                      <td className="py-2.5 px-3 text-right text-muted-foreground whitespace-nowrap border-l border-border">${fmtInt(c.costPerUnit)}</td>
-                      <td className="py-2.5 px-3 text-right text-muted-foreground whitespace-nowrap">${fmtInt(c.totalCompra)}</td>
-                      <td className={`py-2.5 px-3 text-right font-semibold whitespace-nowrap ${!c.hasPrice ? "text-muted-foreground" : c.diferencia >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
-                        {c.hasPrice ? `$${fmtInt(c.diferencia)}` : "—"}
-                      </td>
-                      <td className={`py-2.5 px-3 text-right font-bold whitespace-nowrap ${!c.hasPrice ? "text-muted-foreground" : c.isLowMargin ? "text-destructive" : "text-green-600 dark:text-green-400"}`}>
-                        {c.hasPrice ? fmtPct(c.pct) : "—"}
-                      </td>
-                    </tr>
+                      calc={c}
+                      order={order}
+                      allProducts={allProducts}
+                      hasIva={hasIva}
+                      isDraft={isDraft}
+                      isApproved={isApproved}
+                    />
                   ))}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-border bg-muted/20">
-                    <td colSpan={4} className="py-3 px-3 font-bold text-foreground uppercase tracking-wide text-xs">Total</td>
-                    <td className="py-3 px-3 text-right font-bold text-foreground whitespace-nowrap">${fmtInt(grandTotal)}</td>
+                    <td colSpan={4} className="py-3 px-2 font-bold text-foreground uppercase tracking-wide text-xs">Total</td>
+                    <td className="py-3 px-2 text-right font-bold text-foreground whitespace-nowrap">${fmtInt(grandTotal)}</td>
                     {hasIva && (
-                      <td className="py-3 px-3 text-right font-bold text-primary whitespace-nowrap">${fmtInt(grandTotalConIva)}</td>
+                      <td className="py-3 px-2 text-right font-bold text-primary whitespace-nowrap">${fmtInt(grandTotalConIva)}</td>
                     )}
-                    <td className="py-3 px-3 border-l border-border"></td>
-                    <td className="py-3 px-3 text-right font-bold text-muted-foreground whitespace-nowrap">${fmtInt(grandTotalCompra)}</td>
-                    <td className={`py-3 px-3 text-right font-bold whitespace-nowrap ${grandDiff >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
+                    <td className="py-3 px-2 border-l border-border"></td>
+                    <td className="py-3 px-2 text-right font-bold text-muted-foreground whitespace-nowrap">${fmtInt(grandTotalCompra)}</td>
+                    <td className={`py-3 px-2 text-right font-bold whitespace-nowrap ${grandDiff >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
                       ${fmtInt(grandDiff)}
                     </td>
-                    <td className={`py-3 px-3 text-right font-bold whitespace-nowrap ${grandPct < LOW_MARGIN ? "text-destructive" : "text-green-600 dark:text-green-400"}`}>
+                    <td className={`py-3 px-2 text-right font-bold whitespace-nowrap ${grandPct < LOW_MARGIN ? "text-destructive" : "text-green-600 dark:text-green-400"}`}>
                       {fmtPct(grandPct)}
                     </td>
+                    <td></td>
                   </tr>
                 </tfoot>
               </table>

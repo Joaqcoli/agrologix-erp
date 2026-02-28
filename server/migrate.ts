@@ -235,5 +235,10 @@ export async function runMigrations() {
     UPDATE products SET category = 'Verdura' WHERE category IS NULL
   `);
 
+  // Add override_cost_per_unit to order_items
+  await db.execute(sql`
+    ALTER TABLE order_items ADD COLUMN IF NOT EXISTS override_cost_per_unit NUMERIC(12,4)
+  `);
+
   console.log("Migrations complete.");
 }

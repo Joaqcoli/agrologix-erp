@@ -1,0 +1,182 @@
+Objetivo: En la pantalla Pedido PV-xxxxx (/orders/:id), en la tabla “Detalle de Productos”, cada fila debe poder editarse rápido como Excel y guardar cambios sin romper la lógica de stock/costos.
+
+1) Hacer editable SIEMPRE estos campos por fila
+
+En cada línea (order_item) permitir editar:
+
+Cantidad (number, sin decimales salvo que unidad sea KG/litro donde puede tener 2 decimales opcional configurable)
+
+Unidad (dropdown SOLO con unidades habilitadas para ese producto según product_units)
+
+Producto (searchable dropdown / combobox)
+
+P. Venta (number, sin decimales, moneda)
+
+P. Compra (number, sin decimales, moneda)
+
+UX rápida:
+
+La fila debe mostrar valores como ahora, pero al hacer click (o icono lápiz) se vuelve editable inline.
+
+Enter = guardar, Esc = cancelar.
+
+Al guardar una celda, recalcular la fila y el total en vivo sin recargar toda la página.
+
+2) Regla: “Sin producto”
+
+Hoy aparece “tomate redondo — Sin producto”.
+
+En esas filas, el campo Producto debe permitir asignar un producto existente.
+
+Cuando se asigna un producto:
+
+validar unidad compatible; si no lo es, forzar elegir una unidad válida.
+
+completar automáticamente P.Compra desde product_units.avg_cost de esa unidad.
+
+mantener P.Venta como está si ya estaba cargado; si estaba null, traer último precio del cliente para ese producto+unidad, si existe, sino dejar en blanco.
+
+3) Cambios en P. Venta (precio de venta)
+
+Si el usuario edita P. Venta:
+
+recalcular subtotal, IVA (si aplica), margen, diferencia, % en vivo.
+
+guardar ese precio en la línea.
+
+actualizar “último precio” de ese cliente para ese producto+unidad (la lógica de historial que ya usan para sugerir precios futuros).
+
+4) Cambios en P. Compra (precio de compra) SIN romper costo promedio ponderado
+
+Necesito poder corregir el costo por línea (por ejemplo, diferencias reales del día), pero sin alterar retroactivamente el costo promedio histórico del producto.
+
+Implementación:
+
+Agregar campo en order_items:
+
+override_cost_per_unit (nullable)
+
+En el cálculo del pedido:
+
+si override_cost_per_unit existe, usar ese como P.Compra de la fila
+
+si no, usar product_units.avg_cost
+
+NO actualizar product_units.avg_cost cuando edito P.Compra en un pedido (eso lo define compras).
+
+Mostrar en UI un badge “Costo manual” si la fila usa override.
+
+5) Cambios en Cantidad y Unidad (impacto)
+
+Si se edita Cantidad o Unidad:
+
+recalcular todo en vivo.
+
+Si la unidad cambia:
+
+validar que exista la combinación producto+unidad en product_units (is_active=true)
+
+si no existe, bloquear guardado y mostrar error “Unidad no habilitada para este producto”.
+
+6) Guardado: endpoints claros por ítem
+
+Crear/usar endpoints REST para editar ítems:
+
+PATCH /api/orders/:orderId/items/:itemId
+
+payload opcional con cualquiera de:
+
+quantity
+
+unit
+
+productId (nullable -> pero idealmente siempre set)
+
+pricePerUnit (venta)
+
+overrideCostPerUnit (compra)
+
+backend valida:
+
+order existe
+
+item pertenece al order
+
+quantity > 0
+
+si productId != null: unit permitido en product_units activo
+
+pricePerUnit nullable solo si pedido está en borrador (pero para pedidos aprobados permitir edición igual si yo lo autorizo; ver punto 8)
+
+responde con:
+
+item actualizado + totales recalculados del pedido (neto, iva, total con iva, costo, margen)
+
+7) Formato moneda y decimales
+
+Mostrar y guardar sin decimales para precios (P.Venta y P.Compra).
+
+Cantidad:
+
+por defecto sin decimales
+
+permitir decimales solo si unidad es KG o litro (hasta 2 decimales).
+
+En UI, formatear moneda con separador de miles (ej: $162.600).
+
+8) Edición en pedidos “Aprobado”
+
+En la captura el pedido está “Aprobado”.
+Regla:
+
+Permitir edición incluso en aprobado, pero:
+
+si se cambia Cantidad/Unidad/Producto, eso podría afectar stock ya descontado.
+
+Para no romper ahora, implementar:
+
+Permitir editar solo P.Venta y P.Compra (override) en pedidos aprobados.
+
+Bloquear cambios estructurales (Cantidad/Unidad/Producto) si status=APROBADO, con mensaje: “Para cambiar cantidades/unidades/productos, revertí a borrador”.
+
+(Opcional futuro) agregar workflow “Recalcular stock” o “Revertir aprobación”.
+
+9) UI: tabla estilo Excel más rápida
+
+Cada fila debe tener:
+
+cant editable
+
+unidad dropdown
+
+producto combobox
+
+p.venta input
+
+p.compra input (override)
+
+Recalcular y actualizar columnas:
+
+TOTAL
+
+TOTAL + IVA (si corresponde)
+
+T.COMPRA
+
+DIF
+
+%
+
+Mantener highlight rojo “Margen bajo” si <30%.
+
+10) Tests rápidos
+
+Caso 1: editar P.Venta en borrador -> cambia margen y total.
+
+Caso 2: editar P.Compra -> se guarda override, no cambia avg_cost del producto.
+
+Caso 3: fila “Sin producto” -> asigno producto -> valida unidad y completa costo.
+
+Caso 4: pedido aprobado -> dejo editar P.Venta/P.Compra pero no cantidad/unidad/producto.
+
+Entregable: actualizar /orders/:id UI + storage/routes backend según lo anterior, sin romper el resto del sistema.

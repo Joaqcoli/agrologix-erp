@@ -454,30 +454,97 @@ export const storage = {
     await db.update(orders).set({ total: "0" }).where(eq(orders.id, orderId));
   },
 
-  async updateOrderItemPrice(orderId: number, itemId: number, pricePerUnit: string): Promise<OrderItem> {
+  async updateOrderItem(
+    orderId: number,
+    itemId: number,
+    patch: {
+      quantity?: string;
+      unit?: string;
+      productId?: number | null;
+      pricePerUnit?: string | null;
+      overrideCostPerUnit?: string | null;
+    },
+    customerId: number,
+  ): Promise<{ item: OrderItem; orderTotal: string }> {
     const [item] = await db.select().from(orderItems).where(
       and(eq(orderItems.id, itemId), eq(orderItems.orderId, orderId))
     ).limit(1);
     if (!item) throw new Error("Item not found");
 
-    const qty = parseFloat(item.quantity as string);
-    const price = parseFloat(pricePerUnit);
-    const cost = parseFloat(item.costPerUnit as string);
-    const subtotal = qty * price;
-    const margin = price > 0 ? (price - cost) / price : 0;
+    const newProductId = patch.productId !== undefined ? patch.productId : item.productId;
+    const newUnit = patch.unit ?? (item.unit as string);
 
-    const [updated] = await db.update(orderItems).set({
-      pricePerUnit,
+    // Validate unit is active for the product
+    if (newProductId && patch.unit) {
+      const canonical = dbEnumToCanonical(patch.unit);
+      const [pu] = await db.select().from(productUnits)
+        .where(and(eq(productUnits.productId, newProductId), eq(productUnits.unit, canonical), eq(productUnits.isActive, true)))
+        .limit(1);
+      if (!pu) throw new Error(`Unidad "${patch.unit}" no está habilitada para este producto`);
+    }
+
+    // Look up new cost from product_units when product or unit changes
+    let newCostPerUnit: string | undefined;
+    if (patch.productId !== undefined && patch.productId !== null) {
+      const canonical = dbEnumToCanonical(newUnit);
+      const [pu] = await db.select().from(productUnits)
+        .where(and(eq(productUnits.productId, patch.productId), eq(productUnits.unit, canonical), eq(productUnits.isActive, true)))
+        .limit(1);
+      if (pu) newCostPerUnit = pu.avgCost as string;
+      else {
+        // Fallback to product average_cost
+        const [p] = await db.select().from(products).where(eq(products.id, patch.productId)).limit(1);
+        if (p) newCostPerUnit = p.averageCost as string;
+      }
+    }
+
+    // Effective cost for margin calculation: override > new product cost > existing cost
+    const overrideVal = patch.overrideCostPerUnit !== undefined
+      ? patch.overrideCostPerUnit
+      : ((item as any).overrideCostPerUnit as string | null);
+    const baseCost = newCostPerUnit ?? (item.costPerUnit as string);
+    const effectiveCost = overrideVal ? parseFloat(overrideVal) : parseFloat(baseCost);
+
+    const qty = parseFloat(patch.quantity ?? (item.quantity as string));
+    const existingPrice = item.pricePerUnit ? parseFloat(item.pricePerUnit as string) : null;
+    const newPriceRaw = patch.pricePerUnit !== undefined ? patch.pricePerUnit : null;
+    const price = newPriceRaw !== undefined && newPriceRaw !== null
+      ? parseFloat(newPriceRaw)
+      : existingPrice;
+    const subtotal = price != null && price > 0 ? qty * price : 0;
+    const margin = price && price > 0 ? (price - effectiveCost) / price : null;
+
+    const updateData: Record<string, any> = {
       subtotal: subtotal.toFixed(2),
-      margin: margin.toFixed(4),
-    }).where(eq(orderItems.id, itemId)).returning();
+    };
+    if (patch.quantity !== undefined) updateData.quantity = qty.toFixed(4);
+    if (patch.unit !== undefined) updateData.unit = patch.unit;
+    if (patch.productId !== undefined) updateData.productId = patch.productId;
+    if (patch.pricePerUnit !== undefined) updateData.pricePerUnit = patch.pricePerUnit;
+    if (patch.overrideCostPerUnit !== undefined) updateData.overrideCostPerUnit = patch.overrideCostPerUnit;
+    if (newCostPerUnit !== undefined) updateData.costPerUnit = newCostPerUnit;
+    if (margin !== null) updateData.margin = margin.toFixed(4);
 
-    // Recalculate order total (only items with price)
+    const [updated] = await db.update(orderItems).set(updateData).where(eq(orderItems.id, itemId)).returning();
+
+    // Recalculate order total
     const allItems = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
     const total = allItems.reduce((s, i) => s + parseFloat(i.subtotal as string), 0);
     await db.update(orders).set({ total: total.toFixed(2) }).where(eq(orders.id, orderId));
 
-    return updated;
+    // Save price history when price is explicitly set and a product is linked
+    if (patch.pricePerUnit && newProductId) {
+      await this.savePriceHistory(customerId, newProductId, patch.pricePerUnit, orderId);
+    }
+
+    return { item: updated, orderTotal: total.toFixed(2) };
+  },
+
+  async updateOrderItemPrice(orderId: number, itemId: number, pricePerUnit: string): Promise<OrderItem> {
+    const order = await this.getOrder(orderId);
+    if (!order) throw new Error("Order not found");
+    const { item } = await this.updateOrderItem(orderId, itemId, { pricePerUnit }, order.customerId);
+    return item;
   },
 
   async generateOrderFolio(): Promise<string> {

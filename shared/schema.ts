@@ -116,6 +116,7 @@ export const orderItems = pgTable("order_items", {
   unit: unitEnum("unit").notNull().default("kg"),
   pricePerUnit: numeric("price_per_unit", { precision: 12, scale: 4 }),
   costPerUnit: numeric("cost_per_unit", { precision: 12, scale: 4 }).notNull().default("0"),
+  overrideCostPerUnit: numeric("override_cost_per_unit", { precision: 12, scale: 4 }),
   margin: numeric("margin", { precision: 8, scale: 4 }),
   subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
   rawProductName: text("raw_product_name"),
