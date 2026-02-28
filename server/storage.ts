@@ -2,14 +2,57 @@ import { db } from "./db";
 import {
   users, customers, products, purchases, purchaseItems,
   stockMovements, productCostHistory, orders, orderItems,
-  priceHistory, remitos, productUnits,
+  priceHistory, remitos, productUnits, payments, withholdings,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
+  type Payment, type Withholding, type InsertPayment, type InsertWithholding,
 } from "@shared/schema";
-import { eq, desc, asc, and, sql as drizzleSql, ne } from "drizzle-orm";
+import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
 import bcrypt from "bcryptjs";
+
+// ─── CC Helpers ────────────────────────────────────────────────────────────────
+const IVA_HUEVO = 0.21;
+const IVA_DEFAULT = 0.105;
+function ivaRate(productName: string): number {
+  return productName.toUpperCase().includes("HUEVO") ? IVA_HUEVO : IVA_DEFAULT;
+}
+
+// Items enriched with product name for IVA computation
+type RawOrderItem = {
+  orderId: number;
+  customerId: number;
+  orderDate: string; // ISO date string
+  quantity: string;
+  pricePerUnit: string | null;
+  costPerUnit: string;
+  overrideCostPerUnit: string | null;
+  unit: string;
+  productName: string;
+};
+
+// Compute billing amount for one item (with or without IVA)
+function itemBilling(item: RawOrderItem, hasIva: boolean): number {
+  if (!item.pricePerUnit || parseFloat(item.pricePerUnit) === 0) return 0;
+  const subtotal = parseFloat(item.quantity) * parseFloat(item.pricePerUnit);
+  return hasIva ? subtotal * (1 + ivaRate(item.productName)) : subtotal;
+}
+
+// Compute gross profit for one item (always neto, no IVA)
+function itemProfit(item: RawOrderItem): number {
+  if (!item.pricePerUnit || parseFloat(item.pricePerUnit) === 0) return 0;
+  const qty = parseFloat(item.quantity);
+  const price = parseFloat(item.pricePerUnit);
+  const cost = parseFloat(item.overrideCostPerUnit ?? item.costPerUnit ?? "0");
+  return qty * (price - cost);
+}
+
+// Is this unit a "bulto" (physical box/bag)?
+const BULTO_UNITS = new Set(["caja", "saco"]);
+function isBulto(unit: string): boolean {
+  return BULTO_UNITS.has(unit.toLowerCase());
+}
 
 export const storage = {
   // ─── Auth ─────────────────────────────────────────────────────────────────
@@ -902,5 +945,303 @@ export const storage = {
     // Return updated active units
     return db.select().from(productUnits)
       .where(and(eq(productUnits.productId, productId), eq(productUnits.isActive, true)));
+  },
+
+  // ─── Cuentas Corrientes ────────────────────────────────────────────────────
+
+  async createPayment(data: InsertPayment, userId: number): Promise<Payment> {
+    const [p] = await db.insert(payments).values({ ...data, createdBy: userId }).returning();
+    return p;
+  },
+
+  async createWithholding(data: InsertWithholding, userId: number): Promise<Withholding> {
+    const [w] = await db.insert(withholdings).values({ ...data, createdBy: userId }).returning();
+    return w;
+  },
+
+  async deletePayment(id: number): Promise<void> {
+    await db.delete(payments).where(eq(payments.id, id));
+  },
+
+  async deleteWithholding(id: number): Promise<void> {
+    await db.delete(withholdings).where(eq(withholdings.id, id));
+  },
+
+  // fromDate: inclusive (>=), toDate: exclusive (<)
+  async getCustomerPayments(customerId: number, fromDate?: string, toDate?: string): Promise<Payment[]> {
+    const conds = [eq(payments.customerId, customerId)];
+    if (fromDate) conds.push(gte(payments.date, fromDate));
+    if (toDate) conds.push(lt(payments.date, toDate));
+    return db.select().from(payments).where(and(...conds as any)).orderBy(desc(payments.date));
+  },
+
+  // fromDate: inclusive (>=), toDate: exclusive (<)
+  async getCustomerWithholdings(customerId: number, fromDate?: string, toDate?: string): Promise<Withholding[]> {
+    const conds = [eq(withholdings.customerId, customerId)];
+    if (fromDate) conds.push(gte(withholdings.date, fromDate));
+    if (toDate) conds.push(lt(withholdings.date, toDate));
+    return db.select().from(withholdings).where(and(...conds as any)).orderBy(desc(withholdings.date));
+  },
+
+  // Fetch all approved order items with product name & customer info
+  async _getApprovedItems(beforeDate?: string, fromDate?: string, toDate?: string): Promise<RawOrderItem[]> {
+    // Build where conditions on orders
+    let dateFilter = drizzleSql`o.status = 'approved'`;
+    if (fromDate && toDate) {
+      dateFilter = drizzleSql`o.status = 'approved' AND o.order_date >= ${fromDate}::date AND o.order_date < ${toDate}::date`;
+    } else if (beforeDate) {
+      dateFilter = drizzleSql`o.status = 'approved' AND o.order_date < ${beforeDate}::date`;
+    }
+
+    const rows = await db.execute(drizzleSql`
+      SELECT
+        o.id AS "orderId",
+        o.customer_id AS "customerId",
+        o.order_date::text AS "orderDate",
+        oi.quantity::text AS "quantity",
+        oi.price_per_unit::text AS "pricePerUnit",
+        oi.cost_per_unit::text AS "costPerUnit",
+        oi.override_cost_per_unit::text AS "overrideCostPerUnit",
+        oi.unit::text AS "unit",
+        COALESCE(p.name, oi.raw_product_name, '') AS "productName"
+      FROM orders o
+      JOIN order_items oi ON oi.order_id = o.id
+      LEFT JOIN products p ON p.id = oi.product_id
+      WHERE ${dateFilter}
+    `);
+    return rows.rows as RawOrderItem[];
+  },
+
+  async getCCSummary(month: number, year: number) {
+    // Period boundaries
+    const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
+    const endMonth = month === 12 ? 1 : month + 1;
+    const endYear = month === 12 ? year + 1 : year;
+    const endDate = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
+
+    // Days in month
+    const daysInMonth = new Date(year, month, 0).getDate();
+
+    // Get all customers
+    const allCustomers = await db.select().from(customers).where(eq(customers.active, true)).orderBy(asc(customers.name));
+    const customerMap = new Map(allCustomers.map((c) => [c.id, c]));
+
+    // Get approved order items in period and before period
+    const [itemsInPeriod, itemsBefore] = await Promise.all([
+      this._getApprovedItems(undefined, startDate, endDate),
+      this._getApprovedItems(startDate),
+    ]);
+
+    // Get payments & withholdings in period
+    const [paymentsInPeriod, paymentsBefore, withholdingsInPeriod, withholdingsBefore] = await Promise.all([
+      db.execute(drizzleSql`SELECT customer_id AS "customerId", SUM(amount)::text AS total FROM payments WHERE date >= ${startDate} AND date < ${endDate} GROUP BY customer_id`),
+      db.execute(drizzleSql`SELECT customer_id AS "customerId", SUM(amount)::text AS total FROM payments WHERE date < ${startDate} GROUP BY customer_id`),
+      db.execute(drizzleSql`SELECT customer_id AS "customerId", SUM(amount)::text AS total FROM withholdings WHERE date >= ${startDate} AND date < ${endDate} GROUP BY customer_id`),
+      db.execute(drizzleSql`SELECT customer_id AS "customerId", SUM(amount)::text AS total FROM withholdings WHERE date < ${startDate} GROUP BY customer_id`),
+    ]);
+
+    const toMap = (rows: any[]): Map<number, number> => {
+      const m = new Map<number, number>();
+      for (const r of rows) m.set(Number(r.customerId), parseFloat(r.total ?? "0"));
+      return m;
+    };
+
+    const paymentsInMap = toMap(paymentsInPeriod.rows as any[]);
+    const paymentsBeforeMap = toMap(paymentsBefore.rows as any[]);
+    const withholdingsInMap = toMap(withholdingsInPeriod.rows as any[]);
+    const withholdingsBeforeMap = toMap(withholdingsBefore.rows as any[]);
+
+    // Compute billing per customer (grouped by period)
+    const billingInMap = new Map<number, number>();
+    const billingBeforeMap = new Map<number, number>();
+
+    for (const item of itemsInPeriod) {
+      const c = customerMap.get(item.customerId);
+      if (!c) continue;
+      const b = itemBilling(item, c.hasIva);
+      billingInMap.set(item.customerId, (billingInMap.get(item.customerId) ?? 0) + b);
+    }
+    for (const item of itemsBefore) {
+      const c = customerMap.get(item.customerId);
+      if (!c) continue;
+      const b = itemBilling(item, c.hasIva);
+      billingBeforeMap.set(item.customerId, (billingBeforeMap.get(item.customerId) ?? 0) + b);
+    }
+
+    // Build customer rows
+    const rows = allCustomers.map((c) => {
+      const facturacionBefore = billingBeforeMap.get(c.id) ?? 0;
+      const cobranzaBefore = paymentsBeforeMap.get(c.id) ?? 0;
+      const retencionBefore = withholdingsBeforeMap.get(c.id) ?? 0;
+      const saldoMesAnterior = facturacionBefore - cobranzaBefore - retencionBefore;
+
+      const facturacion = billingInMap.get(c.id) ?? 0;
+      const cobranza = paymentsInMap.get(c.id) ?? 0;
+      const retenciones = withholdingsInMap.get(c.id) ?? 0;
+      const saldo = saldoMesAnterior + facturacion - cobranza - retenciones;
+
+      return {
+        customerId: c.id,
+        customerName: c.name,
+        hasIva: c.hasIva,
+        saldoMesAnterior: Math.round(saldoMesAnterior),
+        facturacion: Math.round(facturacion),
+        cobranza: Math.round(cobranza),
+        retenciones: Math.round(retenciones),
+        saldo: Math.round(saldo),
+        fiado: Math.max(Math.round(saldo), 0),
+      };
+    }).filter((r) =>
+      // show customers with any movement or non-zero balance
+      r.saldoMesAnterior !== 0 || r.facturacion !== 0 || r.cobranza !== 0 || r.retenciones !== 0 || r.saldo !== 0
+    );
+
+    // Compute % del fiado
+    const totalFiado = rows.reduce((s, r) => s + r.fiado, 0);
+    const rowsWithPct = rows
+      .map((r) => ({ ...r, pctFiado: totalFiado > 0 ? (r.fiado / totalFiado) * 100 : 0 }))
+      .sort((a, b) => b.saldo - a.saldo);
+
+    // Totals row
+    const totals = {
+      saldoMesAnterior: rows.reduce((s, r) => s + r.saldoMesAnterior, 0),
+      facturacion: rows.reduce((s, r) => s + r.facturacion, 0),
+      cobranza: rows.reduce((s, r) => s + r.cobranza, 0),
+      retenciones: rows.reduce((s, r) => s + r.retenciones, 0),
+      saldo: rows.reduce((s, r) => s + r.saldo, 0),
+      fiado: totalFiado,
+    };
+
+    // Weekly breakdown (fixed weeks in the month)
+    const weeks = [
+      { label: "1° Semana", start: 1, end: 7 },
+      { label: "2° Semana", start: 8, end: 14 },
+      { label: "3° Semana", start: 15, end: 21 },
+      { label: "4° Semana", start: 22, end: daysInMonth },
+    ];
+
+    const weekTotals = weeks.map((w) => {
+      const wStart = `${year}-${String(month).padStart(2, "0")}-${String(w.start).padStart(2, "0")}`;
+      const wEndDay = Math.min(w.end + 1, daysInMonth + 1);
+      const wEnd = `${year}-${String(month).padStart(2, "0")}-${String(wEndDay).padStart(2, "0")}`;
+
+      let total = 0;
+      for (const item of itemsInPeriod) {
+        const d = item.orderDate.substring(0, 10); // YYYY-MM-DD
+        if (d >= wStart && d < wEnd) {
+          const c = customerMap.get(item.customerId);
+          total += itemBilling(item, c?.hasIva ?? false);
+        }
+      }
+      return { ...w, total: Math.round(total) };
+    });
+
+    // Venta del mes = sum of facturacion all customers in period
+    const ventaMes = rows.reduce((s, r) => s + r.facturacion, 0);
+
+    // Bultos
+    let bultosMes = 0;
+    for (const item of itemsInPeriod) {
+      if (isBulto(item.unit)) bultosMes += parseFloat(item.quantity);
+    }
+
+    // Ganancia bruta
+    let gananciaMes = 0;
+    for (const item of itemsInPeriod) {
+      gananciaMes += itemProfit(item);
+    }
+    gananciaMes = Math.round(gananciaMes);
+
+    // Promedios
+    const promedioDia = Math.round(ventaMes / daysInMonth);
+    const promedioGanancia = Math.round(gananciaMes / daysInMonth);
+    const margenPct = ventaMes > 0 ? (gananciaMes / ventaMes) * 100 : 0;
+
+    return {
+      month,
+      year,
+      daysInMonth,
+      customers: rowsWithPct,
+      totals,
+      semanas: weekTotals,
+      ventaMes,
+      bultosMes: Math.round(bultosMes),
+      gananciaMes,
+      promedioDia,
+      promedioGanancia,
+      margenPct,
+    };
+  },
+
+  async getCCCustomerDetail(customerId: number, month: number, year: number) {
+    const c = await this.getCustomer(customerId);
+    if (!c) return null;
+
+    const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
+    const endMonth = month === 12 ? 1 : month + 1;
+    const endYear = month === 12 ? year + 1 : year;
+    const endDate = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
+
+    const [itemsInPeriod, itemsBefore] = await Promise.all([
+      this._getApprovedItems(undefined, startDate, endDate),
+      this._getApprovedItems(startDate),
+    ]);
+
+    const myItemsInPeriod = itemsInPeriod.filter((i) => i.customerId === customerId);
+    const myItemsBefore = itemsBefore.filter((i) => i.customerId === customerId);
+
+    const facturacion = Math.round(myItemsInPeriod.reduce((s, i) => s + itemBilling(i, c.hasIva), 0));
+    const facturacionBefore = Math.round(myItemsBefore.reduce((s, i) => s + itemBilling(i, c.hasIva), 0));
+
+    const [paymentsIn, paymentsBef, withholdingsIn, withholdingsBef, ordersInPeriod] = await Promise.all([
+      this.getCustomerPayments(customerId, startDate, endDate),
+      this.getCustomerPayments(customerId, undefined, startDate),
+      this.getCustomerWithholdings(customerId, startDate, endDate),
+      this.getCustomerWithholdings(customerId, undefined, startDate),
+      db.execute(drizzleSql`
+        SELECT o.id, o.folio, o.order_date::text AS "orderDate", o.total::text AS total
+        FROM orders o
+        WHERE o.customer_id = ${customerId}
+          AND o.status = 'approved'
+          AND o.order_date >= ${startDate}::date
+          AND o.order_date < ${endDate}::date
+        ORDER BY o.order_date DESC
+      `),
+    ]);
+
+    const cobranzaBefore = paymentsBef.reduce((s, p) => s + parseFloat(p.amount as string), 0);
+    const retencionBefore = withholdingsBef.reduce((s, w) => s + parseFloat(w.amount as string), 0);
+    const saldoMesAnterior = Math.round(facturacionBefore - cobranzaBefore - retencionBefore);
+
+    const cobranza = Math.round(paymentsIn.reduce((s, p) => s + parseFloat(p.amount as string), 0));
+    const retenciones = Math.round(withholdingsIn.reduce((s, w) => s + parseFloat(w.amount as string), 0));
+    const saldo = saldoMesAnterior + facturacion - cobranza - retenciones;
+
+    // Compute billing per order in period for the table
+    const orderBillingMap = new Map<number, number>();
+    for (const item of myItemsInPeriod) {
+      orderBillingMap.set(item.orderId, (orderBillingMap.get(item.orderId) ?? 0) + itemBilling(item, c.hasIva));
+    }
+
+    const ordersWithBilling = (ordersInPeriod.rows as any[]).map((o) => ({
+      id: o.id,
+      folio: o.folio,
+      orderDate: o.orderDate,
+      total: Math.round(orderBillingMap.get(o.id) ?? parseFloat(o.total ?? "0")),
+    }));
+
+    return {
+      customer: c,
+      month,
+      year,
+      saldoMesAnterior,
+      facturacion,
+      cobranza,
+      retenciones,
+      saldo,
+      orders: ordersWithBilling,
+      payments: paymentsIn,
+      withholdings: withholdingsIn,
+    };
   },
 };

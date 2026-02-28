@@ -240,5 +240,32 @@ export async function runMigrations() {
     ALTER TABLE order_items ADD COLUMN IF NOT EXISTS override_cost_per_unit NUMERIC(12,4)
   `);
 
+  // ─── Cuentas Corrientes ─────────────────────────────────────────────────────
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS payments (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES customers(id),
+      date TEXT NOT NULL,
+      amount NUMERIC(12,2) NOT NULL,
+      method TEXT NOT NULL DEFAULT 'EFECTIVO',
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP NOT NULL DEFAULT now()
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS withholdings (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES customers(id),
+      date TEXT NOT NULL,
+      amount NUMERIC(12,2) NOT NULL,
+      type TEXT NOT NULL DEFAULT 'IIBB',
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP NOT NULL DEFAULT now()
+    )
+  `);
+
   console.log("Migrations complete.");
 }

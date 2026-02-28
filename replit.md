@@ -28,6 +28,9 @@ client/src/
       index.tsx        - Orders list with date filter, Resumen del Día, export
       new.tsx          - Create order form (margin warnings, suggested price)
       detail.tsx       - Order detail with Excel-like IVA-aware table
+    cuentas-corrientes/
+      index.tsx        - Monthly AR dashboard (table + right panel summary)
+      detail.tsx       - Customer CC detail (balances, orders, payments, withholdings)
   components/
     app-sidebar.tsx    - Navigation sidebar
     layout.tsx         - Authenticated page layout wrapper
@@ -63,6 +66,8 @@ shared/
 - **price_history**: id, customer_id, product_id, price_per_unit, order_id (last sale price per customer+product)
 - **remitos**: id, folio (VA-000001), order_id, customer_id, issued_at
 - **product_units**: id, product_id, unit (canonical: KG/CAJON/BOLSA/UNIDAD/ATADO/LITRO/TONELADA/PZ), avg_cost, stock_qty, is_active — multi-unit stock tracking per product
+- **payments**: id, customer_id, date (TEXT YYYY-MM-DD), amount, method (EFECTIVO|TRANSFERENCIA|CHEQUE|CUENTA_CORRIENTE|OTRO), notes, created_by
+- **withholdings**: id, customer_id, date (TEXT), amount, type (IIBB|GANANCIAS|IVA|SIRTAC|OTRO), notes, created_by
 
 ## Features Implemented
 
@@ -111,6 +116,24 @@ shared/
     - Intake unit validation: warns if parsed product+unit combo not registered in product_units
     - createOrderFromIntake uses product_units.avg_cost as the cost basis
     - approveOrder deducts from product_units stock in addition to products.current_stock
+
+11. **Cuentas Corrientes (AR Module)** — `/cuentas-corrientes`:
+    - Monthly balance dashboard per customer: Saldo Anterior, Facturación, Cobranza, Retenciones, Saldo, % Fiado
+    - Facturación auto-calculated from approved orders; IVA applied per customer and product (HUEVO rule)
+    - Saldo anterior = accumulated balance before period start (billing - payments - withholdings)
+    - % Fiado = customer's outstanding balance as % of total outstanding
+    - Right panel: weekly billing breakdown (4 fixed weeks), Bultos mes, Ganancia bruta, Promedios diarios
+    - Bultos = order items with unit 'caja' or 'saco' (CAJÓN/BOLSA)
+    - Click customer row → detail page `/cuentas-corrientes/:id` with:
+      - Per-period balance cards + ordered list + payments list + withholdings list
+      - Register payment modal (date, amount, method dropdown)
+      - Register retention modal (date, amount, type dropdown: IIBB/GANANCIAS/IVA/SIRTAC/OTRO)
+      - Delete payment/withholding buttons
+    - Export XLSX (2 sheets: main table + resumen)
+    - Period selector: month + year dropdowns, recalculates everything on change
+    - API: GET /api/ar/cc/summary?month&year, GET /api/ar/cc/customer/:id?month&year, GET /api/ar/cc/export?month&year
+    - POST /api/payments, DELETE /api/payments/:id
+    - POST /api/withholdings, DELETE /api/withholdings/:id
 
 ## IVA Rules
 

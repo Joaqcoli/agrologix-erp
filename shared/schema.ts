@@ -151,6 +151,33 @@ export const remitos = pgTable("remitos", {
   issuedAt: timestamp("issued_at").notNull().default(sql`now()`),
 });
 
+// ─── Cuentas Corrientes ───────────────────────────────────────────────────────
+
+export const PAYMENT_METHODS = ["EFECTIVO", "TRANSFERENCIA", "CHEQUE", "CUENTA_CORRIENTE", "OTRO"] as const;
+export type PaymentMethod = typeof PAYMENT_METHODS[number];
+
+export const payments = pgTable("payments", {
+  id: serial("id").primaryKey(),
+  customerId: integer("customer_id").notNull().references(() => customers.id),
+  date: text("date").notNull(), // YYYY-MM-DD stored as text for simplicity
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  method: text("method").notNull().default("EFECTIVO"),
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
+export const withholdings = pgTable("withholdings", {
+  id: serial("id").primaryKey(),
+  customerId: integer("customer_id").notNull().references(() => customers.id),
+  date: text("date").notNull(), // YYYY-MM-DD
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  type: text("type").notNull().default("IIBB"),
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, passwordHash: true }).extend({
@@ -203,3 +230,15 @@ export type InsertOrder = z.infer<typeof insertOrderSchema>;
 export type ProductUnit = typeof productUnits.$inferSelect;
 export type PriceHistory = typeof priceHistory.$inferSelect;
 export type Remito = typeof remitos.$inferSelect;
+export type Payment = typeof payments.$inferSelect;
+export type Withholding = typeof withholdings.$inferSelect;
+
+export const insertPaymentSchema = createInsertSchema(payments).omit({ id: true, createdAt: true, createdBy: true }).extend({
+  amount: z.union([z.string(), z.number()]).transform((v) => String(v)),
+  method: z.enum(PAYMENT_METHODS).default("EFECTIVO"),
+});
+export const insertWithholdingSchema = createInsertSchema(withholdings).omit({ id: true, createdAt: true, createdBy: true }).extend({
+  amount: z.union([z.string(), z.number()]).transform((v) => String(v)),
+});
+export type InsertPayment = z.infer<typeof insertPaymentSchema>;
+export type InsertWithholding = z.infer<typeof insertWithholdingSchema>;

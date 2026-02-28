@@ -21,6 +21,7 @@ import {
   FileText,
   ClipboardList,
   MessageSquarePlus,
+  Wallet,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
@@ -35,6 +36,7 @@ const navItems = [
   { title: "Pedidos", url: "/orders", icon: FileText },
   { title: "Carga Pedido", url: "/intake", icon: MessageSquarePlus },
   { title: "Lista de Carga", url: "/load-list", icon: ClipboardList },
+  { title: "Cuentas Corrientes", url: "/cuentas-corrientes", icon: Wallet },
 ];
 
 export function AppSidebar() {

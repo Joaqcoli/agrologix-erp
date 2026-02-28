@@ -1,0 +1,299 @@
+Necesito que agregues un nuevo módulo al ERP llamado “Cuentas Corrientes”. Debe quedar integrado al menú lateral y seguir el estilo visual actual (cards + tabla limpia tipo Excel). No rompas módulos existentes.
+
+OBJETIVO FUNCIONAL
+
+Quiero un tablero financiero mensual que muestre:
+
+Tabla por cliente (igual al Excel):
+
+Cliente
+
+Saldos mes anterior
+
+Facturación (del período)
+
+Cobranza (del período)
+
+Retenciones (del período)
+
+Saldo (mes actual)
+
+% del fiado (columna)
+
+Resumen del mes (lado derecho como en la imagen):
+
+1° semana (rango fechas) total facturado
+
+2° semana total facturado
+
+3° semana total facturado
+
+4° semana total facturado
+
+Venta del mes (suma total)
+
+Bultos mes (total de “bultos” vendidos en el mes)
+
+Promedio venta x día
+
+Promedio ganancia x día (ganancia bruta diaria)
+
+FILTRO POR PERÍODO
+
+Arriba del módulo debe haber:
+
+selector de Mes/Año (ej: Febrero 2026)
+
+opcional: selector “desde/hasta” (si es más fácil, pero mínimo Mes/Año)
+
+Todo debe recalcularse según el período seleccionado.
+
+MODELO DE DATOS (DB) – CREAR LO MÍNIMO Y COMPATIBLE
+
+Hoy ya existen pedidos (orders), items, remitos, clientes, costos, etc. Para cuentas corrientes necesitamos registrar pagos y (opcional) retenciones.
+
+A) Clientes: agregar flags
+
+En tabla customers agregar:
+
+has_iva boolean not null default false (ya lo agregaste antes, mantener)
+
+cc_enabled boolean not null default true (opcional)
+
+payment_terms_days int not null default 0 (opcional, para fiado)
+
+B) Pagos (nuevo)
+
+Crear tabla payments:
+
+id uuid pk
+
+customer_id fk customers
+
+date (date)
+
+amount (numeric) (monto total)
+
+method (text enum: EFECTIVO | TRANSFERENCIA | CHEQUE | CUENTA_CORRIENTE | OTRO)
+
+notes (text nullable)
+
+created_at
+
+C) Retenciones (nuevo, opcional pero pedido en tabla)
+
+Crear tabla withholdings:
+
+id uuid pk
+
+customer_id fk
+
+date (date)
+
+amount numeric
+
+type text (ej: IIBB, GANANCIAS, etc)
+
+notes text nullable
+
+created_at
+
+D) Saldos mes anterior (sin cargar a mano)
+
+No quiero cargar “saldos mes anterior” manualmente. Tiene que ser calculado:
+
+saldo_mes_anterior(customer, periodo) = saldo al cierre del mes anterior
+
+saldo = saldo_mes_anterior + facturación - cobranza - retenciones
+
+Si es más simple, podés calcular “saldo acumulado” con todo histórico hasta fin del período.
+
+FUENTES PARA CALCULAR “FACTURACIÓN”
+
+Facturación del período debe basarse en pedidos aprobados (o remitos emitidos) dentro del rango:
+
+tomar orders.status = APROBADO (o equivalente existente)
+
+usar fecha del pedido order.date (o approved_at si existe). Elegí una y dejalo consistente.
+
+Monto facturado por cliente:
+
+si cliente Con IVA: usar total_con_iva
+
+si cliente Sin IVA: usar total_neto
+
+Mostrar ambos en tooltip o subtexto si querés, pero en tabla “Facturación” poner el monto que corresponde según cliente.
+
+CÁLCULOS EN LA TABLA (POR CLIENTE)
+
+Para cada cliente en el período:
+
+facturacion = suma de pedidos del período (según regla IVA arriba)
+
+cobranza = suma de payments.amount del período
+
+retenciones = suma de withholdings.amount del período
+
+saldo_mes_anterior = saldo acumulado hasta el día anterior al inicio del período
+
+saldo = saldo_mes_anterior + facturacion - cobranza - retenciones
+
+% del fiado
+
+En el Excel parece ser participación / fiado. Definilo así para que sea útil y automático:
+
+fiado_cliente = max(saldo, 0) (si debe, cuenta como fiado; si saldo negativo/ a favor, 0)
+
+% del fiado = fiado_cliente / sum(fiado_cliente de todos los clientes) * 100
+
+mostrar 0.00% si total fiado = 0
+
+RESUMEN DERECHO (IGUAL A LA IMAGEN)
+Ventas por semana
+
+Dentro del mes seleccionado, agrupar por semanas tipo:
+
+Semana 1: día 1 al 7
+
+Semana 2: 8 al 14
+
+Semana 3: 15 al 21
+
+Semana 4: 22 al fin de mes
+(Como en tu imagen que tiene rangos específicos. Si el mes tiene 31, la 4ta llega a 31.)
+
+Calcular total_facturado_semana sumando facturación de pedidos aprobados (regla IVA por cliente).
+
+Venta del mes
+
+suma de facturacion de todos los clientes.
+
+Bultos mes
+
+Definición operativa:
+
+bulto = línea de pedido cuya unidad sea CAJON o BOLSA o SACO (y sumar cantidades)
+
+bultos_mes = sum(quantity) de order_items en el período donde unit en (CAJON, BOLSA, SACO)
+(si querés incluir “caja” como bulto, incluir CAJA también)
+
+Promedios
+
+promedio_venta_x_dia = venta_del_mes / cantidad_de_dias_con_venta (o días del mes; elegí el que sea más parecido a tu excel: usar días del mes calendario)
+
+ganancia_bruta_mes:
+
+por pedido = sum( (precio_venta_total - costo_total) ) donde costo_total ya lo calculás en módulo pedidos con promedio ponderado / override.
+
+si hay clientes con IVA: la ganancia bruta se calcula sobre neto (sin IVA), o sea:
+
+venta_neta = total_neto
+
+costo = total_costo
+
+ganancia = venta_neta - costo
+
+promedio_ganancia_x_dia = ganancia_bruta_mes / días_del_mes
+
+Mostrar también ganancia_bruta_mes y % margen bruto opcional como en tu excel (“GANANCIA ACUMULADA BRUTA”).
+
+UI / PANTALLA
+
+Ruta: /cuentas-corrientes
+
+Layout:
+
+Top bar: título + selector Mes/Año + botón “Exportar XLSX”
+
+Dos columnas:
+
+Izquierda: tabla grande por cliente (scroll)
+
+Derecha: panel resumen (ventas por semana, venta mes, bultos, promedios)
+
+Tabla
+
+Filas por cliente
+
+Totales al final (sumas de cada columna)
+
+Columna “Saldo” con color:
+
+rojo si saldo > 0 (debe)
+
+verde si saldo < 0 (a favor)
+
+Columna “% del fiado” como porcentaje con 2 decimales
+
+Orden default: saldo desc (los que más deben arriba)
+
+Acciones rápidas por cliente
+
+Al hacer click en un cliente, abrir detalle:
+
+/cuentas-corrientes/:customerId
+En esa pantalla:
+
+ver la misma info del cliente (saldo anterior, facturación, cobranza, saldo)
+
+lista de pedidos del período + lista de pagos del período
+
+botón “Registrar pago” (modal simple: fecha, monto, método, notas)
+
+botón “Registrar retención” (modal simple)
+
+API / BACKEND
+
+Crear endpoints:
+
+GET /api/ar/cc/summary?month=MM&year=YYYY
+
+devuelve:
+
+clientes[] con campos calculados
+
+totales
+
+resumen semanal
+
+venta_mes, bultos_mes, ganancia_mes, promedios
+
+GET /api/ar/cc/customer/:id?month=MM&year=YYYY
+
+detalle cliente
+
+POST /api/payments
+
+POST /api/withholdings
+
+GET /api/ar/cc/export?month=MM&year=YYYY -> devuelve XLSX con:
+
+hoja 1: tabla principal
+
+hoja 2: resumen
+
+Usar xlsx library (ya la usaste en pedidos).
+
+REGLAS IMPORTANTES
+
+No mostrar decimales en montos ($)
+
+Mantener performance: calcular en SQL lo más posible (joins + group by), no iterar todo en JS si se puede.
+
+Si un cliente no tuvo movimientos, igual puede aparecer si tiene saldo_mes_anterior ≠ 0.
+
+Todo debe funcionar sin Supabase externo (usar la DB actual del proyecto).
+
+ENTREGABLE
+
+Migración DB (payments, withholdings + columnas customers si faltan)
+
+Storage methods para cálculos
+
+Rutas API
+
+UI /cuentas-corrientes + detalle por cliente
+
+Export XLSX igual a la tabla del módulo
+
+Implementar y dejar probado end-to-end con datos de ejemplo.

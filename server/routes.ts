@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import * as XLSX from "xlsx";
 import { storage } from "./storage";
-import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema } from "@shared/schema";
+import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema, insertPaymentSchema, insertWithholdingSchema } from "@shared/schema";
 import { z } from "zod";
 import { canonicalizeUnit } from "@shared/units";
 
@@ -498,6 +498,140 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const date = req.query.date as string;
     if (!date) return res.status(400).json({ error: "date query param required" });
     return res.json(await storage.getLoadList(date));
+  });
+
+  // ─── Cuentas Corrientes ─────────────────────────────────────────────────────
+
+  // GET /api/ar/cc/summary?month=2&year=2026
+  app.get("/api/ar/cc/summary", requireAuth, async (req, res) => {
+    try {
+      const month = parseInt(req.query.month as string);
+      const year = parseInt(req.query.year as string);
+      if (!month || !year || month < 1 || month > 12) {
+        return res.status(400).json({ error: "Invalid month/year" });
+      }
+      const data = await storage.getCCSummary(month, year);
+      return res.json(data);
+    } catch (e: any) {
+      console.error("CC summary error:", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/ar/cc/customer/:id?month=2&year=2026
+  app.get("/api/ar/cc/customer/:id", requireAuth, async (req, res) => {
+    try {
+      const customerId = Number(req.params.id);
+      const month = parseInt(req.query.month as string);
+      const year = parseInt(req.query.year as string);
+      if (!month || !year || month < 1 || month > 12) {
+        return res.status(400).json({ error: "Invalid month/year" });
+      }
+      const data = await storage.getCCCustomerDetail(customerId, month, year);
+      if (!data) return res.status(404).json({ error: "Customer not found" });
+      return res.json(data);
+    } catch (e: any) {
+      console.error("CC customer detail error:", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/payments
+  app.post("/api/payments", requireAuth, async (req, res) => {
+    try {
+      const data = insertPaymentSchema.parse(req.body);
+      const payment = await storage.createPayment(data, req.session.userId!);
+      return res.json(payment);
+    } catch (e: any) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  // DELETE /api/payments/:id
+  app.delete("/api/payments/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deletePayment(Number(req.params.id));
+      return res.json({ ok: true });
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/withholdings
+  app.post("/api/withholdings", requireAuth, async (req, res) => {
+    try {
+      const data = insertWithholdingSchema.parse(req.body);
+      const w = await storage.createWithholding(data, req.session.userId!);
+      return res.json(w);
+    } catch (e: any) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  // DELETE /api/withholdings/:id
+  app.delete("/api/withholdings/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteWithholding(Number(req.params.id));
+      return res.json({ ok: true });
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/ar/cc/export?month=2&year=2026
+  app.get("/api/ar/cc/export", requireAuth, async (req, res) => {
+    try {
+      const month = parseInt(req.query.month as string);
+      const year = parseInt(req.query.year as string);
+      if (!month || !year) return res.status(400).json({ error: "Invalid params" });
+
+      const data = await storage.getCCSummary(month, year);
+      const monthName = new Date(year, month - 1, 1).toLocaleString("es-AR", { month: "long", year: "numeric" });
+
+      const wb = XLSX.utils.book_new();
+
+      // Sheet 1: main table
+      const sheet1Data = [
+        ["Cliente", "Saldo Mes Anterior", "Facturación", "Cobranza", "Retenciones", "Saldo", "% del Fiado"],
+        ...data.customers.map((r) => [
+          r.customerName,
+          r.saldoMesAnterior,
+          r.facturacion,
+          r.cobranza,
+          r.retenciones,
+          r.saldo,
+          parseFloat(r.pctFiado.toFixed(2)),
+        ]),
+        ["TOTAL", data.totals.saldoMesAnterior, data.totals.facturacion, data.totals.cobranza, data.totals.retenciones, data.totals.saldo, ""],
+      ];
+      const ws1 = XLSX.utils.aoa_to_sheet(sheet1Data);
+      XLSX.utils.book_append_sheet(wb, ws1, "Cuentas Corrientes");
+
+      // Sheet 2: summary
+      const sheet2Data = [
+        [`Resumen ${monthName}`],
+        [],
+        ["Período", "Venta"],
+        ...data.semanas.map((s) => [`${s.label} (${s.start}-${s.end})`, s.total]),
+        [],
+        ["Venta del Mes", data.ventaMes],
+        ["Bultos Mes", data.bultosMes],
+        ["Promedio Venta x Día", data.promedioDia],
+        ["Ganancia Bruta Mes", data.gananciaMes],
+        ["Promedio Ganancia x Día", data.promedioGanancia],
+        ["Margen Bruto %", parseFloat(data.margenPct.toFixed(2)) + "%"],
+      ];
+      const ws2 = XLSX.utils.aoa_to_sheet(sheet2Data);
+      XLSX.utils.book_append_sheet(wb, ws2, "Resumen");
+
+      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="CC-${monthName}.xlsx"`);
+      return res.send(buf);
+    } catch (e: any) {
+      console.error("CC export error:", e);
+      return res.status(500).json({ error: e.message });
+    }
   });
 
   return httpServer;

@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, useSearch } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -16,6 +16,8 @@ import NewOrderPage from "@/pages/orders/new";
 import OrderDetailPage from "@/pages/orders/detail";
 import LoadListPage from "@/pages/load-list";
 import IntakePage from "@/pages/intake";
+import CuentasCorrientesPage from "@/pages/cuentas-corrientes/index";
+import CCCustomerDetailPage from "@/pages/cuentas-corrientes/detail";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -37,6 +39,16 @@ function Router() {
       </Route>
       <Route path="/load-list" component={LoadListPage} />
       <Route path="/intake" component={IntakePage} />
+      <Route path="/cuentas-corrientes" component={CuentasCorrientesPage} />
+      <Route path="/cuentas-corrientes/:id">
+        {(params) => {
+          const search = new URLSearchParams(window.location.search);
+          const today = new Date();
+          const month = parseInt(search.get("month") ?? String(today.getMonth() + 1));
+          const year = parseInt(search.get("year") ?? String(today.getFullYear()));
+          return <CCCustomerDetailPage customerId={Number(params.id)} month={month} year={year} />;
+        }}
+      </Route>
       <Route component={NotFound} />
     </Switch>
   );
