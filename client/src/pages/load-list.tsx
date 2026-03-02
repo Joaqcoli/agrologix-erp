@@ -72,16 +72,16 @@ function fmtDiff(diff: number, unit: string) {
 export default function LoadListPage() {
   const today = new Date().toISOString().slice(0, 10);
   const [date, setDate] = useState(today);
-  const [includeDrafts, setIncludeDrafts] = useState(true);
+  const [includeStock, setIncludeStock] = useState(false);
   const [search, setSearch] = useState("");
   const [unitFilter, setUnitFilter] = useState("all");
   const [detailRow, setDetailRow] = useState<LoadListRow | null>(null);
 
   const { data, isLoading } = useQuery<LoadListData>({
-    queryKey: ["/api/load-list", date, includeDrafts],
+    queryKey: ["/api/load-list", date],
     queryFn: async () => {
       const res = await fetch(
-        `/api/load-list?date=${date}&includeDrafts=${includeDrafts ? "1" : "0"}`,
+        `/api/load-list?date=${date}&includeDrafts=1`,
         { credentials: "include" }
       );
       if (!res.ok) throw new Error("Error fetching load list");
@@ -106,7 +106,7 @@ export default function LoadListPage() {
 
   const handleExport = () => {
     window.open(
-      `/api/load-list/export?date=${date}&includeDrafts=${includeDrafts ? "1" : "0"}`,
+      `/api/load-list/export?date=${date}&includeDrafts=1`,
       "_blank"
     );
   };
@@ -146,13 +146,13 @@ export default function LoadListPage() {
           </div>
           <div className="flex items-center gap-2 pb-0.5">
             <Switch
-              id="toggle-drafts"
-              checked={includeDrafts}
-              onCheckedChange={setIncludeDrafts}
-              data-testid="toggle-include-drafts"
+              id="toggle-stock"
+              checked={includeStock}
+              onCheckedChange={setIncludeStock}
+              data-testid="toggle-include-stock"
             />
-            <Label htmlFor="toggle-drafts" className="cursor-pointer text-sm">
-              Incluir borradores
+            <Label htmlFor="toggle-stock" className="cursor-pointer text-sm">
+              Incluir Stock
             </Label>
           </div>
         </div>
@@ -303,8 +303,8 @@ export default function LoadListPage() {
                       <th className="text-left py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Producto</th>
                       <th className="text-left py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Unidad</th>
                       <th className="text-right py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Total Pedido</th>
-                      <th className="text-right py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Stock</th>
-                      <th className="text-right py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Diferencia</th>
+                      {includeStock && <th className="text-right py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Stock</th>}
+                      {includeStock && <th className="text-right py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Neto a Comprar</th>}
                       <th className="text-center py-2.5 px-4 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Clientes</th>
                     </tr>
                   </thead>
@@ -325,7 +325,7 @@ export default function LoadListPage() {
                       return sortedCats.map((cat) => (
                         <>
                           <tr key={`cat-${cat}`} className="border-b border-border bg-muted/50">
-                            <td colSpan={7} className="py-1.5 px-4 text-xs font-semibold text-muted-foreground uppercase tracking-widest">
+                            <td colSpan={includeStock ? 7 : 5} className="py-1.5 px-4 text-xs font-semibold text-muted-foreground uppercase tracking-widest">
                               {cat}
                             </td>
                           </tr>
@@ -335,7 +335,7 @@ export default function LoadListPage() {
                             return (
                               <tr
                                 key={`${row.productId}-${row.unit}`}
-                                className={`border-b border-border last:border-0 hover:bg-muted/20 transition-colors cursor-pointer ${isShortage ? "bg-red-50 dark:bg-red-950/20" : ""}`}
+                                className={`border-b border-border last:border-0 hover:bg-muted/20 transition-colors cursor-pointer ${includeStock && isShortage ? "bg-red-50 dark:bg-red-950/20" : ""}`}
                                 onClick={() => setDetailRow(row)}
                                 data-testid={`load-row-${row.productId}-${row.unit}`}
                               >
@@ -347,18 +347,22 @@ export default function LoadListPage() {
                                 <td className="py-3 px-3 text-right font-semibold text-foreground">
                                   {fmtQty(row.totalQty, row.unit)}
                                 </td>
-                                <td className="py-3 px-3 text-right text-muted-foreground">
-                                  {fmtQty(row.stockQty, row.unit)}
-                                </td>
-                                <td className="py-3 px-3 text-right font-bold">
-                                  {isShortage ? (
-                                    <span className="text-destructive">
-                                      {fmtDiff(Math.abs(row.diffQty), row.unit)} <span className="text-[10px] font-normal">FALTANTE</span>
-                                    </span>
-                                  ) : (
-                                    <span className="text-muted-foreground">—</span>
-                                  )}
-                                </td>
+                                {includeStock && (
+                                  <td className="py-3 px-3 text-right text-muted-foreground">
+                                    {fmtQty(row.stockQty, row.unit)}
+                                  </td>
+                                )}
+                                {includeStock && (
+                                  <td className="py-3 px-3 text-right font-bold">
+                                    {isShortage ? (
+                                      <span className="text-destructive">
+                                        {fmtDiff(Math.abs(row.diffQty), row.unit)} <span className="text-[10px] font-normal">A COMPRAR</span>
+                                      </span>
+                                    ) : (
+                                      <span className="text-green-600 dark:text-green-400 text-xs font-medium">OK</span>
+                                    )}
+                                  </td>
+                                )}
                                 <td className="py-3 px-4 text-center">
                                   <button
                                     className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
