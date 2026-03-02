@@ -131,10 +131,14 @@ export const orderItems = pgTable("order_items", {
 export const productUnits = pgTable("product_units", {
   id: serial("id").primaryKey(),
   productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
-  unit: text("unit").notNull(),         // canonical: KG, CAJON, BOLSA, UNIDAD, ATADO, LITRO, TONELADA, PZ
+  unit: text("unit").notNull(),         // base unit: KG, UNIDAD, ATADO, MAPLE, LITRO, etc.
   isActive: boolean("is_active").notNull().default(true),
   avgCost: numeric("avg_cost", { precision: 12, scale: 4 }).notNull().default("0"),
   stockQty: numeric("stock_qty", { precision: 12, scale: 4 }).notNull().default("0"),
+  // Weight (base units per package) for CAJON/BOLSA products — e.g. 18 KG per cajón
+  weightPerUnit: numeric("weight_per_unit", { precision: 10, scale: 4 }).default("0"),
+  // Set when this row was created/updated by the base-unit purchase model
+  baseUnit: text("base_unit"),
 });
 
 // Stores the last sale price per customer+product (price history)

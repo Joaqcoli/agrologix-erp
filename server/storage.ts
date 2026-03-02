@@ -247,72 +247,65 @@ export const storage = {
           .limit(1);
         if (!product) continue;
 
+        // item.quantity y item.costPerUnit ya vienen en unidad base (frontend convierte)
         const newQty = parseFloat(item.quantity);
         const newCost = parseFloat(item.costPerUnit);
+        const baseUnitCanonical = dbEnumToCanonical(item.unit); // e.g. KG, MAPLE, ATADO
 
-        // ── product_units (unidad base): costo promedio ponderado + stock ────────
-        const canonicalUnit = dbEnumToCanonical(item.unit);
+        // Datos del envase (si la compra fue en CAJON/BOLSA/BANDEJA)
+        const purchaseQtyNum = item.purchaseQty ? parseFloat(item.purchaseQty) : 0;
+        const weightPerPackage = item.weightPerPackage ? parseFloat(item.weightPerPackage) : 0;
+        const isPackagePurchase = !!(item.purchaseUnit && weightPerPackage > 0 && purchaseQtyNum > 0);
+
+        // ── product_units: UNA SOLA FILA por producto (unidad base) ─────────────
         const [existingPU] = await tx.select().from(productUnits)
-          .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+          .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, baseUnitCanonical)))
           .for('update')
           .limit(1);
 
         let newPuAvgCost: number;
+        let newWeightPerUnit: number;
+
         if (existingPU) {
           const puStock = parseFloat(existingPU.stockQty as string);
           const puCost = parseFloat(existingPU.avgCost as string);
           newPuAvgCost = puStock + newQty === 0 ? newCost : (puStock * puCost + newQty * newCost) / (puStock + newQty);
-          await tx.update(productUnits).set({
+
+          // Recalcular weight_per_unit como promedio ponderado de unidades base por envase
+          if (isPackagePurchase) {
+            const oldWPU = parseFloat(existingPU.weightPerUnit as string ?? "0");
+            if (oldWPU > 0 && puStock > 0) {
+              const oldPackages = puStock / oldWPU;
+              newWeightPerUnit = (oldPackages * oldWPU + purchaseQtyNum * weightPerPackage) / (oldPackages + purchaseQtyNum);
+            } else {
+              newWeightPerUnit = weightPerPackage;
+            }
+          } else {
+            newWeightPerUnit = parseFloat(existingPU.weightPerUnit as string ?? "0");
+          }
+
+          const puUpdate: Record<string, any> = {
             stockQty: (puStock + newQty).toFixed(4),
             avgCost: newPuAvgCost.toFixed(4),
-          }).where(eq(productUnits.id, existingPU.id));
+            baseUnit: baseUnitCanonical,
+          };
+          if (isPackagePurchase) puUpdate.weightPerUnit = newWeightPerUnit.toFixed(4);
+
+          await tx.update(productUnits).set(puUpdate).where(eq(productUnits.id, existingPU.id));
         } else {
           newPuAvgCost = newCost;
+          newWeightPerUnit = weightPerPackage;
           await tx.insert(productUnits).values({
             productId: item.productId,
-            unit: canonicalUnit,
+            unit: baseUnitCanonical,
             avgCost: newCost.toFixed(4),
             stockQty: newQty.toFixed(4),
+            baseUnit: baseUnitCanonical,
+            ...(weightPerPackage > 0 ? { weightPerUnit: weightPerPackage.toFixed(4) } : {}),
           });
         }
 
-        // ── product_units (unidad de compra): costo promedio ponderado por cajón ─
-        // Cuando la compra fue convertida (ej. CAJON → KG), también actualizamos
-        // la entrada de product_units en la unidad original para rastrear el costo
-        // promedio por cajón correctamente (independiente del peso por cajón).
-        let newPurchaseUnitAvgCost: number | null = null;
-        if (item.purchaseUnit && item.purchaseQty && item.weightPerPackage) {
-          const purchaseCanonical = dbEnumToCanonical(item.purchaseUnit as any);
-          const purchaseQtyNum = parseFloat(item.purchaseQty);
-          const newCostPerPurchaseUnit = newCost * parseFloat(item.weightPerPackage); // $/cajón de esta compra
-          const [existingPurchasePU] = await tx.select().from(productUnits)
-            .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, purchaseCanonical)))
-            .for('update')
-            .limit(1);
-          if (existingPurchasePU) {
-            const puStock = Number(existingPurchasePU.stockQty);
-            const puCost = Number(existingPurchasePU.avgCost);
-            newPurchaseUnitAvgCost = (puStock + purchaseQtyNum) === 0
-              ? newCostPerPurchaseUnit
-              : (puStock * puCost + purchaseQtyNum * newCostPerPurchaseUnit) / (puStock + purchaseQtyNum);
-            await tx.update(productUnits).set({
-              stockQty: (puStock + purchaseQtyNum).toFixed(4),
-              avgCost: newPurchaseUnitAvgCost.toFixed(4),
-            }).where(eq(productUnits.id, existingPurchasePU.id));
-          } else {
-            newPurchaseUnitAvgCost = newCostPerPurchaseUnit;
-            await tx.insert(productUnits).values({
-              productId: item.productId,
-              unit: purchaseCanonical,
-              avgCost: newPurchaseUnitAvgCost.toFixed(4),
-              stockQty: purchaseQtyNum.toFixed(4),
-              isActive: true,
-            });
-          }
-        }
-
-        // ── products.currentStock + averageCost: costo promedio ponderado ───────────
-        // Nuevo costo = ((stock_actual * costo_actual) + (qty * costo_compra)) / stock_total
+        // ── products.currentStock + averageCost: costo promedio ponderado ─────────
         const currentStock = parseFloat(product.currentStock as string);
         const currentAvgCost = parseFloat(product.averageCost as string);
         const newAvgCost = currentStock + newQty === 0
@@ -367,22 +360,17 @@ export const storage = {
           for (const oi of candidateItems) {
             const oiCanonical = dbEnumToCanonical(oi.unit as string);
 
-            // Determine effective cost for this order item's unit using weighted averages
             let costForUnit: number;
-            if (oiCanonical === canonicalUnit) {
-              // Direct unit match (e.g. both KG): usar el costo promedio ponderado actualizado
+            if (oiCanonical === baseUnitCanonical) {
+              // Pedido en unidad base → costo directo
               costForUnit = newPuAvgCost;
-            } else if (item.purchaseUnit && item.weightPerPackage) {
-              // Cross-unit: la compra fue convertida a unidad base (KG) pero el pedido está en unidad original (CAJON)
-              const purchaseCanonical = dbEnumToCanonical(item.purchaseUnit);
-              if (oiCanonical !== purchaseCanonical) continue;
-              // Usar el costo promedio ponderado por cajón si está disponible (rastreado en product_units),
-              // si no, aproximar con el costo promedio por KG × peso por cajón
-              costForUnit = newPurchaseUnitAvgCost !== null
-                ? newPurchaseUnitAvgCost
-                : newPuAvgCost * parseFloat(item.weightPerPackage);
+            } else if (['CAJON', 'BOLSA', 'BANDEJA'].includes(oiCanonical)) {
+              // Pedido en unidad de envase → derivar costo de unidad base × weight_per_unit
+              const wpu = newWeightPerUnit > 0 ? newWeightPerUnit : weightPerPackage;
+              if (wpu <= 0) continue;
+              costForUnit = newPuAvgCost * wpu;
             } else {
-              continue;
+              continue; // Unidad diferente, no aplica
             }
 
             const qty = Number(oi.quantity);
@@ -422,6 +410,36 @@ export const storage = {
     return `OC-${String(nextNum).padStart(5, "0")}`;
   },
 
+  // ── Helper: obtener costo por unidad para un producto dado ──────────────────
+  // Prioridad: 1) fila exacta en product_units  2) derivado de unidad base × weight_per_unit  3) products.averageCost
+  async _getCostForUnit(productId: number, unit: string, tx: any = db): Promise<string> {
+    const canonical = dbEnumToCanonical(unit);
+
+    // 1) Coincidencia exacta de unidad
+    const [exactPu] = await tx.select().from(productUnits)
+      .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, canonical)))
+      .limit(1);
+    if (exactPu) return exactPu.avgCost as string;
+
+    // 2) Si es unidad de envase, derivar de fila base × weight_per_unit
+    if (['CAJON', 'BOLSA', 'BANDEJA'].includes(canonical)) {
+      const [baseRow] = await tx.select().from(productUnits)
+        .where(and(
+          eq(productUnits.productId, productId),
+          drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+        ))
+        .limit(1);
+      if (baseRow) {
+        const wpu = parseFloat(baseRow.weightPerUnit as string ?? "0");
+        if (wpu > 0) return (parseFloat(baseRow.avgCost as string) * wpu).toFixed(4);
+      }
+    }
+
+    // 3) Fallback: averageCost del producto
+    const [p] = await tx.select().from(products).where(eq(products.id, productId)).limit(1);
+    return p?.averageCost as string ?? "0";
+  },
+
   async _recalcProductSummary(pid: number, tx: any = db): Promise<void> {
     // Solo agregar entradas de la unidad base del producto para evitar mezclar unidades (KG + CAJON)
     const [product] = await tx.select({ unit: products.unit }).from(products).where(eq(products.id, pid)).limit(1);
@@ -449,33 +467,17 @@ export const storage = {
       const items = await tx.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, id));
 
       for (const item of items) {
+        // item.unit es la unidad base (ej. "kg", "maple") — revertir solo esa fila
         const canonicalUnit = dbEnumToCanonical(item.unit as any);
         const [pu] = await tx.select().from(productUnits)
           .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
           .limit(1);
         if (pu) {
           const newStock = Number(pu.stockQty) - Number(item.quantity);
-          if (newStock <= 0) {
-            // Preserve avgCost — only zero the stock qty
-            await tx.update(productUnits).set({ stockQty: "0" }).where(eq(productUnits.id, pu.id));
-          } else {
-            await tx.update(productUnits).set({ stockQty: newStock.toFixed(4) }).where(eq(productUnits.id, pu.id));
-          }
+          // Preserve avgCost — only floor stock at 0
+          await tx.update(productUnits).set({ stockQty: Math.max(0, newStock).toFixed(4) }).where(eq(productUnits.id, pu.id));
         }
-
-        // También revertir el stock en la unidad de compra (CAJON) si corresponde
-        if (item.purchaseUnit && item.purchaseQty) {
-          const purchaseCanonical = dbEnumToCanonical(item.purchaseUnit as any);
-          const [puPurchaseUnit] = await tx.select().from(productUnits)
-            .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, purchaseCanonical)))
-            .limit(1);
-          if (puPurchaseUnit) {
-            const newStock = Number(puPurchaseUnit.stockQty) - Number(item.purchaseQty);
-            await tx.update(productUnits).set({
-              stockQty: Math.max(0, newStock).toFixed(4),
-            }).where(eq(productUnits.id, puPurchaseUnit.id));
-          }
-        }
+        // No revertir el row de unidad de envase (CAJON/BOLSA) — ya no existe en el modelo nuevo
       }
 
       const affectedProductIds = Array.from(new Set(items.map((i) => i.productId)));
@@ -814,18 +816,7 @@ export const storage = {
       data.items.map(async (item) => {
         let costPerUnit = "0";
         if (item.productId) {
-          // Try product_units first (canonical unit lookup)
-          const canonicalUnit = dbEnumToCanonical(item.unit ?? "kg");
-          const [pu] = await db.select().from(productUnits)
-            .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
-            .limit(1);
-          if (pu) {
-            costPerUnit = pu.avgCost as string;
-          } else {
-            // Fallback to products.averageCost
-            const [p] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
-            if (p) costPerUnit = p.averageCost as string;
-          }
+          costPerUnit = await this._getCostForUnit(item.productId, item.unit ?? "kg");
         }
         return {
           orderId: order.id,
@@ -860,8 +851,7 @@ export const storage = {
       items.map(async (item) => {
         let costPerUnit = "0";
         if (item.productId) {
-          const [p] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
-          if (p) costPerUnit = p.averageCost as string;
+          costPerUnit = await this._getCostForUnit(item.productId, item.unit ?? "kg");
         }
         return {
           orderId,
@@ -905,13 +895,35 @@ export const storage = {
       if (order.status === "approved") {
         for (const item of items) {
           if (!item.productId) continue;
-          const canonicalUnit = dbEnumToCanonical(item.unit as string);
-          const [pu] = await tx.select().from(productUnits)
-            .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+          const oiCanonical = dbEnumToCanonical(item.unit as string);
+          const qty = Number(item.quantity);
+
+          // Buscar fila de unidad base (modelo nuevo primero, fallback modelo antiguo)
+          const [baseUnitPu] = await tx.select().from(productUnits)
+            .where(and(
+              eq(productUnits.productId, item.productId),
+              drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+            ))
             .limit(1);
-          if (pu) {
-            const newStock = Number(pu.stockQty) + Number(item.quantity);
-            await tx.update(productUnits).set({ stockQty: newStock.toFixed(4) }).where(eq(productUnits.id, pu.id));
+
+          let restoreQty = qty;
+          let puToRestore: typeof baseUnitPu | null = baseUnitPu ?? null;
+
+          if (baseUnitPu) {
+            if (oiCanonical !== baseUnitPu.unit && ['CAJON', 'BOLSA', 'BANDEJA'].includes(oiCanonical)) {
+              const wpu = parseFloat(baseUnitPu.weightPerUnit as string ?? "0");
+              restoreQty = qty * (wpu > 0 ? wpu : 1);
+            }
+          } else {
+            const [oldPu] = await tx.select().from(productUnits)
+              .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, oiCanonical)))
+              .limit(1);
+            puToRestore = oldPu ?? null;
+          }
+
+          if (puToRestore) {
+            const newStock = Number(puToRestore.stockQty) + restoreQty;
+            await tx.update(productUnits).set({ stockQty: newStock.toFixed(4) }).where(eq(productUnits.id, puToRestore.id));
           }
         }
 
@@ -968,12 +980,30 @@ export const storage = {
       // STEP 1: Revert old stock contribution for approved orders
       if (isApproved && hasStructuralChange && item.productId) {
         const oldCanonical = dbEnumToCanonical(item.unit as string);
-        const [oldPu] = await tx.select().from(productUnits)
-          .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, oldCanonical)))
+        const oldQty = Number(item.quantity);
+
+        const [oldBaseUnitPu] = await tx.select().from(productUnits)
+          .where(and(eq(productUnits.productId, item.productId), drizzleSql`${productUnits.baseUnit} IS NOT NULL`))
           .limit(1);
-        if (oldPu) {
-          const restoredStock = Number(oldPu.stockQty) + Number(item.quantity);
-          await tx.update(productUnits).set({ stockQty: restoredStock.toFixed(4) }).where(eq(productUnits.id, oldPu.id));
+
+        let restoreQty = oldQty;
+        let oldPuToRestore: typeof oldBaseUnitPu | null = oldBaseUnitPu ?? null;
+
+        if (oldBaseUnitPu) {
+          if (oldCanonical !== oldBaseUnitPu.unit && ['CAJON', 'BOLSA', 'BANDEJA'].includes(oldCanonical)) {
+            const wpu = parseFloat(oldBaseUnitPu.weightPerUnit as string ?? "0");
+            restoreQty = oldQty * (wpu > 0 ? wpu : 1);
+          }
+        } else {
+          const [fallbackPu] = await tx.select().from(productUnits)
+            .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, oldCanonical)))
+            .limit(1);
+          oldPuToRestore = fallbackPu ?? null;
+        }
+
+        if (oldPuToRestore) {
+          const restoredStock = Number(oldPuToRestore.stockQty) + restoreQty;
+          await tx.update(productUnits).set({ stockQty: restoredStock.toFixed(4) }).where(eq(productUnits.id, oldPuToRestore.id));
         }
         await this._recalcProductSummary(item.productId, tx);
       }
@@ -982,27 +1012,10 @@ export const storage = {
       const newProductId = patch.productId !== undefined ? patch.productId : item.productId;
       const newUnit = patch.unit ?? (item.unit as string);
 
-      // Validate unit is active for the product
-      if (newProductId && patch.unit) {
-        const canonical = dbEnumToCanonical(patch.unit);
-        const [pu] = await tx.select().from(productUnits)
-          .where(and(eq(productUnits.productId, newProductId), eq(productUnits.unit, canonical), eq(productUnits.isActive, true)))
-          .limit(1);
-        if (!pu) throw new Error(`Unidad "${patch.unit}" no está habilitada para este producto`);
-      }
-
       // Look up new cost from product_units when product or unit changes
       let newCostPerUnit: string | undefined;
       if (patch.productId !== undefined && patch.productId !== null) {
-        const canonical = dbEnumToCanonical(newUnit);
-        const [pu] = await tx.select().from(productUnits)
-          .where(and(eq(productUnits.productId, patch.productId), eq(productUnits.unit, canonical), eq(productUnits.isActive, true)))
-          .limit(1);
-        if (pu) newCostPerUnit = pu.avgCost as string;
-        else {
-          const [p] = await tx.select().from(products).where(eq(products.id, patch.productId)).limit(1);
-          if (p) newCostPerUnit = p.averageCost as string;
-        }
+        newCostPerUnit = await this._getCostForUnit(patch.productId, newUnit, tx);
       }
 
       // Effective cost for margin calculation: override > new product cost > existing cost
@@ -1045,12 +1058,29 @@ export const storage = {
       // STEP 3: Apply new stock deduction for approved orders
       if (isApproved && hasStructuralChange && newProductId) {
         const newCanonical = dbEnumToCanonical(newUnit);
-        const [newPu] = await tx.select().from(productUnits)
-          .where(and(eq(productUnits.productId, newProductId), eq(productUnits.unit, newCanonical)))
+
+        const [newBaseUnitPu] = await tx.select().from(productUnits)
+          .where(and(eq(productUnits.productId, newProductId), drizzleSql`${productUnits.baseUnit} IS NOT NULL`))
           .limit(1);
-        if (newPu) {
-          const deductedStock = Number(newPu.stockQty) - qty;
-          await tx.update(productUnits).set({ stockQty: deductedStock.toFixed(4) }).where(eq(productUnits.id, newPu.id));
+
+        let deductQty = qty;
+        let newPuToDeduct: typeof newBaseUnitPu | null = newBaseUnitPu ?? null;
+
+        if (newBaseUnitPu) {
+          if (newCanonical !== newBaseUnitPu.unit && ['CAJON', 'BOLSA', 'BANDEJA'].includes(newCanonical)) {
+            const wpu = parseFloat(newBaseUnitPu.weightPerUnit as string ?? "0");
+            deductQty = qty * (wpu > 0 ? wpu : 1);
+          }
+        } else {
+          const [fallbackPu] = await tx.select().from(productUnits)
+            .where(and(eq(productUnits.productId, newProductId), eq(productUnits.unit, newCanonical)))
+            .limit(1);
+          newPuToDeduct = fallbackPu ?? null;
+        }
+
+        if (newPuToDeduct) {
+          const deductedStock = Number(newPuToDeduct.stockQty) - deductQty;
+          await tx.update(productUnits).set({ stockQty: Math.max(0, deductedStock).toFixed(4) }).where(eq(productUnits.id, newPuToDeduct.id));
         }
         await this._recalcProductSummary(newProductId, tx);
       }
@@ -1087,8 +1117,7 @@ export const storage = {
     let total = 0;
     const itemsEnriched = await Promise.all(
       data.items.map(async (item) => {
-        const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
-        const costPerUnit = product ? parseFloat(product.averageCost as string) : 0;
+        const costPerUnit = parseFloat(await this._getCostForUnit(item.productId, item.unit));
         const price = parseFloat(item.pricePerUnit);
         const margin = price > 0 ? (price - costPerUnit) / price : 0;
         const subtotal = parseFloat(item.quantity) * price;
@@ -1146,15 +1175,44 @@ export const storage = {
         if (!item.productId) continue;
 
         const qty = parseFloat(item.quantity as string);
+        const oiCanonical = dbEnumToCanonical(item.unit as string);
 
-        // Lock the product row for this transaction to prevent concurrent over-deduction
+        // Lock the product row
         const [product] = await tx.select().from(products)
           .where(eq(products.id, item.productId))
+          .for('update')
           .limit(1);
         if (!product) continue;
 
+        // ── Buscar fila de unidad base (modelo nuevo) ──────────────────────────
+        // Preferir fila con base_unit IS NOT NULL (creada por nuevo modelo)
+        const [baseUnitPu] = await tx.select().from(productUnits)
+          .where(and(
+            eq(productUnits.productId, item.productId),
+            drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+          ))
+          .limit(1);
+
+        // Determinar cantidad a descontar en unidad base
+        let deductQty = qty;
+        let puToUpdate: typeof baseUnitPu | null = baseUnitPu ?? null;
+
+        if (baseUnitPu) {
+          // Modelo nuevo: puede haber conversión de envase → unidad base
+          if (oiCanonical !== baseUnitPu.unit && ['CAJON', 'BOLSA', 'BANDEJA'].includes(oiCanonical)) {
+            const wpu = parseFloat(baseUnitPu.weightPerUnit as string ?? "0");
+            deductQty = qty * (wpu > 0 ? wpu : 1);
+          }
+        } else {
+          // Modelo antiguo: buscar por unidad canónica directa
+          const [oldPu] = await tx.select().from(productUnits)
+            .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, oiCanonical)))
+            .limit(1);
+          puToUpdate = oldPu ?? null;
+        }
+
         const currentStock = parseFloat(product.currentStock as string);
-        const rawNewStock = currentStock - qty;
+        const rawNewStock = currentStock - deductQty;
         const isOverflow = rawNewStock < 0;
         const finalStock = isOverflow ? 0 : rawNewStock;
 
@@ -1173,20 +1231,15 @@ export const storage = {
           notes: movementNotes,
         });
 
-        // Deduct from product_units (canonical unit) — floor at 0
-        const canonicalUnit = dbEnumToCanonical(item.unit as string);
-        const [pu] = await tx.select().from(productUnits)
-          .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
-          .limit(1);
-        if (pu) {
-          const rawPuStock = parseFloat(pu.stockQty as string) - qty;
-          const finalPuStock = rawPuStock < 0 ? 0 : rawPuStock;
+        // Deduct from product_units — floor at 0
+        if (puToUpdate) {
+          const rawPuStock = parseFloat(puToUpdate.stockQty as string) - deductQty;
           await tx.update(productUnits)
             .set({
-              stockQty: finalPuStock.toFixed(4),
+              stockQty: Math.max(0, rawPuStock).toFixed(4),
               ...(isOverflow && { avgCost: "0" }),
             })
-            .where(eq(productUnits.id, pu.id));
+            .where(eq(productUnits.id, puToUpdate.id));
         }
 
         // Update products.currentStock — floor at 0; reset averageCost on overflow
@@ -1396,8 +1449,11 @@ export const storage = {
       })
     );
 
+    // Excluir filas de unidades de envase (CAJON/BOLSA/BANDEJA) — solo mostrar unidades base
+    const PACKAGE_UNITS = new Set(['CAJON', 'BOLSA', 'BANDEJA']);
     return result.filter((r) => {
       if (!r.product?.active) return false;
+      if (PACKAGE_UNITS.has(r.unit)) return false;
       if (filters?.category && r.product.category !== filters.category) return false;
       if (filters?.search && !r.product.name.toUpperCase().includes(filters.search.toUpperCase())) return false;
       return true;

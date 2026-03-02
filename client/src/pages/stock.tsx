@@ -424,6 +424,17 @@ export default function StockPage() {
                               </td>
                               <td className={`py-2.5 px-4 text-right font-semibold whitespace-nowrap ${isNegative ? "text-destructive" : "text-foreground"}`}>
                                 {fmtStock(stock)}
+                                {(() => {
+                                  const wpu = parseFloat(pu.weightPerUnit as string ?? "0");
+                                  if (wpu > 0 && stock > 0) {
+                                    return (
+                                      <span className="ml-1 text-xs font-normal text-muted-foreground">
+                                        (~{(stock / wpu).toFixed(1)} cajones)
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })()}
                               </td>
                               <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">
                                 {cost > 0 ? `$${fmt(cost)}` : "—"}
