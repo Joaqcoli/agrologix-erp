@@ -286,5 +286,15 @@ export async function runMigrations() {
   await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS cc_type text DEFAULT 'por_saldo'`);
   await db.execute(sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS order_id INTEGER REFERENCES orders(id)`);
 
+  // ─── Cuentas Corrientes v3: multi-order payment links ───────────────────────
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS payment_order_links (
+      id SERIAL PRIMARY KEY,
+      payment_id INTEGER NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
+      order_id   INTEGER NOT NULL REFERENCES orders(id)  ON DELETE CASCADE,
+      UNIQUE(payment_id, order_id)
+    )
+  `);
+
   console.log("Migrations complete.");
 }

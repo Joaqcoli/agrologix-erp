@@ -10,8 +10,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Plus, Trash2, FileText, Download } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2 } from "lucide-react";
 import { useState, useRef } from "react";
 import type { Payment, Withholding } from "@shared/schema";
 import { PAYMENT_METHODS } from "@shared/schema";
@@ -25,7 +27,15 @@ const MONTHS = [
 const fmtInt = (v: number) => Math.round(v).toLocaleString("es-AR");
 const today = () => new Date().toISOString().split("T")[0];
 
-type OrderRow = { id: number; folio: string; orderDate: string; total: number; invoiceNumber?: string | null };
+type OrderRow = {
+  id: number;
+  folio: string;
+  orderDate: string;
+  total: number;
+  invoiceNumber?: string | null;
+  isPaid: boolean;
+  paidAmount: number;
+};
 type PaymentRow = Payment & { orderFolio?: string | null };
 
 type CCDetail = {
@@ -58,7 +68,6 @@ function buildPDF(data: CCDetail, monthLabel: string) {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const pageW = 210;
   const margin = 14;
-  const colW = pageW - margin * 2;
   let y = margin;
 
   const setH = (size: number, bold = false) => {
@@ -66,7 +75,6 @@ function buildPDF(data: CCDetail, monthLabel: string) {
     doc.setFont("helvetica", bold ? "bold" : "normal");
   };
 
-  // ── Header ────────────────────────────────────────────────────────────────
   setH(14, true);
   doc.text("AgroLogix", margin, y);
   setH(9);
@@ -83,13 +91,11 @@ function buildPDF(data: CCDetail, monthLabel: string) {
     const dt = new Date(d.replace(/\s.+$/, "T00:00:00"));
     return dt.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
   };
-
   const fmtMoney = (n: number) => `$${Math.round(n).toLocaleString("es-AR")}`;
-
   const isPorRemito = data.customer.ccType === "por_remito";
 
   if (isPorRemito) {
-    // ── Por Remito: only pending orders table ────────────────────────────────
+    const unpaidOrders = data.orders.filter((o) => !o.isPaid);
     setH(9, true);
     doc.text("Fecha", margin, y);
     doc.text("Descripción", margin + 20, y);
@@ -99,10 +105,9 @@ function buildPDF(data: CCDetail, monthLabel: string) {
     doc.setDrawColor(120, 120, 120);
     doc.line(margin, y, pageW - margin, y);
     y += 5;
-
     setH(9);
     let total = 0;
-    for (const o of data.orders) {
+    for (const o of unpaidOrders) {
       if (y > 270) { doc.addPage(); y = margin; }
       doc.text(fmtDate(o.orderDate), margin, y);
       doc.text(o.folio, margin + 20, y);
@@ -111,36 +116,27 @@ function buildPDF(data: CCDetail, monthLabel: string) {
       y += 6;
       total += o.total;
     }
-
     y += 2;
     doc.setDrawColor(120, 120, 120);
     doc.line(margin, y, pageW - margin, y);
     y += 5;
     setH(10, true);
-    doc.text("TOTAL", margin, y);
+    doc.text("TOTAL PENDIENTE", margin, y);
     doc.text(fmtMoney(total), pageW - margin, y, { align: "right" });
-
   } else {
-    // ── Por Saldo: saldo anterior + movimientos + saldo final ────────────────
-
-    // Saldo anterior
     setH(9, true);
     doc.text("Saldo anterior", margin, y);
     doc.text(fmtMoney(data.saldoMesAnterior), pageW - margin, y, { align: "right" });
     y += 7;
-
-    // Table header
     doc.setFillColor(240, 240, 240);
-    doc.rect(margin, y - 4, colW, 6, "F");
+    doc.rect(margin, y - 4, pageW - margin * 2, 6, "F");
     setH(8, true);
     doc.text("Fecha", margin + 1, y);
     doc.text("Descripción", margin + 22, y);
     doc.text("Nro. Factura", margin + 90, y);
     doc.text("Monto", pageW - margin - 1, y, { align: "right" });
     y += 4;
-
     setH(8);
-    // Orders
     for (const o of data.orders) {
       if (y > 270) { doc.addPage(); y = margin; }
       doc.text(fmtDate(o.orderDate), margin + 1, y);
@@ -149,34 +145,26 @@ function buildPDF(data: CCDetail, monthLabel: string) {
       doc.text(fmtMoney(o.total), pageW - margin - 1, y, { align: "right" });
       y += 5;
     }
-
-    // Payments (shown in green as negative)
-    doc.setTextColor(22, 163, 74); // green-600
+    doc.setTextColor(22, 163, 74);
     for (const p of data.payments) {
       if (y > 270) { doc.addPage(); y = margin; doc.setTextColor(22, 163, 74); }
       const amt = parseFloat(p.amount as string);
       doc.text(p.date, margin + 1, y);
-      const desc = `Pago ${p.method.replace(/_/g, " ")}${p.orderFolio ? ` (${p.orderFolio})` : ""}`;
+      const desc = `Pago ${p.method.replace(/_/g, " ")}${(p as PaymentRow).orderFolio ? ` (${(p as PaymentRow).orderFolio})` : ""}`;
       doc.text(desc, margin + 22, y);
-      doc.text("", margin + 90, y);
-      doc.text(`-${fmtMoney(amt)}`, pageW - margin - 1, y, { align: "right" });
+      doc.text("-" + fmtMoney(amt), pageW - margin - 1, y, { align: "right" });
       y += 5;
     }
-    doc.setTextColor(0, 0, 0);
-
-    // Withholdings (shown in blue)
-    doc.setTextColor(37, 99, 235); // blue-600
+    doc.setTextColor(37, 99, 235);
     for (const w of data.withholdings) {
       if (y > 270) { doc.addPage(); y = margin; doc.setTextColor(37, 99, 235); }
       const amt = parseFloat(w.amount as string);
       doc.text(w.date, margin + 1, y);
       doc.text(`Retención ${w.type}`, margin + 22, y);
-      doc.text("", margin + 90, y);
-      doc.text(`-${fmtMoney(amt)}`, pageW - margin - 1, y, { align: "right" });
+      doc.text("-" + fmtMoney(amt), pageW - margin - 1, y, { align: "right" });
       y += 5;
     }
     doc.setTextColor(0, 0, 0);
-
     y += 2;
     doc.setDrawColor(120, 120, 120);
     doc.line(margin, y, pageW - margin, y);
@@ -196,33 +184,32 @@ function buildPDF(data: CCDetail, monthLabel: string) {
 // ── Payment modal ──────────────────────────────────────────────────────────────
 function PaymentModal({
   customerId,
-  month,
-  year,
   open,
   onClose,
+  pendingOrders,
 }: {
   customerId: number;
-  month: number;
-  year: number;
   open: boolean;
   onClose: () => void;
+  pendingOrders: PendingOrder[];
 }) {
   const { toast } = useToast();
   const [date, setDate] = useState(today());
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState<string>("EFECTIVO");
   const [notes, setNotes] = useState("");
-  const [orderId, setOrderId] = useState<string>("none");
+  const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([]);
 
-  const { data: pendingOrders } = useQuery<PendingOrder[]>({
-    queryKey: ["/api/ar/pending-orders", customerId],
-    queryFn: async () => {
-      const res = await fetch(`/api/ar/pending-orders/${customerId}`, { credentials: "include" });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    },
-    enabled: open,
-  });
+  const toggleOrder = (id: number) => {
+    setSelectedOrderIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  // Sum of selected order totals (for amount hint)
+  const selectedTotal = pendingOrders
+    .filter((o) => selectedOrderIds.includes(o.id))
+    .reduce((s, o) => s + parseFloat(o.total), 0);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -232,14 +219,14 @@ function PaymentModal({
         amount,
         method,
         notes: notes || null,
-        orderId: orderId !== "none" ? Number(orderId) : null,
+        orderIds: selectedOrderIds,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ar/cc"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ar/cc/customer", customerId] });
       queryClient.invalidateQueries({ queryKey: ["/api/ar/cc/summary"] });
       toast({ title: "Pago registrado" });
-      setAmount(""); setNotes(""); setMethod("EFECTIVO"); setOrderId("none");
+      setAmount(""); setNotes(""); setMethod("EFECTIVO"); setSelectedOrderIds([]);
       onClose();
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -268,6 +255,17 @@ function PaymentModal({
                 className="flex-1"
                 data-testid="input-payment-amount"
               />
+              {selectedTotal > 0 && !amount && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="text-xs h-8 whitespace-nowrap"
+                  onClick={() => setAmount(String(Math.round(selectedTotal)))}
+                >
+                  Usar ${fmtInt(selectedTotal)}
+                </Button>
+              )}
             </div>
           </div>
           <div>
@@ -283,22 +281,51 @@ function PaymentModal({
               </SelectContent>
             </Select>
           </div>
+
+          {/* Multi-select order checkboxes */}
           <div>
-            <Label className="text-xs">Asociar a pedido (opcional)</Label>
-            <Select value={orderId} onValueChange={setOrderId}>
-              <SelectTrigger className="mt-1" data-testid="select-payment-order">
-                <SelectValue placeholder="Sin asociar (descuento general)" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">Sin asociar (descuento general)</SelectItem>
-                {(pendingOrders ?? []).map((o) => (
-                  <SelectItem key={o.id} value={String(o.id)}>
-                    {o.folio} — ${Math.round(parseFloat(o.total)).toLocaleString("es-AR")}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center justify-between mb-1">
+              <Label className="text-xs">Asociar a pedidos (opcional)</Label>
+              {selectedOrderIds.length > 0 && (
+                <span className="text-[10px] text-muted-foreground">
+                  {selectedOrderIds.length} seleccionado{selectedOrderIds.length > 1 ? "s" : ""}
+                </span>
+              )}
+            </div>
+            {pendingOrders.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-2 text-center border rounded-md">
+                Sin pedidos aprobados
+              </p>
+            ) : (
+              <ScrollArea className="h-40 rounded-md border bg-muted/20 p-2">
+                <div className="space-y-1.5">
+                  {pendingOrders.map((o) => {
+                    const checked = selectedOrderIds.includes(o.id);
+                    return (
+                      <label
+                        key={o.id}
+                        className={`flex items-center gap-2.5 px-2 py-1.5 rounded cursor-pointer transition-colors ${
+                          checked ? "bg-primary/10 text-primary" : "hover:bg-muted/50"
+                        }`}
+                        data-testid={`check-order-${o.id}`}
+                      >
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={() => toggleOrder(o.id)}
+                          className="shrink-0"
+                        />
+                        <span className="text-xs font-mono font-medium">{o.folio}</span>
+                        <span className="text-xs text-muted-foreground ml-auto">
+                          ${Math.round(parseFloat(o.total)).toLocaleString("es-AR")}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+            )}
           </div>
+
           <div>
             <Label className="text-xs">Notas (opcional)</Label>
             <Input
@@ -452,7 +479,10 @@ function InvoiceCell({ order, customerId }: { order: OrderRow; customerId: numbe
         value={val}
         onChange={(e) => setVal(e.target.value)}
         onBlur={save}
-        onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") { setVal(order.invoiceNumber ?? ""); setEditing(false); } }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") save();
+          if (e.key === "Escape") { setVal(order.invoiceNumber ?? ""); setEditing(false); }
+        }}
         data-testid={`invoice-input-${order.id}`}
       />
     );
@@ -498,6 +528,17 @@ export default function CCCustomerDetailPage({
     },
   });
 
+  // Fetch pending orders once (not gated on modal open, always available)
+  const { data: pendingOrders = [] } = useQuery<PendingOrder[]>({
+    queryKey: ["/api/ar/pending-orders", customerId],
+    queryFn: async () => {
+      const res = await fetch(`/api/ar/pending-orders/${customerId}`, { credentials: "include" });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
   const deletePaymentMutation = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/payments/${id}`),
     onSuccess: () => {
@@ -533,6 +574,11 @@ export default function CCCustomerDetailPage({
   const backUrl = `/cuentas-corrientes?month=${month}&year=${year}`;
   const title = data?.customer.name ? `CC — ${data.customer.name}` : "Cuenta Corriente";
 
+  // Pending (unpaid) orders sum — for footer
+  const pendingOrdersTotal = (data?.orders ?? [])
+    .filter((o) => !o.isPaid)
+    .reduce((s, o) => s + o.total, 0);
+
   const SaldoVal = ({ v }: { v: number }) => {
     if (v > 0) return <span className="font-bold text-destructive">${fmtInt(v)}</span>;
     if (v < 0) return <span className="font-bold text-green-600">${fmtInt(v)}</span>;
@@ -567,7 +613,6 @@ export default function CCCustomerDetailPage({
             )}
           </div>
 
-          {/* Period */}
           <div className="flex items-center gap-2">
             <Select value={String(month)} onValueChange={(v) => setMonth(Number(v))}>
               <SelectTrigger className="h-8 w-32 text-sm" data-testid="select-detail-month">
@@ -619,10 +664,8 @@ export default function CCCustomerDetailPage({
                     className={`text-base font-bold mt-0.5 ${
                       item.big
                         ? item.value > 0 ? "text-destructive" : item.value < 0 ? "text-green-600" : "text-foreground"
-                        : item.green
-                        ? "text-green-600"
-                        : item.blue
-                        ? "text-blue-600"
+                        : item.green ? "text-green-600"
+                        : item.blue ? "text-blue-600"
                         : "text-foreground"
                     }`}
                     data-testid={`value-${item.key}`}
@@ -641,6 +684,11 @@ export default function CCCustomerDetailPage({
             <CardTitle className="text-sm font-semibold flex items-center gap-2">
               <FileText className="h-4 w-4" />
               Pedidos del Período ({data?.orders.length ?? 0})
+              {!isLoading && (data?.orders ?? []).some((o) => o.isPaid) && (
+                <Badge className="text-[9px] bg-green-100 text-green-700 border-green-200 ml-1">
+                  {(data?.orders ?? []).filter((o) => o.isPaid).length} pagado{(data?.orders ?? []).filter((o) => o.isPaid).length > 1 ? "s" : ""}
+                </Badge>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
@@ -651,39 +699,63 @@ export default function CCCustomerDetailPage({
             ) : (data?.orders.length ?? 0) === 0 ? (
               <p className="text-sm text-muted-foreground p-4 text-center">Sin pedidos en este período</p>
             ) : (
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-border bg-muted/30">
-                    <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Folio</th>
-                    <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Fecha</th>
-                    <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Nro. Factura</th>
-                    <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Total</th>
-                    <th className="w-8"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data?.orders.map((o) => (
-                    <tr
-                      key={o.id}
-                      className="border-b border-border last:border-0 hover:bg-muted/20 transition-colors"
-                      data-testid={`row-order-${o.id}`}
-                    >
-                      <td
-                        className="py-2 px-3 font-mono font-medium text-primary cursor-pointer"
-                        onClick={() => setLocation(`/orders/${o.id}`)}
-                      >
-                        {o.folio}
-                      </td>
-                      <td className="py-2 px-3 text-muted-foreground">{fmtDate(o.orderDate)}</td>
-                      <td className="py-2 px-3" onClick={(e) => e.stopPropagation()}>
-                        <InvoiceCell order={o} customerId={customerId} />
-                      </td>
-                      <td className="py-2 px-3 text-right font-semibold text-foreground">${fmtInt(o.total)}</td>
-                      <td className="py-2 px-3"></td>
+              <>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/30">
+                      <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Folio</th>
+                      <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Fecha</th>
+                      <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Nro. Factura</th>
+                      <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Total</th>
+                      <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Estado</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {data?.orders.map((o) => (
+                      <tr
+                        key={o.id}
+                        className={`border-b border-border last:border-0 transition-colors ${
+                          o.isPaid ? "bg-green-50/50 dark:bg-green-950/20" : "hover:bg-muted/20"
+                        }`}
+                        data-testid={`row-order-${o.id}`}
+                      >
+                        <td
+                          className="py-2 px-3 font-mono font-medium text-primary cursor-pointer hover:underline"
+                          onClick={() => setLocation(`/orders/${o.id}`)}
+                        >
+                          {o.folio}
+                        </td>
+                        <td className="py-2 px-3 text-muted-foreground">{fmtDate(o.orderDate)}</td>
+                        <td className="py-2 px-3" onClick={(e) => e.stopPropagation()}>
+                          <InvoiceCell order={o} customerId={customerId} />
+                        </td>
+                        <td className={`py-2 px-3 text-right font-semibold ${o.isPaid ? "text-muted-foreground line-through" : "text-foreground"}`}>
+                          ${fmtInt(o.total)}
+                        </td>
+                        <td className="py-2 px-3">
+                          {o.isPaid ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-green-700 bg-green-100 dark:bg-green-900/30 dark:text-green-400 px-1.5 py-0.5 rounded-full">
+                              <CheckCircle2 className="h-2.5 w-2.5" />
+                              Pagado
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-muted-foreground">Pendiente</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {/* Footer: pending total */}
+                {pendingOrdersTotal > 0 && (
+                  <div className="flex items-center justify-between px-3 py-2 border-t border-border bg-muted/20 text-xs">
+                    <span className="text-muted-foreground font-medium">
+                      {(data?.orders ?? []).filter((o) => !o.isPaid).length} pendiente{(data?.orders ?? []).filter((o) => !o.isPaid).length > 1 ? "s" : ""}
+                    </span>
+                    <span className="font-bold text-destructive">${fmtInt(pendingOrdersTotal)}</span>
+                  </div>
+                )}
+              </>
             )}
           </CardContent>
         </Card>
@@ -707,7 +779,7 @@ export default function CCCustomerDetailPage({
                   <thead>
                     <tr className="border-b border-border bg-muted/20">
                       <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Fecha</th>
-                      <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Método</th>
+                      <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Método / Pedidos</th>
                       <th className="text-right py-1.5 px-3 font-semibold text-muted-foreground">Monto</th>
                       <th className="w-7"></th>
                     </tr>
@@ -720,7 +792,7 @@ export default function CCCustomerDetailPage({
                           <div className="flex items-center gap-1 flex-wrap">
                             <Badge variant="outline" className="text-[9px] py-0">{p.method}</Badge>
                             {(p as PaymentRow).orderFolio && (
-                              <Badge className="text-[9px] py-0 bg-primary/10 text-primary border-primary/20 font-mono">
+                              <Badge className="text-[9px] py-0 bg-primary/10 text-primary border-primary/20 font-mono border">
                                 {(p as PaymentRow).orderFolio}
                               </Badge>
                             )}
@@ -798,10 +870,9 @@ export default function CCCustomerDetailPage({
 
       <PaymentModal
         customerId={customerId}
-        month={month}
-        year={year}
         open={showPaymentModal}
         onClose={() => setShowPaymentModal(false)}
+        pendingOrders={pendingOrders}
       />
       <WithholdingModal
         customerId={customerId}

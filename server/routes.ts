@@ -627,7 +627,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/payments", requireAuth, async (req, res) => {
     try {
       const data = insertPaymentSchema.parse(req.body);
+      const orderIds: number[] = Array.isArray(req.body.orderIds)
+        ? (req.body.orderIds as unknown[]).map(Number).filter((n) => !isNaN(n))
+        : [];
       const payment = await storage.createPayment(data, req.session.userId!);
+      if (orderIds.length > 0) {
+        await storage.linkPaymentToOrders(payment.id, orderIds);
+      }
       return res.json(payment);
     } catch (e: any) {
       return res.status(400).json({ error: e.message });

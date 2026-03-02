@@ -178,6 +178,12 @@ export const payments = pgTable("payments", {
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 
+export const paymentOrderLinks = pgTable("payment_order_links", {
+  id: serial("id").primaryKey(),
+  paymentId: integer("payment_id").notNull().references(() => payments.id, { onDelete: "cascade" }),
+  orderId: integer("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+});
+
 export const withholdings = pgTable("withholdings", {
   id: serial("id").primaryKey(),
   customerId: integer("customer_id").notNull().references(() => customers.id),
@@ -245,6 +251,7 @@ export type ProductUnit = typeof productUnits.$inferSelect;
 export type PriceHistory = typeof priceHistory.$inferSelect;
 export type Remito = typeof remitos.$inferSelect;
 export type Payment = typeof payments.$inferSelect;
+export type PaymentOrderLink = typeof paymentOrderLinks.$inferSelect;
 export type Withholding = typeof withholdings.$inferSelect;
 
 export const insertPaymentSchema = createInsertSchema(payments).omit({ id: true, createdAt: true, createdBy: true }).extend({

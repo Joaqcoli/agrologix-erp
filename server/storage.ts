@@ -2,7 +2,7 @@ import { db } from "./db";
 import {
   users, customers, products, purchases, purchaseItems,
   stockMovements, productCostHistory, orders, orderItems,
-  priceHistory, remitos, productUnits, payments, withholdings,
+  priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
@@ -1638,26 +1638,34 @@ export const storage = {
     return db.select().from(payments).where(and(...conds as any)).orderBy(desc(payments.date));
   },
 
-  // Returns payments with an extra orderFolio field from joined orders
+  // Returns payments with comma-separated order folios from the junction table
   async getCustomerPaymentsWithFolio(
     customerId: number,
     fromDate?: string,
     toDate?: string,
   ): Promise<(Payment & { orderFolio: string | null })[]> {
-    let dateWhere = "";
-    const params: (string | number)[] = [customerId];
-    if (fromDate) { params.push(fromDate); dateWhere += ` AND p.date >= $${params.length}`; }
-    if (toDate)   { params.push(toDate);   dateWhere += ` AND p.date < $${params.length}`; }
     const rows = await db.execute(drizzleSql`
-      SELECT p.*, o.folio AS "orderFolio"
+      SELECT p.*,
+        (
+          SELECT STRING_AGG(o2.folio, ', ' ORDER BY o2.folio)
+          FROM payment_order_links pol
+          JOIN orders o2 ON o2.id = pol.order_id
+          WHERE pol.payment_id = p.id
+        ) AS "orderFolio"
       FROM payments p
-      LEFT JOIN orders o ON o.id = p.order_id
       WHERE p.customer_id = ${customerId}
         ${fromDate ? drizzleSql`AND p.date >= ${fromDate}` : drizzleSql``}
         ${toDate   ? drizzleSql`AND p.date < ${toDate}`   : drizzleSql``}
       ORDER BY p.date DESC
     `);
     return rows.rows as (Payment & { orderFolio: string | null })[];
+  },
+
+  async linkPaymentToOrders(paymentId: number, orderIds: number[]): Promise<void> {
+    if (orderIds.length === 0) return;
+    await db.insert(paymentOrderLinks)
+      .values(orderIds.map((oid) => ({ paymentId, orderId: oid })))
+      .onConflictDoNothing();
   },
 
   async getPendingOrdersForCustomer(customerId: number): Promise<{ id: number; folio: string; total: string; orderDate: string }[]> {
@@ -1894,7 +1902,7 @@ export const storage = {
     const facturacion = Math.round(myItemsInPeriod.reduce((s, i) => s + itemBilling(i, c.hasIva), 0));
     const facturacionBefore = Math.round(myItemsBefore.reduce((s, i) => s + itemBilling(i, c.hasIva), 0));
 
-    const [paymentsIn, paymentsBef, withholdingsIn, withholdingsBef, ordersInPeriod] = await Promise.all([
+    const [paymentsIn, paymentsBef, withholdingsIn, withholdingsBef, ordersInPeriod, paidAmountsRows] = await Promise.all([
       this.getCustomerPaymentsWithFolio(customerId, startDate, endDate),
       this.getCustomerPayments(customerId, undefined, startDate),
       this.getCustomerWithholdings(customerId, startDate, endDate),
@@ -1908,6 +1916,18 @@ export const storage = {
           AND o.order_date >= ${startDate}::date
           AND o.order_date < ${endDate}::date
         ORDER BY o.order_date DESC
+      `),
+      // Sum of payment amounts per order (via junction table) for orders in this period
+      db.execute(drizzleSql`
+        SELECT pol.order_id AS "orderId", SUM(p.amount)::text AS "paidTotal"
+        FROM payment_order_links pol
+        JOIN payments p ON p.id = pol.payment_id
+        JOIN orders o ON o.id = pol.order_id
+        WHERE o.customer_id = ${customerId}
+          AND o.status = 'approved'
+          AND o.order_date >= ${startDate}::date
+          AND o.order_date < ${endDate}::date
+        GROUP BY pol.order_id
       `),
     ]);
 
@@ -1925,13 +1945,25 @@ export const storage = {
       orderBillingMap.set(item.orderId, (orderBillingMap.get(item.orderId) ?? 0) + itemBilling(item, c.hasIva));
     }
 
-    const ordersWithBilling = (ordersInPeriod.rows as any[]).map((o) => ({
-      id: o.id,
-      folio: o.folio,
-      orderDate: o.orderDate,
-      total: Math.round(orderBillingMap.get(o.id) ?? parseFloat(o.total ?? "0")),
-      invoiceNumber: o.invoiceNumber ?? null,
-    }));
+    // Map of orderId → sum of linked payment amounts
+    const paidByOrder = new Map<number, number>();
+    for (const row of paidAmountsRows.rows as any[]) {
+      paidByOrder.set(Number(row.orderId), parseFloat(row.paidTotal ?? "0"));
+    }
+
+    const ordersWithBilling = (ordersInPeriod.rows as any[]).map((o) => {
+      const billingTotal = Math.round(orderBillingMap.get(o.id) ?? parseFloat(o.total ?? "0"));
+      const paidAmount = Math.round(paidByOrder.get(o.id) ?? 0);
+      return {
+        id: o.id,
+        folio: o.folio,
+        orderDate: o.orderDate,
+        total: billingTotal,
+        invoiceNumber: o.invoiceNumber ?? null,
+        paidAmount,
+        isPaid: paidAmount >= billingTotal,
+      };
+    });
 
     return {
       customer: c,
