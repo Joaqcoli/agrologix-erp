@@ -250,28 +250,65 @@ export const storage = {
         const newQty = parseFloat(item.quantity);
         const newCost = parseFloat(item.costPerUnit);
 
-        // ── product_units: costo promedio ponderado + stock acumulado ─────────────
+        // ── product_units (unidad base): costo promedio ponderado + stock ────────
         const canonicalUnit = dbEnumToCanonical(item.unit);
         const [existingPU] = await tx.select().from(productUnits)
           .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
           .for('update')
           .limit(1);
 
+        let newPuAvgCost: number;
         if (existingPU) {
           const puStock = parseFloat(existingPU.stockQty as string);
           const puCost = parseFloat(existingPU.avgCost as string);
-          const newPuAvgCost = puStock + newQty === 0 ? newCost : (puStock * puCost + newQty * newCost) / (puStock + newQty);
+          newPuAvgCost = puStock + newQty === 0 ? newCost : (puStock * puCost + newQty * newCost) / (puStock + newQty);
           await tx.update(productUnits).set({
             stockQty: (puStock + newQty).toFixed(4),
             avgCost: newPuAvgCost.toFixed(4),
           }).where(eq(productUnits.id, existingPU.id));
         } else {
+          newPuAvgCost = newCost;
           await tx.insert(productUnits).values({
             productId: item.productId,
             unit: canonicalUnit,
             avgCost: newCost.toFixed(4),
             stockQty: newQty.toFixed(4),
           });
+        }
+
+        // ── product_units (unidad de compra): costo promedio ponderado por cajón ─
+        // Cuando la compra fue convertida (ej. CAJON → KG), también actualizamos
+        // la entrada de product_units en la unidad original para rastrear el costo
+        // promedio por cajón correctamente (independiente del peso por cajón).
+        let newPurchaseUnitAvgCost: number | null = null;
+        if (item.purchaseUnit && item.purchaseQty && item.weightPerPackage) {
+          const purchaseCanonical = dbEnumToCanonical(item.purchaseUnit as any);
+          const purchaseQtyNum = parseFloat(item.purchaseQty);
+          const newCostPerPurchaseUnit = newCost * parseFloat(item.weightPerPackage); // $/cajón de esta compra
+          const [existingPurchasePU] = await tx.select().from(productUnits)
+            .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, purchaseCanonical)))
+            .for('update')
+            .limit(1);
+          if (existingPurchasePU) {
+            const puStock = Number(existingPurchasePU.stockQty);
+            const puCost = Number(existingPurchasePU.avgCost);
+            newPurchaseUnitAvgCost = (puStock + purchaseQtyNum) === 0
+              ? newCostPerPurchaseUnit
+              : (puStock * puCost + purchaseQtyNum * newCostPerPurchaseUnit) / (puStock + purchaseQtyNum);
+            await tx.update(productUnits).set({
+              stockQty: (puStock + purchaseQtyNum).toFixed(4),
+              avgCost: newPurchaseUnitAvgCost.toFixed(4),
+            }).where(eq(productUnits.id, existingPurchasePU.id));
+          } else {
+            newPurchaseUnitAvgCost = newCostPerPurchaseUnit;
+            await tx.insert(productUnits).values({
+              productId: item.productId,
+              unit: purchaseCanonical,
+              avgCost: newPurchaseUnitAvgCost.toFixed(4),
+              stockQty: purchaseQtyNum.toFixed(4),
+              isActive: true,
+            });
+          }
         }
 
         // ── products.currentStock + averageCost: costo promedio ponderado ───────────
@@ -330,17 +367,20 @@ export const storage = {
           for (const oi of candidateItems) {
             const oiCanonical = dbEnumToCanonical(oi.unit as string);
 
-            // Determine effective cost for this order item's unit
+            // Determine effective cost for this order item's unit using weighted averages
             let costForUnit: number;
             if (oiCanonical === canonicalUnit) {
-              // Direct unit match (e.g. both KG)
-              costForUnit = newCost;
+              // Direct unit match (e.g. both KG): usar el costo promedio ponderado actualizado
+              costForUnit = newPuAvgCost;
             } else if (item.purchaseUnit && item.weightPerPackage) {
-              // Cross-unit: purchase was converted to base unit (KG) but order is in original unit (CAJON)
+              // Cross-unit: la compra fue convertida a unidad base (KG) pero el pedido está en unidad original (CAJON)
               const purchaseCanonical = dbEnumToCanonical(item.purchaseUnit);
               if (oiCanonical !== purchaseCanonical) continue;
-              // cost per package = cost per base unit × weight per package (e.g. $1000/kg × 18 kg/cajón = $18000/cajón)
-              costForUnit = newCost * parseFloat(item.weightPerPackage);
+              // Usar el costo promedio ponderado por cajón si está disponible (rastreado en product_units),
+              // si no, aproximar con el costo promedio por KG × peso por cajón
+              costForUnit = newPurchaseUnitAvgCost !== null
+                ? newPurchaseUnitAvgCost
+                : newPuAvgCost * parseFloat(item.weightPerPackage);
             } else {
               continue;
             }
@@ -383,7 +423,14 @@ export const storage = {
   },
 
   async _recalcProductSummary(pid: number, tx: any = db): Promise<void> {
-    const allPu = await tx.select().from(productUnits).where(eq(productUnits.productId, pid));
+    // Solo agregar entradas de la unidad base del producto para evitar mezclar unidades (KG + CAJON)
+    const [product] = await tx.select({ unit: products.unit }).from(products).where(eq(products.id, pid)).limit(1);
+    const baseUnit = product ? dbEnumToCanonical(product.unit) : null;
+    const allPu = await tx.select().from(productUnits).where(
+      baseUnit
+        ? and(eq(productUnits.productId, pid), eq(productUnits.unit, baseUnit))
+        : eq(productUnits.productId, pid)
+    );
     const totalStock = allPu.reduce((s: number, p: any) => s + Number(p.stockQty), 0);
     if (totalStock > 0) {
       const weightedAvg = allPu.reduce((s: number, p: any) => s + Number(p.stockQty) * Number(p.avgCost), 0) / totalStock;
@@ -413,6 +460,20 @@ export const storage = {
             await tx.update(productUnits).set({ stockQty: "0" }).where(eq(productUnits.id, pu.id));
           } else {
             await tx.update(productUnits).set({ stockQty: newStock.toFixed(4) }).where(eq(productUnits.id, pu.id));
+          }
+        }
+
+        // También revertir el stock en la unidad de compra (CAJON) si corresponde
+        if (item.purchaseUnit && item.purchaseQty) {
+          const purchaseCanonical = dbEnumToCanonical(item.purchaseUnit as any);
+          const [puPurchaseUnit] = await tx.select().from(productUnits)
+            .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, purchaseCanonical)))
+            .limit(1);
+          if (puPurchaseUnit) {
+            const newStock = Number(puPurchaseUnit.stockQty) - Number(item.purchaseQty);
+            await tx.update(productUnits).set({
+              stockQty: Math.max(0, newStock).toFixed(4),
+            }).where(eq(productUnits.id, puPurchaseUnit.id));
           }
         }
       }

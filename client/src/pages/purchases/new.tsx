@@ -137,13 +137,13 @@ export default function NewPurchasePage() {
       notes: notes || undefined,
       items: validItems.map((i) => ({
         productId: i.productId,
-        quantity: String(getTotalStock(i)),
+        quantity: String(parseFloat(getTotalStock(i).toFixed(4))),
         unit: hasConversion(i) ? "kg" : i.unit,
-        costPerUnit: String(getCostPerBaseUnit(i)),
+        costPerUnit: String(parseFloat(getCostPerBaseUnit(i).toFixed(4))),
         ...(hasConversion(i) ? {
-          purchaseQty: i.quantity,
+          purchaseQty: String(parseFloat(parseFloat(i.quantity).toFixed(4))),
           purchaseUnit: i.unit,
-          weightPerPackage: i.weightPerPackage,
+          weightPerPackage: String(parseFloat(parseFloat(i.weightPerPackage).toFixed(4))),
         } : {}),
       })),
     });
