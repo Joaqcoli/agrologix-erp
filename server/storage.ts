@@ -1669,19 +1669,22 @@ export const storage = {
   },
 
   async getPendingOrdersForCustomer(customerId: number): Promise<{ id: number; folio: string; total: string; orderDate: string }[]> {
-    const rows = await db.execute(drizzleSql`
-      SELECT o.id, o.folio, o.total::text AS total, o.order_date::text AS "orderDate"
-      FROM orders o
-      WHERE o.customer_id = ${customerId}
-        AND o.status = 'approved'
-      ORDER BY o.order_date DESC
-      LIMIT 60
-    `);
-    return rows.rows as { id: number; folio: string; total: string; orderDate: string }[];
+    const result = await db
+      .select({ id: orders.id, folio: orders.folio, total: orders.total, orderDate: orders.orderDate })
+      .from(orders)
+      .where(and(eq(orders.customerId, customerId), eq(orders.status, "approved")))
+      .orderBy(desc(orders.orderDate))
+      .limit(60);
+    return result.map((r) => ({
+      id: r.id,
+      folio: r.folio,
+      total: r.total != null ? String(r.total) : "0",
+      orderDate: r.orderDate instanceof Date ? r.orderDate.toISOString() : String(r.orderDate),
+    }));
   },
 
   async updateOrderInvoiceNumber(id: number, invoiceNumber: string | null): Promise<void> {
-    await db.update(orders).set({ invoiceNumber }).where(eq(orders.id, id));
+    await db.execute(drizzleSql`UPDATE orders SET invoice_number = ${invoiceNumber} WHERE id = ${id}`);
   },
 
   // fromDate: inclusive (>=), toDate: exclusive (<)

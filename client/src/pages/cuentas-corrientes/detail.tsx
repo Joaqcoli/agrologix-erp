@@ -457,7 +457,7 @@ function InvoiceCell({ order, customerId }: { order: OrderRow; customerId: numbe
     mutationFn: (invoiceNumber: string | null) =>
       apiRequest("PATCH", `/api/orders/${order.id}/invoice-number`, { invoiceNumber }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/ar/cc/customer", customerId] });
+      queryClient.refetchQueries({ queryKey: ["/api/ar/cc/customer", customerId] });
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
