@@ -16,6 +16,12 @@ import { useToast } from "@/hooks/use-toast";
 import { useLocation, Link } from "wouter";
 import { ArrowLeft, Calendar, Package, Truck, Pencil, Trash2 } from "lucide-react";
 
+const UNIT_LABELS: Record<string, string> = {
+  kg: "KG", pz: "UNIDAD", caja: "CAJÓN", saco: "BOLSA",
+  litro: "LITRO", tonelada: "TON", CAJON: "CAJÓN", maple: "MAPLE",
+  atado: "ATADO", bandeja: "BANDEJA",
+};
+
 export default function PurchaseDetailPage({ id }: { id: number }) {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
@@ -144,13 +150,24 @@ export default function PurchaseDetailPage({ id }: { id: number }) {
                 <div key={item.id} className="flex items-center justify-between py-3 border-b border-border last:border-0 gap-4">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground truncate">{item.product?.name}</p>
-                    <div className="flex flex-wrap items-center gap-3 mt-0.5">
-                      <span className="text-xs text-muted-foreground">
-                        {parseFloat(item.quantity).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {item.unit}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        × ${parseFloat(item.costPerUnit).toLocaleString("es-MX", { minimumFractionDigits: 4 })}/u
-                      </span>
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-0.5">
+                      {item.purchaseUnit && item.weightPerPackage ? (
+                        <span className="text-xs text-muted-foreground">
+                          {parseFloat(item.purchaseQty ?? item.quantity).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {UNIT_LABELS[item.purchaseUnit] ?? item.purchaseUnit.toUpperCase()}
+                          {" × "}{parseFloat(item.weightPerPackage).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {UNIT_LABELS[item.unit] ?? item.unit.toUpperCase()}
+                          {" = "}<span className="font-medium text-foreground">{parseFloat(item.quantity).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {UNIT_LABELS[item.unit] ?? item.unit.toUpperCase()}</span>
+                          {" a $"}{parseFloat(item.costPerUnit).toLocaleString("es-MX", { minimumFractionDigits: 4 })}/{UNIT_LABELS[item.unit] ?? item.unit}
+                        </span>
+                      ) : (
+                        <>
+                          <span className="text-xs text-muted-foreground">
+                            {parseFloat(item.quantity).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {UNIT_LABELS[item.unit] ?? item.unit.toUpperCase()}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            × ${parseFloat(item.costPerUnit).toLocaleString("es-MX", { minimumFractionDigits: 4 })}/u
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                   <div className="text-right shrink-0">

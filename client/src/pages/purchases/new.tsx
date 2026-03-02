@@ -52,6 +52,8 @@ export default function NewPurchasePage() {
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/purchases/next-folio"] });
       toast({ title: `Compra ${folio} creada`, description: "Se actualizó el inventario y el costo promedio." });
       setLocation("/purchases");
     },
@@ -138,6 +140,11 @@ export default function NewPurchasePage() {
         quantity: String(getTotalStock(i)),
         unit: hasConversion(i) ? "kg" : i.unit,
         costPerUnit: String(getCostPerBaseUnit(i)),
+        ...(hasConversion(i) ? {
+          purchaseQty: i.quantity,
+          purchaseUnit: i.unit,
+          weightPerPackage: i.weightPerPackage,
+        } : {}),
       })),
     });
   };

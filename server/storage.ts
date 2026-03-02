@@ -192,7 +192,15 @@ export const storage = {
     purchaseDate: Date;
     notes?: string;
     createdBy: number;
-    items: { productId: number; quantity: string; unit: string; costPerUnit: string }[];
+    items: {
+      productId: number;
+      quantity: string;
+      unit: string;
+      costPerUnit: string;
+      purchaseQty?: string;
+      purchaseUnit?: string;
+      weightPerPackage?: string;
+    }[];
   }): Promise<Purchase> {
     // Pre-compute totals (no DB)
     let total = 0;
@@ -222,6 +230,9 @@ export const storage = {
           unit: item.unit as any,
           costPerUnit: item.costPerUnit,
           subtotal: item.subtotal,
+          ...(item.purchaseQty ? { purchaseQty: item.purchaseQty } : {}),
+          ...(item.purchaseUnit ? { purchaseUnit: item.purchaseUnit as any } : {}),
+          ...(item.weightPerPackage ? { weightPerPackage: item.weightPerPackage } : {}),
         }))
       );
 
@@ -317,16 +328,30 @@ export const storage = {
           const affectedOrderIds = new Set<number>();
 
           for (const oi of candidateItems) {
-            // Match by canonical unit
-            if (dbEnumToCanonical(oi.unit as string) !== canonicalUnit) continue;
+            const oiCanonical = dbEnumToCanonical(oi.unit as string);
+
+            // Determine effective cost for this order item's unit
+            let costForUnit: number;
+            if (oiCanonical === canonicalUnit) {
+              // Direct unit match (e.g. both KG)
+              costForUnit = newCost;
+            } else if (item.purchaseUnit && item.weightPerPackage) {
+              // Cross-unit: purchase was converted to base unit (KG) but order is in original unit (CAJON)
+              const purchaseCanonical = dbEnumToCanonical(item.purchaseUnit);
+              if (oiCanonical !== purchaseCanonical) continue;
+              // cost per package = cost per base unit × weight per package (e.g. $1000/kg × 18 kg/cajón = $18000/cajón)
+              costForUnit = newCost * parseFloat(item.weightPerPackage);
+            } else {
+              continue;
+            }
 
             const qty = Number(oi.quantity);
             const price = oi.pricePerUnit ? Number(oi.pricePerUnit) : null;
             const newSubtotal = price != null && price > 0 ? qty * price : 0;
-            const newMargin = price && price > 0 ? (price - newCost) / price : null;
+            const newMargin = price && price > 0 ? (price - costForUnit) / price : null;
 
             const updateData: Record<string, any> = {
-              costPerUnit: item.costPerUnit,
+              costPerUnit: costForUnit.toFixed(4),
               subtotal: newSubtotal.toFixed(2),
             };
             if (newMargin !== null) updateData.margin = newMargin.toFixed(4);
@@ -349,9 +374,12 @@ export const storage = {
   },
 
   async generatePurchaseFolio(): Promise<string> {
-    const [last] = await db.select().from(purchases).orderBy(desc(purchases.id)).limit(1);
-    const num = last ? parseInt(last.folio.replace("OC-", "")) + 1 : 1;
-    return `OC-${String(num).padStart(5, "0")}`;
+    const [row] = await db
+      .select({ maxNum: drizzleSql<number>`COALESCE(MAX(CAST(REPLACE(folio, 'OC-', '') AS INTEGER)), 0)` })
+      .from(purchases)
+      .where(drizzleSql`folio LIKE 'OC-%'`);
+    const nextNum = (Number(row?.maxNum) || 0) + 1;
+    return `OC-${String(nextNum).padStart(5, "0")}`;
   },
 
   async _recalcProductSummary(pid: number, tx: any = db): Promise<void> {
@@ -978,9 +1006,12 @@ export const storage = {
   },
 
   async generateOrderFolio(): Promise<string> {
-    const [last] = await db.select().from(orders).orderBy(desc(orders.id)).limit(1);
-    const num = last ? parseInt(last.folio.replace("PV-", "")) + 1 : 1;
-    return `PV-${String(num).padStart(5, "0")}`;
+    const [row] = await db
+      .select({ maxNum: drizzleSql<number>`COALESCE(MAX(CAST(REPLACE(folio, 'PV-', '') AS INTEGER)), 0)` })
+      .from(orders)
+      .where(drizzleSql`folio LIKE 'PV-%'`);
+    const nextNum = (Number(row?.maxNum) || 0) + 1;
+    return `PV-${String(nextNum).padStart(5, "0")}`;
   },
 
   async createOrder(data: {

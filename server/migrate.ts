@@ -272,5 +272,10 @@ export async function runMigrations() {
     await db.execute(sql.raw(`ALTER TYPE unit ADD VALUE IF NOT EXISTS '${val}'`));
   }
 
+  // ─── purchase_items: original purchase unit context columns ─────────────────
+  await db.execute(sql`ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS purchase_qty NUMERIC(12,4)`);
+  await db.execute(sql`ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS purchase_unit unit`);
+  await db.execute(sql`ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS weight_per_package NUMERIC(12,4)`);
+
   console.log("Migrations complete.");
 }
