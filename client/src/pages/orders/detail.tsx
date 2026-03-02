@@ -13,7 +13,12 @@ import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle, Pencil, Check, X, Lock, ChevronsUpDown } from "lucide-react";
+import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle, Pencil, Check, X, Lock, ChevronsUpDown, Trash2 } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel,
+  AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { generateRemitoPDF } from "@/lib/pdf";
 import { useState } from "react";
 import type { Customer, Product, ProductUnit } from "@shared/schema";
@@ -43,11 +48,11 @@ type FullOrder = Order & {
 };
 
 // DB enum values that can appear in order_items
-const DB_UNITS = ["kg", "pz", "caja", "saco", "litro", "tonelada"] as const;
+const DB_UNITS = ["kg", "pz", "caja", "saco", "litro", "tonelada", "CAJON"] as const;
 type DbUnit = typeof DB_UNITS[number];
 
 const DB_UNIT_LABEL: Record<DbUnit, string> = {
-  kg: "KG", pz: "PZ", caja: "CAJÓN", saco: "BOLSA/SACO", litro: "LITRO", tonelada: "TONELADA",
+  kg: "KG", pz: "PZ", caja: "CAJÓN", saco: "BOLSA/SACO", litro: "LITRO", tonelada: "TONELADA", CAJON: "CAJÓN",
 };
 
 function canonicalToDb(canonical: string): DbUnit | null {
@@ -161,7 +166,7 @@ function ItemRow({
   const [draftPrice, setDraftPrice] = useState("");
   const [draftOverride, setDraftOverride] = useState("");
 
-  const canEditStructural = isDraft;
+  const canEditStructural = isDraft || isApproved;
   const canEdit = isDraft || isApproved;
 
   const { data: productUnitsList = [] } = useQuery<ProductUnit[]>({
@@ -194,6 +199,7 @@ function ItemRow({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders", order.id] });
       queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/load-list"] });
       setEditing(false);
       toast({ title: "Línea guardada" });
     },
@@ -252,7 +258,7 @@ function ItemRow({
     if (e.key === "Escape") cancelEdit();
   };
 
-  const allowDecimals = draftUnit === "kg" || draftUnit === "litro";
+  const allowDecimals = draftUnit.toLowerCase() === "kg" || draftUnit.toLowerCase() === "litro";
 
   // ── Display mode ──────────────────────────────────────────────────────────
   if (!editing) {
@@ -351,18 +357,15 @@ function ItemRow({
       {/* Unit */}
       <td className="py-1.5 px-2">
         {canEditStructural ? (
-          <Select value={draftUnit} onValueChange={(v) => setDraftUnit(v)}>
-            <SelectTrigger className="h-7 text-xs px-1.5 w-24" data-testid={`select-unit-${calc.id}`}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {(availableDbUnits.length > 0 ? availableDbUnits : DB_UNITS).map((u) => (
-                <SelectItem key={u} value={u} className="text-xs">
-                  {DB_UNIT_LABEL[u]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Input
+            type="text"
+            value={draftUnit}
+            onChange={(e) => setDraftUnit(e.target.value)}
+            onKeyDown={handleKeyDown}
+            className="h-7 w-20 text-xs px-1.5 py-0"
+            placeholder="unidad"
+            data-testid={`input-unit-${calc.id}`}
+          />
         ) : (
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <Lock className="h-3 w-3" />
@@ -454,6 +457,20 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const { toast } = useToast();
   const [lowMarginOk, setLowMarginOk] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+
+  const deleteMutation = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/orders/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/load-list"] });
+      toast({ title: "Pedido eliminado" });
+      setLocation("/orders");
+    },
+    onError: (e: any) => {
+      toast({ title: "Error al eliminar", description: e.message, variant: "destructive" });
+    },
+  });
 
   const { data: order, isLoading } = useQuery<FullOrder>({
     queryKey: ["/api/orders", id],
@@ -598,11 +615,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const canApprove = isDraft && unpricedCount === 0 && (!hasAnyLowMargin || lowMarginOk);
 
-  const editHint = isDraft
-    ? "· Hover → lápiz para editar fila"
-    : isApproved
-    ? "· Aprobado: solo P.Venta y P.Compra editables"
-    : "";
+  const editHint = isDraft || isApproved ? "· Hover → lápiz para editar fila" : "";
 
   return (
     <Layout title={`Pedido ${order.folio}`}>
@@ -627,6 +640,15 @@ export default function OrderDetailPage({ id }: { id: number }) {
           </div>
 
           <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowDeleteDialog(true)}
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
+              data-testid="button-delete-order"
+            >
+              <Trash2 className="mr-2 h-4 w-4" /> Eliminar
+            </Button>
             <Button variant="outline" size="sm" onClick={handleExportXlsx} disabled={exporting} data-testid="button-export-order">
               <Download className="mr-2 h-4 w-4" /> {exporting ? "..." : "Exportar"}
             </Button>
@@ -681,7 +703,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
           <Alert>
             <Lock className="h-4 w-4" />
             <AlertDescription className="text-sm">
-              Pedido aprobado. Podés editar <strong>P. Venta</strong> y <strong>P. Compra</strong> en cada fila. Para cambiar cantidades, unidades o productos, revertí a borrador.
+              Pedido aprobado. Podés editar cualquier campo de cada línea — el stock se ajusta automáticamente al cambiar cantidades, unidades o productos.
             </AlertDescription>
           </Alert>
         )}
@@ -788,6 +810,28 @@ export default function OrderDetailPage({ id }: { id: number }) {
           </CardContent>
         </Card>
       </div>
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Eliminar pedido?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Estás por eliminar el pedido <strong>{order.folio}</strong> ({order.customer?.name}). Esta acción no se puede deshacer.
+              {isApproved && " El stock descargado será restituido automáticamente."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteMutation.mutate()}
+              data-testid="button-confirm-delete-detail"
+            >
+              {deleteMutation.isPending ? "Eliminando..." : "Eliminar"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Layout>
   );
 }

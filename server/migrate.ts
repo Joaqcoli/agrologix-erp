@@ -267,5 +267,10 @@ export async function runMigrations() {
     )
   `);
 
+  // Extend unit enum with new values (idempotent: IF NOT EXISTS)
+  for (const val of ["CAJON", "maple", "atado", "bandeja"]) {
+    await db.execute(sql.raw(`ALTER TYPE unit ADD VALUE IF NOT EXISTS '${val}'`));
+  }
+
   console.log("Migrations complete.");
 }

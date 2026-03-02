@@ -3,10 +3,10 @@
  * Used by both server and client.
  */
 
-export type CanonicalUnit = "KG" | "CAJON" | "BOLSA" | "UNIDAD" | "ATADO" | "LITRO" | "TONELADA" | "PZ";
+export type CanonicalUnit = "KG" | "CAJON" | "BOLSA" | "UNIDAD" | "ATADO" | "LITRO" | "TONELADA" | "PZ" | "MAPLE" | "BANDEJA";
 
 export const ALL_CANONICAL_UNITS: CanonicalUnit[] = [
-  "KG", "CAJON", "BOLSA", "UNIDAD", "ATADO", "LITRO", "TONELADA", "PZ",
+  "KG", "CAJON", "BOLSA", "UNIDAD", "ATADO", "LITRO", "TONELADA", "PZ", "MAPLE", "BANDEJA",
 ];
 
 /** Normalize accents and whitespace */
@@ -23,6 +23,8 @@ const INPUT_TO_CANONICAL: Record<string, CanonicalUnit> = {
   LITRO: "LITRO", LITROS: "LITRO", LT: "LITRO", LTS: "LITRO",
   TONELADA: "TONELADA", TONELADAS: "TONELADA", TON: "TONELADA", TONS: "TONELADA",
   ATADO: "ATADO", ATADOS: "ATADO", AT: "ATADO",
+  MAPLE: "MAPLE", MAPLES: "MAPLE",
+  BANDEJA: "BANDEJA", BANDEJAS: "BANDEJA",
 };
 
 /** Convert any unit string to its canonical uppercase form */
@@ -40,11 +42,13 @@ export function dbEnumToCanonical(unit: string): CanonicalUnit {
     pz: "PZ",
     litro: "LITRO",
     tonelada: "TONELADA",
-    // extended values that may be added later
+    // extended values
     cajon: "CAJON",
     bolsa: "BOLSA",
     unidad: "UNIDAD",
     atado: "ATADO",
+    maple: "MAPLE",
+    bandeja: "BANDEJA",
   };
   return MAP[unit.toLowerCase()] ?? (unit.toUpperCase() as CanonicalUnit);
 }
@@ -58,8 +62,10 @@ export function canonicalToDbEnum(canonical: string): string {
     PZ: "pz",
     LITRO: "litro",
     TONELADA: "tonelada",
-    UNIDAD: "pz",   // no enum value — closest is pz
-    ATADO: "pz",    // no enum value — closest is pz
+    UNIDAD: "pz",
+    ATADO: "atado",
+    MAPLE: "maple",
+    BANDEJA: "bandeja",
   };
   return MAP[canonical.toUpperCase()] ?? canonical.toLowerCase();
 }
@@ -71,6 +77,8 @@ export const CANONICAL_UNIT_LABEL: Record<string, string> = {
   BOLSA: "Bolsa/Saco",
   UNIDAD: "Unidad",
   ATADO: "Atado",
+  MAPLE: "Maple",
+  BANDEJA: "Bandeja",
   LITRO: "Litro",
   TONELADA: "Tonelada",
   PZ: "Pieza",

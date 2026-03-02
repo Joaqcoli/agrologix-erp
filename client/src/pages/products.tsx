@@ -12,8 +12,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Pencil, Trash2, Package, Upload } from "lucide-react";
@@ -131,64 +129,6 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
   );
 }
 
-// ─── Adjust Stock Modal ───────────────────────────────────────────────────────
-function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null; onClose: () => void }) {
-  const { toast } = useToast();
-  const [adjustment, setAdjustment] = useState("");
-  const [notes, setNotes] = useState("");
-
-  const adjustMutation = useMutation({
-    mutationFn: async (data: { adjustment: number; notes?: string }) => {
-      const res = await apiRequest("PATCH", `/api/product-units/${pu!.id}/adjust`, data);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      toast({ title: "Stock ajustado" });
-      onClose();
-    },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
-  });
-
-  if (!pu) return null;
-  const adj = parseFloat(adjustment);
-  const currentStock = parseFloat(pu.stockQty as string);
-  const newStock = isNaN(adj) ? currentStock : currentStock + adj;
-
-  return (
-    <Dialog open={!!pu} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Ajustar Stock</DialogTitle>
-          <DialogDescription>{pu.product.name} · {pu.unit}</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4 mt-2">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Stock actual:</span>
-            <span className="font-semibold">{fmtStock(currentStock)} {pu.unit}</span>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Ajuste (+/-)</Label>
-            <Input type="number" value={adjustment} onChange={(e) => setAdjustment(e.target.value)} placeholder="Ej: 10 o -3" data-testid="input-adjustment" />
-            <p className="text-xs text-muted-foreground">Nuevo stock: <strong>{fmtStock(newStock)}</strong> {pu.unit}</p>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Motivo (opcional)</Label>
-            <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ej: inventario, merma..." data-testid="input-adjust-notes" />
-          </div>
-        </div>
-        <DialogFooter className="gap-2">
-          <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => adjustMutation.mutate({ adjustment: adj, notes: notes || undefined })} disabled={!adjustment || isNaN(adj) || adjustMutation.isPending} data-testid="button-confirm-adjust">
-            {adjustMutation.isPending ? "Ajustando..." : "Confirmar ajuste"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ─── Category Filter Bar ─────────────────────────────────────────────────────
 function CategoryFilter({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
@@ -299,34 +239,17 @@ const EMPTY_FORM = { name: "", description: "", unit: "kg" as const, category: "
 
 export default function ProductsPage() {
   const { toast } = useToast();
-  const [tab, setTab] = useState("products");
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
-  const [stockSearch, setStockSearch] = useState("");
-  const [stockCategoryFilter, setStockCategoryFilter] = useState("all");
-  const [showZeroStock, setShowZeroStock] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [editing, setEditing] = useState<Product | null>(null);
   const [form, setForm] = useState<typeof EMPTY_FORM>(EMPTY_FORM);
   const [selectedUnits, setSelectedUnits] = useState<Set<string>>(new Set());
-  const [adjustTarget, setAdjustTarget] = useState<ProductUnitWithProduct | null>(null);
   const [isSavingUnits, setIsSavingUnits] = useState(false);
 
   const { data: products, isLoading } = useQuery<Product[]>({ queryKey: ["/api/products"] });
-
-  // Stock with server-side "onlyInStock" filter
-  const stockQueryKey = ["/api/products/stock", { onlyInStock: !showZeroStock }] as const;
-  const { data: stockData, isLoading: stockLoading } = useQuery<ProductUnitWithProduct[]>({
-    queryKey: stockQueryKey,
-    queryFn: () => {
-      const params = new URLSearchParams();
-      if (!showZeroStock) params.set("onlyInStock", "true");
-      else params.set("onlyInStock", "false");
-      return fetch(`/api/products/stock?${params}`, { credentials: "include" }).then((r) => r.json());
-    },
-  });
 
   // All units (for product cards) — never filtered by stock
   const { data: allUnitsData } = useQuery<ProductUnitWithProduct[]>({
@@ -346,22 +269,12 @@ export default function ProductsPage() {
 
   const activeProducts = (products ?? []).filter((p) => p.active);
 
-  // Tab 1: filtered products (client-side)
   const filteredProducts = useMemo(() =>
     activeProducts.filter((p) => {
       const matchName = p.name.toLowerCase().includes(search.toLowerCase());
       const matchCat = categoryFilter === "all" || p.category === categoryFilter;
       return matchName && matchCat;
     }), [activeProducts, search, categoryFilter]
-  );
-
-  // Tab 2: filtered stock rows (client-side on top of server-side)
-  const filteredStock = useMemo(() =>
-    (stockData ?? []).filter((pu) => {
-      const matchName = pu.product.name.toLowerCase().includes(stockSearch.toLowerCase());
-      const matchCat = stockCategoryFilter === "all" || pu.product.category === stockCategoryFilter;
-      return matchName && matchCat;
-    }), [stockData, stockSearch, stockCategoryFilter]
   );
 
   const createMutation = useMutation({
@@ -459,125 +372,38 @@ export default function ProductsPage() {
           </div>
         </div>
 
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList>
-            <TabsTrigger value="products" data-testid="tab-products">Productos</TabsTrigger>
-            <TabsTrigger value="stock" data-testid="tab-stock">Stock</TabsTrigger>
-          </TabsList>
-
-          {/* ── TAB 1: Products ── */}
-          <TabsContent value="products" className="mt-4 space-y-4">
-            <div className="flex flex-col gap-3">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input placeholder="Buscar por nombre..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" data-testid="input-search-products" />
-              </div>
-              <CategoryFilter value={categoryFilter} onChange={setCategoryFilter} />
+        <div className="space-y-4">
+          <div className="flex flex-col gap-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input placeholder="Buscar por nombre..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" data-testid="input-search-products" />
             </div>
+            <CategoryFilter value={categoryFilter} onChange={setCategoryFilter} />
+          </div>
 
-            {isLoading ? (
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {[1,2,3,4,5,6].map((i) => <Skeleton key={i} className="h-36 w-full rounded-lg" />)}
-              </div>
-            ) : filteredProducts.length === 0 ? (
-              <Card>
-                <CardContent className="flex flex-col items-center justify-center py-16 gap-3">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-                    <Package className="h-6 w-6 text-muted-foreground" />
-                  </div>
-                  <p className="text-sm font-medium text-foreground">Sin productos</p>
-                  <p className="text-sm text-muted-foreground">Agrega tu primer producto o cambia los filtros.</p>
-                  <Button size="sm" onClick={openCreate}><Plus className="mr-2 h-4 w-4" />Agregar</Button>
-                </CardContent>
-              </Card>
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {filteredProducts.map((p) => (
-                  <ProductCard key={p.id} product={p} productUnitMap={productUnitMap} onEdit={openEdit} onDelete={(id) => setDeleteId(id)} />
-                ))}
-              </div>
-            )}
-          </TabsContent>
-
-          {/* ── TAB 2: Stock ── */}
-          <TabsContent value="stock" className="mt-4 space-y-4">
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-wrap gap-3">
-                <div className="relative flex-1 min-w-48">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input placeholder="Buscar producto..." value={stockSearch} onChange={(e) => setStockSearch(e.target.value)} className="pl-9" data-testid="input-search-stock" />
-                </div>
-                <div className="flex items-center gap-2 bg-muted/30 rounded-md px-3 py-2">
-                  <Switch checked={showZeroStock} onCheckedChange={setShowZeroStock} id="show-zero-stock" data-testid="switch-show-zero-stock" />
-                  <label htmlFor="show-zero-stock" className="text-sm cursor-pointer select-none">Mostrar stock 0</label>
-                </div>
-              </div>
-              <CategoryFilter value={stockCategoryFilter} onChange={setStockCategoryFilter} />
+          {isLoading ? (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {[1,2,3,4,5,6].map((i) => <Skeleton key={i} className="h-36 w-full rounded-lg" />)}
             </div>
-
-            {stockLoading ? (
-              <Skeleton className="h-64 w-full" />
-            ) : (
-              <Card>
-                <CardContent className="p-0">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b-2 border-border bg-muted/40">
-                          <th className="text-left py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Producto</th>
-                          <th className="text-left py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Categoría</th>
-                          <th className="text-left py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Unidad</th>
-                          <th className="text-right py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Stock</th>
-                          <th className="text-right py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Costo prom.</th>
-                          <th className="text-right py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Valor stock</th>
-                          <th className="py-2.5 px-4"></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredStock.length === 0 ? (
-                          <tr>
-                            <td colSpan={7} className="py-12 text-center text-sm text-muted-foreground">
-                              {showZeroStock ? "Sin resultados" : "Sin stock disponible. Activá \"Mostrar stock 0\" para ver todos."}
-                            </td>
-                          </tr>
-                        ) : filteredStock.map((pu) => {
-                          const stock = parseFloat(pu.stockQty as string);
-                          const cost = parseFloat(pu.avgCost as string);
-                          const valorStock = stock * cost;
-                          const isNegative = stock < 0;
-                          const noCost = stock > 0 && cost === 0;
-                          return (
-                            <tr key={pu.id} className={`border-b border-border last:border-0 transition-colors ${isNegative ? "bg-destructive/5" : noCost ? "bg-yellow-50/30 dark:bg-yellow-900/10" : "hover:bg-muted/30"}`} data-testid={`row-stock-${pu.id}`}>
-                              <td className="py-2.5 px-4">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium text-foreground">{pu.product.name}</span>
-                                  {isNegative && <Badge variant="destructive" className="text-[9px] py-0 px-1">Negativo</Badge>}
-                                  {noCost && <Badge variant="outline" className="text-[9px] py-0 px-1 text-yellow-600 border-yellow-500/40">Sin costo</Badge>}
-                                </div>
-                              </td>
-                              <td className="py-2.5 px-4">
-                                <Badge variant="outline" className="text-[10px]">{pu.product.category ?? "—"}</Badge>
-                              </td>
-                              <td className="py-2.5 px-4">
-                                <Badge variant="secondary" className="text-[10px]">{pu.unit}</Badge>
-                              </td>
-                              <td className={`py-2.5 px-4 text-right font-semibold whitespace-nowrap ${isNegative ? "text-destructive" : "text-foreground"}`}>{fmtStock(stock)}</td>
-                              <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">{cost > 0 ? `$${fmt(cost)}` : "—"}</td>
-                              <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">{cost > 0 ? `$${fmt(valorStock)}` : "—"}</td>
-                              <td className="py-2.5 px-4">
-                                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setAdjustTarget(pu)} data-testid={`button-adjust-${pu.id}`}>Ajustar</Button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </TabsContent>
-        </Tabs>
+          ) : filteredProducts.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-16 gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+                  <Package className="h-6 w-6 text-muted-foreground" />
+                </div>
+                <p className="text-sm font-medium text-foreground">Sin productos</p>
+                <p className="text-sm text-muted-foreground">Agrega tu primer producto o cambia los filtros.</p>
+                <Button size="sm" onClick={openCreate}><Plus className="mr-2 h-4 w-4" />Agregar</Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {filteredProducts.map((p) => (
+                <ProductCard key={p.id} product={p} productUnitMap={productUnitMap} onEdit={openEdit} onDelete={(id) => setDeleteId(id)} />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Product Create/Edit Dialog ── */}
@@ -639,7 +465,6 @@ export default function ProductsPage() {
       </AlertDialog>
 
       <ImportDialog open={importOpen} onClose={() => setImportOpen(false)} />
-      <AdjustStockDialog pu={adjustTarget} onClose={() => setAdjustTarget(null)} />
     </Layout>
   );
 }

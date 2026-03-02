@@ -1,18 +1,31 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import { Layout } from "@/components/layout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { Plus, ShoppingCart, Calendar, ChevronRight, User } from "lucide-react";
+import { Plus, ShoppingCart, Calendar, ChevronRight } from "lucide-react";
 import type { Purchase } from "@shared/schema";
 
 export default function PurchasesPage() {
-  const { data: purchases, isLoading } = useQuery<(Purchase & { itemCount: number })[]>({ queryKey: ["/api/purchases"] });
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+
+  const { data: purchases, isLoading } = useQuery<(Purchase & { itemCount: number })[]>({
+    queryKey: ["/api/purchases", date],
+    queryFn: () => apiRequest("GET", `/api/purchases?date=${date}`).then((r) => r.json()),
+  });
 
   const formatDate = (d: string | Date) =>
     new Date(d).toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
+
+  const formatDateLong = (d: string) => {
+    const [y, m, day] = d.split("-").map(Number);
+    return new Date(y, m - 1, day).toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" });
+  };
 
   return (
     <Layout title="Compras">
@@ -21,9 +34,15 @@ export default function PurchasesPage() {
           <div>
             <h2 className="text-xl font-semibold text-foreground">Órdenes de Compra</h2>
             <p className="text-sm text-muted-foreground mt-0.5">
-              {purchases?.length ?? 0} orden{(purchases?.length ?? 0) !== 1 ? "es" : ""} registrada{(purchases?.length ?? 0) !== 1 ? "s" : ""}
+              {purchases?.length ?? 0} orden{(purchases?.length ?? 0) !== 1 ? "es" : ""} el {formatDateLong(date)}
             </p>
           </div>
+          <Input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="w-auto"
+          />
           <Link href="/purchases/new">
             <Button data-testid="button-new-purchase">
               <Plus className="mr-2 h-4 w-4" /> Nueva Compra

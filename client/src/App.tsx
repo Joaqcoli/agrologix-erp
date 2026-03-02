@@ -1,4 +1,4 @@
-import { Switch, Route, useSearch } from "wouter";
+import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -11,10 +11,12 @@ import ProductsPage from "@/pages/products";
 import PurchasesPage from "@/pages/purchases/index";
 import NewPurchasePage from "@/pages/purchases/new";
 import PurchaseDetailPage from "@/pages/purchases/detail";
+import EditPurchasePage from "@/pages/purchases/edit";
 import OrdersPage from "@/pages/orders/index";
 import NewOrderPage from "@/pages/orders/new";
 import OrderDetailPage from "@/pages/orders/detail";
 import LoadListPage from "@/pages/load-list";
+import StockPage from "@/pages/stock";
 import IntakePage from "@/pages/intake";
 import CuentasCorrientesPage from "@/pages/cuentas-corrientes/index";
 import CCCustomerDetailPage from "@/pages/cuentas-corrientes/detail";
@@ -29,6 +31,9 @@ function Router() {
       <Route path="/products" component={ProductsPage} />
       <Route path="/purchases" component={PurchasesPage} />
       <Route path="/purchases/new" component={NewPurchasePage} />
+      <Route path="/purchases/:id/edit">
+        {(params) => <EditPurchasePage id={Number(params.id)} />}
+      </Route>
       <Route path="/purchases/:id">
         {(params) => <PurchaseDetailPage id={Number(params.id)} />}
       </Route>
@@ -38,6 +43,7 @@ function Router() {
         {(params) => <OrderDetailPage id={Number(params.id)} />}
       </Route>
       <Route path="/load-list" component={LoadListPage} />
+      <Route path="/stock" component={StockPage} />
       <Route path="/intake" component={IntakePage} />
       <Route path="/cuentas-corrientes" component={CuentasCorrientesPage} />
       <Route path="/cuentas-corrientes/:id">

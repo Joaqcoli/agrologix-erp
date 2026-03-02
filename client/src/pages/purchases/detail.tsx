@@ -1,17 +1,40 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
-import { useLocation } from "wouter";
-import { ArrowLeft, Calendar, Package, Truck } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel,
+  AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { useToast } from "@/hooks/use-toast";
+import { useLocation, Link } from "wouter";
+import { ArrowLeft, Calendar, Package, Truck, Pencil, Trash2 } from "lucide-react";
 
 export default function PurchaseDetailPage({ id }: { id: number }) {
+  const { toast } = useToast();
   const [, setLocation] = useLocation();
+  const [showDelete, setShowDelete] = useState(false);
+
   const { data: purchase, isLoading } = useQuery<any>({
     queryKey: ["/api/purchases", id],
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/purchases/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
+      toast({ title: "Compra eliminada", description: "Se revirtió el stock correctamente." });
+      setLocation("/purchases");
+    },
+    onError: (e: any) => toast({ title: "Error al eliminar", description: e.message, variant: "destructive" }),
   });
 
   const formatDate = (d: string | Date) =>
@@ -45,16 +68,33 @@ export default function PurchaseDetailPage({ id }: { id: number }) {
   return (
     <Layout title={`Compra ${purchase.folio}`}>
       <div className="p-6 max-w-3xl mx-auto space-y-5">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => setLocation("/purchases")}>
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-xl font-bold text-foreground">{purchase.folio}</h2>
-              <Badge variant="secondary">Registrada</Badge>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" size="icon" onClick={() => setLocation("/purchases")}>
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-xl font-bold text-foreground">{purchase.folio}</h2>
+                <Badge variant="secondary">Registrada</Badge>
+              </div>
+              <p className="text-sm text-muted-foreground mt-0.5">Orden de compra completada</p>
             </div>
-            <p className="text-sm text-muted-foreground mt-0.5">Orden de compra completada</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link href={`/purchases/${id}/edit`}>
+              <Button variant="outline" size="sm">
+                <Pencil className="mr-1.5 h-3.5 w-3.5" /> Editar
+              </Button>
+            </Link>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              onClick={() => setShowDelete(true)}
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Eliminar
+            </Button>
           </div>
         </div>
 
@@ -131,6 +171,27 @@ export default function PurchaseDetailPage({ id }: { id: number }) {
           </CardContent>
         </Card>
       </div>
+
+      <AlertDialog open={showDelete} onOpenChange={setShowDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Eliminar {purchase.folio}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esta acción revertirá el stock de todos los productos incluidos en esta compra. Si el stock resultante es negativo, se establecerá en 0. Esta acción no se puede deshacer.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? "Eliminando..." : "Eliminar"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Layout>
   );
 }

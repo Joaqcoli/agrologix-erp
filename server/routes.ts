@@ -104,15 +104,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Specific sub-routes MUST come before /api/products/:id to avoid capture
-  app.get("/api/products/units", requireAuth, async (req, res) => {
-    const { category, search, onlyInStock } = req.query as { category?: string; search?: string; onlyInStock?: string };
-    return res.json(await storage.getAllProductUnitsStock({
-      category: category || undefined,
-      search: search || undefined,
-      onlyInStock: onlyInStock !== "false",
-    }));
-  });
-
   app.get("/api/products/stock", requireAuth, async (req, res) => {
     const { category, search, onlyInStock } = req.query as { category?: string; search?: string; onlyInStock?: string };
     return res.json(await storage.getAllProductUnitsStock({
@@ -204,6 +195,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
+  // ─── Stock Adjustments ─────────────────────────────────────────────────────
+  app.post("/api/stock/adjust", requireAuth, async (req, res) => {
+    try {
+      const { items } = z.object({
+        items: z.array(z.object({
+          productId: z.number().int().positive(),
+          unit: z.string().min(1),
+          qty: z.number().positive(),
+        })).min(1),
+      }).parse(req.body);
+      await storage.addStockAdjustments(items);
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   // ─── Price History ─────────────────────────────────────────────────────────
   app.get("/api/price-history/:customerId/:productId", requireAuth, async (req, res) => {
     const record = await storage.getLastPrice(Number(req.params.customerId), Number(req.params.productId));
@@ -212,7 +218,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Purchases ─────────────────────────────────────────────────────────────
   app.get("/api/purchases", requireAuth, async (req, res) => {
-    return res.json(await storage.getPurchases());
+    const { date } = req.query as { date?: string };
+    return res.json(await storage.getPurchases(date || undefined));
   });
 
   app.get("/api/purchases/next-folio", requireAuth, async (req, res) => {
@@ -223,6 +230,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const p = await storage.getPurchase(Number(req.params.id));
     if (!p) return res.status(404).json({ error: "Not found" });
     return res.json(p);
+  });
+
+  app.patch("/api/purchases/:id", requireAuth, async (req, res) => {
+    try {
+      const schema = z.object({
+        supplierName: z.string().min(1),
+        purchaseDate: z.string(),
+        notes: z.string().optional(),
+        items: z.array(z.object({
+          productId: z.number().int().positive(),
+          quantity: z.string(),
+          unit: z.enum(["kg", "pz", "caja", "saco", "litro", "tonelada", "CAJON", "maple", "atado", "bandeja"]),
+          costPerUnit: z.string(),
+        })).min(1),
+      });
+      const data = schema.parse(req.body);
+      const purchase = await storage.updatePurchase(Number(req.params.id), {
+        ...data,
+        purchaseDate: new Date(data.purchaseDate),
+      });
+      return res.json(purchase);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.delete("/api/purchases/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deletePurchase(Number(req.params.id));
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   app.post("/api/purchases", requireAuth, async (req, res) => {
@@ -238,12 +274,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       return res.status(201).json(purchase);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
-  });
-
-  // ─── Stock Movements ───────────────────────────────────────────────────────
-  app.get("/api/stock-movements", requireAuth, async (req, res) => {
-    const productId = req.query.productId ? Number(req.query.productId) : undefined;
-    return res.json(await storage.getStockMovements(productId));
   });
 
   // ─── Orders ────────────────────────────────────────────────────────────────
@@ -324,12 +354,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       const patch = schema.parse(req.body);
 
-      // Block structural edits on approved orders
-      if (order.status === "approved" &&
-        (patch.quantity !== undefined || patch.unit !== undefined || patch.productId !== undefined)) {
-        return res.status(403).json({ error: "Para cambiar cantidades/unidades/productos, revertí a borrador primero." });
-      }
-
       const result = await storage.updateOrderItem(orderId, itemId, patch, order.customerId);
       return res.json(result);
     } catch (e: any) {
@@ -357,6 +381,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       return res.status(201).json(order);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.delete("/api/orders/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteOrder(Number(req.params.id));
+      return res.json({ ok: true });
+    } catch (e: any) {
+      return res.status(400).json({ error: e.message });
+    }
   });
 
   app.post("/api/orders/:id/approve", requireAuth, async (req, res) => {

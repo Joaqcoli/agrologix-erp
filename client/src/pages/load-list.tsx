@@ -19,6 +19,7 @@ import {
 type LoadListRow = {
   productId: number;
   productName: string;
+  category: string;
   unit: string;
   totalQty: number;
   stockQty: number;
@@ -26,6 +27,10 @@ type LoadListRow = {
   customersCount: number;
   customerNames: string[];
 };
+
+const CATEGORY_ORDER = [
+  "Fruta", "Verdura", "Hortaliza Liviana", "Hortaliza Pesada", "Hongos/Hierbas", "Huevos",
+];
 
 type PendingRow = {
   orderId: number;
@@ -304,54 +309,73 @@ export default function LoadListPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredRows.map((row, idx) => {
-                      const isShortage = row.diffQty < 0;
-                      const isSurplus = row.diffQty > 0;
-                      return (
-                        <tr
-                          key={`${row.productId}-${row.unit}`}
-                          className={`border-b border-border last:border-0 hover:bg-muted/20 transition-colors cursor-pointer ${isShortage ? "bg-red-50 dark:bg-red-950/20" : ""}`}
-                          onClick={() => setDetailRow(row)}
-                          data-testid={`load-row-${row.productId}-${row.unit}`}
-                        >
-                          <td className="py-3 px-4 text-muted-foreground text-xs">{idx + 1}</td>
-                          <td className="py-3 px-3 font-medium text-foreground">{row.productName}</td>
-                          <td className="py-3 px-3">
-                            <Badge variant="outline" className="text-[10px] font-mono">{row.unit}</Badge>
-                          </td>
-                          <td className="py-3 px-3 text-right font-semibold text-foreground">
-                            {fmtQty(row.totalQty, row.unit)}
-                          </td>
-                          <td className="py-3 px-3 text-right text-muted-foreground">
-                            {fmtQty(row.stockQty, row.unit)}
-                          </td>
-                          <td className="py-3 px-3 text-right font-bold">
-                            {isShortage ? (
-                              <span className="text-destructive">
-                                {fmtDiff(row.diffQty, row.unit)} <span className="text-[10px] font-normal">FALTANTE</span>
-                              </span>
-                            ) : isSurplus ? (
-                              <span className="text-green-600 dark:text-green-400">
-                                +{fmtDiff(row.diffQty, row.unit)} <span className="text-[10px] font-normal">SOBRANTE</span>
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">0</span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-center">
-                            <button
-                              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                              onClick={(e) => { e.stopPropagation(); setDetailRow(row); }}
-                              data-testid={`button-detail-${row.productId}-${row.unit}`}
-                            >
-                              <Users className="h-3.5 w-3.5" />
-                              {row.customersCount}
-                              <ChevronDown className="h-3 w-3" />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {(() => {
+                      // Group filtered rows by category preserving backend sort order
+                      const grouped: Record<string, LoadListRow[]> = {};
+                      for (const row of filteredRows) {
+                        const cat = row.category || "Sin categoría";
+                        if (!grouped[cat]) grouped[cat] = [];
+                        grouped[cat].push(row);
+                      }
+                      const sortedCats = [
+                        ...CATEGORY_ORDER.filter((c) => grouped[c]?.length > 0),
+                        ...Object.keys(grouped).filter((c) => !CATEGORY_ORDER.includes(c) && grouped[c]?.length > 0),
+                      ];
+                      let globalIdx = 0;
+                      return sortedCats.map((cat) => (
+                        <>
+                          <tr key={`cat-${cat}`} className="border-b border-border bg-muted/50">
+                            <td colSpan={7} className="py-1.5 px-4 text-xs font-semibold text-muted-foreground uppercase tracking-widest">
+                              {cat}
+                            </td>
+                          </tr>
+                          {grouped[cat].map((row) => {
+                            globalIdx++;
+                            const isShortage = row.diffQty < 0;
+                            return (
+                              <tr
+                                key={`${row.productId}-${row.unit}`}
+                                className={`border-b border-border last:border-0 hover:bg-muted/20 transition-colors cursor-pointer ${isShortage ? "bg-red-50 dark:bg-red-950/20" : ""}`}
+                                onClick={() => setDetailRow(row)}
+                                data-testid={`load-row-${row.productId}-${row.unit}`}
+                              >
+                                <td className="py-3 px-4 text-muted-foreground text-xs">{globalIdx}</td>
+                                <td className="py-3 px-3 font-medium text-foreground">{row.productName}</td>
+                                <td className="py-3 px-3">
+                                  <Badge variant="outline" className="text-[10px] font-mono">{row.unit}</Badge>
+                                </td>
+                                <td className="py-3 px-3 text-right font-semibold text-foreground">
+                                  {fmtQty(row.totalQty, row.unit)}
+                                </td>
+                                <td className="py-3 px-3 text-right text-muted-foreground">
+                                  {fmtQty(row.stockQty, row.unit)}
+                                </td>
+                                <td className="py-3 px-3 text-right font-bold">
+                                  {isShortage ? (
+                                    <span className="text-destructive">
+                                      {fmtDiff(Math.abs(row.diffQty), row.unit)} <span className="text-[10px] font-normal">FALTANTE</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-muted-foreground">—</span>
+                                  )}
+                                </td>
+                                <td className="py-3 px-4 text-center">
+                                  <button
+                                    className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                    onClick={(e) => { e.stopPropagation(); setDetailRow(row); }}
+                                    data-testid={`button-detail-${row.productId}-${row.unit}`}
+                                  >
+                                    <Users className="h-3.5 w-3.5" />
+                                    {row.customersCount}
+                                    <ChevronDown className="h-3 w-3" />
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </>
+                      ));
+                    })()}
                   </tbody>
                 </table>
               </div>

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,8 +9,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel,
+  AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Link } from "wouter";
-import { Plus, FileText, Calendar, ChevronRight, CheckCircle2, Clock, XCircle, TrendingUp, Download, Users } from "lucide-react";
+import { Plus, FileText, Calendar, ChevronRight, CheckCircle2, Clock, XCircle, TrendingUp, Download, Users, Trash2 } from "lucide-react";
 import type { Order } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 
@@ -35,6 +41,21 @@ export default function OrdersPage() {
   const today = new Date().toISOString().slice(0, 10);
   const [date, setDate] = useState(today);
   const [exporting, setExporting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<OrderSummary | null>(null);
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/orders/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders", date] });
+      queryClient.invalidateQueries({ queryKey: ["/api/load-list"] });
+      toast({ title: "Pedido eliminado" });
+      setDeleteTarget(null);
+    },
+    onError: (e: any) => {
+      toast({ title: "Error al eliminar", description: e.message, variant: "destructive" });
+      setDeleteTarget(null);
+    },
+  });
 
   const { data: orders, isLoading } = useQuery<OrderSummary[]>({
     queryKey: ["/api/orders", date],
@@ -199,58 +220,92 @@ export default function OrdersPage() {
               const StatusIcon = statusCfg.icon;
               const vendido = o.hasIva ? parseFloat(o.totalConIva) : parseFloat(o.total);
               return (
-                <Link key={o.id} href={`/orders/${o.id}`}>
-                  <Card className="hover-elevate cursor-pointer" data-testid={`card-order-${o.id}`}>
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex items-start gap-4 flex-1 min-w-0">
-                          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 shrink-0">
-                            <FileText className="h-5 w-5 text-primary" />
+                <div key={o.id} className="relative group">
+                  <Link href={`/orders/${o.id}`}>
+                    <Card className="hover-elevate cursor-pointer" data-testid={`card-order-${o.id}`}>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex items-start gap-4 flex-1 min-w-0">
+                            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 shrink-0">
+                              <FileText className="h-5 w-5 text-primary" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant={statusCfg.variant} className="text-[10px] flex items-center gap-1">
+                                  <StatusIcon className="h-2.5 w-2.5" />
+                                  {statusCfg.label}
+                                </Badge>
+                                <Badge variant="secondary" className="text-[10px]">{o.itemCount} prod.</Badge>
+                                {o.hasIva && (
+                                  <Badge variant="outline" className="text-[10px] text-primary border-primary/40">Con IVA</Badge>
+                                )}
+                              </div>
+                              <p className="text-sm font-semibold text-foreground mt-1 truncate">{o.customerName}</p>
+                              <div className="flex flex-wrap items-center gap-3 mt-0.5">
+                                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                  <Calendar className="h-3 w-3" />
+                                  {formatDate(o.orderDate)}
+                                </span>
+                                <span className="text-xs text-muted-foreground font-mono">
+                                  Remito: <span className="font-semibold text-foreground">{o.suggestedRemito}</span>
+                                </span>
+                              </div>
+                            </div>
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Badge variant={statusCfg.variant} className="text-[10px] flex items-center gap-1">
-                                <StatusIcon className="h-2.5 w-2.5" />
-                                {statusCfg.label}
-                              </Badge>
-                              <Badge variant="secondary" className="text-[10px]">{o.itemCount} prod.</Badge>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <div className="text-right">
+                              <p className="text-xs text-muted-foreground">{o.hasIva ? "Total + IVA" : "Total"}</p>
+                              <p className="text-base font-bold text-foreground">
+                                ${fmt(vendido)}
+                              </p>
                               {o.hasIva && (
-                                <Badge variant="outline" className="text-[10px] text-primary border-primary/40">Con IVA</Badge>
+                                <p className="text-[10px] text-muted-foreground">Neto: ${fmt(parseFloat(o.total))}</p>
                               )}
                             </div>
-                            <p className="text-sm font-semibold text-foreground mt-1 truncate">{o.customerName}</p>
-                            <div className="flex flex-wrap items-center gap-3 mt-0.5">
-                              <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                                <Calendar className="h-3 w-3" />
-                                {formatDate(o.orderDate)}
-                              </span>
-                              <span className="text-xs text-muted-foreground font-mono">
-                                Remito: <span className="font-semibold text-foreground">{o.suggestedRemito}</span>
-                              </span>
-                            </div>
+                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
                           </div>
                         </div>
-                        <div className="flex items-center gap-3 shrink-0">
-                          <div className="text-right">
-                            <p className="text-xs text-muted-foreground">{o.hasIva ? "Total + IVA" : "Total"}</p>
-                            <p className="text-base font-bold text-foreground">
-                              ${fmt(vendido)}
-                            </p>
-                            {o.hasIva && (
-                              <p className="text-[10px] text-muted-foreground">Neto: ${fmt(parseFloat(o.total))}</p>
-                            )}
-                          </div>
-                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </Link>
+                      </CardContent>
+                    </Card>
+                  </Link>
+                  {/* Delete button — outside Link to avoid navigation */}
+                  <button
+                    onClick={(e) => { e.preventDefault(); setDeleteTarget(o); }}
+                    className="absolute top-3 right-10 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                    data-testid={`button-delete-order-${o.id}`}
+                    title="Eliminar pedido"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               );
             })}
           </div>
         )}
       </div>
+      {/* Confirm delete dialog */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Eliminar pedido?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Estás por eliminar el pedido de <strong>{deleteTarget?.customerName}</strong>{" "}
+              ({deleteTarget?.folio}). Esta acción no se puede deshacer.
+              Los ítems del pedido también serán eliminados.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+              data-testid="button-confirm-delete"
+            >
+              {deleteMutation.isPending ? "Eliminando..." : "Eliminar"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Layout>
   );
 }

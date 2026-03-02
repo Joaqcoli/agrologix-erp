@@ -124,6 +124,7 @@ export default function IntakePage() {
     },
     onSuccess: (data: { orderId: number }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/load-list"] });
       toast({ title: "Pedido creado", description: "Redirigiendo al detalle para completar precios..." });
       setLocation(`/orders/${data.orderId}`);
     },

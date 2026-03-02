@@ -12,48 +12,58 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { Plus, Trash2, ArrowLeft, PackagePlus, Calculator, Info } from "lucide-react";
+import { Plus, Trash2, ArrowLeft, Save, Calculator, Info } from "lucide-react";
 import type { Product } from "@shared/schema";
 
-const UNIT_OPTIONS = [
-  { value: "kg",      label: "KG" },
-  { value: "caja",    label: "CAJÓN" },
-  { value: "saco",    label: "BOLSA" },
-  { value: "pz",      label: "UNIDAD" },
-  { value: "maple",   label: "MAPLE" },
-  { value: "atado",   label: "ATADO" },
-  { value: "bandeja", label: "BANDEJA" },
-] as const;
-type PurchaseItem = { productId: number; quantity: string; unit: string; costPerUnit: string };
+const UNITS = ["kg", "pz", "caja", "saco", "litro", "tonelada"] as const;
+type PurchaseItem = { productId: number; quantity: string; unit: typeof UNITS[number]; costPerUnit: string };
 
-export default function NewPurchasePage() {
+export default function EditPurchasePage({ id }: { id: number }) {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
 
-  const [folio, setFolio] = useState("");
   const [supplierName, setSupplierName] = useState("");
   const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<PurchaseItem[]>([{ productId: 0, quantity: "", unit: "kg", costPerUnit: "" }]);
+  const [initialized, setInitialized] = useState(false);
+
+  const { data: purchase, isLoading: loadingPurchase } = useQuery<any>({
+    queryKey: ["/api/purchases", id],
+  });
 
   const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
-  const { data: folioData } = useQuery<{ folio: string }>({ queryKey: ["/api/purchases/next-folio"] });
 
-  useEffect(() => { if (folioData?.folio) setFolio(folioData.folio); }, [folioData]);
+  useEffect(() => {
+    if (purchase && !initialized) {
+      setSupplierName(purchase.supplierName ?? "");
+      setPurchaseDate(purchase.purchaseDate ? new Date(purchase.purchaseDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10));
+      setNotes(purchase.notes ?? "");
+      if (purchase.items?.length) {
+        setItems(purchase.items.map((item: any) => ({
+          productId: item.productId,
+          quantity: String(parseFloat(item.quantity)),
+          unit: item.unit,
+          costPerUnit: String(parseFloat(item.costPerUnit)),
+        })));
+      }
+      setInitialized(true);
+    }
+  }, [purchase, initialized]);
 
-  const createMutation = useMutation({
-    mutationFn: (data: any) => apiRequest("POST", "/api/purchases", data),
-    onSuccess: (data: any) => {
+  const updateMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("PATCH", `/api/purchases/${id}`, data),
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      toast({ title: `Compra ${folio} creada`, description: "Se actualizó el inventario y el costo promedio." });
-      setLocation("/purchases");
+      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
+      toast({ title: "Compra actualizada", description: "Se ajustó el inventario y el costo promedio." });
+      setLocation(`/purchases/${id}`);
     },
     onError: (e: any) => toast({ title: "Error al guardar", description: e.message, variant: "destructive" }),
   });
 
   const addItem = () => setItems([...items, { productId: 0, quantity: "", unit: "kg", costPerUnit: "" }]);
-
   const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
 
   const updateItem = (i: number, field: keyof PurchaseItem, value: string | number) => {
@@ -61,9 +71,7 @@ export default function NewPurchasePage() {
     updated[i] = { ...updated[i], [field]: value };
     if (field === "productId") {
       const product = (products ?? []).find((p) => p.id === Number(value));
-      if (product) {
-        updated[i].unit = product.unit as any;
-      }
+      if (product) updated[i].unit = product.unit as any;
     }
     setItems(updated);
   };
@@ -101,8 +109,7 @@ export default function NewPurchasePage() {
       toast({ title: "Sin productos válidos", description: "Agrega al menos un producto con cantidad y costo.", variant: "destructive" });
       return;
     }
-    createMutation.mutate({
-      folio,
+    updateMutation.mutate({
       supplierName,
       purchaseDate,
       notes: notes || undefined,
@@ -115,16 +122,26 @@ export default function NewPurchasePage() {
     });
   };
 
+  if (loadingPurchase) {
+    return (
+      <Layout title="Editar Compra">
+        <div className="p-6 max-w-4xl mx-auto">
+          <div className="h-8 w-48 bg-muted animate-pulse rounded" />
+        </div>
+      </Layout>
+    );
+  }
+
   return (
-    <Layout title="Nueva Compra">
+    <Layout title={`Editar ${purchase?.folio ?? "Compra"}`}>
       <div className="p-6 max-w-4xl mx-auto space-y-5">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => setLocation("/purchases")} data-testid="button-back">
+          <Button variant="ghost" size="icon" onClick={() => setLocation(`/purchases/${id}`)}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
-            <h2 className="text-xl font-semibold text-foreground">Nueva Orden de Compra</h2>
-            <p className="text-sm text-muted-foreground">Registra una nueva entrada de mercancía</p>
+            <h2 className="text-xl font-semibold text-foreground">Editar Orden de Compra</h2>
+            <p className="text-sm text-muted-foreground">{purchase?.folio} — Los cambios ajustarán el inventario</p>
           </div>
         </div>
 
@@ -137,13 +154,7 @@ export default function NewPurchasePage() {
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div className="space-y-1.5">
                   <Label htmlFor="folio">Folio</Label>
-                  <Input
-                    id="folio"
-                    value={folio}
-                    onChange={(e) => setFolio(e.target.value)}
-                    required
-                    data-testid="input-folio"
-                  />
+                  <Input id="folio" value={purchase?.folio ?? ""} readOnly className="bg-muted/40" />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="date">Fecha de Compra</Label>
@@ -153,7 +164,6 @@ export default function NewPurchasePage() {
                     value={purchaseDate}
                     onChange={(e) => setPurchaseDate(e.target.value)}
                     required
-                    data-testid="input-purchase-date"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -164,13 +174,12 @@ export default function NewPurchasePage() {
                     value={supplierName}
                     onChange={(e) => setSupplierName(e.target.value)}
                     required
-                    data-testid="input-supplier"
                   />
                 </div>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="notes">Notas</Label>
-                <Textarea id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Opcional..." data-testid="input-purchase-notes" />
+                <Textarea id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Opcional..." />
               </div>
             </CardContent>
           </Card>
@@ -178,7 +187,7 @@ export default function NewPurchasePage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
               <CardTitle className="text-sm font-semibold">Productos</CardTitle>
-              <Button type="button" variant="outline" size="sm" onClick={addItem} data-testid="button-add-item">
+              <Button type="button" variant="outline" size="sm" onClick={addItem}>
                 <Plus className="mr-1.5 h-3.5 w-3.5" /> Agregar
               </Button>
             </CardHeader>
@@ -189,11 +198,11 @@ export default function NewPurchasePage() {
                 const projectedAvg = item.productId && item.quantity && item.costPerUnit ? getProjectedAvgCost(item) : null;
 
                 return (
-                  <div key={idx} className="rounded-md border border-border bg-card/50 p-4 space-y-3" data-testid={`purchase-item-${idx}`}>
+                  <div key={idx} className="rounded-md border border-border bg-card/50 p-4 space-y-3">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Producto #{idx + 1}</span>
                       {items.length > 1 && (
-                        <Button type="button" size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => removeItem(idx)} data-testid={`button-remove-item-${idx}`}>
+                        <Button type="button" size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => removeItem(idx)}>
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       )}
@@ -206,7 +215,7 @@ export default function NewPurchasePage() {
                           value={item.productId ? String(item.productId) : ""}
                           onValueChange={(v) => updateItem(idx, "productId", Number(v))}
                         >
-                          <SelectTrigger data-testid={`select-product-${idx}`}>
+                          <SelectTrigger>
                             <SelectValue placeholder="Seleccionar producto..." />
                           </SelectTrigger>
                           <SelectContent>
@@ -222,11 +231,11 @@ export default function NewPurchasePage() {
                       <div className="space-y-1.5">
                         <Label>Unidad</Label>
                         <Select value={item.unit} onValueChange={(v) => updateItem(idx, "unit", v)}>
-                          <SelectTrigger data-testid={`select-unit-${idx}`}>
+                          <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {UNIT_OPTIONS.map((u) => <SelectItem key={u.value} value={u.value}>{u.label}</SelectItem>)}
+                            {UNITS.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}
                           </SelectContent>
                         </Select>
                       </div>
@@ -241,7 +250,6 @@ export default function NewPurchasePage() {
                           value={item.quantity}
                           onChange={(e) => updateItem(idx, "quantity", e.target.value)}
                           required={item.productId > 0}
-                          data-testid={`input-quantity-${idx}`}
                         />
                       </div>
                     </div>
@@ -260,7 +268,6 @@ export default function NewPurchasePage() {
                             onChange={(e) => updateItem(idx, "costPerUnit", e.target.value)}
                             className="pl-7"
                             required={item.productId > 0}
-                            data-testid={`input-cost-${idx}`}
                           />
                         </div>
                       </div>
@@ -315,7 +322,7 @@ export default function NewPurchasePage() {
 
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Total de la compra</span>
-                <span className="text-xl font-bold text-foreground" data-testid="text-grand-total">
+                <span className="text-xl font-bold text-foreground">
                   ${grandTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
                 </span>
               </div>
@@ -323,16 +330,16 @@ export default function NewPurchasePage() {
           </Card>
 
           <div className="flex items-center justify-end gap-3">
-            <Button type="button" variant="outline" onClick={() => setLocation("/purchases")}>
+            <Button type="button" variant="outline" onClick={() => setLocation(`/purchases/${id}`)}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={createMutation.isPending || !supplierName} data-testid="button-save-purchase">
-              {createMutation.isPending ? (
+            <Button type="submit" disabled={updateMutation.isPending || !supplierName}>
+              {updateMutation.isPending ? (
                 <>Guardando...</>
               ) : (
                 <>
-                  <PackagePlus className="mr-2 h-4 w-4" />
-                  Registrar Compra
+                  <Save className="mr-2 h-4 w-4" />
+                  Guardar Cambios
                 </>
               )}
             </Button>

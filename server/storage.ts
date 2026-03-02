@@ -8,7 +8,7 @@ import {
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
   type Payment, type Withholding, type InsertPayment, type InsertWithholding,
 } from "@shared/schema";
-import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between } from "drizzle-orm";
+import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
 import bcrypt from "bcryptjs";
 
@@ -155,8 +155,15 @@ export const storage = {
   },
 
   // ─── Purchases ────────────────────────────────────────────────────────────
-  async getPurchases(): Promise<(Purchase & { itemCount: number })[]> {
-    const all = await db.select().from(purchases).orderBy(desc(purchases.createdAt));
+  async getPurchases(date?: string): Promise<(Purchase & { itemCount: number })[]> {
+    let all: Purchase[];
+    if (date) {
+      all = await db.select().from(purchases)
+        .where(drizzleSql`${purchases.purchaseDate}::date = ${date}::date`)
+        .orderBy(desc(purchases.createdAt));
+    } else {
+      all = await db.select().from(purchases).orderBy(desc(purchases.createdAt));
+    }
     const result = await Promise.all(
       all.map(async (p) => {
         const items = await db.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, p.id));
@@ -185,8 +192,9 @@ export const storage = {
     purchaseDate: Date;
     notes?: string;
     createdBy: number;
-    items: { productId: number; quantity: string; unit: "kg" | "pz" | "caja" | "saco" | "litro" | "tonelada"; costPerUnit: string }[];
+    items: { productId: number; quantity: string; unit: string; costPerUnit: string }[];
   }): Promise<Purchase> {
+    // Pre-compute totals (no DB)
     let total = 0;
     const itemsWithSubtotal = data.items.map((item) => {
       const subtotal = parseFloat(item.quantity) * parseFloat(item.costPerUnit);
@@ -194,94 +202,311 @@ export const storage = {
       return { ...item, subtotal: subtotal.toFixed(2) };
     });
 
-    const [purchase] = await db.insert(purchases).values({
-      folio: data.folio,
-      supplierName: data.supplierName,
-      purchaseDate: data.purchaseDate,
-      notes: data.notes,
-      createdBy: data.createdBy,
-      total: total.toFixed(2),
-    }).returning();
+    const purchaseDateStr = data.purchaseDate.toISOString().slice(0, 10);
 
-    await db.insert(purchaseItems).values(
-      itemsWithSubtotal.map((item) => ({
-        purchaseId: purchase.id,
-        productId: item.productId,
-        quantity: item.quantity,
-        unit: item.unit,
-        costPerUnit: item.costPerUnit,
-        subtotal: item.subtotal,
-      }))
-    );
+    return db.transaction(async (tx) => {
+      const [purchase] = await tx.insert(purchases).values({
+        folio: data.folio,
+        supplierName: data.supplierName,
+        purchaseDate: data.purchaseDate,
+        notes: data.notes,
+        createdBy: data.createdBy,
+        total: total.toFixed(2),
+      }).returning();
 
-    for (const item of data.items) {
-      const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
-      if (!product) continue;
-
-      const newQty = parseFloat(item.quantity);
-      const newCost = parseFloat(item.costPerUnit);
-
-      // ── Update product_units (canonical unit stock + cost) ──────────────────
-      const canonicalUnit = dbEnumToCanonical(item.unit);
-      const [existingPU] = await db.select().from(productUnits)
-        .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
-        .limit(1);
-
-      if (existingPU) {
-        const puStock = parseFloat(existingPU.stockQty as string);
-        const puCost = parseFloat(existingPU.avgCost as string);
-        const newPuAvgCost = puStock + newQty === 0 ? newCost : (puStock * puCost + newQty * newCost) / (puStock + newQty);
-        await db.update(productUnits).set({
-          stockQty: (puStock + newQty).toFixed(4),
-          avgCost: newPuAvgCost.toFixed(4),
-        }).where(eq(productUnits.id, existingPU.id));
-      } else {
-        await db.insert(productUnits).values({
+      await tx.insert(purchaseItems).values(
+        itemsWithSubtotal.map((item) => ({
+          purchaseId: purchase.id,
           productId: item.productId,
-          unit: canonicalUnit,
-          avgCost: newCost.toFixed(4),
-          stockQty: newQty.toFixed(4),
+          quantity: item.quantity,
+          unit: item.unit as any,
+          costPerUnit: item.costPerUnit,
+          subtotal: item.subtotal,
+        }))
+      );
+
+      for (const item of data.items) {
+        const [product] = await tx.select().from(products).where(eq(products.id, item.productId)).limit(1);
+        if (!product) continue;
+
+        const newQty = parseFloat(item.quantity);
+        const newCost = parseFloat(item.costPerUnit);
+
+        // ── Update product_units (canonical unit stock + cost) ──────────────────
+        const canonicalUnit = dbEnumToCanonical(item.unit);
+        const [existingPU] = await tx.select().from(productUnits)
+          .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+          .limit(1);
+
+        if (existingPU) {
+          const puStock = parseFloat(existingPU.stockQty as string);
+          const puCost = parseFloat(existingPU.avgCost as string);
+          const newPuAvgCost = puStock + newQty === 0 ? newCost : (puStock * puCost + newQty * newCost) / (puStock + newQty);
+          await tx.update(productUnits).set({
+            stockQty: (puStock + newQty).toFixed(4),
+            avgCost: newPuAvgCost.toFixed(4),
+          }).where(eq(productUnits.id, existingPU.id));
+        } else {
+          await tx.insert(productUnits).values({
+            productId: item.productId,
+            unit: canonicalUnit,
+            avgCost: newCost.toFixed(4),
+            stockQty: newQty.toFixed(4),
+          });
+        }
+
+        // ── Keep products.currentStock + averageCost for backward compat ─────────
+        const currentStock = parseFloat(product.currentStock as string);
+        const currentAvgCost = parseFloat(product.averageCost as string);
+        const newAvgCost = currentStock + newQty === 0
+          ? newCost
+          : (currentStock * currentAvgCost + newQty * newCost) / (currentStock + newQty);
+        const previousCost = product.averageCost as string;
+
+        await tx.update(products).set({
+          currentStock: (currentStock + newQty).toFixed(4),
+          averageCost: newAvgCost.toFixed(4),
+        }).where(eq(products.id, item.productId));
+
+        await tx.insert(stockMovements).values({
+          productId: item.productId,
+          movementType: "in",
+          quantity: item.quantity,
+          unitCost: item.costPerUnit,
+          referenceId: purchase.id,
+          referenceType: "purchase",
+          notes: `Compra ${data.folio}`,
         });
+
+        await tx.insert(productCostHistory).values({
+          productId: item.productId,
+          averageCost: newAvgCost.toFixed(4),
+          previousCost,
+          purchaseId: purchase.id,
+        });
+
+        // ── SYNC: Update costPerUnit in same-day draft/approved order_items ──────
+        const sameDayOrders = await tx
+          .select({ id: orders.id })
+          .from(orders)
+          .where(and(
+            drizzleSql`${orders.status} IN ('draft', 'approved')`,
+            drizzleSql`${orders.orderDate}::date = ${purchaseDateStr}::date`,
+          ));
+
+        if (sameDayOrders.length > 0) {
+          const sameDayOrderIds = sameDayOrders.map((o) => o.id);
+
+          const candidateItems = await tx
+            .select()
+            .from(orderItems)
+            .where(and(
+              inArray(orderItems.orderId, sameDayOrderIds),
+              eq(orderItems.productId, item.productId),
+            ));
+
+          const affectedOrderIds = new Set<number>();
+
+          for (const oi of candidateItems) {
+            // Match by canonical unit
+            if (dbEnumToCanonical(oi.unit as string) !== canonicalUnit) continue;
+
+            const qty = Number(oi.quantity);
+            const price = oi.pricePerUnit ? Number(oi.pricePerUnit) : null;
+            const newSubtotal = price != null && price > 0 ? qty * price : 0;
+            const newMargin = price && price > 0 ? (price - newCost) / price : null;
+
+            const updateData: Record<string, any> = {
+              costPerUnit: item.costPerUnit,
+              subtotal: newSubtotal.toFixed(2),
+            };
+            if (newMargin !== null) updateData.margin = newMargin.toFixed(4);
+
+            await tx.update(orderItems).set(updateData).where(eq(orderItems.id, oi.id));
+            affectedOrderIds.add(oi.orderId);
+          }
+
+          // Recalculate totals for affected orders
+          for (const orderId of affectedOrderIds) {
+            const allOrderItems = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+            const orderTotal = allOrderItems.reduce((s, i) => s + Number(i.subtotal), 0);
+            await tx.update(orders).set({ total: orderTotal.toFixed(2) }).where(eq(orders.id, orderId));
+          }
+        }
       }
 
-      // ── Keep products.currentStock + averageCost for backward compat ─────────
-      const currentStock = parseFloat(product.currentStock as string);
-      const currentAvgCost = parseFloat(product.averageCost as string);
-      const newAvgCost = currentStock + newQty === 0
-        ? newCost
-        : (currentStock * currentAvgCost + newQty * newCost) / (currentStock + newQty);
-      const previousCost = product.averageCost as string;
-
-      await db.update(products).set({
-        currentStock: (currentStock + newQty).toFixed(4),
-        averageCost: newAvgCost.toFixed(4),
-      }).where(eq(products.id, item.productId));
-
-      await db.insert(stockMovements).values({
-        productId: item.productId,
-        movementType: "in",
-        quantity: item.quantity,
-        unitCost: item.costPerUnit,
-        referenceId: purchase.id,
-        referenceType: "purchase",
-        notes: `Compra ${data.folio}`,
-      });
-
-      await db.insert(productCostHistory).values({
-        productId: item.productId,
-        averageCost: newAvgCost.toFixed(4),
-        previousCost,
-        purchaseId: purchase.id,
-      });
-    }
-
-    return purchase;
+      return purchase;
+    });
   },
 
   async generatePurchaseFolio(): Promise<string> {
     const [last] = await db.select().from(purchases).orderBy(desc(purchases.id)).limit(1);
     const num = last ? parseInt(last.folio.replace("OC-", "")) + 1 : 1;
     return `OC-${String(num).padStart(5, "0")}`;
+  },
+
+  async _recalcProductSummary(pid: number, tx: any = db): Promise<void> {
+    const allPu = await tx.select().from(productUnits).where(eq(productUnits.productId, pid));
+    const totalStock = allPu.reduce((s: number, p: any) => s + Number(p.stockQty), 0);
+    if (totalStock > 0) {
+      const weightedAvg = allPu.reduce((s: number, p: any) => s + Number(p.stockQty) * Number(p.avgCost), 0) / totalStock;
+      await tx.update(products).set({
+        currentStock: totalStock.toFixed(4),
+        averageCost: weightedAvg.toFixed(4),
+      }).where(eq(products.id, pid));
+    } else {
+      // Stock is zero: preserve last known averageCost, only zero the stock count
+      await tx.update(products).set({ currentStock: "0" }).where(eq(products.id, pid));
+    }
+  },
+
+  async deletePurchase(id: number): Promise<void> {
+    await db.transaction(async (tx) => {
+      const items = await tx.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, id));
+
+      for (const item of items) {
+        const canonicalUnit = dbEnumToCanonical(item.unit as any);
+        const [pu] = await tx.select().from(productUnits)
+          .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+          .limit(1);
+        if (pu) {
+          const newStock = Number(pu.stockQty) - Number(item.quantity);
+          if (newStock <= 0) {
+            // Preserve avgCost — only zero the stock qty
+            await tx.update(productUnits).set({ stockQty: "0" }).where(eq(productUnits.id, pu.id));
+          } else {
+            await tx.update(productUnits).set({ stockQty: newStock.toFixed(4) }).where(eq(productUnits.id, pu.id));
+          }
+        }
+      }
+
+      const affectedProductIds = Array.from(new Set(items.map((i) => i.productId)));
+      for (const pid of affectedProductIds) {
+        await this._recalcProductSummary(pid, tx);
+      }
+
+      await tx.delete(stockMovements)
+        .where(and(eq(stockMovements.referenceType, "purchase"), eq(stockMovements.referenceId, id)));
+      await tx.delete(productCostHistory).where(eq(productCostHistory.purchaseId, id));
+      await tx.delete(purchaseItems).where(eq(purchaseItems.purchaseId, id));
+      await tx.delete(purchases).where(eq(purchases.id, id));
+    });
+  },
+
+  async updatePurchase(id: number, data: {
+    supplierName: string;
+    purchaseDate: Date;
+    notes?: string;
+    items: { productId: number; quantity: string; unit: "kg" | "pz" | "caja" | "saco" | "litro" | "tonelada"; costPerUnit: string }[];
+  }): Promise<Purchase> {
+    return db.transaction(async (tx) => {
+      // PHASE 1: Reverse old items
+      const oldItems = await tx.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, id));
+      for (const item of oldItems) {
+        const canonicalUnit = dbEnumToCanonical(item.unit as any);
+        const [pu] = await tx.select().from(productUnits)
+          .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+          .limit(1);
+        if (pu) {
+          const newStock = Number(pu.stockQty) - Number(item.quantity);
+          if (newStock <= 0) {
+            // Preserve avgCost — only zero the stock qty
+            await tx.update(productUnits).set({ stockQty: "0" }).where(eq(productUnits.id, pu.id));
+          } else {
+            await tx.update(productUnits).set({ stockQty: newStock.toFixed(4) }).where(eq(productUnits.id, pu.id));
+          }
+        }
+      }
+      const oldProductIds = Array.from(new Set(oldItems.map((i) => i.productId)));
+      for (const pid of oldProductIds) {
+        await this._recalcProductSummary(pid, tx);
+      }
+
+      // PHASE 2: Apply new items
+      let total = 0;
+      const itemsWithSubtotal = data.items.map((item) => {
+        const subtotal = Number(item.quantity) * Number(item.costPerUnit);
+        total += subtotal;
+        return { ...item, subtotal: subtotal.toFixed(2) };
+      });
+
+      for (const item of data.items) {
+        const newQty = Number(item.quantity);
+        const newCost = Number(item.costPerUnit);
+        const canonicalUnit = dbEnumToCanonical(item.unit);
+        const [existingPU] = await tx.select().from(productUnits)
+          .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+          .limit(1);
+        if (existingPU) {
+          const puStock = Number(existingPU.stockQty);
+          const puCost = Number(existingPU.avgCost);
+          const newPuAvgCost = (puStock + newQty) === 0 ? newCost : (puStock * puCost + newQty * newCost) / (puStock + newQty);
+          await tx.update(productUnits).set({
+            stockQty: (puStock + newQty).toFixed(4),
+            avgCost: newPuAvgCost.toFixed(4),
+          }).where(eq(productUnits.id, existingPU.id));
+        } else {
+          await tx.insert(productUnits).values({
+            productId: item.productId,
+            unit: canonicalUnit,
+            avgCost: newCost.toFixed(4),
+            stockQty: newQty.toFixed(4),
+          });
+        }
+      }
+      const newProductIds = Array.from(new Set(data.items.map((i) => i.productId)));
+      for (const pid of newProductIds) {
+        await this._recalcProductSummary(pid, tx);
+      }
+
+      // Update purchase header
+      const [updated] = await tx.update(purchases).set({
+        supplierName: data.supplierName,
+        purchaseDate: data.purchaseDate,
+        notes: data.notes,
+        total: total.toFixed(2),
+      }).where(eq(purchases.id, id)).returning();
+
+      // Replace items
+      await tx.delete(purchaseItems).where(eq(purchaseItems.purchaseId, id));
+      await tx.insert(purchaseItems).values(
+        itemsWithSubtotal.map((item) => ({
+          purchaseId: id,
+          productId: item.productId,
+          quantity: item.quantity,
+          unit: item.unit,
+          costPerUnit: item.costPerUnit,
+          subtotal: item.subtotal,
+        }))
+      );
+
+      // Recreate stock movements and cost history
+      await tx.delete(stockMovements)
+        .where(and(eq(stockMovements.referenceType, "purchase"), eq(stockMovements.referenceId, id)));
+      await tx.delete(productCostHistory).where(eq(productCostHistory.purchaseId, id));
+
+      for (const item of data.items) {
+        const [product] = await tx.select().from(products).where(eq(products.id, item.productId)).limit(1);
+        if (!product) continue;
+        await tx.insert(stockMovements).values({
+          productId: item.productId,
+          movementType: "in",
+          quantity: item.quantity,
+          unitCost: item.costPerUnit,
+          referenceId: id,
+          referenceType: "purchase",
+          notes: `Compra ${updated.folio} (editada)`,
+        });
+        await tx.insert(productCostHistory).values({
+          productId: item.productId,
+          averageCost: product.averageCost as string,
+          previousCost: product.averageCost as string,
+          purchaseId: id,
+        });
+      }
+
+      return updated;
+    });
   },
 
   async getStockMovements(productId?: number): Promise<StockMovement[]> {
@@ -301,14 +526,10 @@ export const storage = {
   async getOrders(date?: string): Promise<(Order & { customerName: string; itemCount: number; suggestedRemito: string; hasIva: boolean; totalConIva: string; totalCosto: string })[]> {
     let all: Order[];
     if (date) {
-      const startOfDay = new Date(date);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(date);
-      endOfDay.setHours(23, 59, 59, 999);
       all = await db
         .select()
         .from(orders)
-        .where(drizzleSql`${orders.orderDate} >= ${startOfDay} AND ${orders.orderDate} <= ${endOfDay}`)
+        .where(drizzleSql`${orders.orderDate}::date = ${date}::date`)
         .orderBy(desc(orders.createdAt));
     } else {
       all = await db.select().from(orders).orderBy(desc(orders.createdAt));
@@ -374,15 +595,11 @@ export const storage = {
   },
 
   async getDraftOrderByCustomerAndDate(customerId: number, date: string): Promise<Order | undefined> {
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
     const [o] = await db
       .select()
       .from(orders)
       .where(
-        drizzleSql`${orders.customerId} = ${customerId} AND ${orders.status} = 'draft' AND ${orders.orderDate} >= ${startOfDay} AND ${orders.orderDate} <= ${endOfDay}`
+        drizzleSql`${orders.customerId} = ${customerId} AND ${orders.status} = 'draft' AND ${orders.orderDate}::date = ${date}::date`
       )
       .limit(1);
     return o;
@@ -497,6 +714,52 @@ export const storage = {
     await db.update(orders).set({ total: "0" }).where(eq(orders.id, orderId));
   },
 
+  async deleteOrder(id: number): Promise<void> {
+    await db.transaction(async (tx) => {
+      const [order] = await tx.select().from(orders).where(eq(orders.id, id)).limit(1);
+      if (!order) throw new Error("Pedido no encontrado");
+
+      const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, id));
+
+      // Revert stock impact for approved orders
+      if (order.status === "approved") {
+        for (const item of items) {
+          if (!item.productId) continue;
+          const canonicalUnit = dbEnumToCanonical(item.unit as string);
+          const [pu] = await tx.select().from(productUnits)
+            .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+            .limit(1);
+          if (pu) {
+            const newStock = Number(pu.stockQty) + Number(item.quantity);
+            await tx.update(productUnits).set({ stockQty: newStock.toFixed(4) }).where(eq(productUnits.id, pu.id));
+          }
+        }
+
+        const affectedProductIds = Array.from(new Set(
+          items.filter((i) => i.productId != null).map((i) => i.productId!)
+        ));
+        for (const pid of affectedProductIds) {
+          await this._recalcProductSummary(pid, tx);
+        }
+
+        // Delete the "out" stock movements created on approval
+        await tx.delete(stockMovements)
+          .where(and(eq(stockMovements.referenceType, "order"), eq(stockMovements.referenceId, id)));
+      }
+
+      // Break circular FK (orders.remitoId ↔ remitos.orderId) before deleting
+      if (order.remitoId) {
+        await tx.update(orders).set({ remitoId: null }).where(eq(orders.id, id));
+        await tx.delete(remitos).where(eq(remitos.id, order.remitoId));
+      }
+
+      // Null out price_history references (FK is nullable, no cascade)
+      await tx.update(priceHistory).set({ orderId: null }).where(eq(priceHistory.orderId, id));
+      await tx.delete(orderItems).where(eq(orderItems.orderId, id));
+      await tx.delete(orders).where(eq(orders.id, id));
+    });
+  },
+
   async updateOrderItem(
     orderId: number,
     itemId: number,
@@ -509,78 +772,111 @@ export const storage = {
     },
     customerId: number,
   ): Promise<{ item: OrderItem; orderTotal: string }> {
-    const [item] = await db.select().from(orderItems).where(
-      and(eq(orderItems.id, itemId), eq(orderItems.orderId, orderId))
-    ).limit(1);
-    if (!item) throw new Error("Item not found");
+    return db.transaction(async (tx) => {
+      const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+      const [item] = await tx.select().from(orderItems).where(
+        and(eq(orderItems.id, itemId), eq(orderItems.orderId, orderId))
+      ).limit(1);
+      if (!item) throw new Error("Item not found");
 
-    const newProductId = patch.productId !== undefined ? patch.productId : item.productId;
-    const newUnit = patch.unit ?? (item.unit as string);
+      const isApproved = order?.status === "approved";
+      const hasStructuralChange =
+        patch.quantity !== undefined ||
+        patch.unit !== undefined ||
+        patch.productId !== undefined;
 
-    // Validate unit is active for the product
-    if (newProductId && patch.unit) {
-      const canonical = dbEnumToCanonical(patch.unit);
-      const [pu] = await db.select().from(productUnits)
-        .where(and(eq(productUnits.productId, newProductId), eq(productUnits.unit, canonical), eq(productUnits.isActive, true)))
-        .limit(1);
-      if (!pu) throw new Error(`Unidad "${patch.unit}" no está habilitada para este producto`);
-    }
-
-    // Look up new cost from product_units when product or unit changes
-    let newCostPerUnit: string | undefined;
-    if (patch.productId !== undefined && patch.productId !== null) {
-      const canonical = dbEnumToCanonical(newUnit);
-      const [pu] = await db.select().from(productUnits)
-        .where(and(eq(productUnits.productId, patch.productId), eq(productUnits.unit, canonical), eq(productUnits.isActive, true)))
-        .limit(1);
-      if (pu) newCostPerUnit = pu.avgCost as string;
-      else {
-        // Fallback to product average_cost
-        const [p] = await db.select().from(products).where(eq(products.id, patch.productId)).limit(1);
-        if (p) newCostPerUnit = p.averageCost as string;
+      // STEP 1: Revert old stock contribution for approved orders
+      if (isApproved && hasStructuralChange && item.productId) {
+        const oldCanonical = dbEnumToCanonical(item.unit as string);
+        const [oldPu] = await tx.select().from(productUnits)
+          .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, oldCanonical)))
+          .limit(1);
+        if (oldPu) {
+          const restoredStock = Number(oldPu.stockQty) + Number(item.quantity);
+          await tx.update(productUnits).set({ stockQty: restoredStock.toFixed(4) }).where(eq(productUnits.id, oldPu.id));
+        }
+        await this._recalcProductSummary(item.productId, tx);
       }
-    }
 
-    // Effective cost for margin calculation: override > new product cost > existing cost
-    const overrideVal = patch.overrideCostPerUnit !== undefined
-      ? patch.overrideCostPerUnit
-      : ((item as any).overrideCostPerUnit as string | null);
-    const baseCost = newCostPerUnit ?? (item.costPerUnit as string);
-    const effectiveCost = overrideVal ? parseFloat(overrideVal) : parseFloat(baseCost);
+      // STEP 2: Compute new field values
+      const newProductId = patch.productId !== undefined ? patch.productId : item.productId;
+      const newUnit = patch.unit ?? (item.unit as string);
 
-    const qty = parseFloat(patch.quantity ?? (item.quantity as string));
-    const existingPrice = item.pricePerUnit ? parseFloat(item.pricePerUnit as string) : null;
-    const newPriceRaw = patch.pricePerUnit !== undefined ? patch.pricePerUnit : null;
-    const price = newPriceRaw !== undefined && newPriceRaw !== null
-      ? parseFloat(newPriceRaw)
-      : existingPrice;
-    const subtotal = price != null && price > 0 ? qty * price : 0;
-    const margin = price && price > 0 ? (price - effectiveCost) / price : null;
+      // Validate unit is active for the product
+      if (newProductId && patch.unit) {
+        const canonical = dbEnumToCanonical(patch.unit);
+        const [pu] = await tx.select().from(productUnits)
+          .where(and(eq(productUnits.productId, newProductId), eq(productUnits.unit, canonical), eq(productUnits.isActive, true)))
+          .limit(1);
+        if (!pu) throw new Error(`Unidad "${patch.unit}" no está habilitada para este producto`);
+      }
 
-    const updateData: Record<string, any> = {
-      subtotal: subtotal.toFixed(2),
-    };
-    if (patch.quantity !== undefined) updateData.quantity = qty.toFixed(4);
-    if (patch.unit !== undefined) updateData.unit = patch.unit;
-    if (patch.productId !== undefined) updateData.productId = patch.productId;
-    if (patch.pricePerUnit !== undefined) updateData.pricePerUnit = patch.pricePerUnit;
-    if (patch.overrideCostPerUnit !== undefined) updateData.overrideCostPerUnit = patch.overrideCostPerUnit;
-    if (newCostPerUnit !== undefined) updateData.costPerUnit = newCostPerUnit;
-    if (margin !== null) updateData.margin = margin.toFixed(4);
+      // Look up new cost from product_units when product or unit changes
+      let newCostPerUnit: string | undefined;
+      if (patch.productId !== undefined && patch.productId !== null) {
+        const canonical = dbEnumToCanonical(newUnit);
+        const [pu] = await tx.select().from(productUnits)
+          .where(and(eq(productUnits.productId, patch.productId), eq(productUnits.unit, canonical), eq(productUnits.isActive, true)))
+          .limit(1);
+        if (pu) newCostPerUnit = pu.avgCost as string;
+        else {
+          const [p] = await tx.select().from(products).where(eq(products.id, patch.productId)).limit(1);
+          if (p) newCostPerUnit = p.averageCost as string;
+        }
+      }
 
-    const [updated] = await db.update(orderItems).set(updateData).where(eq(orderItems.id, itemId)).returning();
+      // Effective cost for margin calculation: override > new product cost > existing cost
+      const overrideVal = patch.overrideCostPerUnit !== undefined
+        ? patch.overrideCostPerUnit
+        : ((item as any).overrideCostPerUnit as string | null);
+      const baseCost = newCostPerUnit ?? (item.costPerUnit as string);
+      const effectiveCost = overrideVal ? Number(overrideVal) : Number(baseCost);
 
-    // Recalculate order total
-    const allItems = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
-    const total = allItems.reduce((s, i) => s + parseFloat(i.subtotal as string), 0);
-    await db.update(orders).set({ total: total.toFixed(2) }).where(eq(orders.id, orderId));
+      const qty = Number(patch.quantity ?? (item.quantity as string));
+      const existingPrice = item.pricePerUnit ? Number(item.pricePerUnit as string) : null;
+      const newPriceRaw = patch.pricePerUnit !== undefined ? patch.pricePerUnit : null;
+      const price = newPriceRaw !== undefined && newPriceRaw !== null
+        ? Number(newPriceRaw)
+        : existingPrice;
+      const subtotal = price != null && price > 0 ? qty * price : 0;
+      const margin = price && price > 0 ? (price - effectiveCost) / price : null;
 
-    // Save price history when price is explicitly set and a product is linked
-    if (patch.pricePerUnit && newProductId) {
-      await this.savePriceHistory(customerId, newProductId, patch.pricePerUnit, orderId);
-    }
+      const updateData: Record<string, any> = { subtotal: subtotal.toFixed(2) };
+      if (patch.quantity !== undefined) updateData.quantity = qty.toFixed(4);
+      if (patch.unit !== undefined) updateData.unit = patch.unit;
+      if (patch.productId !== undefined) updateData.productId = patch.productId;
+      if (patch.pricePerUnit !== undefined) updateData.pricePerUnit = patch.pricePerUnit;
+      if (patch.overrideCostPerUnit !== undefined) updateData.overrideCostPerUnit = patch.overrideCostPerUnit;
+      if (newCostPerUnit !== undefined) updateData.costPerUnit = newCostPerUnit;
+      if (margin !== null) updateData.margin = margin.toFixed(4);
 
-    return { item: updated, orderTotal: total.toFixed(2) };
+      const [updated] = await tx.update(orderItems).set(updateData).where(eq(orderItems.id, itemId)).returning();
+
+      // Recalculate order total
+      const allItems = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+      const total = allItems.reduce((s, i) => s + Number(i.subtotal), 0);
+      await tx.update(orders).set({ total: total.toFixed(2) }).where(eq(orders.id, orderId));
+
+      // Save price history when price is explicitly set and a product is linked
+      if (patch.pricePerUnit && newProductId) {
+        await tx.insert(priceHistory).values({ customerId, productId: newProductId, pricePerUnit: patch.pricePerUnit, orderId });
+      }
+
+      // STEP 3: Apply new stock deduction for approved orders
+      if (isApproved && hasStructuralChange && newProductId) {
+        const newCanonical = dbEnumToCanonical(newUnit);
+        const [newPu] = await tx.select().from(productUnits)
+          .where(and(eq(productUnits.productId, newProductId), eq(productUnits.unit, newCanonical)))
+          .limit(1);
+        if (newPu) {
+          const deductedStock = Number(newPu.stockQty) - qty;
+          await tx.update(productUnits).set({ stockQty: deductedStock.toFixed(4) }).where(eq(productUnits.id, newPu.id));
+        }
+        await this._recalcProductSummary(newProductId, tx);
+      }
+
+      return { item: updated, orderTotal: total.toFixed(2) };
+    });
   },
 
   async updateOrderItemPrice(orderId: number, itemId: number, pricePerUnit: string): Promise<OrderItem> {
@@ -745,11 +1041,6 @@ export const storage = {
     rows: Array<{ productId: number; productName: string; unit: string; totalQty: number; stockQty: number; diffQty: number; customersCount: number; customerNames: string[] }>;
     pending: Array<{ orderId: number; orderFolio: string; customerName: string; rawText: string; qty: number | null; unit: string | null }>;
   }> {
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
-
     const statusFilter = includeDrafts
       ? drizzleSql`${orders.status} IN ('approved','draft')`
       : eq(orders.status, "approved");
@@ -757,7 +1048,7 @@ export const storage = {
     const dayOrders = await db
       .select({ id: orders.id, folio: orders.folio, customerId: orders.customerId, status: orders.status })
       .from(orders)
-      .where(and(statusFilter, drizzleSql`${orders.orderDate} >= ${startOfDay} AND ${orders.orderDate} <= ${endOfDay}`));
+      .where(and(statusFilter, drizzleSql`${orders.orderDate}::date = ${date}::date`));
 
     if (dayOrders.length === 0) {
       return { summary: { date, ordersCount: 0, customersCount: 0, rowsCount: 0, shortagesCount: 0 }, rows: [], pending: [] };
@@ -793,13 +1084,14 @@ export const storage = {
       return true;
     });
 
-    // Load product names
+    // Load product names and categories
     const productIds = Array.from(new Set(resolvedItems.map((i) => i.productId as number)));
     const allProducts = productIds.length > 0
-      ? await db.select({ id: products.id, name: products.name }).from(products)
+      ? await db.select({ id: products.id, name: products.name, category: products.category }).from(products)
           .where(drizzleSql`${products.id} = ANY(ARRAY[${drizzleSql.join(productIds.map(id => drizzleSql`${id}`), drizzleSql`, `)}]::int[])`)
       : [];
     const productNameMap = new Map(allProducts.map((p) => [p.id, p.name]));
+    const productCategoryMap = new Map(allProducts.map((p) => [p.id, p.category ?? ""]));
 
     // Load stock from product_units
     const allPU = productIds.length > 0
@@ -813,7 +1105,7 @@ export const storage = {
     }
 
     // Consolidate by productId + unit
-    type Row = { productId: number; productName: string; unit: string; totalQty: number; stockQty: number; diffQty: number; customerSet: Set<number>; customerNames: string[] };
+    type Row = { productId: number; productName: string; category: string; unit: string; totalQty: number; stockQty: number; diffQty: number; customerSet: Set<number>; customerNames: string[] };
     const rowMap = new Map<string, Row>();
     for (const item of resolvedItems) {
       const pid = item.productId as number;
@@ -821,10 +1113,11 @@ export const storage = {
       const qty = item.quantity ? parseFloat(item.quantity as string) : 0;
       const cid = orderCustomerMap.get(item.orderId);
       if (!rowMap.has(key)) {
-        const stock = stockMap.get(key) ?? 0;
+        const stock = stockMap.get(`${pid}-${dbEnumToCanonical(item.unit as string)}`) ?? 0;
         rowMap.set(key, {
           productId: pid,
           productName: productNameMap.get(pid) ?? "?",
+          category: productCategoryMap.get(pid) ?? "",
           unit: item.unit,
           totalQty: qty,
           stockQty: stock,
@@ -840,9 +1133,15 @@ export const storage = {
       }
     }
 
+    const CATEGORY_ORDER: Record<string, number> = {
+      "Fruta": 0, "Verdura": 1, "Hortaliza Liviana": 2,
+      "Hortaliza Pesada": 3, "Hongos/Hierbas": 4, "Huevos": 5,
+    };
+
     const rows = Array.from(rowMap.values()).map((r) => ({
       productId: r.productId,
       productName: r.productName,
+      category: r.category,
       unit: r.unit,
       totalQty: r.totalQty,
       stockQty: r.stockQty,
@@ -852,8 +1151,9 @@ export const storage = {
     }));
 
     rows.sort((a, b) => {
-      if (a.diffQty < 0 && b.diffQty >= 0) return -1;
-      if (a.diffQty >= 0 && b.diffQty < 0) return 1;
+      const catA = CATEGORY_ORDER[a.category] ?? 99;
+      const catB = CATEGORY_ORDER[b.category] ?? 99;
+      if (catA !== catB) return catA - catB;
       return a.productName.localeCompare(b.productName);
     });
 
@@ -927,6 +1227,32 @@ export const storage = {
     const totalStock = allPu.reduce((s, p) => s + parseFloat(p.stockQty as string), 0);
     await db.update(products).set({ currentStock: totalStock.toFixed(4) }).where(eq(products.id, pu.productId));
     return updated;
+  },
+
+  async addStockAdjustments(items: { productId: number; unit: string; qty: number }[]): Promise<void> {
+    for (const item of items) {
+      const canonicalUnit = item.unit.trim().toUpperCase();
+      const [existing] = await db.select().from(productUnits)
+        .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+        .limit(1);
+      if (existing) {
+        const newStock = parseFloat(existing.stockQty as string) + item.qty;
+        await db.update(productUnits)
+          .set({ stockQty: newStock.toFixed(4), isActive: true })
+          .where(eq(productUnits.id, existing.id));
+      } else {
+        await db.insert(productUnits).values({
+          productId: item.productId,
+          unit: canonicalUnit,
+          avgCost: "0",
+          stockQty: item.qty.toFixed(4),
+          isActive: true,
+        });
+      }
+      const allPu = await db.select().from(productUnits).where(eq(productUnits.productId, item.productId));
+      const totalStock = allPu.reduce((s, p) => s + parseFloat(p.stockQty as string), 0);
+      await db.update(products).set({ currentStock: totalStock.toFixed(4) }).where(eq(products.id, item.productId));
+    }
   },
 
   async bulkImportProducts(lines: { name: string; unit: string }[]): Promise<{ created: number; unitsAdded: number }> {

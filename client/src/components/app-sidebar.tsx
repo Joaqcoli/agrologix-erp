@@ -22,6 +22,7 @@ import {
   ClipboardList,
   MessageSquarePlus,
   Wallet,
+  Warehouse,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
@@ -33,6 +34,7 @@ const navItems = [
   { title: "Clientes", url: "/customers", icon: Users },
   { title: "Productos", url: "/products", icon: Package },
   { title: "Compras", url: "/purchases", icon: ShoppingCart },
+  { title: "Stock", url: "/stock", icon: Warehouse },
   { title: "Pedidos", url: "/orders", icon: FileText },
   { title: "Carga Pedido", url: "/intake", icon: MessageSquarePlus },
   { title: "Lista de Carga", url: "/load-list", icon: ClipboardList },

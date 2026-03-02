@@ -23,15 +23,15 @@ export type ParsedLine = {
 };
 
 // Valid units for the enum (must match DB enum)
-const VALID_UNITS = ["kg", "pz", "caja", "saco", "litro", "tonelada"] as const;
+const VALID_UNITS = ["kg", "pz", "caja", "saco", "litro", "tonelada", "CAJON"] as const;
 type ValidUnit = typeof VALID_UNITS[number];
 
 // Map of keyword aliases → canonical unit
 const UNIT_MAP: Record<string, ValidUnit> = {
-  cajon: "caja",
-  cajones: "caja",
-  caja: "caja",
-  cajas: "caja",
+  cajon: "CAJON",
+  cajones: "CAJON",
+  caja: "CAJON",
+  cajas: "CAJON",
   bolsa: "saco",
   bolsas: "saco",
   saco: "saco",
