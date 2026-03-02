@@ -957,69 +957,93 @@ export const storage = {
       throw new Error(`${unpricedItems.length} producto(s) sin precio. Completá los precios antes de aprobar.`);
     }
 
-    // Create stock OUT movements and save price history
-    for (const item of order.items) {
-      const qty = parseFloat(item.quantity as string);
+    return db.transaction(async (tx) => {
+      // Stock OUT — atomic per-item deduction with floor-at-zero safety
+      for (const item of order.items) {
+        if (!item.productId) continue;
 
-      // Only create stock movements for items with a linked product
-      if (item.productId) {
-        await db.insert(stockMovements).values({
+        const qty = parseFloat(item.quantity as string);
+
+        // Lock the product row for this transaction to prevent concurrent over-deduction
+        const [product] = await tx.select().from(products)
+          .where(eq(products.id, item.productId))
+          .limit(1);
+        if (!product) continue;
+
+        const currentStock = parseFloat(product.currentStock as string);
+        const rawNewStock = currentStock - qty;
+        const isOverflow = rawNewStock < 0;
+        const finalStock = isOverflow ? 0 : rawNewStock;
+
+        const movementNotes = isOverflow
+          ? `Stock agotado, excedente marcado con costo 0 por rinde (Pedido ${order.folio})`
+          : `Pedido ${order.folio}`;
+
+        // Stock OUT movement (audit trail)
+        await tx.insert(stockMovements).values({
           productId: item.productId,
           movementType: "out",
           quantity: item.quantity as string,
           unitCost: item.costPerUnit as string,
           referenceId: id,
           referenceType: "order",
-          notes: `Pedido ${order.folio}`,
+          notes: movementNotes,
         });
 
-        // Deduct from product_units (canonical unit)
+        // Deduct from product_units (canonical unit) — floor at 0
         const canonicalUnit = dbEnumToCanonical(item.unit as string);
-        const [pu] = await db.select().from(productUnits)
+        const [pu] = await tx.select().from(productUnits)
           .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
           .limit(1);
         if (pu) {
-          const puStock = parseFloat(pu.stockQty as string) - qty;
-          await db.update(productUnits).set({ stockQty: puStock.toFixed(4) }).where(eq(productUnits.id, pu.id));
+          const rawPuStock = parseFloat(pu.stockQty as string) - qty;
+          const finalPuStock = rawPuStock < 0 ? 0 : rawPuStock;
+          await tx.update(productUnits)
+            .set({
+              stockQty: finalPuStock.toFixed(4),
+              ...(isOverflow && { avgCost: "0" }),
+            })
+            .where(eq(productUnits.id, pu.id));
         }
 
-        // Update product.currentStock for backward compat
-        const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
-        if (product) {
-          const newStock = parseFloat(product.currentStock as string) - qty;
-          await db.update(products).set({ currentStock: newStock.toFixed(4) }).where(eq(products.id, item.productId));
-        }
+        // Update products.currentStock — floor at 0; reset averageCost on overflow
+        await tx.update(products)
+          .set({
+            currentStock: finalStock.toFixed(4),
+            ...(isOverflow && { averageCost: "0" }),
+          })
+          .where(eq(products.id, item.productId));
 
         // Save final price to price_history
-        await db.insert(priceHistory).values({
+        await tx.insert(priceHistory).values({
           customerId: order.customerId,
           productId: item.productId,
           pricePerUnit: item.pricePerUnit as string,
           orderId: id,
         });
       }
-    }
 
-    // Generate remito
-    const [lastRemito] = await db.select().from(remitos).orderBy(desc(remitos.id)).limit(1);
-    const remitoNum = lastRemito ? parseInt(lastRemito.folio.replace("VA-", "")) + 1 : 1;
-    const remitoFolio = `VA-${String(remitoNum).padStart(6, "0")}`;
+      // Generate remito
+      const [lastRemito] = await tx.select().from(remitos).orderBy(desc(remitos.id)).limit(1);
+      const remitoNum = lastRemito ? parseInt(lastRemito.folio.replace("VA-", "")) + 1 : 1;
+      const remitoFolio = `VA-${String(remitoNum).padStart(6, "0")}`;
 
-    const [remito] = await db.insert(remitos).values({
-      folio: remitoFolio,
-      orderId: id,
-      customerId: order.customerId,
-    }).returning();
+      const [remito] = await tx.insert(remitos).values({
+        folio: remitoFolio,
+        orderId: id,
+        customerId: order.customerId,
+      }).returning();
 
-    // Update order status
-    const [updated] = await db.update(orders).set({
-      status: "approved",
-      approvedBy: userId,
-      approvedAt: new Date(),
-      remitoId: remito.id,
-    }).where(eq(orders.id, id)).returning();
+      // Update order status
+      const [updated] = await tx.update(orders).set({
+        status: "approved",
+        approvedBy: userId,
+        approvedAt: new Date(),
+        remitoId: remito.id,
+      }).where(eq(orders.id, id)).returning();
 
-    return updated;
+      return updated;
+    });
   },
 
   async getRemito(id: number): Promise<(Remito & { order: Order & { customer: Customer; items: (OrderItem & { product: Product })[] } }) | undefined> {
