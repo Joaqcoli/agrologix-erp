@@ -281,5 +281,10 @@ export async function runMigrations() {
   await db.execute(sql`ALTER TABLE product_units ADD COLUMN IF NOT EXISTS weight_per_unit NUMERIC(10,4) DEFAULT 0`);
   await db.execute(sql`ALTER TABLE product_units ADD COLUMN IF NOT EXISTS base_unit TEXT`);
 
+  // ─── Cuentas Corrientes v2 ───────────────────────────────────────────────────
+  await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS invoice_number text`);
+  await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS cc_type text DEFAULT 'por_saldo'`);
+  await db.execute(sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS order_id INTEGER REFERENCES orders(id)`);
+
   console.log("Migrations complete.");
 }

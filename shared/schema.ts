@@ -31,6 +31,7 @@ export const customers = pgTable("customers", {
   city: text("city"),
   notes: text("notes"),
   hasIva: boolean("has_iva").notNull().default(false),
+  ccType: text("cc_type").default("por_saldo"),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
@@ -109,6 +110,7 @@ export const orders = pgTable("orders", {
   createdBy: integer("created_by").references(() => users.id),
   approvedBy: integer("approved_by").references(() => users.id),
   approvedAt: timestamp("approved_at"),
+  invoiceNumber: text("invoice_number"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 
@@ -171,6 +173,7 @@ export const payments = pgTable("payments", {
   amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
   method: text("method").notNull().default("EFECTIVO"),
   notes: text("notes"),
+  orderId: integer("order_id").references(() => orders.id),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
@@ -247,6 +250,7 @@ export type Withholding = typeof withholdings.$inferSelect;
 export const insertPaymentSchema = createInsertSchema(payments).omit({ id: true, createdAt: true, createdBy: true }).extend({
   amount: z.union([z.string(), z.number()]).transform((v) => String(v)),
   method: z.enum(PAYMENT_METHODS).default("EFECTIVO"),
+  orderId: z.number().int().optional().nullable(),
 });
 export const insertWithholdingSchema = createInsertSchema(withholdings).omit({ id: true, createdAt: true, createdBy: true }).extend({
   amount: z.union([z.string(), z.number()]).transform((v) => String(v)),

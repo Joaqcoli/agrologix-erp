@@ -399,6 +399,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
+  // PATCH /api/orders/:id/invoice-number — update invoice number inline
+  app.patch("/api/orders/:id/invoice-number", requireAuth, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { invoiceNumber } = req.body as { invoiceNumber?: string | null };
+      await storage.updateOrderInvoiceNumber(id, invoiceNumber ?? null);
+      return res.json({ ok: true });
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
   // ─── Export ────────────────────────────────────────────────────────────────
   // Export all orders for a date as XLSX
   app.get("/api/orders/export", requireAuth, async (req, res) => {
@@ -565,6 +577,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── Cuentas Corrientes ─────────────────────────────────────────────────────
+
+  // GET /api/ar/pending-orders/:customerId — orders available to link to a payment
+  app.get("/api/ar/pending-orders/:customerId", requireAuth, async (req, res) => {
+    try {
+      const customerId = Number(req.params.customerId);
+      const result = await storage.getPendingOrdersForCustomer(customerId);
+      return res.json(result);
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
 
   // GET /api/ar/cc/summary?month=2&year=2026
   app.get("/api/ar/cc/summary", requireAuth, async (req, res) => {

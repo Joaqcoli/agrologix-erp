@@ -12,11 +12,12 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Pencil, Trash2, Users, Building2, Phone, Mail } from "lucide-react";
 import type { Customer } from "@shared/schema";
 
-const EMPTY: Partial<Customer> = { name: "", rfc: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false };
+const EMPTY: Partial<Customer> = { name: "", rfc: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ccType: "por_saldo" };
 
 export default function CustomersPage() {
   const { toast } = useToast();
@@ -124,6 +125,9 @@ export default function CustomersPage() {
                           <Badge variant={c.hasIva ? "default" : "outline"} className="text-[10px]">
                             {c.hasIva ? "Con IVA" : "Sin IVA"}
                           </Badge>
+                          <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-200">
+                            {c.ccType === "por_remito" ? "Por remito" : "Por saldo"}
+                          </Badge>
                         </div>
                       </div>
                     </div>
@@ -205,6 +209,18 @@ export default function CustomersPage() {
                     data-testid="switch-has-iva"
                   />
                 </div>
+              </div>
+              <div className="sm:col-span-2 space-y-1.5">
+                <Label>Tipo de Cuenta Corriente</Label>
+                <Select value={form.ccType ?? "por_saldo"} onValueChange={(v) => setForm({ ...form, ccType: v })}>
+                  <SelectTrigger data-testid="select-cc-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="por_saldo">Por saldo (transfiere montos globales)</SelectItem>
+                    <SelectItem value="por_remito">Por remito (paga por factura / remito)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <DialogFooter className="gap-2">

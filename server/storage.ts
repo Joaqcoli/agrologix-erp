@@ -1638,6 +1638,44 @@ export const storage = {
     return db.select().from(payments).where(and(...conds as any)).orderBy(desc(payments.date));
   },
 
+  // Returns payments with an extra orderFolio field from joined orders
+  async getCustomerPaymentsWithFolio(
+    customerId: number,
+    fromDate?: string,
+    toDate?: string,
+  ): Promise<(Payment & { orderFolio: string | null })[]> {
+    let dateWhere = "";
+    const params: (string | number)[] = [customerId];
+    if (fromDate) { params.push(fromDate); dateWhere += ` AND p.date >= $${params.length}`; }
+    if (toDate)   { params.push(toDate);   dateWhere += ` AND p.date < $${params.length}`; }
+    const rows = await db.execute(drizzleSql`
+      SELECT p.*, o.folio AS "orderFolio"
+      FROM payments p
+      LEFT JOIN orders o ON o.id = p.order_id
+      WHERE p.customer_id = ${customerId}
+        ${fromDate ? drizzleSql`AND p.date >= ${fromDate}` : drizzleSql``}
+        ${toDate   ? drizzleSql`AND p.date < ${toDate}`   : drizzleSql``}
+      ORDER BY p.date DESC
+    `);
+    return rows.rows as (Payment & { orderFolio: string | null })[];
+  },
+
+  async getPendingOrdersForCustomer(customerId: number): Promise<{ id: number; folio: string; total: string; orderDate: string }[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT o.id, o.folio, o.total::text AS total, o.order_date::text AS "orderDate"
+      FROM orders o
+      WHERE o.customer_id = ${customerId}
+        AND o.status = 'approved'
+      ORDER BY o.order_date DESC
+      LIMIT 60
+    `);
+    return rows.rows as { id: number; folio: string; total: string; orderDate: string }[];
+  },
+
+  async updateOrderInvoiceNumber(id: number, invoiceNumber: string | null): Promise<void> {
+    await db.update(orders).set({ invoiceNumber }).where(eq(orders.id, id));
+  },
+
   // fromDate: inclusive (>=), toDate: exclusive (<)
   async getCustomerWithholdings(customerId: number, fromDate?: string, toDate?: string): Promise<Withholding[]> {
     const conds = [eq(withholdings.customerId, customerId)];
@@ -1857,12 +1895,13 @@ export const storage = {
     const facturacionBefore = Math.round(myItemsBefore.reduce((s, i) => s + itemBilling(i, c.hasIva), 0));
 
     const [paymentsIn, paymentsBef, withholdingsIn, withholdingsBef, ordersInPeriod] = await Promise.all([
-      this.getCustomerPayments(customerId, startDate, endDate),
+      this.getCustomerPaymentsWithFolio(customerId, startDate, endDate),
       this.getCustomerPayments(customerId, undefined, startDate),
       this.getCustomerWithholdings(customerId, startDate, endDate),
       this.getCustomerWithholdings(customerId, undefined, startDate),
       db.execute(drizzleSql`
-        SELECT o.id, o.folio, o.order_date::text AS "orderDate", o.total::text AS total
+        SELECT o.id, o.folio, o.order_date::text AS "orderDate", o.total::text AS total,
+               o.invoice_number AS "invoiceNumber"
         FROM orders o
         WHERE o.customer_id = ${customerId}
           AND o.status = 'approved'
@@ -1891,6 +1930,7 @@ export const storage = {
       folio: o.folio,
       orderDate: o.orderDate,
       total: Math.round(orderBillingMap.get(o.id) ?? parseFloat(o.total ?? "0")),
+      invoiceNumber: o.invoiceNumber ?? null,
     }));
 
     return {
