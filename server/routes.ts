@@ -195,6 +195,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
+  // ─── Stock Movements (adjustment history) ──────────────────────────────────
+  app.get("/api/stock-movements", requireAuth, async (req, res) => {
+    try {
+      return res.json(await storage.getAdjustmentMovements());
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Stock Adjustments ─────────────────────────────────────────────────────
   app.post("/api/stock/adjust", requireAuth, async (req, res) => {
     try {

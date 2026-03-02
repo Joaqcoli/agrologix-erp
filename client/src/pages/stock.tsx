@@ -12,8 +12,9 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
-import { Search, Package, Plus, CheckCircle2, AlertCircle, Warehouse } from "lucide-react";
+import { Search, Package, Plus, CheckCircle2, AlertCircle, Warehouse, ChevronDown, ChevronUp, History, TrendingDown, TrendingUp } from "lucide-react";
 import type { Product, ProductUnit } from "@shared/schema";
 import { PRODUCT_CATEGORIES, type ProductCategory } from "@shared/schema";
 import { parseQuantityAndUnit } from "@/lib/parseQuantityAndUnit";
@@ -27,11 +28,29 @@ const CATEGORY_ORDER = [
   "Fruta", "Verdura", "Hortaliza Liviana", "Hortaliza Pesada", "Hongos/Hierbas", "Huevos",
 ];
 
+type AdjustmentMovement = {
+  id: number;
+  productId: number;
+  productName: string;
+  unit: string;
+  movementType: "in" | "out";
+  quantity: string;
+  unitCost: string | null;
+  notes: string | null;
+  createdAt: string;
+};
+
+const MOTIVOS = ["Merma", "Rinde", "Otro"] as const;
+type Motivo = typeof MOTIVOS[number];
+
 // ─── Adjust Stock Modal ───────────────────────────────────────────────────────
 function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null; onClose: () => void }) {
   const { toast } = useToast();
   const [adjustment, setAdjustment] = useState("");
-  const [notes, setNotes] = useState("");
+  const [reason, setReason] = useState<Motivo>("Merma");
+  const [otherText, setOtherText] = useState("");
+
+  const finalNotes = reason === "Otro" ? otherText.trim() : reason;
 
   const adjustMutation = useMutation({
     mutationFn: async (data: { adjustment: number; notes?: string }) => {
@@ -41,11 +60,19 @@ function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null;
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stock-movements"] });
       toast({ title: "Stock ajustado" });
       onClose();
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
+
+  const handleClose = () => {
+    setAdjustment("");
+    setReason("Merma");
+    setOtherText("");
+    onClose();
+  };
 
   if (!pu) return null;
   const adj = parseFloat(adjustment);
@@ -53,7 +80,7 @@ function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null;
   const newStock = isNaN(adj) ? currentStock : currentStock + adj;
 
   return (
-    <Dialog open={!!pu} onOpenChange={(o) => { if (!o) { setAdjustment(""); setNotes(""); onClose(); } }}>
+    <Dialog open={!!pu} onOpenChange={(o) => { if (!o) handleClose(); }}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>Ajustar Stock</DialogTitle>
@@ -70,18 +97,181 @@ function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null;
           </div>
           <p className="text-xs text-muted-foreground">Nuevo stock: <strong>{fmtStock(newStock)}</strong> {pu.unit}</p>
           <div className="space-y-1.5">
-            <Label>Motivo (opcional)</Label>
-            <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ej: inventario, merma..." />
+            <Label>Motivo</Label>
+            <Select value={reason} onValueChange={(v) => setReason(v as Motivo)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Merma">Merma — pérdida natural del producto</SelectItem>
+                <SelectItem value="Rinde">Rinde — se obtuvo más de lo esperado</SelectItem>
+                <SelectItem value="Otro">Otro — especificar</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
+          {reason === "Otro" && (
+            <div className="space-y-1.5">
+              <Label>Detalle</Label>
+              <Input value={otherText} onChange={(e) => setOtherText(e.target.value)} placeholder="Describir el motivo..." />
+            </div>
+          )}
         </div>
         <DialogFooter className="gap-2">
-          <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => adjustMutation.mutate({ adjustment: adj, notes: notes || undefined })} disabled={!adjustment || isNaN(adj) || adjustMutation.isPending}>
+          <Button variant="outline" onClick={handleClose}>Cancelar</Button>
+          <Button
+            onClick={() => adjustMutation.mutate({ adjustment: adj, notes: finalNotes || undefined })}
+            disabled={!adjustment || isNaN(adj) || adjustMutation.isPending || (reason === "Otro" && !otherText.trim())}
+          >
             {adjustMutation.isPending ? "Ajustando..." : "Confirmar ajuste"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ─── Adjustment History Section ───────────────────────────────────────────────
+function AdjustmentHistory() {
+  const [open, setOpen] = useState(false);
+  const [motiveFilter, setMotiveFilter] = useState<"all" | Motivo>("all");
+
+  const { data: movements = [], isLoading } = useQuery<AdjustmentMovement[]>({
+    queryKey: ["/api/stock-movements"],
+    enabled: open,
+    staleTime: 30_000,
+  });
+
+  const filtered = useMemo(() => {
+    if (motiveFilter === "all") return movements;
+    return movements.filter((m) => {
+      const note = m.notes ?? "";
+      if (motiveFilter === "Otro") return note !== "Merma" && note !== "Rinde";
+      return note === motiveFilter;
+    });
+  }, [movements, motiveFilter]);
+
+  const totalMerma = useMemo(() =>
+    movements.filter((m) => m.notes === "Merma").reduce((acc, m) => {
+      const qty = parseFloat(m.quantity);
+      return acc + (m.movementType === "out" ? qty : -qty);
+    }, 0),
+    [movements]
+  );
+
+  const totalRinde = useMemo(() =>
+    movements.filter((m) => m.notes === "Rinde").reduce((acc, m) => {
+      const qty = parseFloat(m.quantity);
+      return acc + (m.movementType === "in" ? qty : -qty);
+    }, 0),
+    [movements]
+  );
+
+  const formatDate = (s: string) => {
+    try { return new Date(s).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" }); }
+    catch { return s; }
+  };
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <Card>
+        <CollapsibleTrigger asChild>
+          <CardHeader className="pb-3 cursor-pointer hover:bg-muted/30 rounded-t-lg transition-colors select-none">
+            <CardTitle className="text-sm font-semibold flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <History className="h-4 w-4" /> Historial de Ajustes
+              </span>
+              {open ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+            </CardTitle>
+          </CardHeader>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <CardContent className="pt-0 space-y-4">
+            {/* Totals */}
+            {movements.length > 0 && (
+              <div className="flex gap-3 flex-wrap">
+                <div className="flex items-center gap-1.5 text-xs bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400 px-3 py-1.5 rounded-full border border-red-200 dark:border-red-800">
+                  <TrendingDown className="h-3 w-3" />
+                  Total Merma: <strong>{fmtStock(totalMerma)}</strong> perdidos
+                </div>
+                <div className="flex items-center gap-1.5 text-xs bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-400 px-3 py-1.5 rounded-full border border-green-200 dark:border-green-800">
+                  <TrendingUp className="h-3 w-3" />
+                  Total Rinde: <strong>+{fmtStock(totalRinde)}</strong> ganados
+                </div>
+              </div>
+            )}
+
+            {/* Filter buttons */}
+            <div className="flex gap-1.5 flex-wrap">
+              {(["all", ...MOTIVOS] as const).map((f) => (
+                <Button
+                  key={f}
+                  size="sm"
+                  variant={motiveFilter === f ? "default" : "outline"}
+                  className="h-7 text-xs"
+                  onClick={() => setMotiveFilter(f)}
+                >
+                  {f === "all" ? "Todos" : f}
+                </Button>
+              ))}
+            </div>
+
+            {isLoading ? (
+              <Skeleton className="h-32 w-full" />
+            ) : filtered.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-6">Sin ajustes registrados.</p>
+            ) : (
+              <div className="overflow-x-auto border border-border rounded-md">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/40">
+                      <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Fecha</th>
+                      <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Producto</th>
+                      <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Unidad</th>
+                      <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Ajuste</th>
+                      <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Motivo</th>
+                      <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Resultado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((m) => {
+                      const qty = parseFloat(m.quantity);
+                      const isIn = m.movementType === "in";
+                      const resultado = m.unitCost != null ? parseFloat(m.unitCost) : null;
+                      const isMerma = m.notes === "Merma";
+                      const isRinde = m.notes === "Rinde";
+                      return (
+                        <tr key={m.id} className="border-b border-border last:border-0 hover:bg-muted/20">
+                          <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">{formatDate(m.createdAt)}</td>
+                          <td className="py-2 px-3 font-medium">{m.productName}</td>
+                          <td className="py-2 px-3">
+                            <Badge variant="secondary" className="text-[10px]">{m.unit}</Badge>
+                          </td>
+                          <td className={`py-2 px-3 text-right font-semibold whitespace-nowrap ${isIn ? "text-green-600" : "text-red-600"}`}>
+                            {isIn ? "+" : "-"}{fmtStock(qty)}
+                          </td>
+                          <td className="py-2 px-3">
+                            {isMerma ? (
+                              <Badge variant="outline" className="text-[10px] text-red-600 border-red-400/40">Merma</Badge>
+                            ) : isRinde ? (
+                              <Badge variant="outline" className="text-[10px] text-green-600 border-green-400/40">Rinde</Badge>
+                            ) : (
+                              <span className="text-muted-foreground">{m.notes || "—"}</span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-right text-muted-foreground whitespace-nowrap">
+                            {resultado != null ? fmtStock(resultado) : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </CollapsibleContent>
+      </Card>
+    </Collapsible>
   );
 }
 
@@ -140,6 +330,7 @@ export default function StockPage() {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [showZeroStock, setShowZeroStock] = useState(true);
   const [adjustTarget, setAdjustTarget] = useState<ProductUnitWithProduct | null>(null);
+  const [loadOpen, setLoadOpen] = useState(false);
 
   // Free-text entry state
   const [step, setStep] = useState<"input" | "preview">("input");
@@ -163,6 +354,7 @@ export default function StockPage() {
       setStep("input");
       setRawText("");
       setStaged([]);
+      setLoadOpen(false);
     },
     onError: (e: any) => toast({ title: "Error al cargar stock", description: e.message, variant: "destructive" }),
   });
@@ -237,113 +429,122 @@ export default function StockPage() {
           <p className="text-sm text-muted-foreground mt-0.5">Stock actual por producto y unidad</p>
         </div>
 
-        {/* ── FREE-TEXT STOCK ENTRY ── */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <Plus className="h-4 w-4" /> Cargar Stock
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {step === "input" ? (
-              <div className="space-y-3">
-                <p className="text-xs text-muted-foreground">
-                  Ingresá uno o varios productos por línea. Formato: <code className="bg-muted px-1 rounded">10 KG tomate</code> o <code className="bg-muted px-1 rounded">2 CAJON naranja</code>
-                </p>
-                <Textarea
-                  value={rawText}
-                  onChange={(e) => setRawText(e.target.value)}
-                  placeholder={"10 KG tomate\n2 CAJON naranja\n5 bolsa papa\n1/2 cajon morrón rojo"}
-                  rows={5}
-                  className="font-mono text-sm"
-                  data-testid="textarea-stock-entry"
-                />
-                <div className="flex justify-end gap-2">
-                  <Button onClick={handlePreview} disabled={!rawText.trim()} data-testid="button-preview-stock">
-                    Previsualizar
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {/* Summary chips */}
-                <div className="flex gap-2 flex-wrap">
-                  {okCount > 0 && (
-                    <div className="flex items-center gap-1.5 text-xs bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-400 px-2.5 py-1 rounded-full border border-green-200 dark:border-green-800">
-                      <CheckCircle2 className="h-3 w-3" /> {okCount} OK
+        {/* ── FREE-TEXT STOCK ENTRY (collapsible) ── */}
+        <Collapsible open={loadOpen} onOpenChange={(o) => { setLoadOpen(o); if (!o) { setStep("input"); setRawText(""); setStaged([]); } }}>
+          <Card>
+            <CollapsibleTrigger asChild>
+              <CardHeader className="pb-3 cursor-pointer hover:bg-muted/30 rounded-t-lg transition-colors select-none">
+                <CardTitle className="text-sm font-semibold flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <Plus className="h-4 w-4" /> Cargar Stock
+                  </span>
+                  {loadOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                </CardTitle>
+              </CardHeader>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <CardContent>
+                {step === "input" ? (
+                  <div className="space-y-3">
+                    <p className="text-xs text-muted-foreground">
+                      Ingresá uno o varios productos por línea. Formato: <code className="bg-muted px-1 rounded">10 KG tomate</code> o <code className="bg-muted px-1 rounded">2 CAJON naranja</code>
+                    </p>
+                    <Textarea
+                      value={rawText}
+                      onChange={(e) => setRawText(e.target.value)}
+                      placeholder={"10 KG tomate\n2 CAJON naranja\n5 bolsa papa"}
+                      rows={3}
+                      className="font-mono text-sm"
+                      data-testid="textarea-stock-entry"
+                    />
+                    <div className="flex justify-end gap-2">
+                      <Button onClick={handlePreview} disabled={!rawText.trim()} data-testid="button-preview-stock">
+                        Previsualizar
+                      </Button>
                     </div>
-                  )}
-                  {errCount > 0 && (
-                    <div className="flex items-center gap-1.5 text-xs bg-destructive/10 text-destructive px-2.5 py-1 rounded-full border border-destructive/20">
-                      <AlertCircle className="h-3 w-3" /> {errCount} con error
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {/* Summary chips */}
+                    <div className="flex gap-2 flex-wrap">
+                      {okCount > 0 && (
+                        <div className="flex items-center gap-1.5 text-xs bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-400 px-2.5 py-1 rounded-full border border-green-200 dark:border-green-800">
+                          <CheckCircle2 className="h-3 w-3" /> {okCount} OK
+                        </div>
+                      )}
+                      {errCount > 0 && (
+                        <div className="flex items-center gap-1.5 text-xs bg-destructive/10 text-destructive px-2.5 py-1 rounded-full border border-destructive/20">
+                          <AlertCircle className="h-3 w-3" /> {errCount} con error
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
 
-                {/* Preview table */}
-                <div className="overflow-x-auto border border-border rounded-md">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-border bg-muted/40">
-                        <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Texto original</th>
-                        <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Cant.</th>
-                        <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Unidad</th>
-                        <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Producto</th>
-                        <th className="text-center py-2 px-3 font-semibold text-muted-foreground">Estado</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {staged.map((item, i) => (
-                        <tr key={i} className={`border-b border-border last:border-0 ${item.status !== "ok" ? "bg-destructive/5" : ""}`}>
-                          <td className="py-2 px-3 text-muted-foreground italic">{item.raw}</td>
-                          <td className="py-2 px-3 text-right font-semibold">
-                            {item.qty != null ? item.qty : <span className="text-destructive">—</span>}
-                          </td>
-                          <td className="py-2 px-3">
-                            {item.unit ? (
-                              <Badge variant="secondary" className="text-[10px]">{item.unit}</Badge>
-                            ) : <span className="text-muted-foreground">—</span>}
-                          </td>
-                          <td className="py-2 px-3 font-medium">
-                            {item.productName ?? (
-                              <span className="text-destructive">No encontrado: "{item.rawProductName}"</span>
-                            )}
-                          </td>
-                          <td className="py-2 px-3 text-center">
-                            {item.status === "ok" ? (
-                              <Badge variant="outline" className="text-[10px] text-green-600 border-green-500/40">OK</Badge>
-                            ) : item.status === "no_qty" ? (
-                              <Badge variant="destructive" className="text-[10px]">Sin cantidad</Badge>
-                            ) : (
-                              <Badge variant="destructive" className="text-[10px]">Sin producto</Badge>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                    {/* Preview table */}
+                    <div className="overflow-x-auto border border-border rounded-md">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-border bg-muted/40">
+                            <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Texto original</th>
+                            <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Cant.</th>
+                            <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Unidad</th>
+                            <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Producto</th>
+                            <th className="text-center py-2 px-3 font-semibold text-muted-foreground">Estado</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {staged.map((item, i) => (
+                            <tr key={i} className={`border-b border-border last:border-0 ${item.status !== "ok" ? "bg-destructive/5" : ""}`}>
+                              <td className="py-2 px-3 text-muted-foreground italic">{item.raw}</td>
+                              <td className="py-2 px-3 text-right font-semibold">
+                                {item.qty != null ? item.qty : <span className="text-destructive">—</span>}
+                              </td>
+                              <td className="py-2 px-3">
+                                {item.unit ? (
+                                  <Badge variant="secondary" className="text-[10px]">{item.unit}</Badge>
+                                ) : <span className="text-muted-foreground">—</span>}
+                              </td>
+                              <td className="py-2 px-3 font-medium">
+                                {item.productName ?? (
+                                  <span className="text-destructive">No encontrado: "{item.rawProductName}"</span>
+                                )}
+                              </td>
+                              <td className="py-2 px-3 text-center">
+                                {item.status === "ok" ? (
+                                  <Badge variant="outline" className="text-[10px] text-green-600 border-green-500/40">OK</Badge>
+                                ) : item.status === "no_qty" ? (
+                                  <Badge variant="destructive" className="text-[10px]">Sin cantidad</Badge>
+                                ) : (
+                                  <Badge variant="destructive" className="text-[10px]">Sin producto</Badge>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
 
-                {errCount > 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    Los ítems con error serán ignorados. Solo se cargarán los {okCount} ítems marcados como OK.
-                  </p>
+                    {errCount > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        Los ítems con error serán ignorados. Solo se cargarán los {okCount} ítems marcados como OK.
+                      </p>
+                    )}
+
+                    <div className="flex justify-end gap-2">
+                      <Button variant="outline" onClick={() => setStep("input")}>Volver</Button>
+                      <Button
+                        onClick={handleConfirm}
+                        disabled={okCount === 0 || submitMutation.isPending}
+                        data-testid="button-confirm-stock"
+                      >
+                        {submitMutation.isPending ? "Cargando..." : `Confirmar ${okCount} producto${okCount !== 1 ? "s" : ""}`}
+                      </Button>
+                    </div>
+                  </div>
                 )}
-
-                <div className="flex justify-end gap-2">
-                  <Button variant="outline" onClick={() => setStep("input")}>Volver</Button>
-                  <Button
-                    onClick={handleConfirm}
-                    disabled={okCount === 0 || submitMutation.isPending}
-                    data-testid="button-confirm-stock"
-                  >
-                    {submitMutation.isPending ? "Cargando..." : `Confirmar ${okCount} producto${okCount !== 1 ? "s" : ""}`}
-                  </Button>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              </CardContent>
+            </CollapsibleContent>
+          </Card>
+        </Collapsible>
 
         {/* ── STOCK TABLE ── */}
         <div className="space-y-3">
@@ -464,6 +665,9 @@ export default function StockPage() {
             </CardContent>
           </Card>
         )}
+
+        {/* ── ADJUSTMENT HISTORY ── */}
+        <AdjustmentHistory />
       </div>
 
       <AdjustStockDialog pu={adjustTarget} onClose={() => setAdjustTarget(null)} />

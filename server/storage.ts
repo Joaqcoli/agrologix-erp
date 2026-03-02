@@ -698,6 +698,28 @@ export const storage = {
     return db.select().from(stockMovements).orderBy(desc(stockMovements.createdAt));
   },
 
+  async getAdjustmentMovements(): Promise<Array<{ id: number; productId: number; productName: string; unit: string; movementType: string; quantity: string; unitCost: string | null; notes: string | null; createdAt: string }>> {
+    const rows = await db.execute(drizzleSql`
+      SELECT
+        sm.id,
+        sm.product_id AS "productId",
+        p.name AS "productName",
+        COALESCE(pu.unit, 'KG') AS unit,
+        sm.movement_type AS "movementType",
+        sm.quantity::text AS quantity,
+        sm.unit_cost::text AS "unitCost",
+        sm.notes,
+        sm.created_at::text AS "createdAt"
+      FROM stock_movements sm
+      JOIN products p ON p.id = sm.product_id
+      LEFT JOIN product_units pu ON pu.id = sm.reference_id
+      WHERE sm.reference_type = 'adjustment'
+      ORDER BY sm.created_at DESC
+      LIMIT 500
+    `);
+    return rows.rows as any[];
+  },
+
   // ─── Orders ───────────────────────────────────────────────────────────────
   async getNextRemitoFolio(): Promise<string> {
     const [last] = await db.select().from(remitos).orderBy(desc(remitos.id)).limit(1);
@@ -1480,15 +1502,25 @@ export const storage = {
     await db.update(productUnits).set({ isActive: false }).where(eq(productUnits.id, id));
   },
 
-  async adjustProductUnitStock(id: number, adjustment: number, _notes?: string): Promise<ProductUnit> {
+  async adjustProductUnitStock(id: number, adjustment: number, notes?: string): Promise<ProductUnit> {
     const [pu] = await db.select().from(productUnits).where(eq(productUnits.id, id)).limit(1);
     if (!pu) throw new Error("ProductUnit not found");
     const newStock = parseFloat(pu.stockQty as string) + adjustment;
     const [updated] = await db.update(productUnits).set({ stockQty: newStock.toFixed(4) }).where(eq(productUnits.id, id)).returning();
-    // Sync products.currentStock (pick first active unit as primary)
+    // Sync products.currentStock
     const allPu = await db.select().from(productUnits).where(eq(productUnits.productId, pu.productId));
     const totalStock = allPu.reduce((s, p) => s + parseFloat(p.stockQty as string), 0);
     await db.update(products).set({ currentStock: totalStock.toFixed(4) }).where(eq(products.id, pu.productId));
+    // Record in stock_movements (unitCost stores result stock for history display)
+    await db.insert(stockMovements).values({
+      productId: pu.productId,
+      movementType: adjustment >= 0 ? "in" : "out",
+      quantity: Math.abs(adjustment).toFixed(4),
+      unitCost: newStock.toFixed(4),
+      referenceType: "adjustment",
+      referenceId: pu.id,
+      notes: notes ?? null,
+    });
     return updated;
   },
 
