@@ -24,7 +24,13 @@ const UNIT_OPTIONS = [
   { value: "atado",   label: "ATADO" },
   { value: "bandeja", label: "BANDEJA" },
 ] as const;
-type PurchaseItem = { productId: number; quantity: string; unit: string; costPerUnit: string };
+type PurchaseItem = {
+  productId: number;
+  quantity: string;          // número de unidades de compra (ej. 10 cajones)
+  unit: string;              // unidad de compra (ej. "caja")
+  weightPerPackage: string;  // peso/cant. en unidad base por unidad de compra (ej. 18 kg/cajón)
+  costPerUnit: string;       // costo por unidad de compra (ej. $360/cajón)
+};
 
 export default function NewPurchasePage() {
   const { toast } = useToast();
@@ -34,7 +40,7 @@ export default function NewPurchasePage() {
   const [supplierName, setSupplierName] = useState("");
   const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
-  const [items, setItems] = useState<PurchaseItem[]>([{ productId: 0, quantity: "", unit: "kg", costPerUnit: "" }]);
+  const [items, setItems] = useState<PurchaseItem[]>([{ productId: 0, quantity: "", unit: "kg", weightPerPackage: "", costPerUnit: "" }]);
 
   const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
   const { data: folioData } = useQuery<{ folio: string }>({ queryKey: ["/api/purchases/next-folio"] });
@@ -52,7 +58,7 @@ export default function NewPurchasePage() {
     onError: (e: any) => toast({ title: "Error al guardar", description: e.message, variant: "destructive" }),
   });
 
-  const addItem = () => setItems([...items, { productId: 0, quantity: "", unit: "kg", costPerUnit: "" }]);
+  const addItem = () => setItems([...items, { productId: 0, quantity: "", unit: "kg", weightPerPackage: "", costPerUnit: "" }]);
 
   const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
 
@@ -70,6 +76,27 @@ export default function NewPurchasePage() {
 
   const activeProducts = (products ?? []).filter((p) => p.active);
 
+  // Cuando hay conversión (weightPerPackage), calcula el total en unidad base (ej. kg).
+  // Sin conversión, la cantidad es directamente el total.
+  const getTotalStock = (item: PurchaseItem): number => {
+    const q = parseFloat(item.quantity) || 0;
+    const w = parseFloat(item.weightPerPackage);
+    return item.weightPerPackage !== "" && !isNaN(w) && w > 0 ? q * w : q;
+  };
+
+  // Costo por unidad base = costPerUnit / weightPerPackage (ej. $360/cajón ÷ 18 kg = $20/kg)
+  const getCostPerBaseUnit = (item: PurchaseItem): number => {
+    const c = parseFloat(item.costPerUnit) || 0;
+    const w = parseFloat(item.weightPerPackage);
+    return item.weightPerPackage !== "" && !isNaN(w) && w > 0 ? c / w : c;
+  };
+
+  const hasConversion = (item: PurchaseItem): boolean => {
+    const w = parseFloat(item.weightPerPackage);
+    return item.weightPerPackage !== "" && !isNaN(w) && w > 0;
+  };
+
+  // Subtotal = lo que se paga = cantidad × costo por unidad de compra
   const itemTotal = (item: PurchaseItem) => {
     const q = parseFloat(item.quantity) || 0;
     const c = parseFloat(item.costPerUnit) || 0;
@@ -88,8 +115,8 @@ export default function NewPurchasePage() {
     if (!p) return null;
     const currentStock = parseFloat(p.currentStock as string);
     const currentAvg = parseFloat(p.averageCost as string);
-    const newQty = parseFloat(item.quantity) || 0;
-    const newCost = parseFloat(item.costPerUnit) || 0;
+    const newQty = getTotalStock(item);
+    const newCost = getCostPerBaseUnit(item);
     if (currentStock + newQty === 0) return newCost;
     return (currentStock * currentAvg + newQty * newCost) / (currentStock + newQty);
   };
@@ -108,9 +135,9 @@ export default function NewPurchasePage() {
       notes: notes || undefined,
       items: validItems.map((i) => ({
         productId: i.productId,
-        quantity: i.quantity,
-        unit: i.unit,
-        costPerUnit: i.costPerUnit,
+        quantity: String(getTotalStock(i)),
+        unit: hasConversion(i) ? "kg" : i.unit,
+        costPerUnit: String(getCostPerBaseUnit(i)),
       })),
     });
   };
@@ -220,7 +247,7 @@ export default function NewPurchasePage() {
                       </div>
 
                       <div className="space-y-1.5">
-                        <Label>Unidad</Label>
+                        <Label>Unidad de compra</Label>
                         <Select value={item.unit} onValueChange={(v) => updateItem(idx, "unit", v)}>
                           <SelectTrigger data-testid={`select-unit-${idx}`}>
                             <SelectValue />
@@ -232,12 +259,12 @@ export default function NewPurchasePage() {
                       </div>
 
                       <div className="space-y-1.5">
-                        <Label>Cantidad *</Label>
+                        <Label>Cant. unidades *</Label>
                         <Input
                           type="number"
                           min="0.0001"
                           step="0.0001"
-                          placeholder="0.00"
+                          placeholder="0"
                           value={item.quantity}
                           onChange={(e) => updateItem(idx, "quantity", e.target.value)}
                           required={item.productId > 0}
@@ -246,9 +273,57 @@ export default function NewPurchasePage() {
                       </div>
                     </div>
 
+                    {/* Conversión de envase a unidad base */}
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                       <div className="space-y-1.5">
-                        <Label>Costo por unidad *</Label>
+                        <Label className="flex items-center gap-1">
+                          <PackagePlus className="h-3 w-3 text-muted-foreground" />
+                          Peso/cant. por {UNIT_OPTIONS.find((u) => u.value === item.unit)?.label ?? item.unit}
+                        </Label>
+                        <div className="relative">
+                          <Input
+                            type="number"
+                            min="0.0001"
+                            step="0.0001"
+                            placeholder="ej. 18 (kg por cajón)"
+                            value={item.weightPerPackage}
+                            onChange={(e) => updateItem(idx, "weightPerPackage", e.target.value)}
+                            data-testid={`input-weight-per-package-${idx}`}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <Label className="text-muted-foreground">
+                          Total stock a agregar {hasConversion(item) ? "(kg)" : `(${item.unit})`}
+                        </Label>
+                        <div className={`flex h-9 items-center rounded-md border px-3 gap-2 ${hasConversion(item) ? "border-primary/40 bg-primary/5" : "border-border bg-muted/40"}`}>
+                          <span className="text-sm font-semibold text-foreground">
+                            {getTotalStock(item).toLocaleString("es-MX", { maximumFractionDigits: 4 })}
+                          </span>
+                          {hasConversion(item) && (
+                            <span className="text-xs text-muted-foreground">
+                              ({item.quantity} × {item.weightPerPackage})
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {hasConversion(item) && (
+                        <div className="space-y-1.5">
+                          <Label className="text-muted-foreground">Costo por kg (calculado)</Label>
+                          <div className="flex h-9 items-center rounded-md border border-border bg-muted/40 px-3">
+                            <span className="text-sm font-semibold text-foreground">
+                              ${getCostPerBaseUnit(item).toLocaleString("es-MX", { minimumFractionDigits: 4 })}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div className="space-y-1.5">
+                        <Label>Costo por {UNIT_OPTIONS.find((u) => u.value === item.unit)?.label ?? item.unit} *</Label>
                         <div className="relative">
                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
                           <Input
