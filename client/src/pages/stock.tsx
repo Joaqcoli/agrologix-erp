@@ -8,7 +8,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -16,11 +15,12 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { useToast } from "@/hooks/use-toast";
 import { Search, Package, Plus, CheckCircle2, AlertCircle, Warehouse, ChevronDown, ChevronUp, History, TrendingDown, TrendingUp } from "lucide-react";
 import type { Product, ProductUnit } from "@shared/schema";
-import { PRODUCT_CATEGORIES, type ProductCategory } from "@shared/schema";
+import { PRODUCT_CATEGORIES } from "@shared/schema";
 import { parseQuantityAndUnit } from "@/lib/parseQuantityAndUnit";
 
 const fmt = (v: number) => Math.round(v).toLocaleString("es-MX");
 const fmtStock = (v: number) => v.toLocaleString("es-MX", { maximumFractionDigits: 2 });
+const fmtPesos = (v: number) => `${v >= 0 ? "+" : ""}$${fmt(Math.abs(v))}`;
 
 type ProductUnitWithProduct = ProductUnit & { product: Product };
 
@@ -32,16 +32,31 @@ type AdjustmentMovement = {
   id: number;
   productId: number;
   productName: string;
+  category: string;
   unit: string;
   movementType: "in" | "out";
   quantity: string;
-  unitCost: string | null;
+  avgCost: string | null;
   notes: string | null;
   createdAt: string;
 };
 
 const MOTIVOS = ["Merma", "Rinde", "Otro"] as const;
 type Motivo = typeof MOTIVOS[number];
+
+// ─── Date helpers ─────────────────────────────────────────────────────────────
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+function weekStartStr() {
+  const d = new Date();
+  d.setDate(d.getDate() - d.getDay() + (d.getDay() === 0 ? -6 : 1)); // Monday
+  return d.toISOString().slice(0, 10);
+}
+function monthStartStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
 
 // ─── Adjust Stock Modal ───────────────────────────────────────────────────────
 function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null; onClose: () => void }) {
@@ -134,6 +149,8 @@ function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null;
 function AdjustmentHistory() {
   const [open, setOpen] = useState(false);
   const [motiveFilter, setMotiveFilter] = useState<"all" | Motivo>("all");
+  const [dateFrom, setDateFrom] = useState(monthStartStr);
+  const [dateTo, setDateTo] = useState(todayStr);
 
   const { data: movements = [], isLoading } = useQuery<AdjustmentMovement[]>({
     queryKey: ["/api/stock-movements"],
@@ -141,34 +158,71 @@ function AdjustmentHistory() {
     staleTime: 30_000,
   });
 
+  // Apply date + motive filters
   const filtered = useMemo(() => {
-    if (motiveFilter === "all") return movements;
     return movements.filter((m) => {
+      const date = m.createdAt.slice(0, 10);
+      if (date < dateFrom || date > dateTo) return false;
+      if (motiveFilter === "all") return true;
       const note = m.notes ?? "";
       if (motiveFilter === "Otro") return note !== "Merma" && note !== "Rinde";
       return note === motiveFilter;
     });
-  }, [movements, motiveFilter]);
+  }, [movements, dateFrom, dateTo, motiveFilter]);
 
-  const totalMerma = useMemo(() =>
-    movements.filter((m) => m.notes === "Merma").reduce((acc, m) => {
-      const qty = parseFloat(m.quantity);
-      return acc + (m.movementType === "out" ? qty : -qty);
-    }, 0),
-    [movements]
+  // Peso impact: positive = ganado, negative = perdido
+  const pesoImpact = (m: AdjustmentMovement) => {
+    const qty = parseFloat(m.quantity);
+    const cost = parseFloat(m.avgCost ?? "0");
+    const signed = m.movementType === "in" ? qty : -qty;
+    return signed * cost;
+  };
+
+  // Totals (within current date range, all motivos)
+  const dateFiltered = useMemo(() =>
+    movements.filter((m) => {
+      const date = m.createdAt.slice(0, 10);
+      return date >= dateFrom && date <= dateTo;
+    }),
+    [movements, dateFrom, dateTo]
   );
 
-  const totalRinde = useMemo(() =>
-    movements.filter((m) => m.notes === "Rinde").reduce((acc, m) => {
-      const qty = parseFloat(m.quantity);
-      return acc + (m.movementType === "in" ? qty : -qty);
-    }, 0),
-    [movements]
+  const totalMermaPesos = useMemo(() =>
+    dateFiltered.filter((m) => m.notes === "Merma").reduce((acc, m) => acc + pesoImpact(m), 0),
+    [dateFiltered]
   );
+  const totalRindePesos = useMemo(() =>
+    dateFiltered.filter((m) => m.notes === "Rinde").reduce((acc, m) => acc + pesoImpact(m), 0),
+    [dateFiltered]
+  );
+
+  // Group by category
+  const grouped = useMemo(() => {
+    const g: Record<string, AdjustmentMovement[]> = {};
+    for (const m of filtered) {
+      const cat = m.category ?? "Sin categoría";
+      if (!g[cat]) g[cat] = [];
+      g[cat].push(m);
+    }
+    return g;
+  }, [filtered]);
+
+  const sortedCats = [
+    ...CATEGORY_ORDER.filter((c) => grouped[c]?.length > 0),
+    ...Object.keys(grouped).filter((c) => !CATEGORY_ORDER.includes(c) && grouped[c]?.length > 0),
+  ];
 
   const formatDate = (s: string) => {
-    try { return new Date(s).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" }); }
-    catch { return s; }
+    try { return new Date(s).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit", timeZone: "UTC" }); }
+    catch { return s.slice(0, 10); }
+  };
+
+  const setQuick = (preset: "today" | "week" | "month") => {
+    const to = todayStr();
+    setDateTo(to);
+    if (preset === "today") setDateFrom(to);
+    else if (preset === "week") setDateFrom(weekStartStr());
+    else setDateFrom(monthStartStr());
   };
 
   return (
@@ -186,39 +240,61 @@ function AdjustmentHistory() {
         </CollapsibleTrigger>
         <CollapsibleContent>
           <CardContent className="pt-0 space-y-4">
-            {/* Totals */}
-            {movements.length > 0 && (
+
+            {/* ── Filters row ── */}
+            <div className="flex flex-wrap gap-3 items-end">
+              {/* Date pickers */}
+              <div className="flex items-end gap-2">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground font-medium">Desde</label>
+                  <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="h-8 text-xs w-36" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground font-medium">Hasta</label>
+                  <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="h-8 text-xs w-36" />
+                </div>
+              </div>
+              {/* Quick presets */}
+              <div className="flex gap-1">
+                <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setQuick("today")}>Hoy</Button>
+                <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setQuick("week")}>Esta semana</Button>
+                <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setQuick("month")}>Este mes</Button>
+              </div>
+              {/* Motive filter */}
+              <div className="flex gap-1 ml-auto">
+                {(["all", ...MOTIVOS] as const).map((f) => (
+                  <Button
+                    key={f}
+                    size="sm"
+                    variant={motiveFilter === f ? "default" : "outline"}
+                    className="h-8 text-xs"
+                    onClick={() => setMotiveFilter(f)}
+                  >
+                    {f === "all" ? "Todos" : f}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            {/* ── Totals chips ── */}
+            {dateFiltered.length > 0 && (
               <div className="flex gap-3 flex-wrap">
                 <div className="flex items-center gap-1.5 text-xs bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400 px-3 py-1.5 rounded-full border border-red-200 dark:border-red-800">
                   <TrendingDown className="h-3 w-3" />
-                  Total Merma: <strong>{fmtStock(totalMerma)}</strong> perdidos
+                  Total Merma: <strong>{fmtPesos(totalMermaPesos)}</strong>
                 </div>
                 <div className="flex items-center gap-1.5 text-xs bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-400 px-3 py-1.5 rounded-full border border-green-200 dark:border-green-800">
                   <TrendingUp className="h-3 w-3" />
-                  Total Rinde: <strong>+{fmtStock(totalRinde)}</strong> ganados
+                  Total Rinde: <strong>{fmtPesos(totalRindePesos)}</strong>
                 </div>
               </div>
             )}
 
-            {/* Filter buttons */}
-            <div className="flex gap-1.5 flex-wrap">
-              {(["all", ...MOTIVOS] as const).map((f) => (
-                <Button
-                  key={f}
-                  size="sm"
-                  variant={motiveFilter === f ? "default" : "outline"}
-                  className="h-7 text-xs"
-                  onClick={() => setMotiveFilter(f)}
-                >
-                  {f === "all" ? "Todos" : f}
-                </Button>
-              ))}
-            </div>
-
+            {/* ── Table ── */}
             {isLoading ? (
               <Skeleton className="h-32 w-full" />
             ) : filtered.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-6">Sin ajustes registrados.</p>
+              <p className="text-sm text-muted-foreground text-center py-6">Sin ajustes en el período seleccionado.</p>
             ) : (
               <div className="overflow-x-auto border border-border rounded-md">
                 <table className="w-full text-xs">
@@ -229,39 +305,63 @@ function AdjustmentHistory() {
                       <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Unidad</th>
                       <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Ajuste</th>
                       <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Motivo</th>
-                      <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Resultado</th>
+                      <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Resultado ($)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filtered.map((m) => {
-                      const qty = parseFloat(m.quantity);
-                      const isIn = m.movementType === "in";
-                      const resultado = m.unitCost != null ? parseFloat(m.unitCost) : null;
-                      const isMerma = m.notes === "Merma";
-                      const isRinde = m.notes === "Rinde";
+                    {sortedCats.map((cat) => {
+                      const rows = grouped[cat];
+                      const catMerma = rows.filter((m) => m.notes === "Merma").reduce((a, m) => a + pesoImpact(m), 0);
+                      const catRinde = rows.filter((m) => m.notes === "Rinde").reduce((a, m) => a + pesoImpact(m), 0);
                       return (
-                        <tr key={m.id} className="border-b border-border last:border-0 hover:bg-muted/20">
-                          <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">{formatDate(m.createdAt)}</td>
-                          <td className="py-2 px-3 font-medium">{m.productName}</td>
-                          <td className="py-2 px-3">
-                            <Badge variant="secondary" className="text-[10px]">{m.unit}</Badge>
-                          </td>
-                          <td className={`py-2 px-3 text-right font-semibold whitespace-nowrap ${isIn ? "text-green-600" : "text-red-600"}`}>
-                            {isIn ? "+" : "-"}{fmtStock(qty)}
-                          </td>
-                          <td className="py-2 px-3">
-                            {isMerma ? (
-                              <Badge variant="outline" className="text-[10px] text-red-600 border-red-400/40">Merma</Badge>
-                            ) : isRinde ? (
-                              <Badge variant="outline" className="text-[10px] text-green-600 border-green-400/40">Rinde</Badge>
-                            ) : (
-                              <span className="text-muted-foreground">{m.notes || "—"}</span>
-                            )}
-                          </td>
-                          <td className="py-2 px-3 text-right text-muted-foreground whitespace-nowrap">
-                            {resultado != null ? fmtStock(resultado) : "—"}
-                          </td>
-                        </tr>
+                        <>
+                          {/* Category header */}
+                          <tr key={`cat-${cat}`} className="border-b border-border bg-muted/50">
+                            <td colSpan={4} className="py-1.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-widest">
+                              {cat}
+                            </td>
+                            <td colSpan={2} className="py-1.5 px-3 text-right text-xs text-muted-foreground">
+                              {catMerma !== 0 && (
+                                <span className="text-red-600 mr-2">Merma: {fmtPesos(catMerma)}</span>
+                              )}
+                              {catRinde !== 0 && (
+                                <span className="text-green-600">Rinde: {fmtPesos(catRinde)}</span>
+                              )}
+                            </td>
+                          </tr>
+                          {/* Category rows */}
+                          {rows.map((m) => {
+                            const qty = parseFloat(m.quantity);
+                            const isIn = m.movementType === "in";
+                            const pesos = pesoImpact(m);
+                            const isMerma = m.notes === "Merma";
+                            const isRinde = m.notes === "Rinde";
+                            return (
+                              <tr key={m.id} className="border-b border-border last:border-0 hover:bg-muted/20">
+                                <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">{formatDate(m.createdAt)}</td>
+                                <td className="py-2 px-3 font-medium">{m.productName}</td>
+                                <td className="py-2 px-3">
+                                  <Badge variant="secondary" className="text-[10px]">{m.unit}</Badge>
+                                </td>
+                                <td className={`py-2 px-3 text-right font-semibold whitespace-nowrap ${isIn ? "text-green-600" : "text-red-600"}`}>
+                                  {isIn ? "+" : "-"}{fmtStock(qty)}
+                                </td>
+                                <td className="py-2 px-3">
+                                  {isMerma ? (
+                                    <Badge variant="outline" className="text-[10px] text-red-600 border-red-400/40">Merma</Badge>
+                                  ) : isRinde ? (
+                                    <Badge variant="outline" className="text-[10px] text-green-600 border-green-400/40">Rinde</Badge>
+                                  ) : (
+                                    <span className="text-muted-foreground">{m.notes || "—"}</span>
+                                  )}
+                                </td>
+                                <td className={`py-2 px-3 text-right font-semibold whitespace-nowrap ${pesos > 0 ? "text-green-600" : pesos < 0 ? "text-red-600" : "text-muted-foreground"}`}>
+                                  {parseFloat(m.avgCost ?? "0") > 0 ? fmtPesos(pesos) : "—"}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </>
                       );
                     })}
                   </tbody>
@@ -328,7 +428,6 @@ export default function StockPage() {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
-  const [showZeroStock, setShowZeroStock] = useState(true);
   const [adjustTarget, setAdjustTarget] = useState<ProductUnitWithProduct | null>(null);
   const [loadOpen, setLoadOpen] = useState(false);
 
@@ -359,17 +458,17 @@ export default function StockPage() {
     onError: (e: any) => toast({ title: "Error al cargar stock", description: e.message, variant: "destructive" }),
   });
 
+  // Always hide zero-stock rows
   const filteredStock = useMemo(() => {
     const all = stockData ?? [];
     return all.filter((pu) => {
       const matchName = pu.product.name.toLowerCase().includes(search.toLowerCase());
       const matchCat = categoryFilter === "all" || pu.product.category === categoryFilter;
-      const matchStock = showZeroStock || parseFloat(pu.stockQty as string) > 0;
-      return matchName && matchCat && matchStock;
+      const hasStock = parseFloat(pu.stockQty as string) > 0;
+      return matchName && matchCat && hasStock;
     });
-  }, [stockData, search, categoryFilter, showZeroStock]);
+  }, [stockData, search, categoryFilter]);
 
-  // Group by category for display
   const grouped = useMemo(() => {
     const g: Record<string, ProductUnitWithProduct[]> = {};
     for (const pu of filteredStock) {
@@ -465,7 +564,6 @@ export default function StockPage() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {/* Summary chips */}
                     <div className="flex gap-2 flex-wrap">
                       {okCount > 0 && (
                         <div className="flex items-center gap-1.5 text-xs bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-400 px-2.5 py-1 rounded-full border border-green-200 dark:border-green-800">
@@ -479,7 +577,6 @@ export default function StockPage() {
                       )}
                     </div>
 
-                    {/* Preview table */}
                     <div className="overflow-x-auto border border-border rounded-md">
                       <table className="w-full text-xs">
                         <thead>
@@ -546,36 +643,29 @@ export default function StockPage() {
           </Card>
         </Collapsible>
 
-        {/* ── STOCK TABLE ── */}
+        {/* ── FILTERS & SEARCH ── */}
         <div className="space-y-3">
-          <div className="flex flex-wrap gap-3 items-center">
-            <div className="relative flex-1 min-w-48">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Buscar producto..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9"
-                data-testid="input-search-stock"
-              />
-            </div>
-            <div className="flex items-center gap-2 bg-muted/30 rounded-md px-3 py-2">
-              <Switch checked={showZeroStock} onCheckedChange={setShowZeroStock} id="show-zero-stock" />
-              <label htmlFor="show-zero-stock" className="text-sm cursor-pointer select-none">Mostrar stock 0</label>
-            </div>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Buscar producto..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-9"
+              data-testid="input-search-stock"
+            />
           </div>
           <CategoryFilter value={categoryFilter} onChange={setCategoryFilter} />
         </div>
 
+        {/* ── STOCK TABLE ── */}
         {stockLoading ? (
           <Skeleton className="h-64 w-full" />
         ) : filteredStock.length === 0 ? (
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-12 gap-3">
               <Package className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">
-                {showZeroStock ? "Sin resultados" : "Sin stock disponible. Activá \"Mostrar stock 0\" para ver todos."}
-              </p>
+              <p className="text-sm text-muted-foreground">Sin stock disponible.</p>
             </CardContent>
           </Card>
         ) : (

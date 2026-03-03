@@ -698,16 +698,17 @@ export const storage = {
     return db.select().from(stockMovements).orderBy(desc(stockMovements.createdAt));
   },
 
-  async getAdjustmentMovements(): Promise<Array<{ id: number; productId: number; productName: string; unit: string; movementType: string; quantity: string; unitCost: string | null; notes: string | null; createdAt: string }>> {
+  async getAdjustmentMovements(): Promise<Array<{ id: number; productId: number; productName: string; category: string; unit: string; movementType: string; quantity: string; avgCost: string | null; notes: string | null; createdAt: string }>> {
     const rows = await db.execute(drizzleSql`
       SELECT
         sm.id,
         sm.product_id AS "productId",
         p.name AS "productName",
+        COALESCE(p.category, 'Sin categoría') AS category,
         COALESCE(pu.unit, 'KG') AS unit,
         sm.movement_type AS "movementType",
         sm.quantity::text AS quantity,
-        sm.unit_cost::text AS "unitCost",
+        COALESCE(pu.avg_cost, p.average_cost)::text AS "avgCost",
         sm.notes,
         sm.created_at::text AS "createdAt"
       FROM stock_movements sm
@@ -715,7 +716,7 @@ export const storage = {
       LEFT JOIN product_units pu ON pu.id = sm.reference_id
       WHERE sm.reference_type = 'adjustment'
       ORDER BY sm.created_at DESC
-      LIMIT 500
+      LIMIT 1000
     `);
     return rows.rows as any[];
   },
