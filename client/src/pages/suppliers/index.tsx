@@ -35,7 +35,9 @@ export default function SuppliersPage() {
 
   const { data: suppliers, isLoading } = useQuery<Supplier[]>({ queryKey: ["/api/suppliers"] });
 
-  const { data: ccSummary } = useQuery<{ supplier: Supplier; saldo: number }[]>({
+  const { data: ccSummary } = useQuery<{
+    suppliers: { supplierId: number; supplierName: string; saldo: number }[];
+  }>({
     queryKey: ["/api/ap/cc/summary", month, year],
     queryFn: async () => {
       const res = await fetch(`/api/ap/cc/summary?month=${month}&year=${year}`, { credentials: "include" });
@@ -46,7 +48,8 @@ export default function SuppliersPage() {
   });
 
   const saldoMap = new Map<number, number>();
-  (ccSummary ?? []).forEach((row) => saldoMap.set(row.supplier.id, row.saldo));
+  const supplierRows = Array.isArray(ccSummary?.suppliers) ? ccSummary.suppliers : [];
+  supplierRows.forEach((row) => saldoMap.set(row.supplierId, row.saldo));
 
   const createMutation = useMutation({
     mutationFn: (data: Partial<Supplier>) => apiRequest("POST", "/api/suppliers", data),
