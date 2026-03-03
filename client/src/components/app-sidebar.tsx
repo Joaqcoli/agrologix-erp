@@ -23,6 +23,7 @@ import {
   MessageSquarePlus,
   Wallet,
   Warehouse,
+  Building2,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
@@ -32,13 +33,14 @@ import { Button } from "@/components/ui/button";
 const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
   { title: "Clientes", url: "/customers", icon: Users },
+  { title: "Cuentas Corrientes", url: "/cuentas-corrientes", icon: Wallet },
+  { title: "Proveedores", url: "/suppliers", icon: Building2 },
   { title: "Productos", url: "/products", icon: Package },
   { title: "Compras", url: "/purchases", icon: ShoppingCart },
   { title: "Stock", url: "/stock", icon: Warehouse },
   { title: "Pedidos", url: "/orders", icon: FileText },
   { title: "Carga Pedido", url: "/intake", icon: MessageSquarePlus },
   { title: "Lista de Carga", url: "/load-list", icon: ClipboardList },
-  { title: "Cuentas Corrientes", url: "/cuentas-corrientes", icon: Wallet },
 ];
 
 export function AppSidebar() {

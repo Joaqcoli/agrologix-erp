@@ -3,10 +3,12 @@ import {
   users, customers, products, purchases, purchaseItems,
   stockMovements, productCostHistory, orders, orderItems,
   priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks,
+  suppliers, supplierPayments,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
   type Payment, type Withholding, type InsertPayment, type InsertWithholding,
+  type Supplier, type SupplierPayment, type InsertSupplier, type InsertSupplierPayment,
 } from "@shared/schema";
 import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
@@ -189,6 +191,8 @@ export const storage = {
   async createPurchase(data: {
     folio: string;
     supplierName: string;
+    supplierId?: number | null;
+    paymentMethod?: string;
     purchaseDate: Date;
     notes?: string;
     createdBy: number;
@@ -213,14 +217,32 @@ export const storage = {
     const purchaseDateStr = data.purchaseDate.toISOString().slice(0, 10);
 
     return db.transaction(async (tx) => {
+      const isAutoPayment = data.paymentMethod === "efectivo" || data.paymentMethod === "transferencia";
       const [purchase] = await tx.insert(purchases).values({
         folio: data.folio,
         supplierName: data.supplierName,
+        supplierId: data.supplierId ?? null,
+        paymentMethod: data.paymentMethod ?? "cuenta_corriente",
+        isPaid: isAutoPayment,
         purchaseDate: data.purchaseDate,
         notes: data.notes,
         createdBy: data.createdBy,
         total: total.toFixed(2),
       }).returning();
+
+      // Auto-create supplier payment for cash/transfer purchases
+      if (isAutoPayment && data.supplierId) {
+        const dateStr = data.purchaseDate.toISOString().slice(0, 10);
+        await tx.insert(supplierPayments).values({
+          supplierId: data.supplierId,
+          date: dateStr,
+          amount: total.toFixed(2),
+          method: data.paymentMethod === "efectivo" ? "EFECTIVO" : "TRANSFERENCIA",
+          notes: `Pago automático compra ${data.folio}`,
+          purchaseId: purchase.id,
+          createdBy: data.createdBy,
+        });
+      }
 
       await tx.insert(purchaseItems).values(
         itemsWithSubtotal.map((item) => ({
@@ -2013,6 +2035,211 @@ export const storage = {
       orders: ordersWithBilling,
       payments: paymentsIn,
       withholdings: withholdingsIn,
+    };
+  },
+
+  // ─── Suppliers CRUD ───────────────────────────────────────────────────────────
+
+  async getSuppliers(): Promise<Supplier[]> {
+    return db.select().from(suppliers).where(eq(suppliers.active, true)).orderBy(asc(suppliers.name));
+  },
+
+  async getSupplier(id: number): Promise<Supplier | undefined> {
+    const [s] = await db.select().from(suppliers).where(eq(suppliers.id, id)).limit(1);
+    return s;
+  },
+
+  async createSupplier(data: InsertSupplier): Promise<Supplier> {
+    const [s] = await db.insert(suppliers).values(data).returning();
+    return s;
+  },
+
+  async updateSupplier(id: number, data: Partial<InsertSupplier>): Promise<Supplier> {
+    const [s] = await db.update(suppliers).set(data).where(eq(suppliers.id, id)).returning();
+    return s;
+  },
+
+  async deactivateSupplier(id: number): Promise<void> {
+    await db.update(suppliers).set({ active: false }).where(eq(suppliers.id, id));
+  },
+
+  // ─── AP Payments ──────────────────────────────────────────────────────────────
+
+  async createSupplierPayment(data: InsertSupplierPayment, userId?: number): Promise<SupplierPayment> {
+    const [p] = await db.insert(supplierPayments).values({ ...data, createdBy: userId ?? null }).returning();
+    return p;
+  },
+
+  async deleteSupplierPayment(id: number): Promise<void> {
+    await db.delete(supplierPayments).where(eq(supplierPayments.id, id));
+  },
+
+  async getPendingPurchasesForSupplier(supplierId: number): Promise<{ id: number; folio: string; total: string; purchaseDate: string }[]> {
+    const result = await db
+      .select({ id: purchases.id, folio: purchases.folio, total: purchases.total, purchaseDate: purchases.purchaseDate })
+      .from(purchases)
+      .where(and(eq(purchases.supplierId, supplierId), eq(purchases.isPaid, false)))
+      .orderBy(desc(purchases.purchaseDate))
+      .limit(60);
+    return result.map((r) => ({
+      id: r.id,
+      folio: r.folio,
+      total: r.total != null ? String(r.total) : "0",
+      purchaseDate: r.purchaseDate instanceof Date ? r.purchaseDate.toISOString() : String(r.purchaseDate),
+    }));
+  },
+
+  // ─── AP CC Summary (resumen mensual por proveedor) ────────────────────────────
+
+  async getAPCCSummary(month: number, year: number) {
+    const fromDate = `${year}-${String(month).padStart(2, "0")}-01`;
+    const toDate = month === 12
+      ? `${year + 1}-01-01`
+      : `${year}-${String(month + 1).padStart(2, "0")}-01`;
+
+    const rows = await db.execute(drizzleSql`
+      WITH period_purchases AS (
+        SELECT supplier_id, SUM(total::numeric) AS facturacion
+        FROM purchases
+        WHERE supplier_id IS NOT NULL
+          AND purchase_date >= ${fromDate}::timestamp
+          AND purchase_date < ${toDate}::timestamp
+        GROUP BY supplier_id
+      ),
+      prev_purchases AS (
+        SELECT supplier_id, SUM(total::numeric) AS prev_total
+        FROM purchases
+        WHERE supplier_id IS NOT NULL AND purchase_date < ${fromDate}::timestamp
+        GROUP BY supplier_id
+      ),
+      period_payments AS (
+        SELECT supplier_id, SUM(amount::numeric) AS cobranza
+        FROM supplier_payments
+        WHERE date >= ${fromDate} AND date < ${toDate}
+        GROUP BY supplier_id
+      ),
+      prev_payments AS (
+        SELECT supplier_id, SUM(amount::numeric) AS prev_paid
+        FROM supplier_payments
+        WHERE date < ${fromDate}
+        GROUP BY supplier_id
+      )
+      SELECT
+        s.id AS "supplierId",
+        s.name AS "supplierName",
+        COALESCE(prev_purchases.prev_total, 0) - COALESCE(prev_payments.prev_paid, 0) AS "saldoMesAnterior",
+        COALESCE(period_purchases.facturacion, 0) AS facturacion,
+        COALESCE(period_payments.cobranza, 0) AS cobranza,
+        (COALESCE(prev_purchases.prev_total, 0) - COALESCE(prev_payments.prev_paid, 0))
+          + COALESCE(period_purchases.facturacion, 0)
+          - COALESCE(period_payments.cobranza, 0) AS saldo
+      FROM suppliers s
+      LEFT JOIN period_purchases ON period_purchases.supplier_id = s.id
+      LEFT JOIN prev_purchases ON prev_purchases.supplier_id = s.id
+      LEFT JOIN period_payments ON period_payments.supplier_id = s.id
+      LEFT JOIN prev_payments ON prev_payments.supplier_id = s.id
+      WHERE s.active = true
+        AND (
+          period_purchases.facturacion IS NOT NULL
+          OR prev_purchases.prev_total IS NOT NULL
+          OR period_payments.cobranza IS NOT NULL
+        )
+      ORDER BY s.name
+    `);
+
+    const supplierRows = (rows.rows as any[]).map((r) => ({
+      supplierId: Number(r.supplierId),
+      supplierName: String(r.supplierName),
+      saldoMesAnterior: Math.round(parseFloat(r.saldoMesAnterior ?? "0")),
+      facturacion: Math.round(parseFloat(r.facturacion ?? "0")),
+      cobranza: Math.round(parseFloat(r.cobranza ?? "0")),
+      saldo: Math.round(parseFloat(r.saldo ?? "0")),
+    }));
+
+    const totals = supplierRows.reduce(
+      (acc, r) => ({
+        saldoMesAnterior: acc.saldoMesAnterior + r.saldoMesAnterior,
+        facturacion: acc.facturacion + r.facturacion,
+        cobranza: acc.cobranza + r.cobranza,
+        saldo: acc.saldo + r.saldo,
+      }),
+      { saldoMesAnterior: 0, facturacion: 0, cobranza: 0, saldo: 0 }
+    );
+
+    return { month, year, suppliers: supplierRows, totals };
+  },
+
+  // ─── AP CC Detail (detalle mensual de un proveedor) ───────────────────────────
+
+  async getAPCCSupplierDetail(supplierId: number, month: number, year: number) {
+    const fromDate = `${year}-${String(month).padStart(2, "0")}-01`;
+    const toDate = month === 12
+      ? `${year + 1}-01-01`
+      : `${year}-${String(month + 1).padStart(2, "0")}-01`;
+
+    const [supplier, purchasesPrevRows, purchasesInRows, paymentsRows] = await Promise.all([
+      db.select().from(suppliers).where(eq(suppliers.id, supplierId)).limit(1),
+      // Compras anteriores al período
+      db.execute(drizzleSql`
+        SELECT COALESCE(SUM(total::numeric), 0) AS prev_total
+        FROM purchases WHERE supplier_id = ${supplierId} AND purchase_date < ${fromDate}::timestamp
+      `),
+      // Compras del período
+      db.execute(drizzleSql`
+        SELECT id, folio, total::text AS total, purchase_date::text AS "purchaseDate",
+               payment_method AS "paymentMethod", is_paid AS "isPaid"
+        FROM purchases
+        WHERE supplier_id = ${supplierId}
+          AND purchase_date >= ${fromDate}::timestamp
+          AND purchase_date < ${toDate}::timestamp
+        ORDER BY purchase_date DESC
+      `),
+      // Pagos del período y anteriores
+      db.execute(drizzleSql`
+        SELECT id, supplier_id AS "supplierId", date, amount::text AS amount, method, notes,
+               purchase_id AS "purchaseId", created_at AS "createdAt"
+        FROM supplier_payments
+        WHERE supplier_id = ${supplierId}
+        ORDER BY date DESC
+      `),
+    ]);
+
+    const sup = supplier[0];
+    if (!sup) throw new Error("Supplier not found");
+
+    const prevPurchasesTotal = parseFloat((purchasesPrevRows.rows[0] as any)?.prev_total ?? "0");
+
+    const allPayments = paymentsRows.rows as any[];
+    const prevPaymentsTotal = allPayments
+      .filter((p) => (p.date as string) < fromDate)
+      .reduce((s, p) => s + parseFloat(p.amount ?? "0"), 0);
+    const paymentsInPeriod = allPayments.filter((p) => (p.date as string) >= fromDate && (p.date as string) < toDate);
+
+    const saldoMesAnterior = Math.round(prevPurchasesTotal - prevPaymentsTotal);
+
+    const purchasesInPeriod = (purchasesInRows.rows as any[]).map((p) => ({
+      id: Number(p.id),
+      folio: String(p.folio),
+      purchaseDate: String(p.purchaseDate),
+      total: Math.round(parseFloat(p.total ?? "0")),
+      paymentMethod: String(p.paymentMethod ?? "cuenta_corriente"),
+      isPaid: Boolean(p.isPaid),
+    }));
+
+    const facturacion = purchasesInPeriod.reduce((s, p) => s + p.total, 0);
+    const cobranza = paymentsInPeriod.reduce((s, p) => s + Math.round(parseFloat(p.amount ?? "0")), 0);
+    const saldo = saldoMesAnterior + facturacion - cobranza;
+
+    return {
+      supplier: { id: sup.id, name: sup.name, phone: sup.phone, email: sup.email, cuit: sup.cuit, ccType: sup.ccType },
+      month,
+      year,
+      saldoMesAnterior,
+      facturacion,
+      cobranza,
+      saldo,
+      purchases: purchasesInPeriod,
+      payments: paymentsInPeriod.map((p) => ({ ...p, amount: parseFloat(p.amount ?? "0") })),
     };
   },
 };

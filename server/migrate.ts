@@ -296,5 +296,39 @@ export async function runMigrations() {
     )
   `);
 
+  // ─── Proveedores (AP module) ─────────────────────────────────────────────────
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS suppliers (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      address TEXT,
+      phone TEXT,
+      email TEXT,
+      cuit TEXT,
+      notes TEXT,
+      cc_type TEXT DEFAULT 'por_saldo',
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMP NOT NULL DEFAULT now()
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS supplier_payments (
+      id SERIAL PRIMARY KEY,
+      supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+      date TEXT NOT NULL,
+      amount NUMERIC(12,2) NOT NULL,
+      method TEXT NOT NULL DEFAULT 'EFECTIVO',
+      notes TEXT,
+      purchase_id INTEGER REFERENCES purchases(id),
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP NOT NULL DEFAULT now()
+    )
+  `);
+
+  await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS supplier_id INTEGER REFERENCES suppliers(id)`);
+  await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'cuenta_corriente'`);
+  await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS is_paid BOOLEAN NOT NULL DEFAULT false`);
+
   console.log("Migrations complete.");
 }

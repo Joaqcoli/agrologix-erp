@@ -49,13 +49,41 @@ export const products = pgTable("products", {
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 
+export const suppliers = pgTable("suppliers", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  address: text("address"),
+  phone: text("phone"),
+  email: text("email"),
+  cuit: text("cuit"),
+  notes: text("notes"),
+  ccType: text("cc_type").default("por_saldo"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
 export const purchases = pgTable("purchases", {
   id: serial("id").primaryKey(),
   folio: text("folio").notNull().unique(),
   supplierName: text("supplier_name").notNull(),
+  supplierId: integer("supplier_id").references(() => suppliers.id),
   purchaseDate: timestamp("purchase_date").notNull().default(sql`now()`),
   total: numeric("total", { precision: 12, scale: 2 }).notNull().default("0"),
   notes: text("notes"),
+  paymentMethod: text("payment_method").default("cuenta_corriente"),
+  isPaid: boolean("is_paid").notNull().default(false),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
+export const supplierPayments = pgTable("supplier_payments", {
+  id: serial("id").primaryKey(),
+  supplierId: integer("supplier_id").notNull().references(() => suppliers.id),
+  date: text("date").notNull(),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  method: text("method").notNull().default("EFECTIVO"),
+  notes: text("notes"),
+  purchaseId: integer("purchase_id").references(() => purchases.id),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
@@ -253,6 +281,16 @@ export type Remito = typeof remitos.$inferSelect;
 export type Payment = typeof payments.$inferSelect;
 export type PaymentOrderLink = typeof paymentOrderLinks.$inferSelect;
 export type Withholding = typeof withholdings.$inferSelect;
+export type Supplier = typeof suppliers.$inferSelect;
+export type SupplierPayment = typeof supplierPayments.$inferSelect;
+
+export const insertSupplierSchema = createInsertSchema(suppliers).omit({ id: true, createdAt: true });
+export const insertSupplierPaymentSchema = createInsertSchema(supplierPayments).omit({ id: true, createdAt: true, createdBy: true }).extend({
+  amount: z.union([z.string(), z.number()]).transform((v) => String(v)),
+  purchaseId: z.number().int().optional().nullable(),
+});
+export type InsertSupplier = z.infer<typeof insertSupplierSchema>;
+export type InsertSupplierPayment = z.infer<typeof insertSupplierPaymentSchema>;
 
 export const insertPaymentSchema = createInsertSchema(payments).omit({ id: true, createdAt: true, createdBy: true }).extend({
   amount: z.union([z.string(), z.number()]).transform((v) => String(v)),

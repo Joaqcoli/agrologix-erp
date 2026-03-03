@@ -10,10 +10,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { Plus, Trash2, ArrowLeft, PackagePlus, Calculator, Info } from "lucide-react";
-import type { Product } from "@shared/schema";
+import type { Product, Supplier } from "@shared/schema";
 
 // Todas las unidades disponibles para compra
 const PURCHASE_UNIT_OPTIONS = [
@@ -26,43 +27,93 @@ const PURCHASE_UNIT_OPTIONS = [
   { value: "bandeja", label: "BANDEJA" },
 ] as const;
 
-// Unidades base (no requieren conversión)
 const BASE_UNIT_OPTIONS = [
   { value: "kg",    label: "KG" },
   { value: "pz",    label: "UNIDAD" },
   { value: "atado", label: "ATADO" },
 ] as const;
 
-// Unidades de envase que requieren conversión a unidad base
 const PACKAGE_UNIT_SET = new Set(["caja", "saco", "bandeja"]);
 
 type PurchaseItem = {
   productId: number;
-  quantity: string;          // número de unidades de compra (ej. 2 cajones)
-  unit: string;              // unidad de compra (ej. "caja")
-  weightPerPackage: string;  // unidades base por unidad de envase (ej. "18")
-  baseUnit: string;          // unidad base elegida (ej. "kg", "atado", "maple")
-  costPerUnit: string;       // costo por unidad de compra (ej. $18,000/cajón)
+  quantity: string;
+  unit: string;
+  weightPerPackage: string;
+  baseUnit: string;
+  costPerUnit: string;
 };
 
 const isPackageUnit = (unit: string) => PACKAGE_UNIT_SET.has(unit);
+const labelFor = (unit: string) => PURCHASE_UNIT_OPTIONS.find((u) => u.value === unit)?.label ?? unit.toUpperCase();
 
-const labelFor = (unit: string) =>
-  PURCHASE_UNIT_OPTIONS.find((u) => u.value === unit)?.label ?? unit.toUpperCase();
+// ─── Quick Supplier Modal ──────────────────────────────────────────────────────
+function NewSupplierModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (s: Supplier) => void }) {
+  const { toast } = useToast();
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [cuit, setCuit] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: (data: any) => apiRequest("POST", "/api/suppliers", data).then((r) => r.json()),
+    onSuccess: (s: Supplier) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/suppliers"] });
+      toast({ title: "Proveedor creado" });
+      onCreated(s);
+      onClose();
+      setName(""); setPhone(""); setCuit("");
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Nuevo Proveedor</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 mt-2">
+          <div className="space-y-1.5">
+            <Label>Nombre / Razón Social *</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre del proveedor" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>CUIT</Label>
+            <Input value={cuit} onChange={(e) => setCuit(e.target.value)} placeholder="20-12345678-9" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Teléfono</Label>
+            <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Teléfono" />
+          </div>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => mutation.mutate({ name, phone: phone || undefined, cuit: cuit || undefined })} disabled={!name.trim() || mutation.isPending}>
+            {mutation.isPending ? "Creando..." : "Crear proveedor"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 export default function NewPurchasePage() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
 
   const [folio, setFolio] = useState("");
-  const [supplierName, setSupplierName] = useState("");
+  const [supplierId, setSupplierId] = useState<number | null>(null);
+  const [supplierName, setSupplierName] = useState("");  // fallback text
   const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().slice(0, 10));
+  const [paymentMethod, setPaymentMethod] = useState("cuenta_corriente");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<PurchaseItem[]>([{
     productId: 0, quantity: "", unit: "kg", weightPerPackage: "", baseUnit: "kg", costPerUnit: "",
   }]);
+  const [newSupplierOpen, setNewSupplierOpen] = useState(false);
 
   const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
+  const { data: suppliers } = useQuery<Supplier[]>({ queryKey: ["/api/suppliers"] });
   const { data: folioData } = useQuery<{ folio: string }>({ queryKey: ["/api/purchases/next-folio"] });
 
   useEffect(() => { if (folioData?.folio) setFolio(folioData.folio); }, [folioData]);
@@ -81,16 +132,14 @@ export default function NewPurchasePage() {
   });
 
   const activeProducts = (products ?? []).filter((p) => p.active);
+  const activeSuppliers = (suppliers ?? []).filter((s) => s.active);
 
   const isEggsProduct = (productId: number) => {
     const p = activeProducts.find((x) => x.id === productId);
     return p?.category === "Huevos";
   };
 
-  const addItem = () => setItems([...items, {
-    productId: 0, quantity: "", unit: "kg", weightPerPackage: "", baseUnit: "kg", costPerUnit: "",
-  }]);
-
+  const addItem = () => setItems([...items, { productId: 0, quantity: "", unit: "kg", weightPerPackage: "", baseUnit: "kg", costPerUnit: "" }]);
   const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
 
   const updateItem = (i: number, field: keyof PurchaseItem, value: string | number) => {
@@ -100,10 +149,8 @@ export default function NewPurchasePage() {
     if (field === "productId") {
       const product = activeProducts.find((p) => p.id === Number(value));
       if (product) {
-        // Ajustar unidad por defecto del producto
         const defaultUnit = product.unit as string;
         updated[i].unit = defaultUnit;
-        // Si es huevos y la unidad es cajón, pre-completar
         if (product.category === "Huevos" && defaultUnit === "caja") {
           updated[i].baseUnit = "maple";
           updated[i].weightPerPackage = "12";
@@ -129,7 +176,6 @@ export default function NewPurchasePage() {
           updated[i].weightPerPackage = "";
         }
       } else {
-        // Unidad base directa: baseUnit = unidad misma, sin campo de conversión
         updated[i].baseUnit = unit;
         updated[i].weightPerPackage = "";
       }
@@ -138,7 +184,6 @@ export default function NewPurchasePage() {
     setItems(updated);
   };
 
-  // Total en unidad base
   const getTotalBaseUnits = (item: PurchaseItem): number => {
     const q = parseFloat(item.quantity) || 0;
     if (!isPackageUnit(item.unit)) return q;
@@ -146,7 +191,6 @@ export default function NewPurchasePage() {
     return !isNaN(w) && w > 0 ? q * w : 0;
   };
 
-  // Costo por unidad base
   const getCostPerBaseUnit = (item: PurchaseItem): number => {
     const c = parseFloat(item.costPerUnit) || 0;
     if (!isPackageUnit(item.unit)) return c;
@@ -154,13 +198,7 @@ export default function NewPurchasePage() {
     return !isNaN(w) && w > 0 ? c / w : 0;
   };
 
-  // Subtotal = cantidad × costo por unidad de compra
-  const itemSubtotal = (item: PurchaseItem) => {
-    const q = parseFloat(item.quantity) || 0;
-    const c = parseFloat(item.costPerUnit) || 0;
-    return q * c;
-  };
-
+  const itemSubtotal = (item: PurchaseItem) => (parseFloat(item.quantity) || 0) * (parseFloat(item.costPerUnit) || 0);
   const grandTotal = items.reduce((sum, item) => sum + itemSubtotal(item), 0);
 
   const getProjectedAvgCost = (item: PurchaseItem) => {
@@ -177,18 +215,21 @@ export default function NewPurchasePage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const validItems = items.filter(
-      (i) => i.productId && parseFloat(i.quantity) > 0 && parseFloat(i.costPerUnit) > 0
-    );
+    const validItems = items.filter((i) => i.productId && parseFloat(i.quantity) > 0 && parseFloat(i.costPerUnit) > 0);
     if (!validItems.length) {
       toast({ title: "Sin productos válidos", description: "Agrega al menos un producto con cantidad y costo.", variant: "destructive" });
       return;
     }
+    const effectiveSupplierName = supplierId
+      ? (activeSuppliers.find((s) => s.id === supplierId)?.name ?? supplierName)
+      : supplierName;
 
     createMutation.mutate({
       folio,
-      supplierName,
+      supplierName: effectiveSupplierName,
+      supplierId: supplierId ?? undefined,
       purchaseDate,
+      paymentMethod,
       notes: notes || undefined,
       items: validItems.map((i) => {
         if (isPackageUnit(i.unit)) {
@@ -197,23 +238,26 @@ export default function NewPurchasePage() {
           return {
             productId: Number(i.productId),
             quantity: totalBaseQty.toFixed(4),
-            unit: i.baseUnit,               // unidad base (kg, maple, atado, pz)
+            unit: i.baseUnit,
             costPerUnit: costPerBase.toFixed(4),
             purchaseQty: parseFloat(i.quantity).toFixed(4),
-            purchaseUnit: i.unit,           // unidad original del envase (caja, saco, bandeja)
+            purchaseUnit: i.unit,
             weightPerPackage: parseFloat(i.weightPerPackage).toFixed(4),
           };
         } else {
           return {
             productId: Number(i.productId),
             quantity: parseFloat(i.quantity).toFixed(4),
-            unit: i.unit,                   // ya es unidad base
+            unit: i.unit,
             costPerUnit: parseFloat(i.costPerUnit).toFixed(4),
           };
         }
       }),
     });
   };
+
+  const selectedSupplier = supplierId ? activeSuppliers.find((s) => s.id === supplierId) : null;
+  const canSubmit = !createMutation.isPending && (supplierId != null || supplierName.trim().length > 0);
 
   return (
     <Layout title="Nueva Compra">
@@ -244,10 +288,77 @@ export default function NewPurchasePage() {
                   <Input id="date" type="date" value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} required data-testid="input-purchase-date" />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="supplier">Proveedor *</Label>
-                  <Input id="supplier" placeholder="Nombre del proveedor" value={supplierName} onChange={(e) => setSupplierName(e.target.value)} required data-testid="input-supplier" />
+                  <Label>Forma de Pago</Label>
+                  <Select value={paymentMethod} onValueChange={setPaymentMethod}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cuenta_corriente">Cuenta Corriente</SelectItem>
+                      <SelectItem value="efectivo">Efectivo</SelectItem>
+                      <SelectItem value="transferencia">Transferencia</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
+
+              {/* Proveedor */}
+              <div className="space-y-1.5">
+                <Label>Proveedor *</Label>
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    {activeSuppliers.length > 0 ? (
+                      <Select
+                        value={supplierId ? String(supplierId) : "manual"}
+                        onValueChange={(v) => {
+                          if (v === "manual") { setSupplierId(null); }
+                          else { setSupplierId(Number(v)); setSupplierName(""); }
+                        }}
+                      >
+                        <SelectTrigger data-testid="select-supplier">
+                          <SelectValue placeholder="Seleccionar proveedor..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {activeSuppliers.map((s) => (
+                            <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
+                          ))}
+                          <SelectItem value="manual">— Ingresar manualmente —</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        placeholder="Nombre del proveedor"
+                        value={supplierName}
+                        onChange={(e) => setSupplierName(e.target.value)}
+                        required
+                        data-testid="input-supplier"
+                      />
+                    )}
+                  </div>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setNewSupplierOpen(true)} className="shrink-0">
+                    <Plus className="h-3.5 w-3.5 mr-1" /> Nuevo
+                  </Button>
+                </div>
+                {/* Ingreso manual cuando se eligió esa opción */}
+                {supplierId === null && activeSuppliers.length > 0 && (
+                  <Input
+                    placeholder="Nombre del proveedor (manual)"
+                    value={supplierName}
+                    onChange={(e) => setSupplierName(e.target.value)}
+                    className="mt-2"
+                    data-testid="input-supplier-manual"
+                  />
+                )}
+                {selectedSupplier?.cuit && (
+                  <p className="text-xs text-muted-foreground mt-1">CUIT: {selectedSupplier.cuit}</p>
+                )}
+                {paymentMethod !== "cuenta_corriente" && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                    La compra se marcará como pagada automáticamente ({paymentMethod === "efectivo" ? "Efectivo" : "Transferencia"}).
+                  </p>
+                )}
+              </div>
+
               <div className="space-y-1.5">
                 <Label htmlFor="notes">Notas</Label>
                 <Textarea id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Opcional..." data-testid="input-purchase-notes" />
@@ -284,7 +395,6 @@ export default function NewPurchasePage() {
                       )}
                     </div>
 
-                    {/* Fila 1: Producto + Unidad de compra + Cantidad */}
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
                       <div className="sm:col-span-2 space-y-1.5">
                         <Label>Producto *</Label>
@@ -326,7 +436,6 @@ export default function NewPurchasePage() {
                       </div>
                     </div>
 
-                    {/* Fila 2: Conversión a unidad base (solo para envases) */}
                     {packageMode && (
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                         <div className="space-y-1.5">
@@ -350,9 +459,7 @@ export default function NewPurchasePage() {
                               </div>
                             ) : (
                               <Select value={item.baseUnit} onValueChange={(v) => updateItem(idx, "baseUnit", v)}>
-                                <SelectTrigger className="w-28">
-                                  <SelectValue />
-                                </SelectTrigger>
+                                <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
                                 <SelectContent>
                                   {BASE_UNIT_OPTIONS.map((u) => (
                                     <SelectItem key={u.value} value={u.value}>{u.label}</SelectItem>
@@ -362,21 +469,14 @@ export default function NewPurchasePage() {
                             )}
                           </div>
                         </div>
-
                         <div className="space-y-1.5">
                           <Label className="text-muted-foreground">Total a agregar ({baseUnitLabel})</Label>
                           <div className={`flex h-9 items-center rounded-md border px-3 gap-2 ${totalBaseUnits > 0 ? "border-primary/40 bg-primary/5" : "border-border bg-muted/40"}`}>
                             <span className="text-sm font-semibold text-foreground">
                               {totalBaseUnits > 0 ? totalBaseUnits.toLocaleString("es-MX", { maximumFractionDigits: 4 }) : "—"}
                             </span>
-                            {totalBaseUnits > 0 && item.quantity && (
-                              <span className="text-xs text-muted-foreground">
-                                ({item.quantity} × {item.weightPerPackage})
-                              </span>
-                            )}
                           </div>
                         </div>
-
                         {totalBaseUnits > 0 && costPerBase > 0 && (
                           <div className="space-y-1.5">
                             <Label className="text-muted-foreground">Costo por {baseUnitLabel} (calc.)</Label>
@@ -390,7 +490,6 @@ export default function NewPurchasePage() {
                       </div>
                     )}
 
-                    {/* Fila 3: Costo + Subtotal + Nuevo costo prom. */}
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                       <div className="space-y-1.5">
                         <Label>Costo por {labelFor(item.unit)} *</Label>
@@ -406,7 +505,6 @@ export default function NewPurchasePage() {
                           />
                         </div>
                       </div>
-
                       <div className="space-y-1.5">
                         <Label className="text-muted-foreground">Subtotal</Label>
                         <div className="flex h-9 items-center rounded-md border border-border bg-muted/40 px-3">
@@ -415,7 +513,6 @@ export default function NewPurchasePage() {
                           </span>
                         </div>
                       </div>
-
                       {projectedAvg !== null && (
                         <div className="space-y-1.5">
                           <Label className="flex items-center gap-1 text-muted-foreground">
@@ -435,7 +532,6 @@ export default function NewPurchasePage() {
                       )}
                     </div>
 
-                    {/* Info: stock y costo actuales */}
                     {product && (
                       <div className="flex flex-wrap items-center gap-3 pt-1">
                         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -446,8 +542,7 @@ export default function NewPurchasePage() {
                         </div>
                         {currentAvg !== null && currentAvg > 0 && (
                           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                            Costo actual:
-                            <span className="font-medium text-foreground">
+                            Costo actual: <span className="font-medium text-foreground">
                               ${currentAvg.toLocaleString("es-MX", { minimumFractionDigits: 4 })}
                             </span>
                           </div>
@@ -459,7 +554,6 @@ export default function NewPurchasePage() {
               })}
 
               <Separator />
-
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Total de la compra</span>
                 <span className="text-xl font-bold text-foreground" data-testid="text-grand-total">
@@ -470,21 +564,18 @@ export default function NewPurchasePage() {
           </Card>
 
           <div className="flex items-center justify-end gap-3">
-            <Button type="button" variant="outline" onClick={() => setLocation("/purchases")}>
-              Cancelar
-            </Button>
-            <Button type="submit" disabled={createMutation.isPending || !supplierName} data-testid="button-save-purchase">
-              {createMutation.isPending ? (
-                <>Guardando...</>
-              ) : (
-                <>
-                  <PackagePlus className="mr-2 h-4 w-4" />
-                  Registrar Compra
-                </>
-              )}
+            <Button type="button" variant="outline" onClick={() => setLocation("/purchases")}>Cancelar</Button>
+            <Button type="submit" disabled={!canSubmit} data-testid="button-save-purchase">
+              {createMutation.isPending ? "Guardando..." : <><PackagePlus className="mr-2 h-4 w-4" />Registrar Compra</>}
             </Button>
           </div>
         </form>
+
+        <NewSupplierModal
+          open={newSupplierOpen}
+          onClose={() => setNewSupplierOpen(false)}
+          onCreated={(s) => { setSupplierId(s.id); }}
+        />
       </div>
     </Layout>
   );

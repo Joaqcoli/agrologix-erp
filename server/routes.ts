@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import * as XLSX from "xlsx";
 import { storage } from "./storage";
-import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema, insertPaymentSchema, insertWithholdingSchema } from "@shared/schema";
+import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema, insertPaymentSchema, insertWithholdingSchema, insertSupplierSchema, insertSupplierPaymentSchema } from "@shared/schema";
 import { z } from "zod";
 import { canonicalizeUnit } from "@shared/units";
 
@@ -274,6 +274,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const purchase = await storage.createPurchase({
         folio: data.folio,
         supplierName: data.supplierName,
+        supplierId: (data as any).supplierId ?? null,
+        paymentMethod: (data as any).paymentMethod ?? "cuenta_corriente",
         purchaseDate: new Date(data.purchaseDate as unknown as string),
         notes: data.notes ?? undefined,
         createdBy: req.session.userId!,
@@ -732,6 +734,78 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       console.error("CC export error:", e);
       return res.status(500).json({ error: e.message });
     }
+  });
+
+  // ─── Suppliers CRUD ────────────────────────────────────────────────────────────
+  app.get("/api/suppliers", requireAuth, async (_req, res) => {
+    return res.json(await storage.getSuppliers());
+  });
+
+  app.get("/api/suppliers/:id", requireAuth, async (req, res) => {
+    const s = await storage.getSupplier(Number(req.params.id));
+    if (!s) return res.status(404).json({ error: "Not found" });
+    return res.json(s);
+  });
+
+  app.post("/api/suppliers", requireAuth, async (req, res) => {
+    try {
+      const data = insertSupplierSchema.parse(req.body);
+      return res.json(await storage.createSupplier(data));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.patch("/api/suppliers/:id", requireAuth, async (req, res) => {
+    try {
+      const data = insertSupplierSchema.partial().parse(req.body);
+      return res.json(await storage.updateSupplier(Number(req.params.id), data));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.delete("/api/suppliers/:id", requireAuth, async (req, res) => {
+    await storage.deactivateSupplier(Number(req.params.id));
+    return res.json({ ok: true });
+  });
+
+  // ─── AP CC ─────────────────────────────────────────────────────────────────────
+  app.get("/api/ap/cc/summary", requireAuth, async (req, res) => {
+    try {
+      const month = parseInt(req.query.month as string);
+      const year = parseInt(req.query.year as string);
+      if (!month || !year || month < 1 || month > 12)
+        return res.status(400).json({ error: "Invalid month/year" });
+      return res.json(await storage.getAPCCSummary(month, year));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/ap/cc/:supplierId", requireAuth, async (req, res) => {
+    try {
+      const supplierId = Number(req.params.supplierId);
+      const month = parseInt(req.query.month as string);
+      const year = parseInt(req.query.year as string);
+      if (!month || !year) return res.status(400).json({ error: "month/year required" });
+      return res.json(await storage.getAPCCSupplierDetail(supplierId, month, year));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/ap/payments", requireAuth, async (req, res) => {
+    try {
+      const data = insertSupplierPaymentSchema.parse(req.body);
+      const payment = await storage.createSupplierPayment(data, req.session.userId!);
+      return res.json(payment);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.delete("/api/ap/payments/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteSupplierPayment(Number(req.params.id));
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/ap/pending-purchases/:supplierId", requireAuth, async (req, res) => {
+    try {
+      return res.json(await storage.getPendingPurchasesForSupplier(Number(req.params.supplierId)));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   return httpServer;

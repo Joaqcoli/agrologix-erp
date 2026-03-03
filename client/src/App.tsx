@@ -20,6 +20,8 @@ import StockPage from "@/pages/stock";
 import IntakePage from "@/pages/intake";
 import CuentasCorrientesPage from "@/pages/cuentas-corrientes/index";
 import CCCustomerDetailPage from "@/pages/cuentas-corrientes/detail";
+import SuppliersPage from "@/pages/suppliers/index";
+import SupplierCCPage from "@/pages/suppliers/cc";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -53,6 +55,16 @@ function Router() {
           const month = parseInt(search.get("month") ?? String(today.getMonth() + 1));
           const year = parseInt(search.get("year") ?? String(today.getFullYear()));
           return <CCCustomerDetailPage customerId={Number(params.id)} month={month} year={year} />;
+        }}
+      </Route>
+      <Route path="/suppliers" component={SuppliersPage} />
+      <Route path="/suppliers/:id/cc">
+        {(params) => {
+          const search = new URLSearchParams(window.location.search);
+          const today = new Date();
+          const month = parseInt(search.get("month") ?? String(today.getMonth() + 1));
+          const year = parseInt(search.get("year") ?? String(today.getFullYear()));
+          return <SupplierCCPage supplierId={Number(params.id)} month={month} year={year} />;
         }}
       </Route>
       <Route component={NotFound} />
