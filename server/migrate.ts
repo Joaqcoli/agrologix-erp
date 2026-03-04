@@ -345,5 +345,9 @@ export async function runMigrations() {
     WHERE total_empty_cost > 0
   `);
 
+  // ─── Customers: salesperson & commission ────────────────────────────────────
+  await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS salesperson_name text`);
+  await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS commission_pct numeric(5,2) DEFAULT 0`);
+
   console.log("Migrations complete.");
 }

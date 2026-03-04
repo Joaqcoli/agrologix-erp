@@ -2329,4 +2329,163 @@ export const storage = {
       saldoVacios: totalEmptyQty - totalValesQty,
     };
   },
+
+  // ─── Dashboard Stats ─────────────────────────────────────────────────────────
+  async getDashboardStats(from: string, to: string) {
+    // 1) Ventas + ganancia bruta en el período (approved orders)
+    const salesRow = await db.execute(drizzleSql`
+      SELECT
+        COALESCE(SUM(o.total::numeric), 0) AS ventas,
+        COALESCE(SUM(o.total::numeric), 0)
+          - COALESCE(SUM(oi_cost.cost_total), 0) AS ganancia_bruta
+      FROM orders o
+      LEFT JOIN LATERAL (
+        SELECT SUM(oi.quantity::numeric * oi.cost_per_unit::numeric) AS cost_total
+        FROM order_items oi WHERE oi.order_id = o.id
+      ) oi_cost ON true
+      WHERE o.status = 'approved'
+        AND o.order_date >= ${from}::timestamp
+        AND o.order_date < ${to}::timestamp
+    `);
+
+    // 2) Ventas + ganancia bruta por día (for chart + ganancia real)
+    const byDayRows = await db.execute(drizzleSql`
+      SELECT
+        o.order_date::date AS dia,
+        COALESCE(SUM(o.total::numeric), 0) AS ventas,
+        COALESCE(SUM(o.total::numeric), 0)
+          - COALESCE(SUM(oi_cost.cost_total), 0) AS ganancia_bruta
+      FROM orders o
+      LEFT JOIN LATERAL (
+        SELECT SUM(oi.quantity::numeric * oi.cost_per_unit::numeric) AS cost_total
+        FROM order_items oi WHERE oi.order_id = o.id
+      ) oi_cost ON true
+      WHERE o.status = 'approved'
+        AND o.order_date >= ${from}::timestamp
+        AND o.order_date < ${to}::timestamp
+      GROUP BY o.order_date::date
+      ORDER BY dia
+    `);
+
+    // 3) Merma/Rinde por día
+    const mermaDayRows = await db.execute(drizzleSql`
+      SELECT
+        sm.created_at::date AS dia,
+        COALESCE(SUM(CASE WHEN sm.notes ILIKE '%Merma%' THEN sm.quantity::numeric * COALESCE(sm.unit_cost::numeric, 0) ELSE 0 END), 0) AS merma,
+        COALESCE(SUM(CASE WHEN sm.notes ILIKE '%Rinde%' THEN sm.quantity::numeric * COALESCE(sm.unit_cost::numeric, 0) ELSE 0 END), 0) AS rinde
+      FROM stock_movements sm
+      WHERE sm.created_at >= ${from}::timestamp
+        AND sm.created_at < ${to}::timestamp
+        AND (sm.notes ILIKE '%Merma%' OR sm.notes ILIKE '%Rinde%')
+      GROUP BY sm.created_at::date
+      ORDER BY dia
+    `);
+
+    // 4) Totales merma/rinde del período
+    const mermaRow = await db.execute(drizzleSql`
+      SELECT
+        COALESCE(SUM(CASE WHEN sm.notes ILIKE '%Merma%' THEN sm.quantity::numeric * COALESCE(sm.unit_cost::numeric, 0) ELSE 0 END), 0) AS merma,
+        COALESCE(SUM(CASE WHEN sm.notes ILIKE '%Rinde%' THEN sm.quantity::numeric * COALESCE(sm.unit_cost::numeric, 0) ELSE 0 END), 0) AS rinde
+      FROM stock_movements sm
+      WHERE sm.created_at >= ${from}::timestamp
+        AND sm.created_at < ${to}::timestamp
+        AND (sm.notes ILIKE '%Merma%' OR sm.notes ILIKE '%Rinde%')
+    `);
+
+    // 5) Vacíos en mi poder (all-time)
+    const vaciosRow = await db.execute(drizzleSql`
+      SELECT
+        COALESCE((SELECT SUM(pi.empty_cost::numeric * COALESCE(pi.purchase_qty, pi.quantity)::numeric)
+                  FROM purchase_items pi WHERE pi.empty_cost::numeric > 0), 0) AS vacios_total,
+        COALESCE((SELECT SUM(sp.amount::numeric) FROM supplier_payments sp WHERE sp.method = 'VALE'), 0) AS vales_total
+    `);
+
+    // 6) Deuda a proveedores (all-time)
+    const deudaRow = await db.execute(drizzleSql`
+      SELECT
+        COALESCE(SUM(p.total::numeric), 0) - COALESCE(SUM(sp.amount::numeric), 0) AS deuda
+      FROM suppliers s
+      LEFT JOIN purchases p ON p.supplier_id = s.id
+      LEFT JOIN supplier_payments sp ON sp.supplier_id = s.id
+      WHERE s.active = true
+    `);
+
+    // 7) Stock valorizado actual (real-time, no date filter)
+    const stockValRow = await db.execute(drizzleSql`
+      SELECT COALESCE(SUM(pu.stock_qty::numeric * pu.avg_cost::numeric), 0) AS stock_valorizado
+      FROM product_units pu
+      WHERE pu.stock_qty::numeric > 0 AND pu.is_active = true
+    `);
+
+    // 8) Comisiones por vendedor (período)
+    const comisionesRows = await db.execute(drizzleSql`
+      SELECT
+        c.salesperson_name AS vendedor,
+        COALESCE(SUM(o.total::numeric * c.commission_pct::numeric / 100), 0) AS comision_total
+      FROM customers c
+      JOIN orders o ON o.customer_id = c.id
+      WHERE c.commission_pct::numeric > 0
+        AND c.salesperson_name IS NOT NULL
+        AND o.status = 'approved'
+        AND o.order_date >= ${from}::timestamp
+        AND o.order_date < ${to}::timestamp
+      GROUP BY c.salesperson_name
+      ORDER BY comision_total DESC
+    `);
+
+    // Merge byDay + mermaDia into unified chart rows
+    const mermaByDay = new Map<string, { merma: number; rinde: number }>();
+    for (const r of mermaDayRows.rows as any[]) {
+      mermaByDay.set(String(r.dia), { merma: parseFloat(r.merma ?? "0"), rinde: parseFloat(r.rinde ?? "0") });
+    }
+
+    const ventasPorDia = (byDayRows.rows as any[]).map((r) => {
+      const dia = String(r.dia);
+      const adj = mermaByDay.get(dia) ?? { merma: 0, rinde: 0 };
+      const ganancia_bruta = parseFloat(r.ganancia_bruta ?? "0");
+      return {
+        date: dia,
+        ventas: parseFloat(r.ventas ?? "0"),
+        ganancia_bruta,
+        ajuste_merma: adj.merma,
+        ajuste_rinde: adj.rinde,
+        ganancia_real: ganancia_bruta + adj.rinde - adj.merma,
+      };
+    });
+
+    const s = (salesRow.rows[0] as any) ?? {};
+    const m = (mermaRow.rows[0] as any) ?? {};
+    const v = (vaciosRow.rows[0] as any) ?? {};
+    const d = (deudaRow.rows[0] as any) ?? {};
+    const sv = (stockValRow.rows[0] as any) ?? {};
+
+    const ventas = parseFloat(s.ventas ?? "0");
+    const ganancia_bruta = parseFloat(s.ganancia_bruta ?? "0");
+    const mermaTotal = parseFloat(m.merma ?? "0");
+    const rindeTotal = parseFloat(m.rinde ?? "0");
+    const ganancia_real = ganancia_bruta + rindeTotal - mermaTotal;
+
+    // Días en el período
+    const fromMs = new Date(from).getTime();
+    const toMs = new Date(to).getTime();
+    const diasPeriodo = Math.max(1, Math.ceil((toMs - fromMs) / 86400000));
+
+    return {
+      ventas,
+      ganancia_bruta,
+      mermaTotal,
+      rindeTotal,
+      ganancia_real,
+      diasPeriodo,
+      ventasPorDia,
+      vaciosTotal: parseFloat(v.vacios_total ?? "0"),
+      valesTotal: parseFloat(v.vales_total ?? "0"),
+      deudaProveedores: Math.max(0, parseFloat(d.deuda ?? "0")),
+      stockValorizado: parseFloat(sv.stock_valorizado ?? "0"),
+      comisiones: (comisionesRows.rows as any[]).map((r) => ({
+        vendedor: String(r.vendedor),
+        total: parseFloat(r.comision_total ?? "0"),
+      })),
+    };
+  },
 };

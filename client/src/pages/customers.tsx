@@ -17,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Pencil, Trash2, Users, Building2, Phone, Mail } from "lucide-react";
 import type { Customer } from "@shared/schema";
 
-const EMPTY: Partial<Customer> = { name: "", rfc: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ccType: "por_saldo" };
+const EMPTY: Partial<Customer> = { name: "", rfc: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ccType: "por_saldo", salespersonName: "", commissionPct: "0" };
 
 export default function CustomersPage() {
   const { toast } = useToast();
@@ -222,6 +222,44 @@ export default function CustomersPage() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="sm:col-span-2">
+                <div className="flex items-center justify-between rounded-md border border-border p-3">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Tiene vendedor asignado</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Genera comisión sobre ventas de este cliente</p>
+                  </div>
+                  <Switch
+                    checked={!!form.salespersonName}
+                    onCheckedChange={(v) => setForm({ ...form, salespersonName: v ? " " : "", commissionPct: v ? (form.commissionPct ?? "0") : "0" })}
+                  />
+                </div>
+              </div>
+              {!!form.salespersonName && (
+                <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="salesperson">Nombre del vendedor</Label>
+                    <Input
+                      id="salesperson"
+                      value={form.salespersonName?.trim() ?? ""}
+                      onChange={(e) => setForm({ ...form, salespersonName: e.target.value })}
+                      placeholder="Ej: Juan"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="commission">% Comisión</Label>
+                    <Input
+                      id="commission"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      value={form.commissionPct ?? "0"}
+                      onChange={(e) => setForm({ ...form, commissionPct: e.target.value as any })}
+                      placeholder="Ej: 5"
+                    />
+                  </div>
+                </>
+              )}
             </div>
             <DialogFooter className="gap-2">
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>

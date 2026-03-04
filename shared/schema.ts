@@ -32,6 +32,8 @@ export const customers = pgTable("customers", {
   notes: text("notes"),
   hasIva: boolean("has_iva").notNull().default(false),
   ccType: text("cc_type").default("por_saldo"),
+  salespersonName: text("salesperson_name"),
+  commissionPct: numeric("commission_pct", { precision: 5, scale: 2 }).default("0"),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });

@@ -64,6 +64,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ user: safeUser });
   });
 
+  // ─── Dashboard ─────────────────────────────────────────────────────────────
+  app.get("/api/dashboard/stats", requireAuth, async (req, res) => {
+    try {
+      const { from, to } = req.query as { from?: string; to?: string };
+      if (!from || !to) return res.status(400).json({ error: "from and to are required" });
+      const stats = await storage.getDashboardStats(from, to);
+      return res.json(stats);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Customers ─────────────────────────────────────────────────────────────
   app.get("/api/customers", requireAuth, async (req, res) => {
     return res.json(await storage.getCustomers());
