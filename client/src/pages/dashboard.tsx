@@ -71,8 +71,11 @@ type Stats = {
   diasPeriodo: number;
   ventasPorDia: DayRow[];
   vaciosTotal: number;
+  vaciosQty: number;
   valesTotal: number;
+  valesCount: number;
   deudaProveedores: number;
+  deudaClientes: number;
   stockValorizado: number;
   comisiones: { vendedor: string; total: number }[];
 };
@@ -221,53 +224,51 @@ export default function DashboardPage() {
             loading={isLoading}
           />
           <MetricCard
-            title="Venta/día"
-            value={s ? fmtShort(ventasDia) : "—"}
+            title="Promedio de venta por día"
+            value={s ? fmt(ventasDia) : "—"}
             loading={isLoading}
           />
           <MetricCard
-            title="Ganancia/día"
-            value={s ? fmtShort(gananciaDia) : "—"}
+            title="Promedio de ganancia por día"
+            value={s ? fmt(gananciaDia) : "—"}
             loading={isLoading}
           />
         </div>
 
         {/* ── Ganancia real (bruta + merma/rinde) ── */}
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold">Ganancia real del período</CardTitle>
+          <CardHeader className="pb-1.5">
+            <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Ganancia real del período</CardTitle>
           </CardHeader>
-          <CardContent>
-            {isLoading ? <Skeleton className="h-16 w-full" /> : (
-              <div className="flex flex-wrap items-start gap-6">
+          <CardContent className="pt-0">
+            {isLoading ? <Skeleton className="h-10 w-full" /> : (
+              <div className="flex flex-wrap items-center gap-4">
                 <div>
-                  <p className="text-xs text-muted-foreground">Ganancia bruta</p>
-                  <p className="text-xl font-bold text-foreground">{s ? fmt(s.ganancia_bruta) : "—"}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">solo margen de pedidos</p>
+                  <p className="text-[10px] text-muted-foreground">Bruta</p>
+                  <p className="text-base font-semibold text-foreground">{s ? fmt(s.ganancia_bruta) : "—"}</p>
                 </div>
-                <div className="flex items-center gap-2 text-muted-foreground self-center text-sm">→</div>
+                <span className="text-xs text-muted-foreground">→</span>
                 {s && s.rindeTotal > 0 && (
                   <div>
-                    <p className="text-xs text-muted-foreground">+ Rinde</p>
-                    <p className="text-lg font-semibold text-green-600 dark:text-green-400">+{fmt(s.rindeTotal)}</p>
+                    <p className="text-[10px] text-muted-foreground">+ Rinde</p>
+                    <p className="text-sm font-semibold text-green-600 dark:text-green-400">+{fmt(s.rindeTotal)}</p>
                   </div>
                 )}
                 {s && s.mermaTotal > 0 && (
                   <div>
-                    <p className="text-xs text-muted-foreground">- Merma</p>
-                    <p className="text-lg font-semibold text-red-600 dark:text-red-400">-{fmt(s.mermaTotal)}</p>
+                    <p className="text-[10px] text-muted-foreground">- Merma</p>
+                    <p className="text-sm font-semibold text-red-600 dark:text-red-400">-{fmt(s.mermaTotal)}</p>
                   </div>
                 )}
-                <div className="flex items-center gap-2 text-muted-foreground self-center text-sm">→</div>
+                <span className="text-xs text-muted-foreground">→</span>
                 <div>
-                  <p className="text-xs text-muted-foreground">Ganancia real</p>
-                  <p className="text-xl font-bold text-primary">{s ? fmt(s.ganancia_real) : "—"}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">ajustada por merma/rinde</p>
+                  <p className="text-[10px] text-muted-foreground">Real</p>
+                  <p className="text-base font-bold text-primary">{s ? fmt(s.ganancia_real) : "—"}</p>
                 </div>
                 {s && Math.abs(ajusteNeto) > 0 && (
                   <Badge
                     variant="outline"
-                    className={`self-center text-xs ${ajustePositivo ? "text-green-600 border-green-400/50" : "text-red-600 border-red-400/50"}`}
+                    className={`text-[10px] ${ajustePositivo ? "text-green-600 border-green-400/50" : "text-red-600 border-red-400/50"}`}
                   >
                     {ajustePositivo ? "+" : ""}{fmt(ajusteNeto)} por {ajustePositivo ? "rinde" : "merma"}
                   </Badge>
@@ -306,8 +307,8 @@ export default function DashboardPage() {
                 <>
                   <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">{s ? fmt(saldoVacios) : "—"}</p>
                   <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
-                    <p>Entregados: {s ? fmt(s.vaciosTotal) : "—"}</p>
-                    <p>Vales: {s ? fmt(s.valesTotal) : "—"}</p>
+                    <p>Entregados: {s ? s.vaciosQty : "—"} c ({s ? fmt(s.vaciosTotal) : "—"})</p>
+                    <p>Recibidos: {s ? s.valesCount : "—"} vales ({s ? fmt(s.valesTotal) : "—"})</p>
                   </div>
                 </>
               )}
@@ -326,6 +327,23 @@ export default function DashboardPage() {
                 <>
                   <p className="text-2xl font-bold text-red-600 dark:text-red-400">{s ? fmt(s.deudaProveedores) : "—"}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">Compras pendientes de pago</p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Deuda de clientes */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <Users className="h-3.5 w-3.5" /> Deuda de clientes
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {isLoading ? <Skeleton className="h-8 w-28" /> : (
+                <>
+                  <p className="text-2xl font-bold text-green-600 dark:text-green-400">{s ? fmt(s.deudaClientes) : "—"}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Total a cobrar de clientes activos</p>
                 </>
               )}
             </CardContent>

@@ -516,7 +516,7 @@ export default function NewPurchasePage() {
                             <Label className="text-muted-foreground">Costo por {baseUnitLabel} (calc.)</Label>
                             <div className="flex h-9 items-center rounded-md border border-border bg-muted/40 px-3">
                               <span className="text-sm font-semibold text-foreground">
-                                ${costPerBase.toLocaleString("es-MX", { minimumFractionDigits: 4 })}
+                                ${costPerBase.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
                               </span>
                             </div>
                           </div>
@@ -569,7 +569,7 @@ export default function NewPurchasePage() {
                           </Label>
                           <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-muted/40 px-3">
                             <span className="text-sm font-semibold text-foreground">
-                              ${projectedAvg.toLocaleString("es-MX", { minimumFractionDigits: 4 })}
+                              ${projectedAvg.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
                             </span>
                             {currentAvg !== null && currentAvg > 0 && (
                               <Badge variant={projectedAvg > currentAvg ? "destructive" : "secondary"} className="text-[10px]">

@@ -2397,7 +2397,10 @@ export const storage = {
       SELECT
         COALESCE((SELECT SUM(pi.empty_cost::numeric * COALESCE(pi.purchase_qty, pi.quantity)::numeric)
                   FROM purchase_items pi WHERE pi.empty_cost::numeric > 0), 0) AS vacios_total,
-        COALESCE((SELECT SUM(sp.amount::numeric) FROM supplier_payments sp WHERE sp.method = 'VALE'), 0) AS vales_total
+        COALESCE((SELECT SUM(COALESCE(pi.purchase_qty, pi.quantity)::numeric)
+                  FROM purchase_items pi WHERE pi.empty_cost::numeric > 0), 0) AS vacios_qty,
+        COALESCE((SELECT SUM(sp.amount::numeric) FROM supplier_payments sp WHERE sp.method = 'VALE'), 0) AS vales_total,
+        COALESCE((SELECT COUNT(*) FROM supplier_payments sp WHERE sp.method = 'VALE'), 0) AS vales_count
     `);
 
     // 6) Deuda a proveedores (all-time)
@@ -2410,14 +2413,36 @@ export const storage = {
       WHERE s.active = true
     `);
 
-    // 7) Stock valorizado actual (real-time, no date filter)
+    // 7) Deuda de clientes (all-time AR balance)
+    const deudaClientesRow = await db.execute(drizzleSql`
+      SELECT COALESCE(SUM(GREATEST(0,
+        COALESCE(o.total_sum, 0) - COALESCE(p.paid_sum, 0) - COALESCE(w.with_sum, 0)
+      )), 0) AS deuda_clientes
+      FROM customers c
+      LEFT JOIN (
+        SELECT customer_id, SUM(total::numeric) AS total_sum
+        FROM orders WHERE status = 'approved'
+        GROUP BY customer_id
+      ) o ON o.customer_id = c.id
+      LEFT JOIN (
+        SELECT customer_id, SUM(amount::numeric) AS paid_sum
+        FROM payments GROUP BY customer_id
+      ) p ON p.customer_id = c.id
+      LEFT JOIN (
+        SELECT customer_id, SUM(amount::numeric) AS with_sum
+        FROM withholdings GROUP BY customer_id
+      ) w ON w.customer_id = c.id
+      WHERE c.active = true
+    `);
+
+    // 8) Stock valorizado actual (real-time, no date filter)
     const stockValRow = await db.execute(drizzleSql`
       SELECT COALESCE(SUM(pu.stock_qty::numeric * pu.avg_cost::numeric), 0) AS stock_valorizado
       FROM product_units pu
       WHERE pu.stock_qty::numeric > 0 AND pu.is_active = true
     `);
 
-    // 8) Comisiones por vendedor (período)
+    // 9) Comisiones por vendedor (período)
     const comisionesRows = await db.execute(drizzleSql`
       SELECT
         c.salesperson_name AS vendedor,
@@ -2457,6 +2482,7 @@ export const storage = {
     const m = (mermaRow.rows[0] as any) ?? {};
     const v = (vaciosRow.rows[0] as any) ?? {};
     const d = (deudaRow.rows[0] as any) ?? {};
+    const dc = (deudaClientesRow.rows[0] as any) ?? {};
     const sv = (stockValRow.rows[0] as any) ?? {};
 
     const ventas = parseFloat(s.ventas ?? "0");
@@ -2479,8 +2505,11 @@ export const storage = {
       diasPeriodo,
       ventasPorDia,
       vaciosTotal: parseFloat(v.vacios_total ?? "0"),
+      vaciosQty: parseFloat(v.vacios_qty ?? "0"),
       valesTotal: parseFloat(v.vales_total ?? "0"),
+      valesCount: parseInt(v.vales_count ?? "0", 10),
       deudaProveedores: Math.max(0, parseFloat(d.deuda ?? "0")),
+      deudaClientes: parseFloat(dc.deuda_clientes ?? "0"),
       stockValorizado: parseFloat(sv.stock_valorizado ?? "0"),
       comisiones: (comisionesRows.rows as any[]).map((r) => ({
         vendedor: String(r.vendedor),
