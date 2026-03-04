@@ -318,11 +318,12 @@ export default function ProductsPage() {
     setDialogOpen(true);
   };
 
-  const openEdit = (p: Product) => {
+  const openEdit = async (p: Product) => {
     setEditing(p);
     setForm({ name: p.name, description: p.description ?? "", unit: p.unit as any, category: (p.category as ProductCategory) ?? "Verdura" });
-    // Pre-select active units for this product
-    const units = productUnitMap.get(p.id) ?? [];
+    // Fetch all active units (including CAJON/BOLSA/BANDEJA) directly from the endpoint
+    const res = await fetch(`/api/products/${p.id}/units`, { credentials: "include" });
+    const units: { unit: string }[] = res.ok ? await res.json() : [];
     setSelectedUnits(new Set(units.map((pu) => pu.unit)));
     setDialogOpen(true);
   };

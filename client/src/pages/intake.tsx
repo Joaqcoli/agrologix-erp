@@ -17,7 +17,7 @@ import { useLocation } from "wouter";
 import { ArrowLeft, Sparkles, CheckCircle2, AlertTriangle, XCircle, Search, ChevronRight } from "lucide-react";
 import { parseOrderTextLocal, type ParsedLine } from "@/lib/orderParser";
 import type { Customer, Product, ProductUnit } from "@shared/schema";
-import { canonicalizeUnit } from "@shared/units";
+import { canonicalizeUnit, ALL_CANONICAL_UNITS } from "@shared/units";
 
 const STATUS_ICON = {
   ok: <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400 shrink-0" />,
@@ -57,6 +57,8 @@ export default function IntakePage() {
   const [parsed, setParsed] = useState<ParsedLine[]>([]);
   // Manual overrides for ambiguous lines (index → selectedProductId)
   const [overrides, setOverrides] = useState<Record<number, number>>({});
+  // Unit overrides for mismatched lines (parsedIdx → canonical unit)
+  const [unitOverrides, setUnitOverrides] = useState<Record<number, string>>({});
 
   // Merge dialog state
   const [mergeDialog, setMergeDialog] = useState<{ existingId: number; folio: string } | null>(null);
@@ -82,22 +84,27 @@ export default function IntakePage() {
     const result = parseOrderTextLocal(rawText, simpleProducts);
     setParsed(result);
     setOverrides({});
+    setUnitOverrides({});
     setStep("preview");
   };
 
   // Lines that will actually be sent (excluding no_qty)
   const validLines = useMemo(() =>
-    parsed.filter((l) => l.status !== "no_qty").map((line, idx) => {
-      const resolvedProductId = overrides[idx] !== undefined ? overrides[idx] : line.productId;
-      const resolvedProduct = activeProducts.find((p) => p.id === resolvedProductId);
-      return {
-        ...line,
-        resolvedProductId,
-        resolvedProductName: resolvedProduct?.name ?? line.rawProductName,
-        unit: line.unit ?? resolvedProduct?.unit ?? "kg",
-      };
-    }),
-    [parsed, overrides, activeProducts]
+    parsed
+      .map((line, parsedIdx) => ({ ...line, parsedIdx }))
+      .filter((l) => l.status !== "no_qty")
+      .map(({ parsedIdx, ...line }, idx) => {
+        const resolvedProductId = overrides[idx] !== undefined ? overrides[idx] : line.productId;
+        const resolvedProduct = activeProducts.find((p) => p.id === resolvedProductId);
+        return {
+          ...line,
+          parsedIdx,
+          resolvedProductId,
+          resolvedProductName: resolvedProduct?.name ?? line.rawProductName,
+          unit: unitOverrides[parsedIdx] ?? line.unit ?? resolvedProduct?.unit ?? "kg",
+        };
+      }),
+    [parsed, overrides, activeProducts, unitOverrides]
   );
 
   const submitMutation = useMutation({
@@ -105,10 +112,19 @@ export default function IntakePage() {
       mode: "new" | "merge" | "replace";
       existingOrderId?: number;
     }) => {
+      // Register any new units before creating the order
+      for (const line of validLines) {
+        if (unitOverrides[line.parsedIdx] && line.resolvedProductId) {
+          await apiRequest("POST", `/api/products/${line.resolvedProductId}/units`, {
+            unit: unitOverrides[line.parsedIdx],
+          });
+        }
+      }
+
       const items = validLines.map((line) => ({
         productId: line.resolvedProductId ?? null,
         quantity: String(line.quantity ?? 1),
-        unit: line.unit,
+        unit: line.unit, // already has unitOverride applied
         rawProductName: line.rawProductName,
         parseStatus: line.resolvedProductId ? "ok" : line.status,
       }));
@@ -167,6 +183,7 @@ export default function IntakePage() {
     const bad = new Set<number>();
     parsed.forEach((line, idx) => {
       if (line.status === "no_qty" || !line.unit) return;
+      if (unitOverrides[idx]) return; // user already resolved this
       const resolvedProductId = overrides[idx] !== undefined ? overrides[idx] : line.productId;
       if (!resolvedProductId) return;
       const canonical = canonicalizeUnit(line.unit);
@@ -176,7 +193,7 @@ export default function IntakePage() {
       if (!hasUnit) bad.add(idx);
     });
     return bad;
-  }, [parsed, overrides, stockData]);
+  }, [parsed, overrides, unitOverrides, stockData]);
 
   return (
     <Layout title="Carga Pedido">
@@ -333,13 +350,30 @@ export default function IntakePage() {
                             <div className="flex flex-wrap items-center gap-3 mt-1.5">
                               {line.quantity !== null && (
                                 <span className="text-xs font-semibold text-foreground">
-                                  {line.quantity} {line.unit ?? "—"}
+                                  {line.quantity} {unitOverrides[idx] ?? line.unit ?? "—"}
                                   {unitMismatchIndices.has(idx) && (
                                     <Badge variant="outline" className="ml-2 text-[10px] text-yellow-600 border-yellow-500/40 align-middle">
                                       unidad sin registrar
                                     </Badge>
                                   )}
                                 </span>
+                              )}
+                              {unitMismatchIndices.has(idx) && (
+                                <div className="w-full mt-1">
+                                  <Select
+                                    value={unitOverrides[idx] ?? ""}
+                                    onValueChange={(v) => setUnitOverrides({ ...unitOverrides, [idx]: v })}
+                                  >
+                                    <SelectTrigger className="h-7 text-xs w-48" data-testid={`select-unit-${idx}`}>
+                                      <SelectValue placeholder="Registrar como..." />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {ALL_CANONICAL_UNITS.map((u) => (
+                                        <SelectItem key={u} value={u} className="text-xs">{u}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
                               )}
 
                               {/* Product display / picker */}

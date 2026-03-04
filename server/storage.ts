@@ -441,16 +441,17 @@ export const storage = {
 
   // ── Helper: obtener costo por unidad para un producto dado ──────────────────
   // Prioridad: 1) fila exacta en product_units  2) derivado de unidad base × weight_per_unit  3) products.averageCost
+  // En todos los casos: solo retorna costo si hay stock > 0, sino retorna "0"
   async _getCostForUnit(productId: number, unit: string, tx: any = db): Promise<string> {
     const canonical = dbEnumToCanonical(unit);
 
-    // 1) Coincidencia exacta de unidad
+    // 1) Coincidencia exacta — solo si hay stock
     const [exactPu] = await tx.select().from(productUnits)
       .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, canonical)))
       .limit(1);
-    if (exactPu) return exactPu.avgCost as string;
+    if (exactPu && parseFloat(exactPu.stockQty as string) > 0) return exactPu.avgCost as string;
 
-    // 2) Si es unidad de envase, derivar de fila base × weight_per_unit
+    // 2) Si es unidad de envase, derivar de fila base × weight_per_unit — solo si base tiene stock
     if (['CAJON', 'BOLSA', 'BANDEJA'].includes(canonical)) {
       const [baseRow] = await tx.select().from(productUnits)
         .where(and(
@@ -458,15 +459,17 @@ export const storage = {
           drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
         ))
         .limit(1);
-      if (baseRow) {
+      if (baseRow && parseFloat(baseRow.stockQty as string) > 0) {
         const wpu = parseFloat(baseRow.weightPerUnit as string ?? "0");
         if (wpu > 0) return (parseFloat(baseRow.avgCost as string) * wpu).toFixed(4);
       }
     }
 
-    // 3) Fallback: averageCost del producto
+    // 3) Fallback: averageCost del producto — solo si hay currentStock
     const [p] = await tx.select().from(products).where(eq(products.id, productId)).limit(1);
-    return p?.averageCost as string ?? "0";
+    const currentStock = parseFloat(p?.currentStock as string ?? "0");
+    if (currentStock > 0) return p?.averageCost as string ?? "0";
+    return "0";
   },
 
   async _recalcProductSummary(pid: number, tx: any = db): Promise<void> {
@@ -1301,6 +1304,18 @@ export const storage = {
             ...(isOverflow && { averageCost: "0" }),
           })
           .where(eq(products.id, item.productId));
+
+        // On overflow: mark this order item with cost $0 (stock agotado)
+        if (isOverflow) {
+          const price = parseFloat(item.pricePerUnit as string ?? "0");
+          const margin = price > 0 ? price / price : null; // margin = 100% when cost = 0
+          await tx.update(orderItems)
+            .set({
+              costPerUnit: "0",
+              ...(margin !== null && { margin: "1.0000" }),
+            })
+            .where(eq(orderItems.id, item.id));
+        }
 
         // Save final price to price_history
         await tx.insert(priceHistory).values({

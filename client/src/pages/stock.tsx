@@ -679,6 +679,7 @@ export default function StockPage() {
                       <th className="text-left py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Unidad</th>
                       <th className="text-right py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Stock</th>
                       <th className="text-right py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Costo prom.</th>
+                      <th className="text-right py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Costo/Cajón</th>
                       <th className="text-right py-2.5 px-4 font-semibold text-muted-foreground uppercase tracking-wide text-xs">Valor stock</th>
                       <th className="py-2.5 px-4"></th>
                     </tr>
@@ -687,7 +688,7 @@ export default function StockPage() {
                     {sortedCats.map((cat) => (
                       <>
                         <tr key={`cat-${cat}`} className="border-b border-border bg-muted/50">
-                          <td colSpan={6} className="py-1.5 px-4 text-xs font-semibold text-muted-foreground uppercase tracking-widest">
+                          <td colSpan={7} className="py-1.5 px-4 text-xs font-semibold text-muted-foreground uppercase tracking-widest">
                             {cat}
                           </td>
                         </tr>
@@ -729,6 +730,12 @@ export default function StockPage() {
                               </td>
                               <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">
                                 {cost > 0 ? `$${fmt(cost)}` : "—"}
+                              </td>
+                              <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">
+                                {(() => {
+                                  const wpu = parseFloat(pu.weightPerUnit as string ?? "0");
+                                  return wpu > 0 && cost > 0 ? `$${fmt(cost * wpu)}` : "—";
+                                })()}
                               </td>
                               <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">
                                 {cost > 0 ? `$${fmt(valorStock)}` : "—"}
