@@ -190,12 +190,36 @@ export default function PurchaseDetailPage({ id }: { id: number }) {
               ))}
             </div>
             <Separator className="my-3" />
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Total</span>
-              <span className="text-xl font-bold text-foreground">
-                ${parseFloat(purchase.total).toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-              </span>
-            </div>
+            {parseFloat(purchase.totalEmptyCost ?? "0") > 0 ? (
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-muted-foreground">Subtotal productos</span>
+                  <span className="text-sm text-foreground">
+                    ${(parseFloat(purchase.total) - parseFloat(purchase.totalEmptyCost)).toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-amber-600 dark:text-amber-400">Total vacíos</span>
+                  <span className="text-sm text-amber-600 dark:text-amber-400">
+                    ${parseFloat(purchase.totalEmptyCost).toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <Separator className="my-1" />
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-medium text-foreground">Total</span>
+                  <span className="text-xl font-bold text-foreground">
+                    ${parseFloat(purchase.total).toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-muted-foreground">Total</span>
+                <span className="text-xl font-bold text-foreground">
+                  ${parseFloat(purchase.total).toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

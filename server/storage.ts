@@ -233,7 +233,7 @@ export const storage = {
         purchaseDate: data.purchaseDate,
         notes: data.notes,
         createdBy: data.createdBy,
-        total: total.toFixed(2),
+        total: (total + totalEmptyCost).toFixed(2),
       }).returning();
 
       // Auto-create supplier payment for cash/transfer purchases
@@ -242,7 +242,7 @@ export const storage = {
         await tx.insert(supplierPayments).values({
           supplierId: data.supplierId,
           date: dateStr,
-          amount: total.toFixed(2),
+          amount: (total + totalEmptyCost).toFixed(2),
           method: data.paymentMethod === "efectivo" ? "EFECTIVO" : "TRANSFERENCIA",
           notes: `Pago automático compra ${data.folio}`,
           purchaseId: purchase.id,

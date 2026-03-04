@@ -334,5 +334,16 @@ export async function runMigrations() {
   await db.execute(sql`ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS empty_cost numeric(12,4) DEFAULT 0`);
   await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS total_empty_cost numeric(12,2) DEFAULT 0`);
 
+  // Backfill: recalculate total to include total_empty_cost for existing purchases
+  await db.execute(sql`
+    UPDATE purchases
+    SET total = (
+      SELECT COALESCE(SUM(pi.subtotal), 0) + purchases.total_empty_cost
+      FROM purchase_items pi
+      WHERE pi.purchase_id = purchases.id
+    )
+    WHERE total_empty_cost > 0
+  `);
+
   console.log("Migrations complete.");
 }
