@@ -37,11 +37,13 @@ const PACKAGE_UNIT_SET = new Set(["caja", "saco", "bandeja"]);
 
 type PurchaseItem = {
   productId: number;
+  productSearch: string;
   quantity: string;
   unit: string;
   weightPerPackage: string;
   baseUnit: string;
   costPerUnit: string;
+  emptyCost: string;
 };
 
 const isPackageUnit = (unit: string) => PACKAGE_UNIT_SET.has(unit);
@@ -108,7 +110,7 @@ export default function NewPurchasePage() {
   const [paymentMethod, setPaymentMethod] = useState("cuenta_corriente");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<PurchaseItem[]>([{
-    productId: 0, quantity: "", unit: "kg", weightPerPackage: "", baseUnit: "kg", costPerUnit: "",
+    productId: 0, productSearch: "", quantity: "", unit: "kg", weightPerPackage: "", baseUnit: "kg", costPerUnit: "", emptyCost: "",
   }]);
   const [newSupplierOpen, setNewSupplierOpen] = useState(false);
 
@@ -139,7 +141,7 @@ export default function NewPurchasePage() {
     return p?.category === "Huevos";
   };
 
-  const addItem = () => setItems([...items, { productId: 0, quantity: "", unit: "kg", weightPerPackage: "", baseUnit: "kg", costPerUnit: "" }]);
+  const addItem = () => setItems([...items, { productId: 0, productSearch: "", quantity: "", unit: "kg", weightPerPackage: "", baseUnit: "kg", costPerUnit: "", emptyCost: "" }]);
   const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
 
   const updateItem = (i: number, field: keyof PurchaseItem, value: string | number) => {
@@ -149,6 +151,7 @@ export default function NewPurchasePage() {
     if (field === "productId") {
       const product = activeProducts.find((p) => p.id === Number(value));
       if (product) {
+        updated[i].productSearch = product.name;
         const defaultUnit = product.unit as string;
         updated[i].unit = defaultUnit;
         if (product.category === "Huevos" && defaultUnit === "caja") {
@@ -200,6 +203,12 @@ export default function NewPurchasePage() {
 
   const itemSubtotal = (item: PurchaseItem) => (parseFloat(item.quantity) || 0) * (parseFloat(item.costPerUnit) || 0);
   const grandTotal = items.reduce((sum, item) => sum + itemSubtotal(item), 0);
+  const grandEmptyCost = items.reduce((sum, item) => {
+    if (!isPackageUnit(item.unit)) return sum;
+    const ec = parseFloat(item.emptyCost) || 0;
+    const qty = parseFloat(item.quantity) || 0;
+    return sum + ec * qty;
+  }, 0);
 
   const getProjectedAvgCost = (item: PurchaseItem) => {
     const p = activeProducts.find((x) => x.id === item.productId);
@@ -243,6 +252,7 @@ export default function NewPurchasePage() {
             purchaseQty: parseFloat(i.quantity).toFixed(4),
             purchaseUnit: i.unit,
             weightPerPackage: parseFloat(i.weightPerPackage).toFixed(4),
+            emptyCost: i.emptyCost && parseFloat(i.emptyCost) > 0 ? parseFloat(i.emptyCost).toFixed(4) : undefined,
           };
         } else {
           return {
@@ -398,16 +408,40 @@ export default function NewPurchasePage() {
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
                       <div className="sm:col-span-2 space-y-1.5">
                         <Label>Producto *</Label>
-                        <Select value={item.productId ? String(item.productId) : ""} onValueChange={(v) => updateItem(idx, "productId", Number(v))}>
-                          <SelectTrigger data-testid={`select-product-${idx}`}>
-                            <SelectValue placeholder="Seleccionar producto..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {activeProducts.map((p) => (
-                              <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <div className="relative">
+                          <Input
+                            placeholder="Buscar producto..."
+                            value={item.productSearch}
+                            onChange={(e) => {
+                              const updated = [...items];
+                              updated[idx] = { ...updated[idx], productSearch: e.target.value };
+                              if (!e.target.value) updated[idx].productId = 0;
+                              setItems(updated);
+                            }}
+                            autoComplete="off"
+                            data-testid={`input-product-search-${idx}`}
+                          />
+                          {item.productSearch.length >= 1 && item.productId === 0 && (() => {
+                            const filtered = activeProducts.filter((p) =>
+                              p.name.toLowerCase().includes(item.productSearch.toLowerCase())
+                            ).slice(0, 12);
+                            if (filtered.length === 0) return null;
+                            return (
+                              <div className="absolute z-20 top-full left-0 right-0 mt-0.5 bg-background border border-border rounded-md shadow-lg max-h-52 overflow-y-auto">
+                                {filtered.map((p) => (
+                                  <div
+                                    key={p.id}
+                                    className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-muted text-sm"
+                                    onMouseDown={(e) => { e.preventDefault(); updateItem(idx, "productId", p.id); }}
+                                  >
+                                    <span className="font-medium">{p.name}</span>
+                                    {p.category && <span className="text-xs text-muted-foreground ml-2">{p.category}</span>}
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                        </div>
                       </div>
 
                       <div className="space-y-1.5">
@@ -491,6 +525,21 @@ export default function NewPurchasePage() {
                     )}
 
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      {packageMode && (
+                        <div className="space-y-1.5">
+                          <Label>Costo vacío / {labelFor(item.unit)}</Label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
+                            <Input
+                              type="number" min="0" step="1" placeholder="0"
+                              value={item.emptyCost}
+                              onChange={(e) => updateItem(idx, "emptyCost", e.target.value)}
+                              className="pl-7"
+                              data-testid={`input-empty-cost-${idx}`}
+                            />
+                          </div>
+                        </div>
+                      )}
                       <div className="space-y-1.5">
                         <Label>Costo por {labelFor(item.unit)} *</Label>
                         <div className="relative">
@@ -554,12 +603,31 @@ export default function NewPurchasePage() {
               })}
 
               <Separator />
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Total de la compra</span>
-                <span className="text-xl font-bold text-foreground" data-testid="text-grand-total">
-                  ${grandTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                </span>
-              </div>
+              {grandEmptyCost > 0 ? (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Subtotal productos</span>
+                    <span>${grandTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Total vacíos</span>
+                    <span>${grandEmptyCost.toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground font-semibold">Total compra</span>
+                    <span className="text-xl font-bold text-foreground" data-testid="text-grand-total">
+                      ${(grandTotal + grandEmptyCost).toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Total de la compra</span>
+                  <span className="text-xl font-bold text-foreground" data-testid="text-grand-total">
+                    ${grandTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              )}
             </CardContent>
           </Card>
 

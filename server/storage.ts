@@ -204,13 +204,18 @@ export const storage = {
       purchaseQty?: string;
       purchaseUnit?: string;
       weightPerPackage?: string;
+      emptyCost?: string;
     }[];
   }): Promise<Purchase> {
     // Pre-compute totals (no DB)
     let total = 0;
+    let totalEmptyCost = 0;
     const itemsWithSubtotal = data.items.map((item) => {
       const subtotal = parseFloat(item.quantity) * parseFloat(item.costPerUnit);
       total += subtotal;
+      const emptyCost = parseFloat(item.emptyCost ?? "0") || 0;
+      const emptyQty = item.purchaseQty ? parseFloat(item.purchaseQty) : parseFloat(item.quantity);
+      totalEmptyCost += emptyCost * emptyQty;
       return { ...item, subtotal: subtotal.toFixed(2) };
     });
 
@@ -224,6 +229,7 @@ export const storage = {
         supplierId: data.supplierId ?? null,
         paymentMethod: data.paymentMethod ?? "cuenta_corriente",
         isPaid: isAutoPayment,
+        totalEmptyCost: totalEmptyCost.toFixed(2),
         purchaseDate: data.purchaseDate,
         notes: data.notes,
         createdBy: data.createdBy,
@@ -255,6 +261,7 @@ export const storage = {
           ...(item.purchaseQty ? { purchaseQty: item.purchaseQty } : {}),
           ...(item.purchaseUnit ? { purchaseUnit: item.purchaseUnit as any } : {}),
           ...(item.weightPerPackage ? { weightPerPackage: item.weightPerPackage } : {}),
+          ...(item.emptyCost && parseFloat(item.emptyCost) > 0 ? { emptyCost: item.emptyCost } : {}),
         }))
       );
 
@@ -2187,7 +2194,8 @@ export const storage = {
       // Compras del período
       db.execute(drizzleSql`
         SELECT id, folio, total::text AS total, purchase_date::text AS "purchaseDate",
-               payment_method AS "paymentMethod", is_paid AS "isPaid"
+               payment_method AS "paymentMethod", is_paid AS "isPaid",
+               COALESCE(total_empty_cost, 0)::text AS "totalEmptyCost"
         FROM purchases
         WHERE supplier_id = ${supplierId}
           AND purchase_date >= ${fromDate}::timestamp
@@ -2224,6 +2232,7 @@ export const storage = {
       total: Math.round(parseFloat(p.total ?? "0")),
       paymentMethod: String(p.paymentMethod ?? "cuenta_corriente"),
       isPaid: Boolean(p.isPaid),
+      totalEmptyCost: Math.round(parseFloat(p.totalEmptyCost ?? "0")),
     }));
 
     const facturacion = purchasesInPeriod.reduce((s, p) => s + p.total, 0);
@@ -2240,6 +2249,69 @@ export const storage = {
       saldo,
       purchases: purchasesInPeriod,
       payments: paymentsInPeriod.map((p) => ({ ...p, amount: parseFloat(p.amount ?? "0") })),
+    };
+  },
+
+  // ─── Vacíos vs Vales (historial completo por proveedor) ──────────────────────
+  async getSupplierEmptiesDetail(supplierId: number) {
+    const [emptiesRows, valesRows] = await Promise.all([
+      db.execute(drizzleSql`
+        SELECT pi.id, pi.purchase_id, pi.empty_cost::text AS empty_cost,
+               pi.purchase_qty::text AS purchase_qty, pi.quantity::text AS quantity,
+               pi.purchase_unit,
+               p.folio, p.purchase_date::text AS purchase_date,
+               pr.name AS product_name
+        FROM purchase_items pi
+        JOIN purchases p ON p.id = pi.purchase_id
+        JOIN products pr ON pr.id = pi.product_id
+        WHERE p.supplier_id = ${supplierId}
+          AND pi.empty_cost > 0
+        ORDER BY p.purchase_date DESC
+      `),
+      db.execute(drizzleSql`
+        SELECT id, date, amount::text AS amount, notes
+        FROM supplier_payments
+        WHERE supplier_id = ${supplierId} AND method = 'VALE'
+        ORDER BY date DESC
+      `),
+    ]);
+
+    const empties = (emptiesRows.rows as any[]).map((r) => {
+      const emptyCostPerUnit = parseFloat(r.empty_cost ?? "0");
+      const qty = r.purchase_qty ? parseFloat(r.purchase_qty) : parseFloat(r.quantity ?? "0");
+      return {
+        purchaseId: Number(r.purchase_id),
+        folio: String(r.folio),
+        purchaseDate: String(r.purchase_date),
+        productName: String(r.product_name),
+        qty,
+        emptyCostPerUnit,
+        total: emptyCostPerUnit * qty,
+      };
+    });
+
+    const vales = (valesRows.rows as any[]).map((r) => ({
+      id: Number(r.id),
+      date: String(r.date),
+      amount: parseFloat(r.amount ?? "0"),
+      notes: r.notes,
+    }));
+
+    const totalEmptyQty = empties.reduce((s, e) => s + e.qty, 0);
+    const totalEmptyAmount = empties.reduce((s, e) => s + e.total, 0);
+    const totalValesAmount = vales.reduce((s, v) => s + v.amount, 0);
+    const avgEmptyCost = totalEmptyQty > 0 ? totalEmptyAmount / totalEmptyQty : 0;
+    const totalValesQty = avgEmptyCost > 0 ? totalValesAmount / avgEmptyCost : 0;
+
+    return {
+      empties,
+      vales,
+      totalEmptyQty,
+      totalEmptyAmount,
+      totalValesQty,
+      totalValesAmount,
+      avgEmptyCost,
+      saldoVacios: totalEmptyQty - totalValesQty,
     };
   },
 };

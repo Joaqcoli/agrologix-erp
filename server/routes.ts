@@ -808,5 +808,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  app.get("/api/ap/empties/:supplierId", requireAuth, async (req, res) => {
+    try {
+      return res.json(await storage.getSupplierEmptiesDetail(Number(req.params.supplierId)));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   return httpServer;
 }

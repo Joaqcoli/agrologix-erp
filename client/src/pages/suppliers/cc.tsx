@@ -14,7 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2 } from "lucide-react";
-import { useState } from "react";
+import React, { useState } from "react";
 import { jsPDF } from "jspdf";
 
 const MONTHS = [
@@ -22,7 +22,7 @@ const MONTHS = [
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ];
 
-const PAYMENT_METHODS = ["EFECTIVO", "TRANSFERENCIA", "CHEQUE", "CUENTA_CORRIENTE", "OTRO"] as const;
+const PAYMENT_METHODS = ["EFECTIVO", "TRANSFERENCIA", "CHEQUE", "VALE", "CUENTA_CORRIENTE", "OTRO"] as const;
 
 const fmtInt = (v: number) => Math.round(v).toLocaleString("es-AR");
 const todayStr = () => new Date().toISOString().split("T")[0];
@@ -34,6 +34,18 @@ type PurchaseRow = {
   total: number;
   paymentMethod: string;
   isPaid: boolean;
+  totalEmptyCost: number;
+};
+
+type EmptiesDetail = {
+  empties: { purchaseId: number; folio: string; purchaseDate: string; productName: string; qty: number; emptyCostPerUnit: number; total: number }[];
+  vales: { id: number; date: string; amount: number; notes?: string | null }[];
+  totalEmptyQty: number;
+  totalEmptyAmount: number;
+  totalValesQty: number;
+  totalValesAmount: number;
+  avgEmptyCost: number;
+  saldoVacios: number;
 };
 
 type PaymentRow = {
@@ -331,6 +343,7 @@ export default function SupplierCCPage({
   const [month, setMonth] = useState(initMonth);
   const [year, setYear] = useState(initYear);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [activeTab, setActiveTab] = useState<"cc" | "vacios">("cc");
   const today2 = new Date();
   const years = Array.from({ length: 4 }, (_, i) => today2.getFullYear() - i);
 
@@ -351,6 +364,17 @@ export default function SupplierCCPage({
       return res.json();
     },
     staleTime: 60_000,
+  });
+
+  const { data: emptiesData } = useQuery<EmptiesDetail>({
+    queryKey: ["/api/ap/empties", supplierId],
+    queryFn: async () => {
+      const res = await fetch(`/api/ap/empties/${supplierId}`, { credentials: "include" });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    staleTime: 60_000,
+    enabled: activeTab === "vacios",
   });
 
   const deletePaymentMutation = useMutation({
@@ -433,6 +457,23 @@ export default function SupplierCCPage({
           </Button>
         </div>
 
+        {/* Tabs */}
+        <div className="flex gap-1 border-b border-border">
+          <button
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === "cc" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+            onClick={() => setActiveTab("cc")}
+          >
+            Cuenta Corriente
+          </button>
+          <button
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === "vacios" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+            onClick={() => setActiveTab("vacios")}
+          >
+            Vacíos vs Vales
+          </button>
+        </div>
+
+        {activeTab === "cc" && <>
         {/* Balance summary cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
@@ -497,36 +538,44 @@ export default function SupplierCCPage({
                   </thead>
                   <tbody>
                     {data?.purchases.map((p) => (
-                      <tr
-                        key={p.id}
-                        className={`border-b border-border last:border-0 transition-colors ${
-                          p.isPaid ? "bg-green-50/50 dark:bg-green-950/20" : "hover:bg-muted/20"
-                        }`}
-                      >
-                        <td
-                          className="py-2 px-3 font-mono font-medium text-primary cursor-pointer hover:underline"
-                          onClick={() => setLocation(`/purchases/${p.id}`)}
+                      <React.Fragment key={p.id}>
+                        <tr
+                          className={`border-b ${p.totalEmptyCost > 0 ? "" : "border-border"} transition-colors ${
+                            p.isPaid ? "bg-green-50/50 dark:bg-green-950/20" : "hover:bg-muted/20"
+                          }`}
                         >
-                          {p.folio}
-                        </td>
-                        <td className="py-2 px-3 text-muted-foreground">{fmtDate(p.purchaseDate)}</td>
-                        <td className="py-2 px-3 text-muted-foreground capitalize">
-                          {p.paymentMethod.replace(/_/g, " ")}
-                        </td>
-                        <td className={`py-2 px-3 text-right font-semibold ${p.isPaid ? "text-muted-foreground line-through" : "text-foreground"}`}>
-                          ${fmtInt(p.total)}
-                        </td>
-                        <td className="py-2 px-3">
-                          {p.isPaid ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-green-700 bg-green-100 dark:bg-green-900/30 dark:text-green-400 px-1.5 py-0.5 rounded-full">
-                              <CheckCircle2 className="h-2.5 w-2.5" />
-                              Pagada
-                            </span>
-                          ) : (
-                            <span className="text-[10px] text-muted-foreground">Pendiente</span>
-                          )}
-                        </td>
-                      </tr>
+                          <td
+                            className="py-2 px-3 font-mono font-medium text-primary cursor-pointer hover:underline"
+                            onClick={() => setLocation(`/purchases/${p.id}`)}
+                          >
+                            {p.folio}
+                          </td>
+                          <td className="py-2 px-3 text-muted-foreground">{fmtDate(p.purchaseDate)}</td>
+                          <td className="py-2 px-3 text-muted-foreground capitalize">
+                            {p.paymentMethod.replace(/_/g, " ")}
+                          </td>
+                          <td className={`py-2 px-3 text-right font-semibold ${p.isPaid ? "text-muted-foreground line-through" : "text-foreground"}`}>
+                            ${fmtInt(p.total)}
+                          </td>
+                          <td className="py-2 px-3">
+                            {p.isPaid ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-medium text-green-700 bg-green-100 dark:bg-green-900/30 dark:text-green-400 px-1.5 py-0.5 rounded-full">
+                                <CheckCircle2 className="h-2.5 w-2.5" />
+                                Pagada
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-muted-foreground">Pendiente</span>
+                            )}
+                          </td>
+                        </tr>
+                        {p.totalEmptyCost > 0 && (
+                          <tr className="border-b border-border bg-amber-50/30 dark:bg-amber-950/10">
+                            <td colSpan={5} className="py-1 px-3 pl-8 text-xs text-amber-600 dark:text-amber-400">
+                              └─ Vacíos: ${fmtInt(p.totalEmptyCost)}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     ))}
                   </tbody>
                 </table>
@@ -595,6 +644,102 @@ export default function SupplierCCPage({
             )}
           </CardContent>
         </Card>
+        </> /* end activeTab === "cc" */}
+
+        {activeTab === "vacios" && (
+          <div className="space-y-4">
+            {/* Resumen */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {[
+                { label: "Vacíos entregados", value: emptiesData?.totalEmptyQty ?? 0, suffix: " u.", color: "text-amber-600" },
+                { label: "Vales pagados", value: emptiesData?.totalValesQty ?? 0, suffix: " u.", color: "text-blue-600" },
+                { label: "Saldo en tu poder", value: emptiesData?.saldoVacios ?? 0, suffix: " u.", color: "text-foreground", big: true },
+              ].map((item) => (
+                <Card key={item.label} className={item.big ? "border-2 border-primary/30" : ""}>
+                  <CardContent className="p-3">
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide">{item.label}</p>
+                    <p className={`text-base font-bold mt-0.5 ${item.color}`}>
+                      {(item.value).toLocaleString("es-AR", { maximumFractionDigits: 1 })}{item.suffix}
+                    </p>
+                    {item.label === "Vacíos entregados" && emptiesData && emptiesData.totalEmptyAmount > 0 && (
+                      <p className="text-[10px] text-muted-foreground">${fmtInt(emptiesData.totalEmptyAmount)}</p>
+                    )}
+                    {item.label === "Vales pagados" && emptiesData && emptiesData.totalValesAmount > 0 && (
+                      <p className="text-[10px] text-muted-foreground">${fmtInt(emptiesData.totalValesAmount)}</p>
+                    )}
+                    {item.label === "Saldo en tu poder" && emptiesData && emptiesData.avgEmptyCost > 0 && (
+                      <p className="text-[10px] text-muted-foreground">Precio prom. ${fmtInt(emptiesData.avgEmptyCost)}/u.</p>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            {/* Detalle */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-semibold">Detalle de movimientos</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                {!emptiesData || (emptiesData.empties.length === 0 && emptiesData.vales.length === 0) ? (
+                  <p className="text-sm text-muted-foreground p-4 text-center">Sin movimientos de vacíos registrados</p>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-border bg-muted/30">
+                        <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Fecha</th>
+                        <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Tipo</th>
+                        <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Descripción</th>
+                        <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Cantidad</th>
+                        <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Monto</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        ...emptiesData.empties.map((e) => ({
+                          date: e.purchaseDate,
+                          tipo: "vacío" as const,
+                          desc: `${e.folio} — ${e.productName}`,
+                          qty: e.qty,
+                          amount: e.total,
+                        })),
+                        ...emptiesData.vales.map((v) => ({
+                          date: v.date,
+                          tipo: "vale" as const,
+                          desc: v.notes ?? `Pago #${v.id}`,
+                          qty: emptiesData.avgEmptyCost > 0 ? v.amount / emptiesData.avgEmptyCost : null,
+                          amount: v.amount,
+                        })),
+                      ]
+                        .sort((a, b) => b.date.localeCompare(a.date))
+                        .map((row, i) => (
+                          <tr key={i} className="border-b border-border last:border-0">
+                            <td className="py-2 px-3 text-muted-foreground">{fmtDate(row.date)}</td>
+                            <td className="py-2 px-3">
+                              <Badge
+                                variant="outline"
+                                className={`text-[9px] py-0 ${row.tipo === "vacío" ? "text-amber-600 border-amber-200" : "text-blue-600 border-blue-200"}`}
+                              >
+                                {row.tipo === "vacío" ? "Vacío entregado" : "Vale pagado"}
+                              </Badge>
+                            </td>
+                            <td className="py-2 px-3 text-muted-foreground truncate max-w-[160px]">{row.desc}</td>
+                            <td className={`py-2 px-3 text-right font-medium ${row.tipo === "vacío" ? "text-amber-600" : "text-blue-600"}`}>
+                              {row.tipo === "vacío" ? "+" : "-"}
+                              {row.qty != null ? row.qty.toLocaleString("es-AR", { maximumFractionDigits: 1 }) : "—"} u.
+                            </td>
+                            <td className={`py-2 px-3 text-right font-semibold ${row.tipo === "vacío" ? "text-amber-600" : "text-blue-600"}`}>
+                              {row.tipo === "vacío" ? "+" : "-"}${fmtInt(row.amount)}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
       </div>
 
       <PaymentModal

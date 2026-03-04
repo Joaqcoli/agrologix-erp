@@ -72,6 +72,7 @@ export const purchases = pgTable("purchases", {
   notes: text("notes"),
   paymentMethod: text("payment_method").default("cuenta_corriente"),
   isPaid: boolean("is_paid").notNull().default(false),
+  totalEmptyCost: numeric("total_empty_cost", { precision: 12, scale: 2 }).default("0"),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
@@ -100,6 +101,7 @@ export const purchaseItems = pgTable("purchase_items", {
   purchaseQty: numeric("purchase_qty", { precision: 12, scale: 4 }),
   purchaseUnit: unitEnum("purchase_unit"),
   weightPerPackage: numeric("weight_per_package", { precision: 12, scale: 4 }),
+  emptyCost: numeric("empty_cost", { precision: 12, scale: 4 }).default("0"),
 });
 
 export const stockMovements = pgTable("stock_movements", {
@@ -244,6 +246,7 @@ export const insertPurchaseSchema = createInsertSchema(purchases).omit({ id: tru
     purchaseQty: z.string().optional(),
     purchaseUnit: z.enum(["kg", "pz", "caja", "saco", "litro", "tonelada", "CAJON", "maple", "atado", "bandeja"]).optional(),
     weightPerPackage: z.string().optional(),
+    emptyCost: z.string().optional(),
   })).min(1, "Must have at least one item"),
 });
 export const insertOrderSchema = z.object({

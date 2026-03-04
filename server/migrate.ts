@@ -330,5 +330,9 @@ export async function runMigrations() {
   await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'cuenta_corriente'`);
   await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS is_paid BOOLEAN NOT NULL DEFAULT false`);
 
+  // ─── Vacíos (empty packaging cost) ──────────────────────────────────────────
+  await db.execute(sql`ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS empty_cost numeric(12,4) DEFAULT 0`);
+  await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS total_empty_cost numeric(12,2) DEFAULT 0`);
+
   console.log("Migrations complete.");
 }
