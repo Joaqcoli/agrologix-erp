@@ -348,6 +348,13 @@ export async function runMigrations() {
   // ─── Customers: salesperson & commission ────────────────────────────────────
   await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS salesperson_name text`);
   await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS commission_pct numeric(5,2) DEFAULT 0`);
+  await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS bolsa_fv boolean DEFAULT false`);
+
+  // ─── Bolsa FV en pedidos ─────────────────────────────────────────────────────
+  await db.execute(sql`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS bolsa_type text`);
+
+  // ─── Saldo inicial de cuentas corrientes ──────────────────────────────────────
+  await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS opening_balance numeric(12,2) NOT NULL DEFAULT 0`);
 
   console.log("Migrations complete.");
 }

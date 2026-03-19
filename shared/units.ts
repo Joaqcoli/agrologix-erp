@@ -6,7 +6,7 @@
 export type CanonicalUnit = "KG" | "CAJON" | "BOLSA" | "UNIDAD" | "ATADO" | "LITRO" | "TONELADA" | "PZ" | "MAPLE" | "BANDEJA";
 
 export const ALL_CANONICAL_UNITS: CanonicalUnit[] = [
-  "KG", "CAJON", "BOLSA", "UNIDAD", "ATADO", "LITRO", "TONELADA", "PZ", "MAPLE", "BANDEJA",
+  "KG", "CAJON", "BOLSA", "UNIDAD", "ATADO", "MAPLE", "BANDEJA",
 ];
 
 /** Normalize accents and whitespace */

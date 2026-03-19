@@ -248,7 +248,7 @@ export default function NewPurchasePage() {
             productId: Number(i.productId),
             quantity: totalBaseQty.toFixed(4),
             unit: i.baseUnit,
-            costPerUnit: costPerBase.toFixed(4),
+            costPerUnit: Math.round(costPerBase).toFixed(4),
             purchaseQty: parseFloat(i.quantity).toFixed(4),
             purchaseUnit: i.unit,
             weightPerPackage: parseFloat(i.weightPerPackage).toFixed(4),
@@ -259,7 +259,7 @@ export default function NewPurchasePage() {
             productId: Number(i.productId),
             quantity: parseFloat(i.quantity).toFixed(4),
             unit: i.unit,
-            costPerUnit: parseFloat(i.costPerUnit).toFixed(4),
+            costPerUnit: Math.round(parseFloat(i.costPerUnit)).toFixed(4),
           };
         }
       }),
@@ -545,9 +545,9 @@ export default function NewPurchasePage() {
                         <div className="relative">
                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
                           <Input
-                            type="number" min="0" step="0.0001" placeholder="0.0000"
+                            type="text" inputMode="numeric" placeholder="$0"
                             value={item.costPerUnit}
-                            onChange={(e) => updateItem(idx, "costPerUnit", e.target.value)}
+                            onChange={(e) => updateItem(idx, "costPerUnit", e.target.value.replace(/[^0-9.]/g, ""))}
                             className="pl-7"
                             required={item.productId > 0}
                             data-testid={`input-cost-${idx}`}
@@ -558,7 +558,7 @@ export default function NewPurchasePage() {
                         <Label className="text-muted-foreground">Subtotal</Label>
                         <div className="flex h-9 items-center rounded-md border border-border bg-muted/40 px-3">
                           <span className="text-sm font-semibold text-foreground">
-                            ${itemSubtotal(item).toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                            ${Math.round(itemSubtotal(item)).toLocaleString("es-MX")}
                           </span>
                         </div>
                       </div>
@@ -569,7 +569,7 @@ export default function NewPurchasePage() {
                           </Label>
                           <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-muted/40 px-3">
                             <span className="text-sm font-semibold text-foreground">
-                              ${projectedAvg.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                              ${Math.round(projectedAvg).toLocaleString("es-MX")}
                             </span>
                             {currentAvg !== null && currentAvg > 0 && (
                               <Badge variant={projectedAvg > currentAvg ? "destructive" : "secondary"} className="text-[10px]">
@@ -592,7 +592,7 @@ export default function NewPurchasePage() {
                         {currentAvg !== null && currentAvg > 0 && (
                           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                             Costo actual: <span className="font-medium text-foreground">
-                              ${currentAvg.toLocaleString("es-MX", { minimumFractionDigits: 4 })}
+                              ${currentAvg.toLocaleString("es-MX", { maximumFractionDigits: 2 })}
                             </span>
                           </div>
                         )}

@@ -8,6 +8,8 @@ import { runMigrations } from "./migrate";
 import { seedDatabase } from "./seed";
 import { pool } from "./db";
 
+console.log('[DB] DATABASE_URL:', process.env.DATABASE_URL ? 'configurada ✓' : 'NO ENCONTRADA ✗');
+
 const app = express();
 const httpServer = createServer(app);
 

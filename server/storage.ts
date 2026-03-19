@@ -132,7 +132,7 @@ export const storage = {
     return p;
   },
 
-  async updateProduct(id: number, data: Partial<typeof products.$inferInsert>): Promise<Product> {
+  async updateProduct(id: number, data: Partial<typeof products.$inferInsert>, units?: string[]): Promise<Product> {
     const [p] = await db.update(products).set(data).where(eq(products.id, id)).returning();
     return p;
   },
@@ -1016,6 +1016,7 @@ export const storage = {
       productId?: number | null;
       pricePerUnit?: string | null;
       overrideCostPerUnit?: string | null;
+      bolsaType?: string | null;
     },
     customerId: number,
   ): Promise<{ item: OrderItem; orderTotal: string }> {
@@ -1097,6 +1098,7 @@ export const storage = {
       if (patch.overrideCostPerUnit !== undefined) updateData.overrideCostPerUnit = patch.overrideCostPerUnit;
       if (newCostPerUnit !== undefined) updateData.costPerUnit = newCostPerUnit;
       if (margin !== null) updateData.margin = margin.toFixed(4);
+      if (patch.bolsaType !== undefined) updateData.bolsaType = patch.bolsaType;
 
       const [updated] = await tx.update(orderItems).set(updateData).where(eq(orderItems.id, itemId)).returning();
 
@@ -1149,6 +1151,164 @@ export const storage = {
     if (!order) throw new Error("Order not found");
     const { item } = await this.updateOrderItem(orderId, itemId, { pricePerUnit }, order.customerId);
     return item;
+  },
+
+  async addOrderItem(
+    orderId: number,
+    data: {
+      quantity: string;
+      unit: string;
+      productId: number | null;
+      pricePerUnit?: string | null;
+      bolsaType?: string | null;
+    },
+  ): Promise<{ item: OrderItem; orderTotal: string }> {
+    return db.transaction(async (tx) => {
+      const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+      if (!order) throw new Error("Order not found");
+      const isApproved = order.status === "approved";
+
+      let costPerUnit = "0";
+      if (data.productId && !data.bolsaType) {
+        costPerUnit = await this._getCostForUnit(data.productId, data.unit, tx);
+      }
+
+      const qty = Number(data.quantity);
+      const price = data.pricePerUnit ? Number(data.pricePerUnit) : null;
+      const subtotal = price && price > 0 ? qty * price : 0;
+      const effectiveCost = data.bolsaType ? 0 : Number(costPerUnit);
+      const margin = price && price > 0 ? (price - effectiveCost) / price : null;
+
+      const [item] = await tx.insert(orderItems).values({
+        orderId,
+        productId: data.productId ?? null,
+        quantity: qty.toFixed(4),
+        unit: data.unit as any,
+        pricePerUnit: data.pricePerUnit ?? null,
+        costPerUnit: data.bolsaType ? "0" : costPerUnit,
+        subtotal: subtotal.toFixed(2),
+        margin: margin !== null ? margin.toFixed(4) : null,
+        bolsaType: data.bolsaType ?? null,
+      } as any).returning();
+
+      const allItems = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+      const total = allItems.reduce((s, i) => s + Number(i.subtotal), 0);
+      await tx.update(orders).set({ total: total.toFixed(2) }).where(eq(orders.id, orderId));
+
+      if (isApproved && data.productId && !data.bolsaType) {
+        const newCanonical = dbEnumToCanonical(data.unit);
+        const [baseUnitPu] = await tx.select().from(productUnits)
+          .where(and(eq(productUnits.productId, data.productId), drizzleSql`${productUnits.baseUnit} IS NOT NULL`))
+          .limit(1);
+        let deductQty = qty;
+        let puToUpdate: typeof baseUnitPu | null = baseUnitPu ?? null;
+        if (baseUnitPu) {
+          if (newCanonical !== baseUnitPu.unit && ['CAJON', 'BOLSA', 'BANDEJA'].includes(newCanonical)) {
+            const wpu = parseFloat(baseUnitPu.weightPerUnit as string ?? "0");
+            deductQty = qty * (wpu > 0 ? wpu : 1);
+          }
+        } else {
+          const [fallbackPu] = await tx.select().from(productUnits)
+            .where(and(eq(productUnits.productId, data.productId), eq(productUnits.unit, newCanonical)))
+            .limit(1);
+          puToUpdate = fallbackPu ?? null;
+        }
+        if (puToUpdate) {
+          const newStock = Number(puToUpdate.stockQty) - deductQty;
+          await tx.update(productUnits).set({ stockQty: Math.max(0, newStock).toFixed(4) }).where(eq(productUnits.id, puToUpdate.id));
+        }
+        await this._recalcProductSummary(data.productId, tx);
+      }
+
+      return { item, orderTotal: total.toFixed(2) };
+    });
+  },
+
+  async deleteOrderItem(orderId: number, itemId: number): Promise<{ orderTotal: string }> {
+    return db.transaction(async (tx) => {
+      const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+      if (!order) throw new Error("Order not found");
+
+      const [item] = await tx.select().from(orderItems).where(
+        and(eq(orderItems.id, itemId), eq(orderItems.orderId, orderId))
+      ).limit(1);
+      if (!item) throw new Error("Item not found");
+
+      const isApproved = order.status === "approved";
+      const hasBolsaType = !!(item as any).bolsaType;
+
+      if (isApproved && item.productId && !hasBolsaType) {
+        const oldCanonical = dbEnumToCanonical(item.unit as string);
+        const oldQty = Number(item.quantity);
+        const [oldBaseUnitPu] = await tx.select().from(productUnits)
+          .where(and(eq(productUnits.productId, item.productId), drizzleSql`${productUnits.baseUnit} IS NOT NULL`))
+          .limit(1);
+        let restoreQty = oldQty;
+        let puToRestore: typeof oldBaseUnitPu | null = oldBaseUnitPu ?? null;
+        if (oldBaseUnitPu) {
+          if (oldCanonical !== oldBaseUnitPu.unit && ['CAJON', 'BOLSA', 'BANDEJA'].includes(oldCanonical)) {
+            const wpu = parseFloat(oldBaseUnitPu.weightPerUnit as string ?? "0");
+            restoreQty = oldQty * (wpu > 0 ? wpu : 1);
+          }
+        } else {
+          const [fallbackPu] = await tx.select().from(productUnits)
+            .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, oldCanonical)))
+            .limit(1);
+          puToRestore = fallbackPu ?? null;
+        }
+        if (puToRestore) {
+          const restored = Number(puToRestore.stockQty) + restoreQty;
+          await tx.update(productUnits).set({ stockQty: restored.toFixed(4) }).where(eq(productUnits.id, puToRestore.id));
+        }
+        await this._recalcProductSummary(item.productId, tx);
+      }
+
+      await tx.delete(orderItems).where(eq(orderItems.id, itemId));
+
+      const allItems = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+      const total = allItems.reduce((s, i) => s + Number(i.subtotal), 0);
+      await tx.update(orders).set({ total: total.toFixed(2) }).where(eq(orders.id, orderId));
+
+      return { orderTotal: total.toFixed(2) };
+    });
+  },
+
+  async getBolsaFvStats(from: string, to: string, type?: string): Promise<{
+    rows: { orderId: number; orderFolio: string; orderDate: Date; customerName: string; productName: string | null; quantity: string; unit: string; pricePerUnit: string | null; subtotal: string; bolsaType: string }[];
+    grandTotal: number;
+  }> {
+    const conditions = [
+      eq(orders.status, "approved"),
+      drizzleSql`${orderItems}.bolsa_type IS NOT NULL`,
+      drizzleSql`${orders.orderDate}::date >= ${from}::date`,
+      drizzleSql`${orders.orderDate}::date < ${to}::date`,
+    ];
+    if (type && type !== "all") {
+      conditions.push(drizzleSql`${orderItems}.bolsa_type = ${type}`);
+    }
+
+    const rows = await db
+      .select({
+        orderId: orders.id,
+        orderFolio: orders.folio,
+        orderDate: orders.orderDate,
+        customerName: customers.name,
+        productName: products.name,
+        quantity: orderItems.quantity,
+        unit: orderItems.unit,
+        pricePerUnit: orderItems.pricePerUnit,
+        subtotal: orderItems.subtotal,
+        bolsaType: drizzleSql<string>`${orderItems}.bolsa_type`,
+      })
+      .from(orderItems)
+      .innerJoin(orders, eq(orderItems.orderId, orders.id))
+      .innerJoin(customers, eq(orders.customerId, customers.id))
+      .leftJoin(products, eq(orderItems.productId, products.id))
+      .where(and(...conditions))
+      .orderBy(desc(orders.orderDate)) as any[];
+
+    const grandTotal = rows.reduce((s: number, r: any) => s + Number(r.subtotal ?? 0), 0);
+    return { rows, grandTotal };
   },
 
   async generateOrderFolio(): Promise<string> {
@@ -1228,6 +1388,8 @@ export const storage = {
       // Stock OUT — atomic per-item deduction with floor-at-zero safety
       for (const item of order.items) {
         if (!item.productId) continue;
+        // Bolsa FV items: no stock deduction, cost stays 0
+        if ((item as any).bolsaType) continue;
 
         const qty = parseFloat(item.quantity as string);
         const oiCanonical = dbEnumToCanonical(item.unit as string);
@@ -1528,18 +1690,24 @@ export const storage = {
   },
 
   async upsertProductUnit(productId: number, unit: string): Promise<ProductUnit> {
+    const PACKAGE_UNITS = new Set(['CAJON', 'BOLSA', 'BANDEJA']);
+    const isBase = !PACKAGE_UNITS.has(unit);
     const [existing] = await db.select().from(productUnits)
       .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, unit)))
       .limit(1);
     if (existing) {
-      // Just activate it if inactive
-      if (!existing.isActive) {
-        const [updated] = await db.update(productUnits).set({ isActive: true }).where(eq(productUnits.id, existing.id)).returning();
+      const needsBaseUnit = isBase && !existing.baseUnit;
+      if (!existing.isActive || needsBaseUnit) {
+        const patch: Record<string, any> = { isActive: true };
+        if (needsBaseUnit) patch.baseUnit = unit;
+        const [updated] = await db.update(productUnits).set(patch).where(eq(productUnits.id, existing.id)).returning();
         return updated;
       }
       return existing;
     }
-    const [created] = await db.insert(productUnits).values({ productId, unit, avgCost: "0", stockQty: "0" }).returning();
+    const insertVals: Record<string, any> = { productId, unit, avgCost: "0", stockQty: "0" };
+    if (isBase) insertVals.baseUnit = unit;
+    const [created] = await db.insert(productUnits).values(insertVals).returning();
     return created;
   },
 
@@ -1648,6 +1816,16 @@ export const storage = {
     const currentUnitSet = new Set(currentActive.map((pu) => pu.unit));
     const desiredSet = new Set(normalized);
 
+    // Package units never have their own base_unit row — they derive from the base unit
+    const PACKAGE_UNITS = new Set(['CAJON', 'BOLSA', 'BANDEJA']);
+
+    // Fix pre-existing active base unit rows that lack base_unit (one-time migration per save)
+    for (const pu of currentActive) {
+      if (!PACKAGE_UNITS.has(pu.unit) && !pu.baseUnit) {
+        await db.update(productUnits).set({ baseUnit: pu.unit }).where(eq(productUnits.id, pu.id));
+      }
+    }
+
     // Units to add (desired but not currently active)
     for (const unit of normalized) {
       if (!currentUnitSet.has(unit)) {
@@ -1656,9 +1834,15 @@ export const storage = {
           .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, unit)))
           .limit(1);
         if (inactive) {
-          await db.update(productUnits).set({ isActive: true }).where(eq(productUnits.id, inactive.id));
+          // Restore + set base_unit for base units
+          const updateFields: Record<string, any> = { isActive: true };
+          if (!PACKAGE_UNITS.has(unit)) updateFields.baseUnit = unit;
+          await db.update(productUnits).set(updateFields).where(eq(productUnits.id, inactive.id));
         } else {
-          await db.insert(productUnits).values({ productId, unit, avgCost: "0", stockQty: "0" });
+          // Insert new row; base units get base_unit = unit so the system can find them
+          const insertValues: Record<string, any> = { productId, unit, avgCost: "0", stockQty: "0" };
+          if (!PACKAGE_UNITS.has(unit)) insertValues.baseUnit = unit;
+          await db.insert(productUnits).values(insertValues);
         }
       }
     }
@@ -1683,8 +1867,9 @@ export const storage = {
     }
 
     // Return updated active units
-    return db.select().from(productUnits)
+    const result = await db.select().from(productUnits)
       .where(and(eq(productUnits.productId, productId), eq(productUnits.isActive, true)));
+    return result;
   },
 
   // ─── Cuentas Corrientes ────────────────────────────────────────────────────
@@ -1862,7 +2047,8 @@ export const storage = {
       const facturacionBefore = billingBeforeMap.get(c.id) ?? 0;
       const cobranzaBefore = paymentsBeforeMap.get(c.id) ?? 0;
       const retencionBefore = withholdingsBeforeMap.get(c.id) ?? 0;
-      const saldoMesAnterior = facturacionBefore - cobranzaBefore - retencionBefore;
+      const openingBalance = parseFloat(c.openingBalance ?? "0");
+      const saldoMesAnterior = openingBalance + facturacionBefore - cobranzaBefore - retencionBefore;
 
       const facturacion = billingInMap.get(c.id) ?? 0;
       const cobranza = paymentsInMap.get(c.id) ?? 0;
@@ -2013,7 +2199,8 @@ export const storage = {
 
     const cobranzaBefore = paymentsBef.reduce((s, p) => s + parseFloat(p.amount as string), 0);
     const retencionBefore = withholdingsBef.reduce((s, w) => s + parseFloat(w.amount as string), 0);
-    const saldoMesAnterior = Math.round(facturacionBefore - cobranzaBefore - retencionBefore);
+    const openingBalance = parseFloat(c.openingBalance ?? "0");
+    const saldoMesAnterior = Math.round(openingBalance + facturacionBefore - cobranzaBefore - retencionBefore);
 
     const cobranza = Math.round(paymentsIn.reduce((s, p) => s + parseFloat(p.amount as string), 0));
     const retenciones = Math.round(withholdingsIn.reduce((s, w) => s + parseFloat(w.amount as string), 0));
@@ -2348,40 +2535,7 @@ export const storage = {
         AND o.order_date < ${to}::timestamp
     `);
 
-    // 2) Ventas + ganancia bruta por día (for chart + ganancia real)
-    const byDayRows = await db.execute(drizzleSql`
-      SELECT
-        o.order_date::date AS dia,
-        COALESCE(SUM(o.total::numeric), 0) AS ventas,
-        COALESCE(SUM(o.total::numeric), 0)
-          - COALESCE(SUM(oi_cost.cost_total), 0) AS ganancia_bruta
-      FROM orders o
-      LEFT JOIN LATERAL (
-        SELECT SUM(oi.quantity::numeric * oi.cost_per_unit::numeric) AS cost_total
-        FROM order_items oi WHERE oi.order_id = o.id
-      ) oi_cost ON true
-      WHERE o.status = 'approved'
-        AND o.order_date >= ${from}::timestamp
-        AND o.order_date < ${to}::timestamp
-      GROUP BY o.order_date::date
-      ORDER BY dia
-    `);
-
-    // 3) Merma/Rinde por día
-    const mermaDayRows = await db.execute(drizzleSql`
-      SELECT
-        sm.created_at::date AS dia,
-        COALESCE(SUM(CASE WHEN sm.notes ILIKE '%Merma%' THEN sm.quantity::numeric * COALESCE(sm.unit_cost::numeric, 0) ELSE 0 END), 0) AS merma,
-        COALESCE(SUM(CASE WHEN sm.notes ILIKE '%Rinde%' THEN sm.quantity::numeric * COALESCE(sm.unit_cost::numeric, 0) ELSE 0 END), 0) AS rinde
-      FROM stock_movements sm
-      WHERE sm.created_at >= ${from}::timestamp
-        AND sm.created_at < ${to}::timestamp
-        AND (sm.notes ILIKE '%Merma%' OR sm.notes ILIKE '%Rinde%')
-      GROUP BY sm.created_at::date
-      ORDER BY dia
-    `);
-
-    // 4) Totales merma/rinde del período
+    // 3) Totales merma/rinde del período
     const mermaRow = await db.execute(drizzleSql`
       SELECT
         COALESCE(SUM(CASE WHEN sm.notes ILIKE '%Merma%' THEN sm.quantity::numeric * COALESCE(sm.unit_cost::numeric, 0) ELSE 0 END), 0) AS merma,
@@ -2392,15 +2546,32 @@ export const storage = {
         AND (sm.notes ILIKE '%Merma%' OR sm.notes ILIKE '%Rinde%')
     `);
 
-    // 5) Vacíos en mi poder (all-time)
-    const vaciosRow = await db.execute(drizzleSql`
+    // 5a) Vacíos recibidos en el período
+    const vaciosRecibidosRow = await db.execute(drizzleSql`
       SELECT
-        COALESCE((SELECT SUM(pi.empty_cost::numeric * COALESCE(pi.purchase_qty, pi.quantity)::numeric)
-                  FROM purchase_items pi WHERE pi.empty_cost::numeric > 0), 0) AS vacios_total,
-        COALESCE((SELECT SUM(COALESCE(pi.purchase_qty, pi.quantity)::numeric)
-                  FROM purchase_items pi WHERE pi.empty_cost::numeric > 0), 0) AS vacios_qty,
-        COALESCE((SELECT SUM(sp.amount::numeric) FROM supplier_payments sp WHERE sp.method = 'VALE'), 0) AS vales_total,
-        COALESCE((SELECT COUNT(*) FROM supplier_payments sp WHERE sp.method = 'VALE'), 0) AS vales_count
+        COALESCE(SUM(COALESCE(pi.purchase_qty, pi.quantity)::numeric), 0) AS qty,
+        COALESCE(SUM(pi.empty_cost::numeric * COALESCE(pi.purchase_qty, pi.quantity)::numeric), 0) AS pesos
+      FROM purchase_items pi
+      JOIN purchases p ON p.id = pi.purchase_id
+      WHERE pi.empty_cost::numeric > 0
+        AND p.purchase_date::date >= ${from}::date AND p.purchase_date::date < ${to}::date
+    `);
+
+    // 5b) Vacíos entregados (vales VALE) en el período
+    const vaciosEntregadosRow = await db.execute(drizzleSql`
+      SELECT COALESCE(SUM(sp.amount::numeric), 0) AS pesos
+      FROM supplier_payments sp
+      WHERE sp.method = 'VALE'
+        AND sp.date::date >= ${from}::date AND sp.date::date < ${to}::date
+    `);
+
+    // 5c) Histórico all-time para calcular en poder
+    const vaciosHistRow = await db.execute(drizzleSql`
+      SELECT
+        COALESCE(SUM(COALESCE(pi.purchase_qty, pi.quantity)::numeric), 0) AS hist_qty,
+        COALESCE(SUM(pi.empty_cost::numeric * COALESCE(pi.purchase_qty, pi.quantity)::numeric), 0) AS hist_pesos,
+        COALESCE((SELECT SUM(sp.amount::numeric) FROM supplier_payments sp WHERE sp.method = 'VALE'), 0) AS hist_vales_pesos
+      FROM purchase_items pi WHERE pi.empty_cost::numeric > 0
     `);
 
     // 6) Deuda a proveedores (all-time)
@@ -2458,29 +2629,11 @@ export const storage = {
       ORDER BY comision_total DESC
     `);
 
-    // Merge byDay + mermaDia into unified chart rows
-    const mermaByDay = new Map<string, { merma: number; rinde: number }>();
-    for (const r of mermaDayRows.rows as any[]) {
-      mermaByDay.set(String(r.dia), { merma: parseFloat(r.merma ?? "0"), rinde: parseFloat(r.rinde ?? "0") });
-    }
-
-    const ventasPorDia = (byDayRows.rows as any[]).map((r) => {
-      const dia = String(r.dia);
-      const adj = mermaByDay.get(dia) ?? { merma: 0, rinde: 0 };
-      const ganancia_bruta = parseFloat(r.ganancia_bruta ?? "0");
-      return {
-        date: dia,
-        ventas: parseFloat(r.ventas ?? "0"),
-        ganancia_bruta,
-        ajuste_merma: adj.merma,
-        ajuste_rinde: adj.rinde,
-        ganancia_real: ganancia_bruta + adj.rinde - adj.merma,
-      };
-    });
-
     const s = (salesRow.rows[0] as any) ?? {};
     const m = (mermaRow.rows[0] as any) ?? {};
-    const v = (vaciosRow.rows[0] as any) ?? {};
+    const vr = (vaciosRecibidosRow.rows[0] as any) ?? {};
+    const ve = (vaciosEntregadosRow.rows[0] as any) ?? {};
+    const vh = (vaciosHistRow.rows[0] as any) ?? {};
     const d = (deudaRow.rows[0] as any) ?? {};
     const dc = (deudaClientesRow.rows[0] as any) ?? {};
     const sv = (stockValRow.rows[0] as any) ?? {};
@@ -2496,6 +2649,14 @@ export const storage = {
     const toMs = new Date(to).getTime();
     const diasPeriodo = Math.max(1, Math.ceil((toMs - fromMs) / 86400000));
 
+    const histQty = parseFloat(vh.hist_qty ?? "0");
+    const histPesos = parseFloat(vh.hist_pesos ?? "0");
+    const histValesPesos = parseFloat(vh.hist_vales_pesos ?? "0");
+    const avgCost = histQty > 0 ? histPesos / histQty : 0;
+    const histEntregadosQty = avgCost > 0 ? Math.round(histValesPesos / avgCost) : 0;
+    const enPoderQty = Math.max(0, histQty - histEntregadosQty);
+    const enPoderPesos = Math.max(0, histPesos - histValesPesos);
+
     return {
       ventas,
       ganancia_bruta,
@@ -2503,11 +2664,9 @@ export const storage = {
       rindeTotal,
       ganancia_real,
       diasPeriodo,
-      ventasPorDia,
-      vaciosTotal: parseFloat(v.vacios_total ?? "0"),
-      vaciosQty: parseFloat(v.vacios_qty ?? "0"),
-      valesTotal: parseFloat(v.vales_total ?? "0"),
-      valesCount: parseInt(v.vales_count ?? "0", 10),
+      vaciosRecibidosPeriodo: { qty: parseFloat(vr.qty ?? "0"), pesos: parseFloat(vr.pesos ?? "0") },
+      vaciosEntregadosPeriodo: { pesos: parseFloat(ve.pesos ?? "0"), qty: avgCost > 0 ? Math.round(parseFloat(ve.pesos ?? "0") / avgCost) : 0 },
+      vaciosEnPoder: { qty: enPoderQty, pesos: enPoderPesos },
       deudaProveedores: Math.max(0, parseFloat(d.deuda ?? "0")),
       deudaClientes: parseFloat(dc.deuda_clientes ?? "0"),
       stockValorizado: parseFloat(sv.stock_valorizado ?? "0"),

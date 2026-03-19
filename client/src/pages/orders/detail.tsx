@@ -13,7 +13,7 @@ import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle, Pencil, Check, X, Lock, ChevronsUpDown, Trash2 } from "lucide-react";
+import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle, Check, X, Lock, ChevronsUpDown, Trash2, Plus, RotateCcw } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
@@ -21,9 +21,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { generateRemitoPDF } from "@/lib/pdf";
 import { useState } from "react";
-import type { Customer, Product, ProductUnit } from "@shared/schema";
+import type { Customer, Product } from "@shared/schema";
 import type { Order, OrderItem } from "@shared/schema";
-import { canonicalToDbEnum, dbEnumToCanonical, CANONICAL_UNIT_LABEL } from "@shared/units";
+import { dbEnumToCanonical, ALL_CANONICAL_UNITS } from "@shared/units";
 
 const IVA_DEFAULT = 0.105;
 const IVA_HUEVO = 0.21;
@@ -39,6 +39,7 @@ const fmtInt = (v: number) => Math.round(v).toLocaleString("es-MX");
 
 type FullOrderItem = OrderItem & {
   overrideCostPerUnit?: string | null;
+  bolsaType?: string | null;
   product?: (Product & { [key: string]: any }) | null;
 };
 
@@ -46,19 +47,6 @@ type FullOrder = Order & {
   customer: Customer;
   items: FullOrderItem[];
 };
-
-// DB enum values that can appear in order_items
-const DB_UNITS = ["kg", "pz", "caja", "saco", "litro", "tonelada", "CAJON"] as const;
-type DbUnit = typeof DB_UNITS[number];
-
-const DB_UNIT_LABEL: Record<DbUnit, string> = {
-  kg: "KG", pz: "PZ", caja: "CAJÓN", saco: "BOLSA/SACO", litro: "LITRO", tonelada: "TONELADA", CAJON: "CAJÓN",
-};
-
-function canonicalToDb(canonical: string): DbUnit | null {
-  const db = canonicalToDbEnum(canonical) as DbUnit;
-  return DB_UNITS.includes(db) ? db : null;
-}
 
 // ─── ProductCombobox ───────────────────────────────────────────────────────────
 function ProductCombobox({
@@ -131,6 +119,8 @@ function ItemRow({
   hasIva,
   isDraft,
   isApproved,
+  hasBolsaFv,
+  onDelete,
 }: {
   calc: {
     id: number;
@@ -151,47 +141,27 @@ function ItemRow({
     diferencia: number;
     pct: number;
     isLowMargin: boolean;
+    bolsaType: string | null;
   };
   order: FullOrder;
   allProducts: Product[];
   hasIva: boolean;
   isDraft: boolean;
   isApproved: boolean;
+  hasBolsaFv: boolean;
+  onDelete: (itemId: number) => void;
 }) {
   const { toast } = useToast();
-  const [editing, setEditing] = useState(false);
-  const [draftQty, setDraftQty] = useState("");
-  const [draftUnit, setDraftUnit] = useState<string>("kg");
-  const [draftProductId, setDraftProductId] = useState<number | null>(null);
-  const [draftPrice, setDraftPrice] = useState("");
-  const [draftOverride, setDraftOverride] = useState("");
+  const [editingCell, setEditingCell] = useState<"qty" | "unit" | "price" | "product" | "cost" | null>(null);
+  const [draftValue, setDraftValue] = useState("");
+  const [origValue, setOrigValue] = useState("");
 
-  const canEditStructural = isDraft || isApproved;
   const canEdit = isDraft || isApproved;
 
-  const { data: productUnitsList = [] } = useQuery<ProductUnit[]>({
-    queryKey: [`/api/products/${draftProductId}/units`],
-    enabled: editing && draftProductId != null,
-  });
-
-  const availableDbUnits: DbUnit[] = editing && draftProductId != null
-    ? productUnitsList
-        .filter((pu) => pu.isActive)
-        .map((pu) => canonicalToDb(pu.unit))
-        .filter((u): u is DbUnit => u !== null)
-    : DB_UNITS.filter(() => true);
-
-  const enterEdit = () => {
-    setDraftQty(fmt(calc.qty, 4).replace(/\.?0+$/, ""));
-    setDraftUnit(calc.unit as DbUnit);
-    setDraftProductId(calc.item.productId);
-    setDraftPrice(calc.hasPrice ? String(Math.round(calc.pricePerUnit!)) : "");
-    const override = calc.item.overrideCostPerUnit;
-    setDraftOverride(override && parseFloat(override) > 0 ? String(Math.round(parseFloat(override))) : "");
-    setEditing(true);
+  const startEdit = (cell: typeof editingCell, value: string) => {
+    setEditingCell(cell); setDraftValue(value); setOrigValue(value);
   };
-
-  const cancelEdit = () => setEditing(false);
+  const cancelEdit = () => { setDraftValue(origValue); setEditingCell(null); };
 
   const patchMutation = useMutation({
     mutationFn: (data: Record<string, any>) =>
@@ -200,249 +170,359 @@ function ItemRow({
       queryClient.invalidateQueries({ queryKey: ["/api/orders", order.id] });
       queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/load-list"] });
-      setEditing(false);
       toast({ title: "Línea guardada" });
     },
     onError: (e: any) => toast({ title: "Error al guardar", description: e.message, variant: "destructive" }),
   });
 
-  const handleProductSelect = async (productId: number | null, name: string) => {
-    setDraftProductId(productId);
-    // Auto-fill override cost from product_units for current unit
-    if (productId) {
-      try {
-        const res = await fetch(`/api/products/${productId}/units`, { credentials: "include" });
-        if (res.ok) {
-          const units: ProductUnit[] = await res.json();
-          const canonical = dbEnumToCanonical(draftUnit);
-          const pu = units.find((u) => u.unit === canonical && u.isActive);
-          if (pu && parseFloat(pu.avgCost as string) > 0) {
-            setDraftOverride(String(Math.round(parseFloat(pu.avgCost as string))));
-          }
-        }
-      } catch { /* noop */ }
-      // Try to fetch last price for this customer + product
-      try {
-        const res = await fetch(`/api/price-history/${order.customerId}/${productId}`, { credentials: "include" });
-        if (res.ok) {
-          const history = await res.json();
-          if (history?.pricePerUnit && !draftPrice) {
-            setDraftPrice(String(Math.round(parseFloat(history.pricePerUnit))));
-          }
-        }
-      } catch { /* noop */ }
-    }
+  const saveCellEdit = () => {
+    if (patchMutation.isPending) return;
+    const patch = ({
+      qty: { quantity: draftValue },
+      unit: { unit: draftValue },
+      price: { pricePerUnit: draftValue || null },
+      product: { productId: parseInt(draftValue) },
+      cost: { overrideCostPerUnit: draftValue || null },
+    } as Record<string, any>)[editingCell!];
+    patchMutation.mutate(patch, { onSuccess: () => setEditingCell(null) });
   };
 
-  const handleSave = () => {
-    const qtyNum = parseFloat(draftQty);
-    if (canEditStructural && (isNaN(qtyNum) || qtyNum <= 0)) {
-      toast({ title: "Cantidad inválida", variant: "destructive" });
-      return;
-    }
-
-    const patch: Record<string, any> = {};
-    if (canEditStructural) {
-      if (draftQty && !isNaN(qtyNum)) patch.quantity = String(qtyNum);
-      if (draftUnit !== calc.unit) patch.unit = draftUnit;
-      if (draftProductId !== calc.item.productId) patch.productId = draftProductId;
-    }
-    if (draftPrice !== "") patch.pricePerUnit = draftPrice;
-    patch.overrideCostPerUnit = draftOverride !== "" ? draftOverride : null;
-
-    patchMutation.mutate(patch);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") { e.preventDefault(); handleSave(); }
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") { e.preventDefault(); saveCellEdit(); }
     if (e.key === "Escape") cancelEdit();
   };
 
-  const allowDecimals = draftUnit.toLowerCase() === "kg" || draftUnit.toLowerCase() === "litro";
+  const handleProductSelect = async (productId: number | null, _name: string) => {
+    if (!productId) { setEditingCell(null); return; }
+    let pricePerUnit: string | null = null;
+    try {
+      const res = await fetch(`/api/price-history/${order.customerId}/${productId}`, { credentials: "include" });
+      if (res.ok) {
+        const history = await res.json();
+        if (history?.pricePerUnit) pricePerUnit = String(Math.round(parseFloat(history.pricePerUnit)));
+      }
+    } catch { /* noop */ }
+    patchMutation.mutate({ productId, pricePerUnit }, { onSuccess: () => setEditingCell(null) });
+  };
 
-  // ── Display mode ──────────────────────────────────────────────────────────
-  if (!editing) {
-    return (
-      <tr
-        className={`border-b border-border last:border-0 group ${
-          !calc.hasPrice ? "bg-yellow-50/30 dark:bg-yellow-900/10"
-          : calc.isLowMargin ? "bg-destructive/5"
-          : "hover:bg-muted/30"
-        } transition-colors`}
-        data-testid={`row-item-${calc.id}`}
-      >
-        <td className="py-2 px-2 font-medium text-foreground whitespace-nowrap text-xs">
-          {fmt(calc.qty, 4).replace(/\.?0+$/, "")}
-        </td>
-        <td className="py-2 px-2 text-muted-foreground whitespace-nowrap text-xs">{calc.unit}</td>
-        <td className="py-2 px-2 text-xs">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className={`font-medium ${calc.item.product ? "text-foreground" : "text-muted-foreground italic"}`}>
-              {calc.name}
-            </span>
-            {!calc.item.product && <Badge variant="outline" className="text-[9px] py-0">Sin producto</Badge>}
-            {calc.isLowMargin && <Badge variant="destructive" className="text-[9px] py-0 px-1">Margen bajo</Badge>}
-            {hasIva && calc.hasPrice && (
-              <span className="text-[10px] text-muted-foreground">IVA {(calc.ivaRate * 100).toFixed(1)}%</span>
-            )}
-          </div>
-        </td>
-        <td className="py-2 px-2 text-right whitespace-nowrap text-xs">
-          {!calc.hasPrice ? (
-            <Badge variant="destructive" className="text-[9px]">Sin precio</Badge>
-          ) : (
-            <span className="text-foreground">${fmtInt(calc.pricePerUnit!)}</span>
-          )}
-        </td>
-        <td className="py-2 px-2 text-right text-foreground whitespace-nowrap text-xs">
-          {calc.hasPrice ? `$${fmtInt(calc.subtotal)}` : <span className="text-muted-foreground">—</span>}
-        </td>
-        {hasIva && (
-          <td className="py-2 px-2 text-right font-semibold text-primary whitespace-nowrap text-xs">
-            {calc.hasPrice ? `$${fmtInt(calc.totalConIva)}` : <span className="text-muted-foreground">—</span>}
-          </td>
-        )}
-        <td className="py-2 px-2 text-right text-muted-foreground whitespace-nowrap border-l border-border text-xs">
-          <span>${fmtInt(calc.effectiveCostPerUnit)}</span>
-          {calc.hasOverride && (
-            <Badge variant="outline" className="text-[8px] py-0 px-1 ml-1 text-orange-600 border-orange-300">Manual</Badge>
-          )}
-        </td>
-        <td className="py-2 px-2 text-right text-muted-foreground whitespace-nowrap text-xs">${fmtInt(calc.totalCompra)}</td>
-        <td className={`py-2 px-2 text-right font-semibold whitespace-nowrap text-xs ${!calc.hasPrice ? "text-muted-foreground" : calc.diferencia >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
-          {calc.hasPrice ? `$${fmtInt(calc.diferencia)}` : "—"}
-        </td>
-        <td className={`py-2 px-2 text-right font-bold whitespace-nowrap text-xs ${!calc.hasPrice ? "text-muted-foreground" : calc.isLowMargin ? "text-destructive" : "text-green-600 dark:text-green-400"}`}>
-          {calc.hasPrice ? fmtPct(calc.pct) : "—"}
-        </td>
-        <td className="py-2 px-2 text-center w-8">
-          {canEdit && (
-            <button
-              onClick={enterEdit}
-              className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted"
-              data-testid={`button-edit-row-${calc.id}`}
-            >
-              <Pencil className="h-3 w-3 text-muted-foreground" />
-            </button>
-          )}
-        </td>
-      </tr>
-    );
-  }
+  // Bolsa FV toggle
+  const handleBolsaToggle = (type: "bolsa" | "bolsa_propia") => {
+    const newType = calc.bolsaType === type ? null : type;
+    patchMutation.mutate({
+      bolsaType: newType,
+      overrideCostPerUnit: newType ? "0" : null,
+    });
+  };
 
-  // ── Edit mode ─────────────────────────────────────────────────────────────
   return (
-    <tr className="border-b border-border bg-blue-50/30 dark:bg-blue-900/10" data-testid={`row-item-${calc.id}-editing`}>
+    <tr
+      className={`border-b border-border last:border-0 group ${
+        !calc.hasPrice ? "bg-yellow-50/30 dark:bg-yellow-900/10"
+        : calc.isLowMargin ? "bg-destructive/5"
+        : "hover:bg-muted/30"
+      } transition-colors`}
+      data-testid={`row-item-${calc.id}`}
+    >
       {/* Qty */}
-      <td className="py-1.5 px-2">
-        {canEditStructural ? (
-          <Input
-            type="number"
-            value={draftQty}
-            onChange={(e) => setDraftQty(e.target.value)}
-            onKeyDown={handleKeyDown}
-            step={allowDecimals ? "0.01" : "1"}
-            min="0"
-            className="h-7 w-16 text-xs px-1.5 py-0"
-            autoFocus
-            data-testid={`input-qty-${calc.id}`}
-          />
-        ) : (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Lock className="h-3 w-3" />
-            <span>{fmt(calc.qty, 4).replace(/\.?0+$/, "")}</span>
+      <td className="py-2 px-2 font-medium text-foreground whitespace-nowrap text-xs">
+        {canEdit && editingCell === "qty" ? (
+          <div className="flex items-center gap-1">
+            <Input
+              type="number" value={draftValue} onChange={(e) => setDraftValue(e.target.value)}
+              onKeyDown={onKeyDown} step="0.01" min="0"
+              className="h-7 w-16 text-xs px-1.5 py-0" autoFocus
+              data-testid={`input-qty-${calc.id}`}
+            />
+            <button onClick={cancelEdit} className="text-muted-foreground hover:text-foreground">
+              <RotateCcw className="h-3 w-3" />
+            </button>
           </div>
+        ) : (
+          <span
+            className={canEdit ? "cursor-pointer hover:underline" : ""}
+            onClick={canEdit ? () => startEdit("qty", fmt(calc.qty, 4).replace(/\.?0+$/, "")) : undefined}
+          >
+            {fmt(calc.qty, 4).replace(/\.?0+$/, "")}
+          </span>
         )}
       </td>
       {/* Unit */}
-      <td className="py-1.5 px-2">
-        {canEditStructural ? (
-          <Input
-            type="text"
-            value={draftUnit}
-            onChange={(e) => setDraftUnit(e.target.value)}
-            onKeyDown={handleKeyDown}
-            className="h-7 w-20 text-xs px-1.5 py-0"
-            placeholder="unidad"
-            data-testid={`input-unit-${calc.id}`}
-          />
+      <td className="py-2 px-2 text-muted-foreground whitespace-nowrap text-xs">
+        {canEdit && editingCell === "unit" ? (
+          <Select
+            value={draftValue}
+            onValueChange={(v) => {
+              setDraftValue(v);
+              if (calc.item.productId) {
+                apiRequest("POST", `/api/products/${calc.item.productId}/units`, { unit: v }).catch(() => {});
+              }
+              patchMutation.mutate({ unit: v }, { onSuccess: () => setEditingCell(null) });
+            }}
+          >
+            <SelectTrigger className="h-7 w-24 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {ALL_CANONICAL_UNITS.map((u) => (
+                <SelectItem key={u} value={u.toLowerCase()}>{u}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         ) : (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Lock className="h-3 w-3" />
-            <span>{calc.unit}</span>
-          </div>
+          <span
+            className={canEdit ? "cursor-pointer hover:underline" : ""}
+            onClick={canEdit ? () => startEdit("unit", dbEnumToCanonical(calc.unit).toLowerCase()) : undefined}
+          >
+            {calc.unit}
+          </span>
         )}
       </td>
       {/* Product */}
-      <td className="py-1.5 px-2">
-        {canEditStructural ? (
-          <ProductCombobox value={draftProductId} onSelect={handleProductSelect} allProducts={allProducts} />
-        ) : (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Lock className="h-3 w-3" />
-            <span className="font-medium text-foreground">{calc.name}</span>
+      <td className="py-2 px-2 text-xs">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {canEdit && editingCell === "product" ? (
+            <ProductCombobox
+              value={calc.item.productId}
+              onSelect={(id, name) => handleProductSelect(id, name)}
+              allProducts={allProducts}
+            />
+          ) : (
+            <span
+              className={`font-medium ${calc.item.product ? "text-foreground" : "text-muted-foreground italic"} ${canEdit ? "cursor-pointer hover:underline" : ""}`}
+              onClick={canEdit ? () => startEdit("product", String(calc.item.productId ?? "")) : undefined}
+            >
+              {calc.name}
+            </span>
+          )}
+          {!calc.item.product && editingCell !== "product" && <Badge variant="outline" className="text-[9px] py-0">Sin producto</Badge>}
+          {calc.isLowMargin && <Badge variant="destructive" className="text-[9px] py-0 px-1">Margen bajo</Badge>}
+          {calc.bolsaType && (
+            <Badge variant="outline" className="text-[9px] py-0 px-1 text-green-600 border-green-300">
+              {calc.bolsaType === "bolsa_propia" ? "Bolsa propia" : "Bolsa"}
+            </Badge>
+          )}
+          {hasIva && calc.hasPrice && (
+            <span className="text-[10px] text-muted-foreground">IVA {(calc.ivaRate * 100).toFixed(1)}%</span>
+          )}
+          {hasBolsaFv && (
+            <div className="flex items-center gap-1 ml-1">
+              <button
+                onClick={() => handleBolsaToggle("bolsa")}
+                disabled={patchMutation.isPending}
+                className={`flex items-center gap-0.5 text-[10px] rounded px-1 py-0.5 border transition-colors ${calc.bolsaType === "bolsa" ? "bg-green-100 border-green-400 text-green-700 dark:bg-green-900/30 dark:text-green-400" : "border-border text-muted-foreground hover:border-green-400"}`}
+              >
+                <span>Bolsa</span>
+              </button>
+              <button
+                onClick={() => handleBolsaToggle("bolsa_propia")}
+                disabled={patchMutation.isPending}
+                className={`flex items-center gap-0.5 text-[10px] rounded px-1 py-0.5 border transition-colors ${calc.bolsaType === "bolsa_propia" ? "bg-blue-100 border-blue-400 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" : "border-border text-muted-foreground hover:border-blue-400"}`}
+              >
+                <span>Bolsa propia</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </td>
+      {/* Price */}
+      <td className="py-2 px-2 text-right whitespace-nowrap text-xs">
+        {canEdit && editingCell === "price" ? (
+          <div className="flex items-center gap-1 justify-end">
+            <Input
+              type="number" value={draftValue} onChange={(e) => setDraftValue(e.target.value)}
+              onKeyDown={onKeyDown} step="1" min="0"
+              className="h-7 w-24 text-xs px-1.5 py-0" autoFocus placeholder="Precio"
+              data-testid={`input-price-${calc.id}`}
+            />
+            <button onClick={cancelEdit} className="text-muted-foreground hover:text-foreground">
+              <RotateCcw className="h-3 w-3" />
+            </button>
           </div>
+        ) : !calc.hasPrice ? (
+          <Badge
+            variant="destructive"
+            className={`text-[9px] ${canEdit ? "cursor-pointer" : ""}`}
+            onClick={canEdit ? () => startEdit("price", "") : undefined}
+          >Sin precio</Badge>
+        ) : (
+          <span
+            className={`text-foreground ${canEdit ? "cursor-pointer hover:underline" : ""}`}
+            onClick={canEdit ? () => startEdit("price", String(Math.round(calc.pricePerUnit!))) : undefined}
+          >
+            ${fmtInt(calc.pricePerUnit!)}
+          </span>
         )}
       </td>
-      {/* P. Venta */}
+      {/* Subtotal */}
+      <td className="py-2 px-2 text-right text-foreground whitespace-nowrap text-xs">
+        {calc.hasPrice ? `$${fmtInt(calc.subtotal)}` : <span className="text-muted-foreground">—</span>}
+      </td>
+      {hasIva && (
+        <td className="py-2 px-2 text-right font-semibold text-primary whitespace-nowrap text-xs">
+          {calc.hasPrice ? `$${fmtInt(calc.totalConIva)}` : <span className="text-muted-foreground">—</span>}
+        </td>
+      )}
+      {/* Costo */}
+      <td className="py-2 px-2 text-right text-muted-foreground whitespace-nowrap border-l border-border text-xs">
+        {canEdit && editingCell === "cost" ? (
+          <div className="flex items-center gap-1 justify-end">
+            <Input
+              type="number" value={draftValue} onChange={(e) => setDraftValue(e.target.value)}
+              onKeyDown={onKeyDown} step="1" min="0"
+              className="h-7 w-24 text-xs px-1.5 py-0" autoFocus placeholder="Costo"
+            />
+            <button onClick={cancelEdit} className="text-muted-foreground hover:text-foreground">
+              <RotateCcw className="h-3 w-3" />
+            </button>
+          </div>
+        ) : (
+          <>
+            <span
+              className={canEdit ? "cursor-pointer hover:underline" : ""}
+              onClick={canEdit ? () => startEdit("cost", String(Math.round(calc.effectiveCostPerUnit))) : undefined}
+            >
+              ${fmtInt(calc.effectiveCostPerUnit)}
+            </span>
+            {calc.hasOverride && (
+              <Badge variant="outline" className="text-[8px] py-0 px-1 ml-1 text-orange-600 border-orange-300">Manual</Badge>
+            )}
+          </>
+        )}
+      </td>
+      <td className="py-2 px-2 text-right text-muted-foreground whitespace-nowrap text-xs">${fmtInt(calc.totalCompra)}</td>
+      <td className={`py-2 px-2 text-right font-semibold whitespace-nowrap text-xs ${!calc.hasPrice ? "text-muted-foreground" : calc.diferencia >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
+        {calc.hasPrice ? `$${fmtInt(calc.diferencia)}` : "—"}
+      </td>
+      <td className={`py-2 px-2 text-right font-bold whitespace-nowrap text-xs ${!calc.hasPrice ? "text-muted-foreground" : calc.isLowMargin ? "text-destructive" : "text-green-600 dark:text-green-400"}`}>
+        {calc.hasPrice ? fmtPct(calc.pct) : "—"}
+      </td>
+      {/* Delete */}
+      <td className="py-2 px-2 text-center w-14">
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={() => onDelete(calc.id)}
+            className="p-0.5 rounded hover:bg-destructive/10 text-destructive"
+            data-testid={`button-delete-row-${calc.id}`}
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// ─── AddItemRow ─────────────────────────────────────────────────────────────────
+function AddItemRow({
+  orderId,
+  allProducts,
+  hasIva,
+  hasBolsaFv,
+  onDone,
+}: {
+  orderId: number;
+  allProducts: Product[];
+  hasIva: boolean;
+  hasBolsaFv: boolean;
+  onDone: () => void;
+}) {
+  const { toast } = useToast();
+  const [qty, setQty] = useState("");
+  const [unit, setUnit] = useState("KG");
+  const [productId, setProductId] = useState<number | null>(null);
+  const [price, setPrice] = useState("");
+  const [bolsaType, setBolsaType] = useState<string | null>(null);
+
+  const addMutation = useMutation({
+    mutationFn: (data: any) => apiRequest("POST", `/api/orders/${orderId}/items`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders", orderId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/load-list"] });
+      toast({ title: "Línea agregada" });
+      onDone();
+    },
+    onError: (e: any) => toast({ title: "Error al agregar", description: e.message, variant: "destructive" }),
+  });
+
+  const handleProductSelect = async (id: number | null, _name: string) => {
+    setProductId(id);
+    if (id) {
+      try {
+        const res = await fetch(`/api/price-history/${orderId}/${id}`, { credentials: "include" });
+        if (res.ok) {
+          const history = await res.json();
+          if (history?.pricePerUnit && !price) setPrice(String(Math.round(parseFloat(history.pricePerUnit))));
+        }
+      } catch { /* noop */ }
+    }
+  };
+
+  const handleSave = async () => {
+    const q = parseFloat(qty);
+    if (isNaN(q) || q <= 0) { toast({ title: "Cantidad inválida", variant: "destructive" }); return; }
+    if (productId) {
+      try { await apiRequest("POST", `/api/products/${productId}/units`, { unit }); } catch { /* ya existe */ }
+    }
+    addMutation.mutate({
+      productId: productId ?? null,
+      quantity: String(q),
+      unit,
+      pricePerUnit: price || null,
+      bolsaType: bolsaType || null,
+    });
+  };
+
+  return (
+    <tr className="border-b border-border bg-green-50/20 dark:bg-green-900/10">
+      <td className="py-1.5 px-2">
+        <Input type="number" value={qty} onChange={(e) => setQty(e.target.value)} step="1" min="0" className="h-7 w-16 text-xs px-1.5 py-0" placeholder="Cant." autoFocus />
+      </td>
+      <td className="py-1.5 px-2">
+        <Select value={unit} onValueChange={setUnit}>
+          <SelectTrigger className="h-7 w-24 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {ALL_CANONICAL_UNITS.map((u) => (
+              <SelectItem key={u} value={u}>{u}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </td>
+      <td className="py-1.5 px-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <ProductCombobox value={productId} onSelect={handleProductSelect} allProducts={allProducts} />
+          {hasBolsaFv && (
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setBolsaType(bolsaType === "bolsa" ? null : "bolsa")}
+                className={`text-[10px] rounded px-1 py-0.5 border transition-colors ${bolsaType === "bolsa" ? "bg-green-100 border-green-400 text-green-700" : "border-border text-muted-foreground"}`}
+              >Bolsa</button>
+              <button
+                type="button"
+                onClick={() => setBolsaType(bolsaType === "bolsa_propia" ? null : "bolsa_propia")}
+                className={`text-[10px] rounded px-1 py-0.5 border transition-colors ${bolsaType === "bolsa_propia" ? "bg-blue-100 border-blue-400 text-blue-700" : "border-border text-muted-foreground"}`}
+              >Bolsa propia</button>
+            </div>
+          )}
+        </div>
+      </td>
       <td className="py-1.5 px-2">
         <div className="flex items-center gap-0.5">
           <span className="text-xs text-muted-foreground">$</span>
-          <Input
-            type="number"
-            value={draftPrice}
-            onChange={(e) => setDraftPrice(e.target.value)}
-            onKeyDown={handleKeyDown}
-            step="1"
-            min="0"
-            className="h-7 w-24 text-xs px-1.5 py-0"
-            placeholder="Precio"
-            data-testid={`input-price-${calc.id}`}
-          />
+          <Input type="number" value={price} onChange={(e) => setPrice(e.target.value)} step="1" min="0" className="h-7 w-24 text-xs px-1.5 py-0" placeholder="Precio" />
         </div>
       </td>
-      {/* Total preview */}
-      <td className="py-1.5 px-2 text-right text-xs text-muted-foreground whitespace-nowrap">
-        {draftPrice && draftQty ? `$${fmtInt(parseFloat(draftQty) * parseFloat(draftPrice))}` : "—"}
+      <td className="py-1.5 px-2 text-right text-xs text-muted-foreground">
+        {price && qty ? `$${fmtInt(parseFloat(qty) * parseFloat(price))}` : "—"}
       </td>
-      {hasIva && <td className="py-1.5 px-2 text-xs text-muted-foreground">—</td>}
-      {/* P. Compra override */}
-      <td className="py-1.5 px-2 border-l border-border">
-        <div className="flex items-center gap-0.5">
-          <span className="text-xs text-muted-foreground">$</span>
-          <Input
-            type="number"
-            value={draftOverride}
-            onChange={(e) => setDraftOverride(e.target.value)}
-            onKeyDown={handleKeyDown}
-            step="1"
-            min="0"
-            className="h-7 w-24 text-xs px-1.5 py-0"
-            placeholder={String(Math.round(calc.costPerUnit))}
-            data-testid={`input-cost-${calc.id}`}
-          />
-        </div>
-      </td>
-      {/* Blanks for T.Compra, Dif, % */}
-      <td className="py-1.5 px-2 text-xs text-muted-foreground text-right">—</td>
-      <td className="py-1.5 px-2 text-xs text-muted-foreground text-right">—</td>
-      <td className="py-1.5 px-2 text-xs text-muted-foreground text-right">—</td>
-      {/* Actions */}
+      {hasIva && <td />}
+      <td className="border-l border-border" />
+      <td /><td /><td />
       <td className="py-1.5 px-2">
         <div className="flex items-center gap-1">
-          <button
-            onClick={handleSave}
-            disabled={patchMutation.isPending}
-            className="p-1 rounded hover:bg-green-100 dark:hover:bg-green-900 text-green-600"
-            data-testid={`button-save-row-${calc.id}`}
-          >
+          <button onClick={handleSave} disabled={addMutation.isPending} className="p-1 rounded hover:bg-green-100 dark:hover:bg-green-900 text-green-600">
             <Check className="h-3.5 w-3.5" />
           </button>
-          <button
-            onClick={cancelEdit}
-            className="p-1 rounded hover:bg-muted text-muted-foreground"
-            data-testid={`button-cancel-row-${calc.id}`}
-          >
+          <button onClick={onDone} className="p-1 rounded hover:bg-muted text-muted-foreground">
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -458,6 +538,9 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const [lowMarginOk, setLowMarginOk] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deleteItemId, setDeleteItemId] = useState<number | null>(null);
+  const [addingItem, setAddingItem] = useState(false);
+  const [hidePrecios, setHidePrecios] = useState(false);
 
   const deleteMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/orders/${id}`),
@@ -470,6 +553,18 @@ export default function OrderDetailPage({ id }: { id: number }) {
     onError: (e: any) => {
       toast({ title: "Error al eliminar", description: e.message, variant: "destructive" });
     },
+  });
+
+  const deleteItemMutation = useMutation({
+    mutationFn: (itemId: number) => apiRequest("DELETE", `/api/orders/${id}/items/${itemId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/load-list"] });
+      toast({ title: "Línea eliminada" });
+      setDeleteItemId(null);
+    },
+    onError: (e: any) => toast({ title: "Error al eliminar línea", description: e.message, variant: "destructive" }),
   });
 
   const { data: order, isLoading } = useQuery<FullOrder>({
@@ -491,16 +586,82 @@ export default function OrderDetailPage({ id }: { id: number }) {
     onError: (e: any) => toast({ title: "Error al aprobar", description: e.message, variant: "destructive" }),
   });
 
-  const formatDate = (d: string | Date) =>
-    new Date(d).toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" });
+  const formatDate = (d: string | Date) => {
+    const s = typeof d === "string" ? d.slice(0, 10) : d.toISOString().slice(0, 10);
+    return new Date(s + "T12:00:00").toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" });
+  };
 
   const handleDownloadRemito = async () => {
-    if (!order?.remitoId) return;
     try {
-      const res = await fetch(`/api/remitos/${order.remitoId}`, { credentials: "include" });
-      if (!res.ok) throw new Error("No se pudo obtener el remito");
-      const remito = await res.json();
-      generateRemitoPDF(remito);
+      type RemitoItem = { product: { name: string; sku: string } | null; quantity: string; unit: string; pricePerUnit: string; subtotal: string; bolsaType?: string | null };
+
+      let remitoItems: RemitoItem[];
+      let remitoFolio: string;
+      let remitoDate: string | Date;
+
+      if (order.remitoId) {
+        // Pedido con remito creado normalmente
+        const res = await fetch(`/api/remitos/${order.remitoId}`, { credentials: "include" });
+        if (!res.ok) throw new Error("No se pudo obtener el remito");
+        const remito = await res.json();
+        remitoItems = remito.order.items;
+        remitoFolio = remito.folio;
+        remitoDate = remito.issuedAt;
+      } else {
+        // Pedido importado sin remito — construir desde el pedido
+        remitoItems = order.items.map((item) => ({
+          product: item.product ? { name: item.product.name, sku: (item.product as any).sku ?? "" } : null,
+          quantity: String(item.quantity),
+          unit: String(item.unit),
+          pricePerUnit: String(item.pricePerUnit ?? "0"),
+          subtotal: String(item.subtotal),
+          bolsaType: (item as any).bolsaType ?? null,
+        }));
+        remitoFolio = order.notes?.match(/Remito\s+(\S+)/i)?.[1] ?? order.folio;
+        remitoDate = order.orderDate;
+      }
+
+      const remito = {
+        folio: remitoFolio,
+        issuedAt: remitoDate,
+        order: {
+          folio: order.folio,
+          orderDate: order.orderDate,
+          notes: order.notes,
+          customer: {
+            name: order.customer.name,
+            hasIva: order.customer.hasIva,
+            rfc: (order.customer as any).rfc ?? null,
+            address: (order.customer as any).address ?? null,
+            city: (order.customer as any).city ?? null,
+            phone: (order.customer as any).phone ?? null,
+          },
+          items: remitoItems,
+          total: String(order.total),
+        },
+      };
+
+      // Merge bolsa lines for bolsaFv customers
+      if (order.customer.bolsaFv) {
+        const merged = new Map<string, RemitoItem>();
+        for (const item of remito.order.items) {
+          const key = String(item.product?.name ?? Math.random());
+          if (merged.has(key)) {
+            const existing = merged.get(key)!;
+            merged.set(key, {
+              ...existing,
+              quantity: String(parseFloat(existing.quantity) + parseFloat(item.quantity)),
+              subtotal: String(parseFloat(existing.subtotal) + parseFloat(item.subtotal)),
+            });
+          } else {
+            merged.set(key, { ...item });
+          }
+        }
+        remito.order.items = Array.from(merged.values());
+        remito.order.total = String(remito.order.items.reduce((s, i) => s + parseFloat(i.subtotal), 0));
+      }
+
+      await generateRemitoPDF(remito, { hidePrecios });
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     }
@@ -553,6 +714,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const isDraft = order.status === "draft";
   const isApproved = order.status === "approved";
   const hasIva = order.customer.hasIva;
+  const hasBolsaFv = !!(order.customer as any).bolsaFv;
 
   const statusConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" }> = {
     draft:     { label: "Borrador", variant: "secondary" },
@@ -564,7 +726,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const getItemName = (item: FullOrderItem) =>
     item.product?.name ?? (item as any).rawProductName ?? "Producto sin nombre";
 
-  // Per-item calculations using effectiveCostPerUnit (override ?? stored cost)
   const calcs = order.items.map((item) => {
     const qty = parseFloat(item.quantity as string);
     const hasPrice = item.pricePerUnit != null && parseFloat(item.pricePerUnit as string) > 0;
@@ -600,6 +761,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
       diferencia,
       pct,
       isLowMargin: hasPrice && pct < LOW_MARGIN,
+      bolsaType: (item as any).bolsaType ?? null,
     };
   });
 
@@ -615,7 +777,15 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const canApprove = isDraft && unpricedCount === 0 && (!hasAnyLowMargin || lowMarginOk);
 
-  const editHint = isDraft || isApproved ? "· Hover → lápiz para editar fila" : "";
+  const editHint = isDraft || isApproved ? "· Clic en celda para editar" : "";
+
+  const handleDeleteItem = (itemId: number) => {
+    if (isApproved) {
+      setDeleteItemId(itemId);
+    } else {
+      deleteItemMutation.mutate(itemId);
+    }
+  };
 
   return (
     <Layout title={`Pedido ${order.folio}`}>
@@ -630,6 +800,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
               <h2 className="text-xl font-bold text-foreground">{order.folio}</h2>
               <Badge variant={sc.variant}>{sc.label}</Badge>
               {hasIva && <Badge variant="outline" className="text-[10px] text-primary border-primary/40">Con IVA</Badge>}
+              {hasBolsaFv && <Badge variant="outline" className="text-[10px] text-green-600 border-green-300">Bolsa FV</Badge>}
               {order.lowMarginConfirmed && (
                 <Badge variant="outline" className="text-[10px] text-destructive border-destructive/50">
                   <AlertTriangle className="h-2.5 w-2.5 mr-1" /> Margen bajo confirmado
@@ -652,10 +823,20 @@ export default function OrderDetailPage({ id }: { id: number }) {
             <Button variant="outline" size="sm" onClick={handleExportXlsx} disabled={exporting} data-testid="button-export-order">
               <Download className="mr-2 h-4 w-4" /> {exporting ? "..." : "Exportar"}
             </Button>
-            {isApproved && order.remitoId && (
-              <Button variant="outline" size="sm" onClick={handleDownloadRemito} data-testid="button-download-remito">
-                <Download className="mr-2 h-4 w-4" /> Remito PDF
-              </Button>
+            {isApproved && (
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                  <Checkbox
+                    checked={hidePrecios}
+                    onCheckedChange={(v) => setHidePrecios(!!v)}
+                    className="h-3.5 w-3.5"
+                  />
+                  Ocultar precios
+                </label>
+                <Button variant="outline" size="sm" onClick={handleDownloadRemito} data-testid="button-download-remito">
+                  <Download className="mr-2 h-4 w-4" /> Remito PDF
+                </Button>
+              </div>
             )}
             {isDraft && (
               <Button
@@ -676,7 +857,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
           <Alert>
             <AlertTriangle className="h-4 w-4 text-yellow-600" />
             <AlertDescription className="text-sm">
-              <strong>{unpricedCount} producto(s) sin precio.</strong> Pasá el mouse sobre la fila y hacé clic en el lápiz para editar.
+              <strong>{unpricedCount} producto(s) sin precio.</strong> Hacé clic en la celda de precio para editar.
             </AlertDescription>
           </Alert>
         )}
@@ -771,7 +952,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
                     <th className="text-right py-2 px-2 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">T. Compra</th>
                     <th className="text-right py-2 px-2 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Dif.</th>
                     <th className="text-right py-2 px-2 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">%</th>
-                    <th className="w-8"></th>
+                    <th className="w-14"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -784,8 +965,19 @@ export default function OrderDetailPage({ id }: { id: number }) {
                       hasIva={hasIva}
                       isDraft={isDraft}
                       isApproved={isApproved}
+                      hasBolsaFv={hasBolsaFv}
+                      onDelete={handleDeleteItem}
                     />
                   ))}
+                  {addingItem && (
+                    <AddItemRow
+                      orderId={id}
+                      allProducts={allProducts}
+                      hasIva={hasIva}
+                      hasBolsaFv={hasBolsaFv}
+                      onDone={() => setAddingItem(false)}
+                    />
+                  )}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-border bg-muted/20">
@@ -807,10 +999,25 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 </tfoot>
               </table>
             </div>
+            {!addingItem && (
+              <div className="p-3 border-t border-border">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => setAddingItem(true)}
+                  data-testid="button-add-item"
+                >
+                  <Plus className="mr-1.5 h-3.5 w-3.5" /> Agregar producto
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
 
+      {/* Delete order dialog */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -828,6 +1035,28 @@ export default function OrderDetailPage({ id }: { id: number }) {
               data-testid="button-confirm-delete-detail"
             >
               {deleteMutation.isPending ? "Eliminando..." : "Eliminar"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete item dialog (approved orders only) */}
+      <AlertDialog open={deleteItemId !== null} onOpenChange={(o) => !o && setDeleteItemId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Eliminar línea?</AlertDialogTitle>
+            <AlertDialogDescription>
+              El pedido está aprobado. Eliminar esta línea restaurará el stock del producto automáticamente.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => deleteItemId && deleteItemMutation.mutate(deleteItemId)}
+              disabled={deleteItemMutation.isPending}
+            >
+              {deleteItemMutation.isPending ? "Eliminando..." : "Eliminar línea"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

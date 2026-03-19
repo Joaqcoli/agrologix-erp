@@ -288,7 +288,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
                           </Label>
                           <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-muted/40 px-3">
                             <span className="text-sm font-semibold text-foreground">
-                              ${projectedAvg.toLocaleString("es-MX", { minimumFractionDigits: 4 })}
+                              ${projectedAvg.toLocaleString("es-MX", { maximumFractionDigits: 2 })}
                             </span>
                             {currentAvg !== null && (
                               <Badge variant={projectedAvg > currentAvg ? "destructive" : "secondary"} className="text-[10px]">
@@ -309,7 +309,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
                         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                           Costo actual:
                           <span className="font-medium text-foreground">
-                            ${currentAvg.toLocaleString("es-MX", { minimumFractionDigits: 4 })}
+                            ${currentAvg.toLocaleString("es-MX", { maximumFractionDigits: 2 })}
                           </span>
                         </div>
                       </div>

@@ -67,8 +67,10 @@ export default function OrdersPage() {
     enabled: !!date,
   });
 
-  const formatDate = (d: string | Date) =>
-    new Date(d).toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
+  const formatDate = (d: string | Date) => {
+    const s = typeof d === "string" ? d.slice(0, 10) : d.toISOString().slice(0, 10);
+    return new Date(s + "T12:00:00").toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
+  };
 
   // Day summary
   const dayOrders = orders ?? [];
@@ -151,7 +153,7 @@ export default function OrdersPage() {
               <CardTitle className="text-sm font-semibold text-primary flex items-center gap-2">
                 <TrendingUp className="h-4 w-4" /> Resumen del Día
                 <span className="text-xs font-normal text-muted-foreground ml-1">
-                  {new Date(date).toLocaleDateString("es-MX", { weekday: "long", day: "2-digit", month: "long" })}
+                  {new Date(date + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "2-digit", month: "long" })}
                 </span>
               </CardTitle>
             </CardHeader>

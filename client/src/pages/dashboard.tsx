@@ -6,20 +6,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { TrendingUp, TrendingDown, Package, Truck, AlertTriangle, Users } from "lucide-react";
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
-} from "recharts";
+import { TrendingUp, Package, Truck, AlertTriangle, Users, Download } from "lucide-react";
+import { generateBolsaFvPDF, type BolsaFvRow } from "@/lib/pdf";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const fmt = (n: number) =>
   "$" + Math.round(n).toLocaleString("es-MX");
-
-const fmtShort = (n: number) => {
-  if (Math.abs(n) >= 1_000_000) return "$" + (n / 1_000_000).toFixed(1) + "M";
-  if (Math.abs(n) >= 1_000) return "$" + (n / 1_000).toFixed(0) + "k";
-  return fmt(n);
-};
 
 function todayRange(): [string, string] {
   const d = new Date();
@@ -53,15 +45,6 @@ function yearRange(): [string, string] {
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type DayRow = {
-  date: string;
-  ventas: number;
-  ganancia_bruta: number;
-  ajuste_merma: number;
-  ajuste_rinde: number;
-  ganancia_real: number;
-};
-
 type Stats = {
   ventas: number;
   ganancia_bruta: number;
@@ -69,11 +52,9 @@ type Stats = {
   rindeTotal: number;
   ganancia_real: number;
   diasPeriodo: number;
-  ventasPorDia: DayRow[];
-  vaciosTotal: number;
-  vaciosQty: number;
-  valesTotal: number;
-  valesCount: number;
+  vaciosRecibidosPeriodo: { qty: number; pesos: number };
+  vaciosEntregadosPeriodo: { pesos: number; qty: number };
+  vaciosEnPoder: { qty: number; pesos: number };
   deudaProveedores: number;
   deudaClientes: number;
   stockValorizado: number;
@@ -82,9 +63,9 @@ type Stats = {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 function MetricCard({
-  title, value, sub, icon: Icon, loading, highlight,
+  title, value, sub, icon: Icon, loading, highlight, green,
 }: {
-  title: string; value: string; sub?: string; icon?: React.ElementType; loading: boolean; highlight?: boolean;
+  title: string; value: string; sub?: string; icon?: React.ElementType; loading: boolean; highlight?: boolean; green?: boolean;
 }) {
   return (
     <Card className={highlight ? "border-primary/40 bg-primary/5" : ""}>
@@ -95,25 +76,12 @@ function MetricCard({
       <CardContent className="pt-0">
         {loading ? <Skeleton className="h-8 w-28" /> : (
           <>
-            <p className={`text-2xl font-bold ${highlight ? "text-primary" : "text-foreground"}`}>{value}</p>
+            <p className={`text-2xl font-bold ${highlight ? "text-primary" : green ? "text-green-600 dark:text-green-400" : "text-foreground"}`}>{value}</p>
             {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
           </>
         )}
       </CardContent>
     </Card>
-  );
-}
-
-// ─── Custom tooltip for chart ─────────────────────────────────────────────────
-function ChartTooltip({ active, payload, label }: any) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div className="rounded-md border border-border bg-background p-2.5 text-xs shadow-md space-y-1">
-      <p className="font-semibold text-foreground">{label}</p>
-      {payload.map((p: any) => (
-        <p key={p.name} style={{ color: p.color }}>{p.name}: {fmt(p.value)}</p>
-      ))}
-    </div>
   );
 }
 
@@ -124,6 +92,7 @@ export default function DashboardPage() {
   const [period, setPeriod] = useState<Period>("mes");
   const [customFrom, setCustomFrom] = useState(() => monthRange()[0]);
   const [customTo, setCustomTo] = useState(() => monthRange()[1]);
+  const [bolsaFilter, setBolsaFilter] = useState<"all" | "bolsa" | "bolsa_propia">("all");
 
   const [from, to] = useMemo((): [string, string] => {
     if (period === "hoy") return todayRange();
@@ -140,24 +109,27 @@ export default function DashboardPage() {
     staleTime: 30_000,
   });
 
+  const { data: bolsaData, isLoading: bolsaLoading } = useQuery<{ rows: BolsaFvRow[]; grandTotal: number }>({
+    queryKey: ["/api/dashboard/bolsa-fv", from, to, bolsaFilter],
+    queryFn: () =>
+      fetch(`/api/dashboard/bolsa-fv?from=${from}&to=${to}&type=${bolsaFilter}`, { credentials: "include" }).then((r) => r.json()),
+    staleTime: 30_000,
+  });
+
   const s = stats;
   const diasPeriodo = s?.diasPeriodo ?? 1;
   const ventasDia = s ? s.ventas / diasPeriodo : 0;
   const gananciaDia = s ? s.ganancia_real / diasPeriodo : 0;
-  const saldoVacios = s ? s.vaciosTotal - s.valesTotal : 0;
 
   const PERIOD_LABELS: Record<Period, string> = {
     hoy: "Hoy", semana: "Esta semana", mes: "Este mes", año: "Este año", custom: "Personalizado",
   };
 
-  // Chart: label short date
-  const chartData = (s?.ventasPorDia ?? []).map((d) => ({
-    ...d,
-    label: d.date.slice(5), // MM-DD
-  }));
-
   const ajusteNeto = (s?.rindeTotal ?? 0) - (s?.mermaTotal ?? 0);
   const ajustePositivo = ajusteNeto >= 0;
+  const recibidos = s?.vaciosRecibidosPeriodo ?? { qty: 0, pesos: 0 };
+  const entregados = s?.vaciosEntregadosPeriodo ?? { pesos: 0, qty: 0 };
+  const enPoder = s?.vaciosEnPoder ?? { qty: 0, pesos: 0 };
 
   return (
     <Layout title="Dashboard">
@@ -222,6 +194,7 @@ export default function DashboardPage() {
             value={s ? fmt(s.ganancia_bruta) : "—"}
             sub={s ? `Margen ${s.ventas > 0 ? ((s.ganancia_bruta / s.ventas) * 100).toFixed(1) : 0}%` : undefined}
             loading={isLoading}
+            green
           />
           <MetricCard
             title="Promedio de venta por día"
@@ -297,19 +270,18 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
-          {/* Vacíos en mi poder */}
+          {/* Deuda de clientes */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Vacíos en mi poder</CardTitle>
+              <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <Users className="h-3.5 w-3.5" /> Deuda de clientes
+              </CardTitle>
             </CardHeader>
             <CardContent className="pt-0">
               {isLoading ? <Skeleton className="h-8 w-28" /> : (
                 <>
-                  <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">{s ? fmt(saldoVacios) : "—"}</p>
-                  <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
-                    <p>Entregados: {s ? s.vaciosQty : "—"} c ({s ? fmt(s.vaciosTotal) : "—"})</p>
-                    <p>Recibidos: {s ? s.valesCount : "—"} vales ({s ? fmt(s.valesTotal) : "—"})</p>
-                  </div>
+                  <p className="text-2xl font-bold text-green-600 dark:text-green-400">{s ? fmt(s.deudaClientes) : "—"}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Total a cobrar de clientes activos</p>
                 </>
               )}
             </CardContent>
@@ -327,23 +299,6 @@ export default function DashboardPage() {
                 <>
                   <p className="text-2xl font-bold text-red-600 dark:text-red-400">{s ? fmt(s.deudaProveedores) : "—"}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">Compras pendientes de pago</p>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Deuda de clientes */}
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
-                <Users className="h-3.5 w-3.5" /> Deuda de clientes
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              {isLoading ? <Skeleton className="h-8 w-28" /> : (
-                <>
-                  <p className="text-2xl font-bold text-green-600 dark:text-green-400">{s ? fmt(s.deudaClientes) : "—"}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Total a cobrar de clientes activos</p>
                 </>
               )}
             </CardContent>
@@ -371,16 +326,37 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
+          {/* Vacíos en mi poder */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Vacíos en mi poder</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {isLoading ? <Skeleton className="h-8 w-28" /> : (
+                <>
+                  <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">
+                    {s ? fmt(enPoder.pesos) : "—"}
+                    {s && enPoder.qty > 0 && <span className="text-base font-normal ml-1">({Math.round(enPoder.qty)} cajones)</span>}
+                  </p>
+                  <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
+                    <p>Recibidos (período): {s ? Math.round(recibidos.qty) : "—"} cajones — {s ? fmt(recibidos.pesos) : "—"}</p>
+                    <p>Entregados (período): {s ? Math.round(entregados.qty) : "—"} cajones — {s ? fmt(entregados.pesos) : "—"}</p>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Comisiones */}
-          {(!s || s.comisiones.length > 0) && (
-            <Card className={s && s.comisiones.length > 1 ? "sm:col-span-2" : ""}>
+          {(!s || (s.comisiones ?? []).length > 0) && (
+            <Card className={s && (s.comisiones ?? []).length > 1 ? "sm:col-span-2" : ""}>
               <CardHeader className="pb-2">
                 <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
                   <Users className="h-3.5 w-3.5" /> Comisiones vendedores
                 </CardTitle>
               </CardHeader>
               <CardContent className="pt-0">
-                {isLoading ? <Skeleton className="h-12 w-full" /> : s && s.comisiones.length === 0 ? (
+                {isLoading ? <Skeleton className="h-12 w-full" /> : s && (s.comisiones ?? []).length === 0 ? (
                   <p className="text-sm text-muted-foreground">Sin comisiones en el período</p>
                 ) : (
                   <div className="space-y-2">
@@ -390,11 +366,11 @@ export default function DashboardPage() {
                         <span className="text-sm font-bold text-foreground">{fmt(c.total)}</span>
                       </div>
                     ))}
-                    {s && s.comisiones.length > 0 && (
+                    {s && (s.comisiones ?? []).length > 0 && (
                       <div className="flex items-center justify-between border-t border-border pt-1.5 mt-1.5">
                         <span className="text-xs text-muted-foreground">Total comisiones</span>
                         <span className="text-sm font-bold text-foreground">
-                          {fmt(s.comisiones.reduce((acc, c) => acc + c.total, 0))}
+                          {fmt((s.comisiones ?? []).reduce((acc, c) => acc + c.total, 0))}
                         </span>
                       </div>
                     )}
@@ -405,26 +381,96 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* ── Chart ── */}
-        {chartData.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold">Ventas y ganancia real por día</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={chartData} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
-                  <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                  <YAxis tickFormatter={(v) => fmtShort(v)} tick={{ fontSize: 10 }} width={55} />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar dataKey="ventas" name="Ventas" fill="hsl(var(--primary))" radius={[2, 2, 0, 0]} />
-                  <Bar dataKey="ganancia_real" name="Ganancia real" fill="hsl(142 71% 45%)" radius={[2, 2, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        )}
+        {/* ── Bolsa FV ── */}
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle className="text-sm font-semibold text-green-700 dark:text-green-400">Bolsa FV</CardTitle>
+              <div className="flex items-center gap-2">
+                <div className="flex gap-1">
+                  {(["all", "bolsa", "bolsa_propia"] as const).map((f) => (
+                    <Button
+                      key={f}
+                      size="sm"
+                      variant={bolsaFilter === f ? "default" : "outline"}
+                      className="h-6 text-[11px] px-2"
+                      onClick={() => setBolsaFilter(f)}
+                    >
+                      {f === "all" ? "Total" : f === "bolsa" ? "Solo Bolsa" : "Solo Bolsa Propia"}
+                    </Button>
+                  ))}
+                </div>
+                {bolsaData && (bolsaData.rows ?? []).length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 text-[11px] px-2"
+                    onClick={() => generateBolsaFvPDF(bolsaData.rows, bolsaData.grandTotal, from, to)}
+                  >
+                    <Download className="h-3 w-3 mr-1" /> PDF
+                  </Button>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {bolsaLoading ? (
+              <Skeleton className="h-24 w-full" />
+            ) : !bolsaData || (bolsaData.rows ?? []).length === 0 ? (
+              <p className="text-xs text-muted-foreground py-4 text-center">Sin líneas Bolsa FV en este período</p>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-border">
+                        <th className="text-left py-1.5 px-2 font-semibold text-muted-foreground">Fecha</th>
+                        <th className="text-left py-1.5 px-2 font-semibold text-muted-foreground">Cliente</th>
+                        <th className="text-left py-1.5 px-2 font-semibold text-muted-foreground">Producto</th>
+                        <th className="text-right py-1.5 px-2 font-semibold text-muted-foreground">Cant.</th>
+                        <th className="text-right py-1.5 px-2 font-semibold text-muted-foreground">Precio</th>
+                        <th className="text-right py-1.5 px-2 font-semibold text-muted-foreground">Total</th>
+                        <th className="text-left py-1.5 px-2 font-semibold text-muted-foreground">Tipo</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(bolsaData.rows ?? []).map((row, i) => (
+                        <tr key={i} className={`border-b border-border last:border-0 ${i % 2 === 0 ? "" : "bg-muted/20"}`}>
+                          <td className="py-1.5 px-2 text-muted-foreground whitespace-nowrap">
+                            {new Date(row.orderDate).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit" })}
+                          </td>
+                          <td className="py-1.5 px-2 font-medium truncate max-w-[120px]">{row.customerName}</td>
+                          <td className="py-1.5 px-2 text-muted-foreground truncate max-w-[120px]">{row.productName ?? "—"}</td>
+                          <td className="py-1.5 px-2 text-right whitespace-nowrap">
+                            {parseFloat(row.quantity).toLocaleString("es-MX", { maximumFractionDigits: 2 })} {row.unit}
+                          </td>
+                          <td className="py-1.5 px-2 text-right whitespace-nowrap">
+                            {row.pricePerUnit ? `$${Math.round(parseFloat(row.pricePerUnit)).toLocaleString("es-MX")}` : "—"}
+                          </td>
+                          <td className="py-1.5 px-2 text-right font-semibold whitespace-nowrap">
+                            ${Math.round(parseFloat(row.subtotal)).toLocaleString("es-MX")}
+                          </td>
+                          <td className="py-1.5 px-2">
+                            <Badge variant="outline" className={`text-[9px] ${row.bolsaType === "bolsa_propia" ? "text-blue-600 border-blue-300" : "text-green-600 border-green-300"}`}>
+                              {row.bolsaType === "bolsa_propia" ? "Propia" : "Bolsa"}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-border bg-muted/30">
+                        <td colSpan={5} className="py-2 px-2 font-bold text-xs uppercase tracking-wide">Total</td>
+                        <td className="py-2 px-2 text-right font-bold text-sm">${Math.round(bolsaData.grandTotal).toLocaleString("es-MX")}</td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </Layout>
   );

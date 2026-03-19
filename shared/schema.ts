@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, numeric, integer, timestamp, pgEnum, boolean, serial } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, numeric, integer, timestamp, pgEnum, boolean, serial, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -32,8 +32,10 @@ export const customers = pgTable("customers", {
   notes: text("notes"),
   hasIva: boolean("has_iva").notNull().default(false),
   ccType: text("cc_type").default("por_saldo"),
+  bolsaFv: boolean("bolsa_fv").default(false),
   salespersonName: text("salesperson_name"),
   commissionPct: numeric("commission_pct", { precision: 5, scale: 2 }).default("0"),
+  openingBalance: numeric("opening_balance", { precision: 12, scale: 2 }).notNull().default("0"),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
@@ -159,6 +161,7 @@ export const orderItems = pgTable("order_items", {
   subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull().default("0"),
   rawProductName: text("raw_product_name"),
   parseStatus: text("parse_status"),
+  bolsaType: text("bolsa_type"), // null | 'bolsa' | 'bolsa_propia'
 });
 
 // ─── Product Units (stock + cost per unit per product) ─────────────────────────
@@ -173,7 +176,9 @@ export const productUnits = pgTable("product_units", {
   weightPerUnit: numeric("weight_per_unit", { precision: 10, scale: 4 }).default("0"),
   // Set when this row was created/updated by the base-unit purchase model
   baseUnit: text("base_unit"),
-});
+}, (t) => ({
+  productUnitUnique: unique().on(t.productId, t.unit),
+}));
 
 // Stores the last sale price per customer+product (price history)
 export const priceHistory = pgTable("price_history", {

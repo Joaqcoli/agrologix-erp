@@ -84,7 +84,15 @@ export default function IntakePage() {
     const result = parseOrderTextLocal(rawText, simpleProducts);
     setParsed(result);
     setOverrides({});
-    setUnitOverrides({});
+
+    // Pre-fill unit overrides from localStorage (last used unit per product)
+    const initialUnitOverrides: Record<number, string> = {};
+    result.forEach((line, idx) => {
+      if (line.status === "no_qty" || !line.productId) return;
+      const last = localStorage.getItem(`lastUnit_${line.productId}`);
+      if (last) initialUnitOverrides[idx] = last;
+    });
+    setUnitOverrides(initialUnitOverrides);
     setStep("preview");
   };
 
@@ -112,15 +120,6 @@ export default function IntakePage() {
       mode: "new" | "merge" | "replace";
       existingOrderId?: number;
     }) => {
-      // Register any new units before creating the order
-      for (const line of validLines) {
-        if (unitOverrides[line.parsedIdx] && line.resolvedProductId) {
-          await apiRequest("POST", `/api/products/${line.resolvedProductId}/units`, {
-            unit: unitOverrides[line.parsedIdx],
-          });
-        }
-      }
-
       const items = validLines.map((line) => ({
         productId: line.resolvedProductId ?? null,
         quantity: String(line.quantity ?? 1),
@@ -362,7 +361,14 @@ export default function IntakePage() {
                                 <div className="w-full mt-1">
                                   <Select
                                     value={unitOverrides[idx] ?? ""}
-                                    onValueChange={(v) => setUnitOverrides({ ...unitOverrides, [idx]: v })}
+                                    onValueChange={(v) => {
+                                      setUnitOverrides({ ...unitOverrides, [idx]: v });
+                                      if (resolvedProductId) {
+                                        // Immediately register the unit for the product
+                                        apiRequest("POST", `/api/products/${resolvedProductId}/units`, { unit: v }).catch(() => {});
+                                        try { localStorage.setItem(`lastUnit_${resolvedProductId}`, v); } catch { /* quota exceeded */ }
+                                      }
+                                    }}
                                   >
                                     <SelectTrigger className="h-7 text-xs w-48" data-testid={`select-unit-${idx}`}>
                                       <SelectValue placeholder="Registrar como..." />

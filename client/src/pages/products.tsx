@@ -292,8 +292,8 @@ export default function ProductsPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: number; data: Partial<typeof EMPTY_FORM> }) => {
-      const res = await apiRequest("PATCH", `/api/products/${id}`, data);
+    mutationFn: async ({ id, data, units }: { id: number; data: Partial<typeof EMPTY_FORM>; units?: string[] }) => {
+      const res = await apiRequest("PATCH", `/api/products/${id}`, { ...data, units });
       if (!res.ok) throw new Error("Error al actualizar producto");
       return res.json();
     },
@@ -336,7 +336,7 @@ export default function ProductsPage() {
     if (editingId !== undefined) {
       setIsSavingUnits(true);
       try {
-        await updateMutation.mutateAsync({ id: editingId, data: snapshot });
+        await updateMutation.mutateAsync({ id: editingId, data: snapshot, units });
         const res = await apiRequest("PUT", `/api/products/${editingId}/units`, { units });
         if (!res.ok) throw new Error("Error al guardar unidades");
         queryClient.invalidateQueries({ queryKey: ["/api/products"] });

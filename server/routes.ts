@@ -39,9 +39,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/auth/login", async (req, res) => {
     try {
       const { email, password } = z.object({ email: z.string().email(), password: z.string().min(1) }).parse(req.body);
+      console.log('[LOGIN] Buscando usuario:', email);
       const user = await storage.getUserByEmail(email);
+      console.log('[LOGIN] Usuario encontrado:', !!user);
+      console.log('[LOGIN] Usuario activo:', user?.active);
       if (!user || !user.active) return res.status(401).json({ error: "Invalid credentials" });
       const valid = await storage.verifyPassword(password, user.passwordHash);
+      console.log('[LOGIN] Password válida:', valid);
       if (!valid) return res.status(401).json({ error: "Invalid credentials" });
       req.session.userId = user.id;
       req.session.userRole = user.role;
@@ -71,6 +75,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!from || !to) return res.status(400).json({ error: "from and to are required" });
       const stats = await storage.getDashboardStats(from, to);
       return res.json(stats);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/dashboard/bolsa-fv", requireAuth, async (req, res) => {
+    try {
+      const { from, to, type } = req.query as { from?: string; to?: string; type?: string };
+      if (!from || !to) return res.status(400).json({ error: "from and to are required" });
+      const data = await storage.getBolsaFvStats(from, to, type);
+      return res.json(data);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
@@ -157,7 +170,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const { units, ...rest } = req.body as any;
       const data = insertProductSchema.partial().parse(rest);
-      const product = await storage.updateProduct(Number(req.params.id), data);
+      const product = await storage.updateProduct(Number(req.params.id), data, units);
+      // Also process units if provided in the PATCH body (belt-and-suspenders alongside PUT /units)
+      if (Array.isArray(units) && units.length > 0) {
+        const canonical = units.map((u: string) => canonicalizeUnit(u));
+        await storage.setProductUnits(Number(req.params.id), canonical);
+      }
       return res.json(product);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
@@ -370,6 +388,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         productId: z.number().nullable().optional(),
         pricePerUnit: z.string().nullable().optional(),
         overrideCostPerUnit: z.string().nullable().optional(),
+        bolsaType: z.string().nullable().optional(),
       });
       const patch = schema.parse(req.body);
 
@@ -378,6 +397,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) {
       return res.status(400).json({ error: e.message });
     }
+  });
+
+  // Add item to order
+  app.post("/api/orders/:id/items", requireAuth, async (req, res) => {
+    try {
+      const orderId = Number(req.params.id);
+      const schema = z.object({
+        quantity: z.string(),
+        unit: z.string(),
+        productId: z.number().nullable().optional(),
+        pricePerUnit: z.string().nullable().optional(),
+        bolsaType: z.string().nullable().optional(),
+      });
+      const data = schema.parse(req.body);
+      const result = await storage.addOrderItem(orderId, data);
+      return res.status(201).json(result);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  // Delete item from order (restores stock if approved)
+  app.delete("/api/orders/:id/items/:itemId", requireAuth, async (req, res) => {
+    try {
+      const orderId = Number(req.params.id);
+      const itemId = Number(req.params.itemId);
+      const result = await storage.deleteOrderItem(orderId, itemId);
+      return res.json(result);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   app.get("/api/orders/:id", requireAuth, async (req, res) => {
@@ -559,40 +605,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Load List ─────────────────────────────────────────────────────────────
   app.get("/api/load-list/export", requireAuth, async (req, res) => {
-    const date = req.query.date as string;
-    if (!date) return res.status(400).json({ error: "date query param required" });
-    const includeDrafts = req.query.includeDrafts !== "0";
-    const data = await storage.getLoadListByDate(date, includeDrafts);
-    const XLSX = await import("xlsx");
-    const wb = XLSX.utils.book_new();
+    try {
+      const date = req.query.date as string;
+      if (!date) return res.status(400).json({ error: "date query param required" });
+      const includeDrafts = req.query.includeDrafts !== "0";
+      const data = await storage.getLoadListByDate(date, includeDrafts);
+      const XLSX = await import("xlsx");
+      const wb = XLSX.utils.book_new();
 
-    // Sheet 1: Carga
-    const cargaData = [
-      ["Producto", "Unidad", "Total Pedido", "Stock Disponible", "Diferencia", "Clientes"],
-      ...data.rows.map((r) => [r.productName, r.unit, r.totalQty, r.stockQty, r.diffQty, r.customersCount]),
-    ];
-    const ws1 = XLSX.utils.aoa_to_sheet(cargaData);
-    XLSX.utils.book_append_sheet(wb, ws1, "Carga");
+      // Sheet 1: Carga
+      const cargaData = [
+        ["Producto", "Unidad", "Total Pedido", "Stock Disponible", "Diferencia", "Clientes"],
+        ...data.rows.map((r) => [r.productName, r.unit, r.totalQty, r.stockQty, r.diffQty, r.customersCount]),
+      ];
+      const ws1 = XLSX.utils.aoa_to_sheet(cargaData);
+      XLSX.utils.book_append_sheet(wb, ws1, "Carga");
 
-    // Sheet 2: Detalle por cliente
-    const detailRows: (string | number)[][] = [["Cliente", "Pedido", "Producto", "Unidad", "Cantidad"]];
-    for (const p of data.pending) {
-      detailRows.push([p.customerName, p.orderFolio, p.rawText, p.unit ?? "", p.qty ?? ""]);
-    }
-    const ws2 = XLSX.utils.aoa_to_sheet(detailRows);
-    XLSX.utils.book_append_sheet(wb, ws2, "Detalle por Cliente");
+      // Sheet 2: Detalle por cliente
+      const detailRows: (string | number)[][] = [["Cliente", "Pedido", "Producto", "Unidad", "Cantidad"]];
+      for (const p of data.pending) {
+        detailRows.push([p.customerName, p.orderFolio, p.rawText, p.unit ?? "", p.qty ?? ""]);
+      }
+      const ws2 = XLSX.utils.aoa_to_sheet(detailRows);
+      XLSX.utils.book_append_sheet(wb, ws2, "Detalle por Cliente");
 
-    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
-    res.setHeader("Content-Disposition", `attachment; filename="lista-carga-${date}.xlsx"`);
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    return res.send(buf);
+      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      res.setHeader("Content-Disposition", `attachment; filename="lista-carga-${date}.xlsx"`);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      return res.send(buf);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   app.get("/api/load-list", requireAuth, async (req, res) => {
-    const date = req.query.date as string;
-    if (!date) return res.status(400).json({ error: "date query param required" });
-    const includeDrafts = req.query.includeDrafts !== "0";
-    return res.json(await storage.getLoadListByDate(date, includeDrafts));
+    try {
+      const date = req.query.date as string;
+      if (!date) return res.status(400).json({ error: "date query param required" });
+      const includeDrafts = req.query.includeDrafts !== "0";
+      return res.json(await storage.getLoadListByDate(date, includeDrafts));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   // ─── Cuentas Corrientes ─────────────────────────────────────────────────────
