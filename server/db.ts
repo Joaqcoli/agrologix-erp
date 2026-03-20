@@ -1,11 +1,6 @@
-import { config } from "dotenv";
-import { resolve } from "path";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "@shared/schema";
-
-config({ path: resolve(process.cwd(), ".env") });
-config({ path: resolve(process.cwd(), "dist/.env") });
 
 console.log('=== INICIO DEL PROCESO ===');
 console.log('Todas las variables de entorno:', JSON.stringify(
