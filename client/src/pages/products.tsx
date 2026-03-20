@@ -260,7 +260,7 @@ export default function ProductsPage() {
   // Map productId → units (from allUnitsData for cards)
   const productUnitMap = useMemo(() => {
     const map = new Map<number, ProductUnitWithProduct[]>();
-    (allUnitsData ?? []).forEach((pu) => {
+    (Array.isArray(allUnitsData) ? allUnitsData : []).forEach((pu) => {
       if (!map.has(pu.productId)) map.set(pu.productId, []);
       map.get(pu.productId)!.push(pu);
     });
