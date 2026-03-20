@@ -42,6 +42,8 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+app.set("trust proxy", 1);
+
 const PgStore = connectPgSimple(session);
 
 app.use(session({
@@ -52,6 +54,7 @@ app.use(session({
   cookie: {
     secure: process.env.NODE_ENV === "production",
     httpOnly: true,
+    sameSite: "none",
     maxAge: 7 * 24 * 60 * 60 * 1000,
   },
 }));
