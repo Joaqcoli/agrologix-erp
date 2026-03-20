@@ -8,18 +8,19 @@ import { runMigrations } from "./migrate";
 import { seedDatabase } from "./seed";
 import { pool } from "./db";
 
-setTimeout(() => {
-  console.log('VARS:', JSON.stringify({
-    SUPABASE_URL: !!process.env.SUPABASE_URL,
-    DATABASE_URL: !!process.env.DATABASE_URL,
-    NODE_ENV: process.env.NODE_ENV,
-    PATH: !!process.env.PATH,
-    HOME: !!process.env.HOME,
-  }));
-}, 2000);
-
 const app = express();
 const httpServer = createServer(app);
+
+app.get("/health", (_req, res) => {
+  res.json({
+    status: "ok",
+    env: {
+      SURL: !!process.env.SUPABASE_URL,
+      DATABASE_URL: !!process.env.DATABASE_URL,
+      NODE_ENV: process.env.NODE_ENV,
+    },
+  });
+});
 
 declare module "http" {
   interface IncomingMessage {

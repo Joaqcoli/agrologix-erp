@@ -11,7 +11,7 @@ console.log('Todas las variables de entorno:', JSON.stringify(
 const connectionString = process.env.SUPABASE_URL || process.env.DATABASE_URL;
 
 if (!connectionString) {
-  throw new Error("No hay URL de base de datos configurada (SUPABASE_URL o DATABASE_URL)");
+  console.warn("ADVERTENCIA: No hay URL de DB configurada. El servidor arranca pero las queries van a fallar.");
 }
 
 const needsSsl = /neon|supabase/.test(connectionString);
