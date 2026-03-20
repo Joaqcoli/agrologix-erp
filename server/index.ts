@@ -8,7 +8,15 @@ import { runMigrations } from "./migrate";
 import { seedDatabase } from "./seed";
 import { pool } from "./db";
 
-console.log('[DB] DATABASE_URL:', process.env.DATABASE_URL ? 'configurada ✓' : 'NO ENCONTRADA ✗');
+setTimeout(() => {
+  console.log('VARS:', JSON.stringify({
+    SUPABASE_URL: !!process.env.SUPABASE_URL,
+    DATABASE_URL: !!process.env.DATABASE_URL,
+    NODE_ENV: process.env.NODE_ENV,
+    PATH: !!process.env.PATH,
+    HOME: !!process.env.HOME,
+  }));
+}, 2000);
 
 const app = express();
 const httpServer = createServer(app);
