@@ -8,7 +8,9 @@ console.log('Todas las variables de entorno:', JSON.stringify(
   null, 2
 ));
 
-const connectionString = process.env.SUPABASE_URL || process.env.DATABASE_URL;
+export const connectionString = process.env.SUPABASE_URL || process.env.DATABASE_URL;
+
+console.log('[DB] Conectando a:', connectionString ? connectionString.substring(0, 40) + '...' : 'NINGUNA URL');
 
 if (!connectionString) {
   console.warn("ADVERTENCIA: No hay URL de DB configurada. El servidor arranca pero las queries van a fallar.");
