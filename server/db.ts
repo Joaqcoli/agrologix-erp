@@ -2,17 +2,20 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "@shared/schema";
 
-console.log('ENV vars disponibles:', Object.keys(process.env).filter(k => k.includes('DB') || k.includes('DATABASE')));
-console.log('DATABASE_URL valor:', process.env.DATABASE_URL ? 'PRESENTE' : 'AUSENTE');
+const connectionString = process.env.SUPABASE_URL || process.env.DATABASE_URL;
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL no está configurada");
+console.log('SUPABASE_URL:', process.env.SUPABASE_URL ? 'PRESENTE' : 'AUSENTE');
+console.log('DATABASE_URL:', process.env.DATABASE_URL ? 'PRESENTE' : 'AUSENTE');
+console.log('connectionString final:', connectionString ? 'PRESENTE' : 'AUSENTE');
+
+if (!connectionString) {
+  throw new Error("No hay URL de base de datos configurada (SUPABASE_URL o DATABASE_URL)");
 }
 
-const needsSsl = /neon|supabase/.test(process.env.DATABASE_URL);
+const needsSsl = /neon|supabase/.test(connectionString);
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString,
   ssl: needsSsl ? { rejectUnauthorized: false } : false,
 });
 
