@@ -22,6 +22,7 @@ app.get("/health", (_req, res) => {
       DATABASE_URL: !!process.env.DATABASE_URL,
       NODE_ENV: process.env.NODE_ENV,
       connectionString: !!connectionString,
+      connectionString_preview: connectionString ? connectionString.substring(0, 30) : 'NINGUNA',
     },
   });
 });
