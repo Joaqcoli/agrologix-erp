@@ -1,9 +1,27 @@
 import { Switch, Route } from "wouter";
+import { Component, type ReactNode } from "react";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/lib/auth";
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: "2rem", fontFamily: "monospace" }}>
+          <h2>Algo salió mal</h2>
+          <pre style={{ color: "red", whiteSpace: "pre-wrap" }}>{(this.state.error as Error).message}</pre>
+          <button onClick={() => this.setState({ error: null })}>Reintentar</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
 import CustomersPage from "@/pages/customers";
@@ -74,14 +92,16 @@ function Router() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <AuthProvider>
-          <Toaster />
-          <Router />
-        </AuthProvider>
-      </TooltipProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <AuthProvider>
+            <Toaster />
+            <Router />
+          </AuthProvider>
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 

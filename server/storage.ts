@@ -529,7 +529,7 @@ export const storage = {
     supplierName: string;
     purchaseDate: Date;
     notes?: string;
-    items: { productId: number; quantity: string; unit: "kg" | "pz" | "caja" | "saco" | "litro" | "tonelada"; costPerUnit: string }[];
+    items: { productId: number; quantity: string; unit: "kg" | "pz" | "caja" | "saco" | "litro" | "tonelada" | "CAJON" | "maple" | "atado" | "bandeja"; costPerUnit: string }[];
   }): Promise<Purchase> {
     return db.transaction(async (tx) => {
       const purchaseDateStr = data.purchaseDate.toISOString().slice(0, 10);
@@ -1698,16 +1698,17 @@ export const storage = {
     if (existing) {
       const needsBaseUnit = isBase && !existing.baseUnit;
       if (!existing.isActive || needsBaseUnit) {
-        const patch: Record<string, any> = { isActive: true };
-        if (needsBaseUnit) patch.baseUnit = unit;
-        const [updated] = await db.update(productUnits).set(patch).where(eq(productUnits.id, existing.id)).returning();
+        const [updated] = await db.update(productUnits)
+          .set({ isActive: true, ...(needsBaseUnit ? { baseUnit: unit } : {}) })
+          .where(eq(productUnits.id, existing.id)).returning();
         return updated;
       }
       return existing;
     }
-    const insertVals: Record<string, any> = { productId, unit, avgCost: "0", stockQty: "0" };
-    if (isBase) insertVals.baseUnit = unit;
-    const [created] = await db.insert(productUnits).values(insertVals).returning();
+    const [created] = await db.insert(productUnits).values({
+      productId, unit, avgCost: "0", stockQty: "0",
+      ...(isBase ? { baseUnit: unit } : {}),
+    }).returning();
     return created;
   },
 
@@ -1835,14 +1836,15 @@ export const storage = {
           .limit(1);
         if (inactive) {
           // Restore + set base_unit for base units
-          const updateFields: Record<string, any> = { isActive: true };
-          if (!PACKAGE_UNITS.has(unit)) updateFields.baseUnit = unit;
-          await db.update(productUnits).set(updateFields).where(eq(productUnits.id, inactive.id));
+          await db.update(productUnits)
+            .set({ isActive: true, ...(!PACKAGE_UNITS.has(unit) ? { baseUnit: unit } : {}) })
+            .where(eq(productUnits.id, inactive.id));
         } else {
           // Insert new row; base units get base_unit = unit so the system can find them
-          const insertValues: Record<string, any> = { productId, unit, avgCost: "0", stockQty: "0" };
-          if (!PACKAGE_UNITS.has(unit)) insertValues.baseUnit = unit;
-          await db.insert(productUnits).values(insertValues);
+          await db.insert(productUnits).values({
+            productId, unit, avgCost: "0", stockQty: "0",
+            ...(!PACKAGE_UNITS.has(unit) ? { baseUnit: unit } : {}),
+          });
         }
       }
     }

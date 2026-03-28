@@ -248,7 +248,7 @@ export default function NewPurchasePage() {
             productId: Number(i.productId),
             quantity: totalBaseQty.toFixed(4),
             unit: i.baseUnit,
-            costPerUnit: Math.round(costPerBase).toFixed(4),
+            costPerUnit: parseFloat(costPerBase.toFixed(4)).toString(),
             purchaseQty: parseFloat(i.quantity).toFixed(4),
             purchaseUnit: i.unit,
             weightPerPackage: parseFloat(i.weightPerPackage).toFixed(4),

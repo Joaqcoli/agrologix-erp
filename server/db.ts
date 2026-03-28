@@ -8,10 +8,10 @@ if (!connectionString) {
   console.warn("ADVERTENCIA: No hay URL de DB configurada. El servidor arranca pero las queries van a fallar.");
 }
 
-const needsSsl = /neon|supabase/.test(connectionString);
+const needsSsl = /neon|supabase/.test(connectionString ?? "");
 
 const pool = new Pool({
-  connectionString,
+  connectionString: connectionString ?? undefined,
   ssl: needsSsl ? { rejectUnauthorized: false } : false,
 });
 

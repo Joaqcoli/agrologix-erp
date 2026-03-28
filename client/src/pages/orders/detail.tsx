@@ -593,6 +593,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const handleDownloadRemito = async () => {
     try {
+      if (!order) return;
       type RemitoItem = { product: { name: string; sku: string } | null; quantity: string; unit: string; pricePerUnit: string; subtotal: string; bolsaType?: string | null };
 
       let remitoItems: RemitoItem[];

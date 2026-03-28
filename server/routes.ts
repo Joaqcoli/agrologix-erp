@@ -39,13 +39,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/auth/login", async (req, res) => {
     try {
       const { email, password } = z.object({ email: z.string().email(), password: z.string().min(1) }).parse(req.body);
-      console.log('[LOGIN] Buscando usuario:', email);
       const user = await storage.getUserByEmail(email);
-      console.log('[LOGIN] Usuario encontrado:', !!user);
-      console.log('[LOGIN] Usuario activo:', user?.active);
       if (!user || !user.active) return res.status(401).json({ error: "Invalid credentials" });
       const valid = await storage.verifyPassword(password, user.passwordHash);
-      console.log('[LOGIN] Password válida:', valid);
       if (!valid) return res.status(401).json({ error: "Invalid credentials" });
       req.session.userId = user.id;
       req.session.userRole = user.role;
@@ -89,7 +85,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Customers ─────────────────────────────────────────────────────────────
   app.get("/api/customers", requireAuth, async (req, res) => {
-    return res.json(await storage.getCustomers());
+    try {
+      return res.json(await storage.getCustomers());
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   app.get("/api/customers/:id", requireAuth, async (req, res) => {
@@ -113,27 +111,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.delete("/api/customers/:id", requireAuth, async (req, res) => {
-    await storage.deleteCustomer(Number(req.params.id));
-    return res.json({ ok: true });
+    try {
+      await storage.deleteCustomer(Number(req.params.id));
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   // ─── Products ──────────────────────────────────────────────────────────────
   app.get("/api/products", requireAuth, async (req, res) => {
-    const { category, search } = req.query as { category?: string; search?: string };
-    return res.json(await storage.getProducts({
-      category: category || undefined,
-      search: search || undefined,
-    }));
+    try {
+      const { category, search } = req.query as { category?: string; search?: string };
+      return res.json(await storage.getProducts({
+        category: category || undefined,
+        search: search || undefined,
+      }));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   // Specific sub-routes MUST come before /api/products/:id to avoid capture
   app.get("/api/products/stock", requireAuth, async (req, res) => {
-    const { category, search, onlyInStock } = req.query as { category?: string; search?: string; onlyInStock?: string };
-    return res.json(await storage.getAllProductUnitsStock({
-      category: category || undefined,
-      search: search || undefined,
-      onlyInStock: onlyInStock !== "false",
-    }));
+    try {
+      const { category, search, onlyInStock } = req.query as { category?: string; search?: string; onlyInStock?: string };
+      return res.json(await storage.getAllProductUnitsStock({
+        category: category || undefined,
+        search: search || undefined,
+        onlyInStock: onlyInStock !== "false",
+      }));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   app.post("/api/products/import", requireAuth, async (req, res) => {
@@ -147,9 +151,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get("/api/products/:id", requireAuth, async (req, res) => {
-    const p = await storage.getProduct(Number(req.params.id));
-    if (!p) return res.status(404).json({ error: "Not found" });
-    return res.json(p);
+    try {
+      const p = await storage.getProduct(Number(req.params.id));
+      if (!p) return res.status(404).json({ error: "Not found" });
+      return res.json(p);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   app.post("/api/products", requireAuth, async (req, res) => {
@@ -181,14 +187,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.delete("/api/products/:id", requireAuth, async (req, res) => {
-    await storage.deleteProduct(Number(req.params.id));
-    return res.json({ ok: true });
+    try {
+      await storage.deleteProduct(Number(req.params.id));
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   // ─── Product Units ─────────────────────────────────────────────────────────
 
   app.get("/api/products/:id/units", requireAuth, async (req, res) => {
-    return res.json(await storage.getProductUnits(Number(req.params.id)));
+    try {
+      return res.json(await storage.getProductUnits(Number(req.params.id)));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   // PUT /api/products/:id/units — replace unit set (idempotent diff)
@@ -211,8 +221,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.delete("/api/product-units/:id", requireAuth, async (req, res) => {
-    await storage.deactivateProductUnit(Number(req.params.id));
-    return res.json({ ok: true });
+    try {
+      await storage.deactivateProductUnit(Number(req.params.id));
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   app.patch("/api/product-units/:id/adjust", requireAuth, async (req, res) => {
@@ -411,7 +423,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         bolsaType: z.string().nullable().optional(),
       });
       const data = schema.parse(req.body);
-      const result = await storage.addOrderItem(orderId, data);
+      const result = await storage.addOrderItem(orderId, { ...data, productId: data.productId ?? null });
       return res.status(201).json(result);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
