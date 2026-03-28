@@ -810,13 +810,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── Suppliers CRUD ────────────────────────────────────────────────────────────
   app.get("/api/suppliers", requireAuth, async (_req, res) => {
-    return res.json(await storage.getSuppliers());
+    try {
+      return res.json(await storage.getSuppliers());
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   app.get("/api/suppliers/:id", requireAuth, async (req, res) => {
-    const s = await storage.getSupplier(Number(req.params.id));
-    if (!s) return res.status(404).json({ error: "Not found" });
-    return res.json(s);
+    try {
+      const s = await storage.getSupplier(Number(req.params.id));
+      if (!s) return res.status(404).json({ error: "Not found" });
+      return res.json(s);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   app.post("/api/suppliers", requireAuth, async (req, res) => {
@@ -834,8 +838,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.delete("/api/suppliers/:id", requireAuth, async (req, res) => {
-    await storage.deactivateSupplier(Number(req.params.id));
-    return res.json({ ok: true });
+    try {
+      await storage.deactivateSupplier(Number(req.params.id));
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   // ─── AP CC ─────────────────────────────────────────────────────────────────────

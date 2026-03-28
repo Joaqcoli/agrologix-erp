@@ -91,7 +91,7 @@ export default function SuppliersPage() {
     else createMutation.mutate(form);
   };
 
-  const filtered = (suppliers ?? []).filter((s) =>
+  const filtered = (Array.isArray(suppliers) ? suppliers : []).filter((s) =>
     s.active && (
       s.name.toLowerCase().includes(search.toLowerCase()) ||
       (s.cuit ?? "").toLowerCase().includes(search.toLowerCase()) ||
