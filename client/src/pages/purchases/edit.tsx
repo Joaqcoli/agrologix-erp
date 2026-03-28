@@ -70,9 +70,9 @@ export default function EditPurchasePage({ id }: { id: number }) {
               : String(parseFloat(item.quantity)),
             unit: isPackage ? item.purchaseUnit : item.unit,
             costPerUnit: isPackage && wpp > 0
-              ? String(parseFloat(item.costPerUnit) * wpp)
-              : String(parseFloat(item.costPerUnit)),
-            weightPerPackage: String(item.weightPerPackage ?? ""),
+              ? String(Math.round(parseFloat(item.costPerUnit) * wpp * 100) / 100)
+              : String(Math.round(parseFloat(item.costPerUnit) * 100) / 100),
+            weightPerPackage: item.weightPerPackage ? String(parseFloat(item.weightPerPackage)) : "",
             baseUnit: item.unit, // preserve DB base unit for submit
           };
         }));
@@ -122,7 +122,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
   const itemTotal = (item: PurchaseItem) => {
     const q = parseFloat(item.quantity) || 0;
     const c = parseFloat(item.costPerUnit) || 0;
-    return q * c;
+    return Math.round(q * c * 100) / 100;
   };
 
   const grandTotal = items.reduce((sum, item) => sum + itemTotal(item), 0);
