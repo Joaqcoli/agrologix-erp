@@ -670,15 +670,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // GET /api/ar/cc/summary?month=2&year=2026
+  // Helper: parse dateFrom/dateTo OR month/year from query
+  function parseCCDateRange(query: Record<string, any>): { startDate: string; endDate: string } | null {
+    if (query.dateFrom && query.dateTo) {
+      return { startDate: query.dateFrom as string, endDate: query.dateTo as string };
+    }
+    const month = parseInt(query.month as string);
+    const year = parseInt(query.year as string);
+    if (!month || !year || month < 1 || month > 12) return null;
+    const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
+    const endMonth = month === 12 ? 1 : month + 1;
+    const endYear = month === 12 ? year + 1 : year;
+    const endDate = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
+    return { startDate, endDate };
+  }
+
+  // GET /api/ar/cc/summary?month=2&year=2026  OR  ?dateFrom=2026-03-01&dateTo=2026-03-08
   app.get("/api/ar/cc/summary", requireAuth, async (req, res) => {
     try {
-      const month = parseInt(req.query.month as string);
-      const year = parseInt(req.query.year as string);
-      if (!month || !year || month < 1 || month > 12) {
-        return res.status(400).json({ error: "Invalid month/year" });
-      }
-      const data = await storage.getCCSummary(month, year);
+      const range = parseCCDateRange(req.query as Record<string, any>);
+      if (!range) return res.status(400).json({ error: "Invalid date params" });
+      const data = await storage.getCCSummary(range.startDate, range.endDate);
       return res.json(data);
     } catch (e: any) {
       console.error("CC summary error:", e);
@@ -686,16 +698,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // GET /api/ar/cc/customer/:id?month=2&year=2026
+  // GET /api/ar/cc/customer/:id?month=2&year=2026  OR  ?dateFrom=...&dateTo=...
   app.get("/api/ar/cc/customer/:id", requireAuth, async (req, res) => {
     try {
       const customerId = Number(req.params.id);
-      const month = parseInt(req.query.month as string);
-      const year = parseInt(req.query.year as string);
-      if (!month || !year || month < 1 || month > 12) {
-        return res.status(400).json({ error: "Invalid month/year" });
-      }
-      const data = await storage.getCCCustomerDetail(customerId, month, year);
+      const range = parseCCDateRange(req.query as Record<string, any>);
+      if (!range) return res.status(400).json({ error: "Invalid date params" });
+      const data = await storage.getCCCustomerDetail(customerId, range.startDate, range.endDate);
       if (!data) return res.status(404).json({ error: "Customer not found" });
       return res.json(data);
     } catch (e: any) {
@@ -759,7 +768,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const year = parseInt(req.query.year as string);
       if (!month || !year) return res.status(400).json({ error: "Invalid params" });
 
-      const data = await storage.getCCSummary(month, year);
+      const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
+      const endMonth = month === 12 ? 1 : month + 1;
+      const endYear = month === 12 ? year + 1 : year;
+      const endDate = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
+      const data = await storage.getCCSummary(startDate, endDate);
       const monthName = new Date(year, month - 1, 1).toLocaleString("es-AR", { month: "long", year: "numeric" });
 
       const wb = XLSX.utils.book_new();

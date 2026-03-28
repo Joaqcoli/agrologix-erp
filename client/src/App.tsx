@@ -72,7 +72,9 @@ function Router() {
           const today = new Date();
           const month = parseInt(search.get("month") ?? String(today.getMonth() + 1));
           const year = parseInt(search.get("year") ?? String(today.getFullYear()));
-          return <CCCustomerDetailPage customerId={Number(params.id)} month={month} year={year} />;
+          const dateFrom = search.get("dateFrom") ?? undefined;
+          const dateTo = search.get("dateTo") ?? undefined;
+          return <CCCustomerDetailPage customerId={Number(params.id)} month={month} year={year} dateFrom={dateFrom} dateTo={dateTo} />;
         }}
       </Route>
       <Route path="/suppliers" component={SuppliersPage} />

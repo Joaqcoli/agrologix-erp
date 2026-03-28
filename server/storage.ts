@@ -1993,15 +1993,18 @@ export const storage = {
       .where(and(eq(customers.parentCustomerId, parentId), eq(customers.active, true)));
   },
 
-  async getCCSummary(month: number, year: number) {
-    // Period boundaries
-    const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
-    const endMonth = month === 12 ? 1 : month + 1;
-    const endYear = month === 12 ? year + 1 : year;
-    const endDate = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
+  async getCCSummary(startDate: string, endDate: string) {
+    // Extract month/year from startDate for metadata
+    const [yearStr, monthStr] = startDate.split("-");
+    const month = parseInt(monthStr);
+    const year = parseInt(yearStr);
 
-    // Days in month
-    const daysInMonth = new Date(year, month, 0).getDate();
+    // Period length in days
+    const periodDays = Math.max(1, Math.round(
+      (new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)
+    ));
+    const monthDays = new Date(year, month, 0).getDate(); // calendar days, for weekly breakdown
+    const daysInMonth = periodDays; // used for averages
 
     // Get all customers
     const allCustomers = await db.select().from(customers).where(eq(customers.active, true)).orderBy(asc(customers.name));
@@ -2118,17 +2121,16 @@ export const storage = {
       fiado: totalFiado,
     };
 
-    // Weekly breakdown (fixed weeks in the month)
-    const weeks = [
+    // Weekly breakdown — only for full-month ranges (periodDays >= 28)
+    const isFullMonth = periodDays >= 28;
+    const weekTotals = isFullMonth ? [
       { label: "1° Semana", start: 1, end: 7 },
       { label: "2° Semana", start: 8, end: 14 },
       { label: "3° Semana", start: 15, end: 21 },
-      { label: "4° Semana", start: 22, end: daysInMonth },
-    ];
-
-    const weekTotals = weeks.map((w) => {
+      { label: "4° Semana", start: 22, end: monthDays },
+    ].map((w) => {
       const wStart = `${year}-${String(month).padStart(2, "0")}-${String(w.start).padStart(2, "0")}`;
-      const wEndDay = Math.min(w.end + 1, daysInMonth + 1);
+      const wEndDay = Math.min(w.end + 1, monthDays + 1);
       const wEnd = `${year}-${String(month).padStart(2, "0")}-${String(wEndDay).padStart(2, "0")}`;
 
       let total = 0;
@@ -2140,7 +2142,7 @@ export const storage = {
         }
       }
       return { ...w, total: Math.round(total) };
-    });
+    }) : [];
 
     // Venta del mes = sum of facturacion all customers in period
     const ventaMes = rows.reduce((s, r) => s + r.facturacion, 0);
@@ -2179,7 +2181,7 @@ export const storage = {
     };
   },
 
-  async getCCCustomerDetail(customerId: number, month: number, year: number) {
+  async getCCCustomerDetail(customerId: number, startDate: string, endDate: string) {
     const c = await this.getCustomer(customerId);
     if (!c) return null;
 
@@ -2197,11 +2199,6 @@ export const storage = {
       [customerId, c],
       ...children.map((ch) => [ch.id, ch] as [number, Customer]),
     ]);
-
-    const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
-    const endMonth = month === 12 ? 1 : month + 1;
-    const endYear = month === 12 ? year + 1 : year;
-    const endDate = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
 
     const [itemsInPeriod, itemsBefore] = await Promise.all([
       this._getApprovedItems(undefined, startDate, endDate),
@@ -2252,7 +2249,7 @@ export const storage = {
       `)),
       db.execute(drizzleSql.raw(`
         SELECT o.id, o.folio, o.order_date::text AS "orderDate", o.total::text AS total,
-               o.invoice_number AS "invoiceNumber"
+               o.invoice_number AS "invoiceNumber", o.customer_id AS "customerId"
         FROM orders o
         WHERE o.customer_id = ANY(ARRAY[${idArr}]::int[])
           AND o.status = 'approved'

@@ -6,8 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Download, TrendingUp, TrendingDown, Package, DollarSign } from "lucide-react";
-import { useState } from "react";
+import { Download, TrendingUp, Package, DollarSign } from "lucide-react";
+import { useState, useMemo } from "react";
 
 const MONTHS = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -67,19 +67,61 @@ function SaldoBadge({ saldo }: { saldo: number }) {
   return <span className="text-muted-foreground">$0</span>;
 }
 
+type FilterType = "mes" | "semana" | "dia";
+
+function weekRange(weekStr: string): [string, string] {
+  const [ys, ws] = weekStr.split("-W");
+  const year = parseInt(ys), week = parseInt(ws);
+  const jan4 = new Date(year, 0, 4);
+  const dayOfWeek = (jan4.getDay() + 6) % 7;
+  const monday = new Date(jan4);
+  monday.setDate(jan4.getDate() - dayOfWeek + (week - 1) * 7);
+  const nextMonday = new Date(monday);
+  nextMonday.setDate(monday.getDate() + 7);
+  const fmt = (d: Date) => d.toISOString().split("T")[0];
+  return [fmt(monday), fmt(nextMonday)];
+}
+
+function toISOWeek(d: Date): string {
+  const tmp = new Date(d.getTime());
+  tmp.setHours(0, 0, 0, 0);
+  tmp.setDate(tmp.getDate() + 3 - ((tmp.getDay() + 6) % 7));
+  const week1 = new Date(tmp.getFullYear(), 0, 4);
+  const weekNum = 1 + Math.round(((tmp.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
+  return `${tmp.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
+}
+
 export default function CuentasCorrientesPage() {
   const [, setLocation] = useLocation();
   const today = new Date();
+  const [filterType, setFilterType] = useState<FilterType>("mes");
   const [selectedMonth, setSelectedMonth] = useState(today.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(today.getFullYear());
+  const [selectedDate, setSelectedDate] = useState(() => today.toISOString().split("T")[0]);
+  const [selectedWeek, setSelectedWeek] = useState(() => toISOWeek(today));
   const [exporting, setExporting] = useState(false);
 
   const years = Array.from({ length: 4 }, (_, i) => today.getFullYear() - i);
 
+  const [dateFrom, dateTo] = useMemo<[string, string]>(() => {
+    if (filterType === "mes") {
+      const from = `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-01`;
+      const em = selectedMonth === 12 ? 1 : selectedMonth + 1;
+      const ey = selectedMonth === 12 ? selectedYear + 1 : selectedYear;
+      return [from, `${ey}-${String(em).padStart(2, "0")}-01`];
+    }
+    if (filterType === "dia") {
+      const d = new Date(selectedDate + "T00:00:00");
+      d.setDate(d.getDate() + 1);
+      return [selectedDate, d.toISOString().split("T")[0]];
+    }
+    return weekRange(selectedWeek);
+  }, [filterType, selectedMonth, selectedYear, selectedDate, selectedWeek]);
+
   const { data, isLoading, error } = useQuery<CCSummary>({
-    queryKey: ["/api/ar/cc/summary", selectedMonth, selectedYear],
+    queryKey: ["/api/ar/cc/summary", dateFrom, dateTo],
     queryFn: async () => {
-      const res = await fetch(`/api/ar/cc/summary?month=${selectedMonth}&year=${selectedYear}`, { credentials: "include" });
+      const res = await fetch(`/api/ar/cc/summary?dateFrom=${dateFrom}&dateTo=${dateTo}`, { credentials: "include" });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },
@@ -101,7 +143,11 @@ export default function CuentasCorrientesPage() {
     }
   };
 
-  const monthLabel = `${MONTHS[selectedMonth - 1]} ${selectedYear}`;
+  const monthLabel = filterType === "mes"
+    ? `${MONTHS[selectedMonth - 1]} ${selectedYear}`
+    : filterType === "dia"
+      ? new Date(selectedDate + "T00:00:00").toLocaleDateString("es-AR", { day: "2-digit", month: "long", year: "numeric" })
+      : (() => { const [f, t] = weekRange(selectedWeek); const d1 = new Date(f + "T00:00:00"); const d2 = new Date(new Date(t + "T00:00:00").getTime() - 86400000); return `${d1.toLocaleDateString("es-AR", { day: "2-digit", month: "short" })} – ${d2.toLocaleDateString("es-AR", { day: "2-digit", month: "short", year: "numeric" })}`; })();
 
   return (
     <Layout title="Cuentas Corrientes">
@@ -114,30 +160,64 @@ export default function CuentasCorrientesPage() {
           </div>
 
           {/* Period selector */}
-          <div className="flex items-center gap-2">
-            <Select value={String(selectedMonth)} onValueChange={(v) => setSelectedMonth(Number(v))}>
-              <SelectTrigger className="h-9 w-36 text-sm" data-testid="select-month">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {MONTHS.map((m, i) => (
-                  <SelectItem key={i + 1} value={String(i + 1)}>{m}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Filter type toggle */}
+            <div className="flex rounded-md border border-border overflow-hidden text-xs">
+              {(["mes", "semana", "dia"] as FilterType[]).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setFilterType(t)}
+                  className={`px-2.5 py-1.5 capitalize transition-colors ${filterType === t ? "bg-primary text-primary-foreground" : "hover:bg-muted/50 text-muted-foreground"}`}
+                >
+                  {t === "mes" ? "Mes" : t === "semana" ? "Semana" : "Día"}
+                </button>
+              ))}
+            </div>
 
-            <Select value={String(selectedYear)} onValueChange={(v) => setSelectedYear(Number(v))}>
-              <SelectTrigger className="h-9 w-24 text-sm" data-testid="select-year">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {years.map((y) => (
-                  <SelectItem key={y} value={String(y)}>{y}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {filterType === "mes" && (
+              <>
+                <Select value={String(selectedMonth)} onValueChange={(v) => setSelectedMonth(Number(v))}>
+                  <SelectTrigger className="h-9 w-36 text-sm" data-testid="select-month">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MONTHS.map((m, i) => (
+                      <SelectItem key={i + 1} value={String(i + 1)}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={String(selectedYear)} onValueChange={(v) => setSelectedYear(Number(v))}>
+                  <SelectTrigger className="h-9 w-24 text-sm" data-testid="select-year">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {years.map((y) => (
+                      <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </>
+            )}
+            {filterType === "dia" && (
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                data-testid="input-filter-date"
+              />
+            )}
+            {filterType === "semana" && (
+              <input
+                type="week"
+                value={selectedWeek}
+                onChange={(e) => setSelectedWeek(e.target.value)}
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                data-testid="input-filter-week"
+              />
+            )}
 
-            <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting || isLoading} data-testid="button-export-cc">
+            <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting || isLoading || filterType !== "mes"} title={filterType !== "mes" ? "Exportar solo disponible para vista mensual" : ""} data-testid="button-export-cc">
               <Download className="mr-2 h-4 w-4" />
               {exporting ? "..." : "Exportar XLSX"}
             </Button>
@@ -191,7 +271,7 @@ export default function CuentasCorrientesPage() {
                       <tr
                         key={row.customerId}
                         className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer group"
-                        onClick={() => setLocation(`/cuentas-corrientes/${row.customerId}?month=${selectedMonth}&year=${selectedYear}`)}
+                        onClick={() => setLocation(`/cuentas-corrientes/${row.customerId}?dateFrom=${dateFrom}&dateTo=${dateTo}&month=${selectedMonth}&year=${selectedYear}`)}
                         data-testid={`row-customer-${row.customerId}`}
                       >
                         <td className="py-2 px-3">
@@ -257,26 +337,28 @@ export default function CuentasCorrientesPage() {
 
           {/* ── Right: Summary panel ─────────────────────── */}
           <div className="w-64 shrink-0 space-y-3">
-            {/* Ventas por semana */}
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ventas por Semana</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1.5 pt-0">
-                {isLoading ? (
-                  Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-5 w-full" />)
-                ) : data?.semanas.map((s) => (
-                  <div key={s.label} className="flex justify-between items-center" data-testid={`semana-${s.label.replace(/\s/g, "-")}`}>
-                    <span className="text-xs text-muted-foreground">{s.label} <span className="text-[10px]">({s.start}-{s.end})</span></span>
-                    <span className="text-xs font-semibold text-foreground">${fmtInt(s.total)}</span>
+            {/* Ventas por semana — only for full-month view */}
+            {(isLoading || (data?.semanas ?? []).length > 0) && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ventas por Semana</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-1.5 pt-0">
+                  {isLoading ? (
+                    Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-5 w-full" />)
+                  ) : data?.semanas.map((s) => (
+                    <div key={s.label} className="flex justify-between items-center" data-testid={`semana-${s.label.replace(/\s/g, "-")}`}>
+                      <span className="text-xs text-muted-foreground">{s.label} <span className="text-[10px]">({s.start}-{s.end})</span></span>
+                      <span className="text-xs font-semibold text-foreground">${fmtInt(s.total)}</span>
+                    </div>
+                  ))}
+                  <div className="border-t border-border pt-1.5 mt-1 flex justify-between">
+                    <span className="text-xs font-bold text-foreground uppercase">Venta del período</span>
+                    <span className="text-sm font-bold text-primary">${fmtInt(data?.ventaMes ?? 0)}</span>
                   </div>
-                ))}
-                <div className="border-t border-border pt-1.5 mt-1 flex justify-between">
-                  <span className="text-xs font-bold text-foreground uppercase">Venta del Mes</span>
-                  <span className="text-sm font-bold text-primary">${fmtInt(data?.ventaMes ?? 0)}</span>
-                </div>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            )}
 
             {/* KPIs */}
             <Card>

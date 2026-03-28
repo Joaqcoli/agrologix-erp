@@ -14,7 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2, Building2 } from "lucide-react";
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 import type { Payment, Withholding } from "@shared/schema";
 import { PAYMENT_METHODS } from "@shared/schema";
 import { jsPDF } from "jspdf";
@@ -27,6 +27,8 @@ const MONTHS = [
 const fmtInt = (v: number) => Math.round(v).toLocaleString("es-AR");
 const today = () => new Date().toISOString().split("T")[0];
 
+type FilterType = "mes" | "semana" | "dia";
+
 type OrderRow = {
   id: number;
   folio: string;
@@ -35,8 +37,197 @@ type OrderRow = {
   invoiceNumber?: string | null;
   isPaid: boolean;
   paidAmount: number;
+  customerId?: number;
 };
 type PaymentRow = Payment & { orderFolio?: string | null };
+
+// ── Date range helpers ──────────────────────────────────────────────────────────
+
+function monthRange(month: number, year: number): [string, string] {
+  const from = `${year}-${String(month).padStart(2, "0")}-01`;
+  const em = month === 12 ? 1 : month + 1;
+  const ey = month === 12 ? year + 1 : year;
+  return [from, `${ey}-${String(em).padStart(2, "0")}-01`];
+}
+
+function dayRange(dateStr: string): [string, string] {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + 1);
+  return [dateStr, d.toISOString().split("T")[0]];
+}
+
+function weekRange(weekStr: string): [string, string] {
+  // weekStr = "2026-W12"
+  const [ys, ws] = weekStr.split("-W");
+  const year = parseInt(ys), week = parseInt(ws);
+  const jan4 = new Date(year, 0, 4);
+  const dayOfWeek = (jan4.getDay() + 6) % 7; // 0=Mon
+  const monday = new Date(jan4);
+  monday.setDate(jan4.getDate() - dayOfWeek + (week - 1) * 7);
+  const nextMonday = new Date(monday);
+  nextMonday.setDate(monday.getDate() + 7);
+  const fmt = (d: Date) => d.toISOString().split("T")[0];
+  return [fmt(monday), fmt(nextMonday)];
+}
+
+function toISOWeek(d: Date): string {
+  const tmp = new Date(d.getTime());
+  tmp.setHours(0, 0, 0, 0);
+  tmp.setDate(tmp.getDate() + 3 - ((tmp.getDay() + 6) % 7));
+  const week1 = new Date(tmp.getFullYear(), 0, 4);
+  const weekNum = 1 + Math.round(((tmp.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
+  return `${tmp.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
+}
+
+function detectFilterType(from: string, to: string): FilterType {
+  const days = Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86400000);
+  if (days === 1) return "dia";
+  if (days === 7) return "semana";
+  return "mes";
+}
+
+function formatPeriodLabel(filterType: FilterType, from: string, to: string, month: number, year: number): string {
+  if (filterType === "mes") return `${MONTHS[month - 1]} ${year}`;
+  if (filterType === "dia") {
+    const d = new Date(from + "T00:00:00");
+    return d.toLocaleDateString("es-AR", { day: "2-digit", month: "long", year: "numeric" });
+  }
+  const d1 = new Date(from + "T00:00:00");
+  const d2 = new Date(new Date(to + "T00:00:00").getTime() - 86400000);
+  return `${d1.toLocaleDateString("es-AR", { day: "2-digit", month: "short" })} – ${d2.toLocaleDateString("es-AR", { day: "2-digit", month: "short", year: "numeric" })}`;
+}
+
+// ── Subsidiary Detail Modal (MEJORA 2) ──────────────────────────────────────────
+
+function SubsidiaryDetailModal({
+  open,
+  onClose,
+  subsidiary,
+  orders,
+  periodLabel,
+}: {
+  open: boolean;
+  onClose: () => void;
+  subsidiary: { customerId: number; customerName: string; facturacion: number; cobranza: number; saldo: number } | null;
+  orders: OrderRow[];
+  periodLabel: string;
+}) {
+  const fmtDate = (d: string) => {
+    const dt = new Date(d.replace(/\s.+$/, "T00:00:00"));
+    return dt.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
+  };
+
+  const subOrders = useMemo(
+    () => (orders ?? []).filter((o) => o.customerId === subsidiary?.customerId),
+    [orders, subsidiary?.customerId]
+  );
+
+  const handleDownloadPDF = () => {
+    if (!subsidiary) return;
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const pageW = 210;
+    const margin = 14;
+    let y = margin;
+    doc.setFontSize(14); doc.setFont("helvetica", "bold");
+    doc.text("AgroLogix", margin, y);
+    doc.setFontSize(9); doc.setFont("helvetica", "normal");
+    doc.text(periodLabel, pageW - margin, y, { align: "right" });
+    y += 5;
+    doc.setFontSize(10); doc.setFont("helvetica", "bold");
+    doc.text(subsidiary.customerName + " (Sede)", margin, y);
+    y += 5; doc.setDrawColor(180, 180, 180); doc.line(margin, y, pageW - margin, y); y += 5;
+    doc.setFontSize(8); doc.setFont("helvetica", "bold");
+    doc.text("Fecha", margin, y); doc.text("Folio", margin + 22, y);
+    doc.text("Nro. Factura", margin + 80, y);
+    doc.text("Total", pageW - margin, y, { align: "right" });
+    y += 4; doc.line(margin, y, pageW - margin, y); y += 4;
+    doc.setFont("helvetica", "normal");
+    for (const o of subOrders) {
+      if (y > 270) { doc.addPage(); y = margin; }
+      doc.text(fmtDate(o.orderDate), margin, y);
+      doc.text(o.folio, margin + 22, y);
+      doc.text(o.invoiceNumber ?? "—", margin + 80, y);
+      doc.text(`$${Math.round(o.total).toLocaleString("es-AR")}`, pageW - margin, y, { align: "right" });
+      y += 5;
+    }
+    y += 3; doc.setDrawColor(120, 120, 120); doc.line(margin, y, pageW - margin, y); y += 5;
+    doc.setFontSize(9); doc.setFont("helvetica", "bold");
+    doc.text("TOTAL FACTURADO", margin, y);
+    doc.text(`$${Math.round(subsidiary.facturacion).toLocaleString("es-AR")}`, pageW - margin, y, { align: "right" });
+    doc.save(`CC-${subsidiary.customerName.replace(/\s+/g, "_")}-${periodLabel}.pdf`);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Building2 className="h-4 w-4" />
+            {subsidiary?.customerName} — {periodLabel}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          {/* Summary row */}
+          <div className="flex gap-4 text-sm">
+            <div className="flex-1 rounded-md bg-muted/40 p-2.5 text-center">
+              <p className="text-[10px] text-muted-foreground uppercase">Facturación</p>
+              <p className="font-bold">${fmtInt(subsidiary?.facturacion ?? 0)}</p>
+            </div>
+            <div className="flex-1 rounded-md bg-muted/40 p-2.5 text-center">
+              <p className="text-[10px] text-muted-foreground uppercase">Cobranza</p>
+              <p className="font-bold text-green-600">${fmtInt(subsidiary?.cobranza ?? 0)}</p>
+            </div>
+            <div className="flex-1 rounded-md bg-muted/40 p-2.5 text-center">
+              <p className="text-[10px] text-muted-foreground uppercase">Saldo</p>
+              <p className={`font-bold ${(subsidiary?.saldo ?? 0) > 0 ? "text-destructive" : "text-green-600"}`}>
+                ${fmtInt(Math.abs(subsidiary?.saldo ?? 0))} {(subsidiary?.saldo ?? 0) > 0 ? "a cobrar" : (subsidiary?.saldo ?? 0) < 0 ? "a favor" : ""}
+              </p>
+            </div>
+          </div>
+          {/* Orders table */}
+          {subOrders.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-4">Sin pedidos en este período</p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border bg-muted/30">
+                  <th className="text-left py-2 px-3">Folio</th>
+                  <th className="text-left py-2 px-3">Fecha</th>
+                  <th className="text-left py-2 px-3">Nro. Factura</th>
+                  <th className="text-right py-2 px-3">Total</th>
+                  <th className="text-left py-2 px-3">Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {subOrders.map((o) => (
+                  <tr key={o.id} className={`border-b border-border last:border-0 ${o.isPaid ? "bg-green-50/30" : ""}`}>
+                    <td className="py-1.5 px-3 font-mono font-medium">{o.folio}</td>
+                    <td className="py-1.5 px-3 text-muted-foreground">{fmtDate(o.orderDate)}</td>
+                    <td className="py-1.5 px-3 text-muted-foreground">{o.invoiceNumber || "—"}</td>
+                    <td className={`py-1.5 px-3 text-right font-semibold ${o.isPaid ? "line-through text-muted-foreground" : ""}`}>
+                      ${fmtInt(o.total)}
+                    </td>
+                    <td className="py-1.5 px-3">
+                      {o.isPaid
+                        ? <span className="text-[10px] text-green-600 font-medium">Pagado</span>
+                        : <span className="text-[10px] text-muted-foreground">Pendiente</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cerrar</Button>
+          <Button variant="outline" onClick={handleDownloadPDF} disabled={subOrders.length === 0}>
+            <Download className="mr-1 h-3.5 w-3.5" /> Descargar PDF
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 type SubsidiaryRow = {
   customerId: number;
@@ -520,24 +711,47 @@ export default function CCCustomerDetailPage({
   customerId,
   month: initMonth,
   year: initYear,
+  dateFrom: initDateFrom,
+  dateTo: initDateTo,
 }: {
   customerId: number;
   month: number;
   year: number;
+  dateFrom?: string;
+  dateTo?: string;
 }) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const [month, setMonth] = useState(initMonth);
-  const [year, setYear] = useState(initYear);
-  const [showPaymentModal, setShowPaymentModal] = useState(false);
-  const [showWithholdingModal, setShowWithholdingModal] = useState(false);
   const today2 = new Date();
   const years = Array.from({ length: 4 }, (_, i) => today2.getFullYear() - i);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showWithholdingModal, setShowWithholdingModal] = useState(false);
+  const [selectedSubsidiary, setSelectedSubsidiary] = useState<CCDetail["subsidiaries"] extends (infer T)[] ? T : never | null>(null);
+
+  // ── MEJORA 3: Date range filter state ─────────────────────────────────────────
+  const initRange = useMemo<[string, string]>(() => {
+    if (initDateFrom && initDateTo) return [initDateFrom, initDateTo];
+    return monthRange(initMonth, initYear);
+  }, []);
+
+  const [filterType, setFilterType] = useState<FilterType>(() => detectFilterType(initRange[0], initRange[1]));
+  const [month, setMonth] = useState(initMonth);
+  const [year, setYear] = useState(initYear);
+  const [selectedDate, setSelectedDate] = useState(initRange[0]);
+  const [selectedWeek, setSelectedWeek] = useState(() => toISOWeek(new Date(initRange[0] + "T00:00:00")));
+
+  const [queryDateFrom, queryDateTo] = useMemo<[string, string]>(() => {
+    if (filterType === "mes") return monthRange(month, year);
+    if (filterType === "dia") return dayRange(selectedDate);
+    return weekRange(selectedWeek);
+  }, [filterType, month, year, selectedDate, selectedWeek]);
+
+  const periodLabel = formatPeriodLabel(filterType, queryDateFrom, queryDateTo, month, year);
 
   const { data, isLoading } = useQuery<CCDetail>({
-    queryKey: ["/api/ar/cc/customer", customerId, month, year],
+    queryKey: ["/api/ar/cc/customer", customerId, queryDateFrom, queryDateTo],
     queryFn: async () => {
-      const res = await fetch(`/api/ar/cc/customer/${customerId}?month=${month}&year=${year}`, { credentials: "include" });
+      const res = await fetch(`/api/ar/cc/customer/${customerId}?dateFrom=${queryDateFrom}&dateTo=${queryDateTo}`, { credentials: "include" });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },
@@ -581,9 +795,8 @@ export default function CCCustomerDetailPage({
 
   const handleDownloadPDF = () => {
     if (!data) return;
-    const monthLabel = `${MONTHS[month - 1]} ${year}`;
-    const doc = buildPDF(data as CCDetail, monthLabel);
-    doc.save(`CC-${data.customer.name.replace(/\s+/g, "_")}-${MONTHS[month - 1]}-${year}.pdf`);
+    const doc = buildPDF(data as CCDetail, periodLabel);
+    doc.save(`CC-${data.customer.name.replace(/\s+/g, "_")}-${periodLabel.replace(/[\s/]/g, "_")}.pdf`);
   };
 
   const backUrl = `/cuentas-corrientes?month=${month}&year=${year}`;
@@ -610,7 +823,7 @@ export default function CCCustomerDetailPage({
                   Su cuenta corriente está unificada bajo <span className="font-medium text-foreground">{data.parentName}</span>
                 </p>
               </div>
-              <Button onClick={() => setLocation(`/cuentas-corrientes/${data.parentId}?month=${month}&year=${year}`)}>
+              <Button onClick={() => setLocation(`/cuentas-corrientes/${data.parentId}?dateFrom=${queryDateFrom}&dateTo=${queryDateTo}&month=${month}&year=${year}`)}>
                 Ver CC del grupo — {data.parentName}
               </Button>
             </CardContent>
@@ -653,31 +866,65 @@ export default function CCCustomerDetailPage({
                   )}
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  {data?.customer.city ?? ""} {data?.customer.hasIva && "· Con IVA"}
+                  {periodLabel} {data?.customer.city ? `· ${data.customer.city}` : ""} {data?.customer.hasIva && "· Con IVA"}
                 </p>
               </>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <Select value={String(month)} onValueChange={(v) => setMonth(Number(v))}>
-              <SelectTrigger className="h-8 w-32 text-sm" data-testid="select-detail-month">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {MONTHS.map((m, i) => (
-                  <SelectItem key={i + 1} value={String(i + 1)}>{m}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
-              <SelectTrigger className="h-8 w-20 text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {years.map((y) => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
-              </SelectContent>
-            </Select>
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Filter type toggle */}
+            <div className="flex rounded-md border border-border overflow-hidden text-xs">
+              {(["mes", "semana", "dia"] as FilterType[]).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setFilterType(t)}
+                  className={`px-2.5 py-1.5 capitalize transition-colors ${filterType === t ? "bg-primary text-primary-foreground" : "hover:bg-muted/50 text-muted-foreground"}`}
+                >
+                  {t === "mes" ? "Mes" : t === "semana" ? "Semana" : "Día"}
+                </button>
+              ))}
+            </div>
+            {filterType === "mes" && (
+              <>
+                <Select value={String(month)} onValueChange={(v) => setMonth(Number(v))}>
+                  <SelectTrigger className="h-8 w-32 text-sm" data-testid="select-detail-month">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MONTHS.map((m, i) => (
+                      <SelectItem key={i + 1} value={String(i + 1)}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
+                  <SelectTrigger className="h-8 w-20 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {years.map((y) => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </>
+            )}
+            {filterType === "dia" && (
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                data-testid="input-filter-date"
+              />
+            )}
+            {filterType === "semana" && (
+              <input
+                type="week"
+                value={selectedWeek}
+                onChange={(e) => setSelectedWeek(e.target.value)}
+                className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+                data-testid="input-filter-week"
+              />
+            )}
           </div>
 
           <Button size="sm" variant="outline" onClick={() => setShowPaymentModal(true)} data-testid="button-add-payment">
@@ -751,6 +998,7 @@ export default function CCCustomerDetailPage({
                     <tr className="border-b border-border bg-muted/30">
                       <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Folio</th>
                       <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Fecha</th>
+                      {data?.isParent && <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Sede</th>}
                       <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Nro. Factura</th>
                       <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Total</th>
                       <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Estado</th>
@@ -772,6 +1020,14 @@ export default function CCCustomerDetailPage({
                           {o.folio}
                         </td>
                         <td className="py-2 px-3 text-muted-foreground">{fmtDate(o.orderDate)}</td>
+                        {data?.isParent && (
+                          <td className="py-2 px-3">
+                            {o.customerId !== customerId
+                              ? <Badge variant="outline" className="text-[9px] py-0">{(data.subsidiaries ?? []).find((s) => s.customerId === o.customerId)?.customerName ?? "—"}</Badge>
+                              : <span className="text-[10px] text-muted-foreground italic">Principal</span>
+                            }
+                          </td>
+                        )}
                         <td className="py-2 px-3" onClick={(e) => e.stopPropagation()}>
                           <InvoiceCell order={o} customerId={customerId} />
                         </td>
@@ -934,11 +1190,8 @@ export default function CCCustomerDetailPage({
                 </thead>
                 <tbody>
                   {data.subsidiaries!.map((s) => (
-                    <tr key={s.customerId} className="border-b border-border last:border-0">
-                      <td
-                        className="py-2 px-3 font-medium cursor-pointer text-primary hover:underline"
-                        onClick={() => setLocation(`/cuentas-corrientes/${s.customerId}?month=${month}&year=${year}`)}
-                      >
+                    <tr key={s.customerId} className="border-b border-border last:border-0 hover:bg-muted/20 cursor-pointer" onClick={() => setSelectedSubsidiary(s as any)}>
+                      <td className="py-2 px-3 font-medium text-primary">
                         {s.customerName}
                       </td>
                       <td className="py-2 px-3 text-right">${fmtInt(s.facturacion)}</td>
@@ -954,6 +1207,14 @@ export default function CCCustomerDetailPage({
           </Card>
         )}
       </div>
+
+      <SubsidiaryDetailModal
+        open={selectedSubsidiary !== null}
+        onClose={() => setSelectedSubsidiary(null)}
+        subsidiary={selectedSubsidiary as any}
+        orders={data?.orders ?? []}
+        periodLabel={periodLabel}
+      />
 
       <PaymentModal
         customerId={customerId}
