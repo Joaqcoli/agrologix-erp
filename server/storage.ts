@@ -1988,6 +1988,11 @@ export const storage = {
     return rows.rows as RawOrderItem[];
   },
 
+  async getCustomerChildren(parentId: number): Promise<Customer[]> {
+    return db.select().from(customers)
+      .where(and(eq(customers.parentCustomerId, parentId), eq(customers.active, true)));
+  },
+
   async getCCSummary(month: number, year: number) {
     // Period boundaries
     const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
@@ -2001,6 +2006,13 @@ export const storage = {
     // Get all customers
     const allCustomers = await db.select().from(customers).where(eq(customers.active, true)).orderBy(asc(customers.name));
     const customerMap = new Map(allCustomers.map((c) => [c.id, c]));
+
+    // Build childToParent redirect map (child id → parent id)
+    const childToParent = new Map<number, number>();
+    for (const c of allCustomers) {
+      if (c.parentCustomerId != null) childToParent.set(c.id, c.parentCustomerId);
+    }
+    const effectiveId = (id: number) => childToParent.get(id) ?? id;
 
     // Get approved order items in period and before period
     const [itemsInPeriod, itemsBefore] = await Promise.all([
@@ -2027,7 +2039,19 @@ export const storage = {
     const withholdingsInMap = toMap(withholdingsInPeriod.rows as any[]);
     const withholdingsBeforeMap = toMap(withholdingsBefore.rows as any[]);
 
-    // Compute billing per customer (grouped by period)
+    // Roll up child payments/withholdings into parent totals
+    const rollUpMap = (m: Map<number, number>) => {
+      for (const [childId, parentId] of childToParent) {
+        const val = m.get(childId) ?? 0;
+        if (val !== 0) { m.set(parentId, (m.get(parentId) ?? 0) + val); m.delete(childId); }
+      }
+    };
+    rollUpMap(paymentsInMap);
+    rollUpMap(paymentsBeforeMap);
+    rollUpMap(withholdingsInMap);
+    rollUpMap(withholdingsBeforeMap);
+
+    // Compute billing per customer, rolling children up to parent
     const billingInMap = new Map<number, number>();
     const billingBeforeMap = new Map<number, number>();
 
@@ -2035,21 +2059,26 @@ export const storage = {
       const c = customerMap.get(item.customerId);
       if (!c) continue;
       const b = itemBilling(item, c.hasIva);
-      billingInMap.set(item.customerId, (billingInMap.get(item.customerId) ?? 0) + b);
+      const eid = effectiveId(item.customerId);
+      billingInMap.set(eid, (billingInMap.get(eid) ?? 0) + b);
     }
     for (const item of itemsBefore) {
       const c = customerMap.get(item.customerId);
       if (!c) continue;
       const b = itemBilling(item, c.hasIva);
-      billingBeforeMap.set(item.customerId, (billingBeforeMap.get(item.customerId) ?? 0) + b);
+      const eid = effectiveId(item.customerId);
+      billingBeforeMap.set(eid, (billingBeforeMap.get(eid) ?? 0) + b);
     }
 
-    // Build customer rows
-    const rows = allCustomers.map((c) => {
+    // Build customer rows — only parents and independents (children rolled up)
+    const rows = allCustomers.filter((c) => c.parentCustomerId == null).map((c) => {
       const facturacionBefore = billingBeforeMap.get(c.id) ?? 0;
       const cobranzaBefore = paymentsBeforeMap.get(c.id) ?? 0;
       const retencionBefore = withholdingsBeforeMap.get(c.id) ?? 0;
-      const openingBalance = parseFloat(c.openingBalance ?? "0");
+      // Sum opening balance of this customer + all its children
+      const openingBalance = parseFloat(c.openingBalance ?? "0") +
+        allCustomers.filter((ch) => ch.parentCustomerId === c.id)
+          .reduce((s, ch) => s + parseFloat(ch.openingBalance ?? "0"), 0);
       const saldoMesAnterior = openingBalance + facturacionBefore - cobranzaBefore - retencionBefore;
 
       const facturacion = billingInMap.get(c.id) ?? 0;
@@ -2154,6 +2183,21 @@ export const storage = {
     const c = await this.getCustomer(customerId);
     if (!c) return null;
 
+    // ── Child detection: redirect to parent ──────────────────────────────────────
+    if (c.parentCustomerId != null) {
+      const parent = await this.getCustomer(c.parentCustomerId);
+      return { isChild: true, parentId: c.parentCustomerId, parentName: parent?.name ?? "" };
+    }
+
+    // ── Parent detection: collect all subsidiary IDs ──────────────────────────────
+    const children = await this.getCustomerChildren(customerId);
+    const allIds = [customerId, ...children.map((ch) => ch.id)];
+    const isParent = children.length > 0;
+    const allCustomersMap = new Map<number, Customer>([
+      [customerId, c],
+      ...children.map((ch) => [ch.id, ch] as [number, Customer]),
+    ]);
+
     const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
     const endMonth = month === 12 ? 1 : month + 1;
     const endYear = month === 12 ? year + 1 : year;
@@ -2164,57 +2208,91 @@ export const storage = {
       this._getApprovedItems(startDate),
     ]);
 
-    const myItemsInPeriod = itemsInPeriod.filter((i) => i.customerId === customerId);
-    const myItemsBefore = itemsBefore.filter((i) => i.customerId === customerId);
+    const myItemsInPeriod = itemsInPeriod.filter((i) => allIds.includes(i.customerId));
+    const myItemsBefore = itemsBefore.filter((i) => allIds.includes(i.customerId));
 
-    const facturacion = Math.round(myItemsInPeriod.reduce((s, i) => s + itemBilling(i, c.hasIva), 0));
-    const facturacionBefore = Math.round(myItemsBefore.reduce((s, i) => s + itemBilling(i, c.hasIva), 0));
+    const facturacion = Math.round(myItemsInPeriod.reduce((s, i) => {
+      const cust = allCustomersMap.get(i.customerId);
+      return s + itemBilling(i, cust?.hasIva ?? c.hasIva);
+    }, 0));
+    const facturacionBefore = Math.round(myItemsBefore.reduce((s, i) => {
+      const cust = allCustomersMap.get(i.customerId);
+      return s + itemBilling(i, cust?.hasIva ?? c.hasIva);
+    }, 0));
 
+    // Multi-ID raw SQL queries (allIds are validated integers from DB)
+    const idArr = allIds.join(",");
     const [paymentsIn, paymentsBef, withholdingsIn, withholdingsBef, ordersInPeriod, paidAmountsRows] = await Promise.all([
-      this.getCustomerPaymentsWithFolio(customerId, startDate, endDate),
-      this.getCustomerPayments(customerId, undefined, startDate),
-      this.getCustomerWithholdings(customerId, startDate, endDate),
-      this.getCustomerWithholdings(customerId, undefined, startDate),
-      db.execute(drizzleSql`
+      db.execute(drizzleSql.raw(`
+        SELECT p.*, (
+          SELECT STRING_AGG(o2.folio, ', ' ORDER BY o2.folio)
+          FROM payment_order_links pol
+          JOIN orders o2 ON o2.id = pol.order_id
+          WHERE pol.payment_id = p.id
+        ) AS "orderFolio"
+        FROM payments p
+        WHERE p.customer_id = ANY(ARRAY[${idArr}]::int[])
+          AND p.date >= '${startDate}' AND p.date < '${endDate}'
+        ORDER BY p.date DESC
+      `)),
+      db.execute(drizzleSql.raw(`
+        SELECT * FROM payments
+        WHERE customer_id = ANY(ARRAY[${idArr}]::int[])
+          AND date < '${startDate}'
+      `)),
+      db.execute(drizzleSql.raw(`
+        SELECT * FROM withholdings
+        WHERE customer_id = ANY(ARRAY[${idArr}]::int[])
+          AND date >= '${startDate}' AND date < '${endDate}'
+      `)),
+      db.execute(drizzleSql.raw(`
+        SELECT * FROM withholdings
+        WHERE customer_id = ANY(ARRAY[${idArr}]::int[])
+          AND date < '${startDate}'
+      `)),
+      db.execute(drizzleSql.raw(`
         SELECT o.id, o.folio, o.order_date::text AS "orderDate", o.total::text AS total,
                o.invoice_number AS "invoiceNumber"
         FROM orders o
-        WHERE o.customer_id = ${customerId}
+        WHERE o.customer_id = ANY(ARRAY[${idArr}]::int[])
           AND o.status = 'approved'
-          AND o.order_date >= ${startDate}::date
-          AND o.order_date < ${endDate}::date
+          AND o.order_date >= '${startDate}'::date
+          AND o.order_date < '${endDate}'::date
         ORDER BY o.order_date DESC
-      `),
-      // Sum of payment amounts per order (via junction table) for orders in this period
-      db.execute(drizzleSql`
+      `)),
+      db.execute(drizzleSql.raw(`
         SELECT pol.order_id AS "orderId", SUM(p.amount)::text AS "paidTotal"
         FROM payment_order_links pol
         JOIN payments p ON p.id = pol.payment_id
         JOIN orders o ON o.id = pol.order_id
-        WHERE o.customer_id = ${customerId}
+        WHERE o.customer_id = ANY(ARRAY[${idArr}]::int[])
           AND o.status = 'approved'
-          AND o.order_date >= ${startDate}::date
-          AND o.order_date < ${endDate}::date
+          AND o.order_date >= '${startDate}'::date
+          AND o.order_date < '${endDate}'::date
         GROUP BY pol.order_id
-      `),
+      `)),
     ]);
 
-    const cobranzaBefore = paymentsBef.reduce((s, p) => s + parseFloat(p.amount as string), 0);
-    const retencionBefore = withholdingsBef.reduce((s, w) => s + parseFloat(w.amount as string), 0);
-    const openingBalance = parseFloat(c.openingBalance ?? "0");
+    // Opening balance: sum across all IDs
+    const openingBalance = allIds.reduce((s, id) => {
+      const cust = allCustomersMap.get(id);
+      return s + parseFloat(cust?.openingBalance ?? "0");
+    }, 0);
+    const cobranzaBefore = (paymentsBef.rows as any[]).reduce((s, p) => s + parseFloat(p.amount ?? "0"), 0);
+    const retencionBefore = (withholdingsBef.rows as any[]).reduce((s, w) => s + parseFloat(w.amount ?? "0"), 0);
     const saldoMesAnterior = Math.round(openingBalance + facturacionBefore - cobranzaBefore - retencionBefore);
 
-    const cobranza = Math.round(paymentsIn.reduce((s, p) => s + parseFloat(p.amount as string), 0));
-    const retenciones = Math.round(withholdingsIn.reduce((s, w) => s + parseFloat(w.amount as string), 0));
+    const cobranza = Math.round((paymentsIn.rows as any[]).reduce((s, p) => s + parseFloat(p.amount ?? "0"), 0));
+    const retenciones = Math.round((withholdingsIn.rows as any[]).reduce((s, w) => s + parseFloat(w.amount ?? "0"), 0));
     const saldo = saldoMesAnterior + facturacion - cobranza - retenciones;
 
-    // Compute billing per order in period for the table
+    // Compute billing per order
     const orderBillingMap = new Map<number, number>();
     for (const item of myItemsInPeriod) {
-      orderBillingMap.set(item.orderId, (orderBillingMap.get(item.orderId) ?? 0) + itemBilling(item, c.hasIva));
+      const cust = allCustomersMap.get(item.customerId);
+      orderBillingMap.set(item.orderId, (orderBillingMap.get(item.orderId) ?? 0) + itemBilling(item, cust?.hasIva ?? c.hasIva));
     }
 
-    // Map of orderId → sum of linked payment amounts
     const paidByOrder = new Map<number, number>();
     for (const row of paidAmountsRows.rows as any[]) {
       paidByOrder.set(Number(row.orderId), parseFloat(row.paidTotal ?? "0"));
@@ -2234,6 +2312,29 @@ export const storage = {
       };
     });
 
+    // Per-subsidiary breakdown (only for parent customers)
+    const subsidiaries = isParent ? allIds.map((cid) => {
+      const cust = allCustomersMap.get(cid)!;
+      const cidItemsIn = myItemsInPeriod.filter((i) => i.customerId === cid);
+      const cidItemsBef = myItemsBefore.filter((i) => i.customerId === cid);
+      const cidFact = Math.round(cidItemsIn.reduce((s, i) => s + itemBilling(i, cust.hasIva), 0));
+      const cidFactBef = Math.round(cidItemsBef.reduce((s, i) => s + itemBilling(i, cust.hasIva), 0));
+      const cidPayIn = (paymentsIn.rows as any[]).filter((p) => Number(p.customer_id) === cid).reduce((s, p) => s + parseFloat(p.amount ?? "0"), 0);
+      const cidPayBef = (paymentsBef.rows as any[]).filter((p) => Number(p.customer_id) === cid).reduce((s, p) => s + parseFloat(p.amount ?? "0"), 0);
+      const cidWitIn = (withholdingsIn.rows as any[]).filter((w) => Number(w.customer_id) === cid).reduce((s, w) => s + parseFloat(w.amount ?? "0"), 0);
+      const cidWitBef = (withholdingsBef.rows as any[]).filter((w) => Number(w.customer_id) === cid).reduce((s, w) => s + parseFloat(w.amount ?? "0"), 0);
+      const cidOpenBal = parseFloat(cust.openingBalance ?? "0");
+      const cidSaldoBef = Math.round(cidOpenBal + cidFactBef - cidPayBef - cidWitBef);
+      const cidSaldo = cidSaldoBef + cidFact - Math.round(cidPayIn) - Math.round(cidWitIn);
+      return {
+        customerId: cid,
+        customerName: cust.name,
+        facturacion: cidFact,
+        cobranza: Math.round(cidPayIn),
+        saldo: cidSaldo,
+      };
+    }) : [];
+
     return {
       customer: c,
       month,
@@ -2244,8 +2345,10 @@ export const storage = {
       retenciones,
       saldo,
       orders: ordersWithBilling,
-      payments: paymentsIn,
-      withholdings: withholdingsIn,
+      payments: paymentsIn.rows,
+      withholdings: withholdingsIn.rows,
+      isParent,
+      subsidiaries,
     };
   },
 

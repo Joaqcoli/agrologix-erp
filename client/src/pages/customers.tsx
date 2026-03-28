@@ -13,10 +13,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Search, Pencil, Trash2, Users, Building2, Phone, Mail } from "lucide-react";
 import type { Customer } from "@shared/schema";
 
-const EMPTY: Partial<Customer> = { name: "", rfc: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ccType: "por_saldo", bolsaFv: false, salespersonName: "", commissionPct: "0" };
+const EMPTY: Partial<Customer> = { name: "", rfc: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ccType: "por_saldo", bolsaFv: false, salespersonName: "", commissionPct: "0", parentCustomerId: null };
 
 export default function CustomersPage() {
   const { toast } = useToast();
@@ -63,6 +64,21 @@ export default function CustomersPage() {
     )
   );
 
+  // Group: parents/independents first, then their children immediately after
+  const grouped: Customer[] = [];
+  const parentRows = filtered.filter((c) => !c.parentCustomerId);
+  const childRows = filtered.filter((c) => !!c.parentCustomerId);
+  for (const parent of parentRows) {
+    grouped.push(parent);
+    grouped.push(...childRows.filter((c) => c.parentCustomerId === parent.id));
+  }
+  // Orphan children (parent filtered out by search)
+  grouped.push(...childRows.filter((c) => !parentRows.find((p) => p.id === c.parentCustomerId)));
+
+  const allCustomers = customers ?? [];
+  const hasChildren = (id: number) => allCustomers.some((ch) => ch.active && ch.parentCustomerId === id);
+  const getParentName = (parentId: number | null | undefined) => allCustomers.find((c) => c.id === parentId)?.name ?? "";
+
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   return (
@@ -108,52 +124,65 @@ export default function CustomersPage() {
           </Card>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {filtered.map((c) => (
-              <Card key={c.id} className="hover-elevate" data-testid={`card-customer-${c.id}`}>
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-start gap-3 flex-1 min-w-0">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 shrink-0">
-                        <Building2 className="h-5 w-5 text-primary" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-foreground truncate" title={c.name}>{c.name}</p>
-                        {c.rfc && <p className="text-xs text-muted-foreground mt-0.5">{c.rfc}</p>}
-                        <div className="flex flex-wrap gap-1 mt-1.5">
-                          {c.city && <Badge variant="secondary" className="text-[10px]">{c.city}</Badge>}
-                          <Badge variant={c.hasIva ? "default" : "outline"} className="text-[10px]">
-                            {c.hasIva ? "Con IVA" : "Sin IVA"}
-                          </Badge>
-                          {c.bolsaFv && (
-                            <Badge variant="outline" className="text-[10px] text-green-600 border-green-300">Bolsa FV</Badge>
+            {grouped.map((c) => {
+              const isChild = !!c.parentCustomerId;
+              const isGroup = hasChildren(c.id);
+              return (
+                <Card
+                  key={c.id}
+                  className={`hover-elevate${isChild ? " ml-4 border-l-4 border-l-muted-foreground/20" : ""}`}
+                  data-testid={`card-customer-${c.id}`}
+                >
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-3 flex-1 min-w-0">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 shrink-0">
+                          <Building2 className="h-5 w-5 text-primary" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-foreground truncate" title={c.name}>{c.name}</p>
+                          {isChild && (
+                            <p className="text-[11px] text-muted-foreground mt-0.5">Sede de {getParentName(c.parentCustomerId)}</p>
                           )}
+                          {c.rfc && !isChild && <p className="text-xs text-muted-foreground mt-0.5">{c.rfc}</p>}
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {isGroup && <Badge variant="secondary" className="text-[10px]">Grupo</Badge>}
+                            {isChild && <Badge variant="outline" className="text-[10px] text-muted-foreground">Sede</Badge>}
+                            {c.city && <Badge variant="secondary" className="text-[10px]">{c.city}</Badge>}
+                            <Badge variant={c.hasIva ? "default" : "outline"} className="text-[10px]">
+                              {c.hasIva ? "Con IVA" : "Sin IVA"}
+                            </Badge>
+                            {c.bolsaFv && (
+                              <Badge variant="outline" className="text-[10px] text-green-600 border-green-300">Bolsa FV</Badge>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openEdit(c)} data-testid={`button-edit-customer-${c.id}`}>
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setDeleteId(c.id)} data-testid={`button-delete-customer-${c.id}`}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="mt-3 space-y-1">
-                    {c.phone && (
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <Phone className="h-3 w-3 shrink-0" /> <span className="truncate">{c.phone}</span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openEdit(c)} data-testid={`button-edit-customer-${c.id}`}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setDeleteId(c.id)} data-testid={`button-delete-customer-${c.id}`}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
                       </div>
-                    )}
-                    {c.email && (
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <Mail className="h-3 w-3 shrink-0" /> <span className="truncate">{c.email}</span>
-                      </div>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                    </div>
+                    <div className="mt-3 space-y-1">
+                      {c.phone && (
+                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <Phone className="h-3 w-3 shrink-0" /> <span className="truncate">{c.phone}</span>
+                        </div>
+                      )}
+                      {c.email && (
+                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <Mail className="h-3 w-3 shrink-0" /> <span className="truncate">{c.email}</span>
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         )}
       </div>
@@ -171,6 +200,26 @@ export default function CustomersPage() {
               <div className="sm:col-span-2 space-y-1.5">
                 <Label htmlFor="name">Nombre / Razón Social *</Label>
                 <Input id="name" value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })} required data-testid="input-customer-name" />
+              </div>
+              <div className="sm:col-span-2 space-y-1.5">
+                <Label>Cliente padre (opcional)</Label>
+                <Select
+                  value={form.parentCustomerId ? String(form.parentCustomerId) : "none"}
+                  onValueChange={(v) => setForm({ ...form, parentCustomerId: v === "none" ? null : Number(v) })}
+                >
+                  <SelectTrigger data-testid="select-parent-customer">
+                    <SelectValue placeholder="— Ninguno (cliente independiente) —" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">— Ninguno (cliente independiente) —</SelectItem>
+                    {allCustomers
+                      .filter((p) => p.active && !p.parentCustomerId && p.id !== editing?.id)
+                      .map((p) => (
+                        <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                      ))
+                    }
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="rfc">RFC</Label>

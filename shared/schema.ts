@@ -36,6 +36,7 @@ export const customers = pgTable("customers", {
   salespersonName: text("salesperson_name"),
   commissionPct: numeric("commission_pct", { precision: 5, scale: 2 }).default("0"),
   openingBalance: numeric("opening_balance", { precision: 12, scale: 2 }).notNull().default("0"),
+  parentCustomerId: integer("parent_customer_id").references(() => customers.id),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });

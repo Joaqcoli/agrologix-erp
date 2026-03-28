@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2, Building2 } from "lucide-react";
 import { useState, useRef } from "react";
 import type { Payment, Withholding } from "@shared/schema";
 import { PAYMENT_METHODS } from "@shared/schema";
@@ -38,7 +38,20 @@ type OrderRow = {
 };
 type PaymentRow = Payment & { orderFolio?: string | null };
 
+type SubsidiaryRow = {
+  customerId: number;
+  customerName: string;
+  facturacion: number;
+  cobranza: number;
+  saldo: number;
+};
+
 type CCDetail = {
+  // Child redirect
+  isChild?: boolean;
+  parentId?: number;
+  parentName?: string;
+  // Normal detail
   customer: {
     id: number;
     name: string;
@@ -58,6 +71,8 @@ type CCDetail = {
   orders: OrderRow[];
   payments: PaymentRow[];
   withholdings: Withholding[];
+  isParent?: boolean;
+  subsidiaries?: SubsidiaryRow[];
 };
 
 type PendingOrder = { id: number; folio: string; total: string; orderDate: string };
@@ -567,12 +582,43 @@ export default function CCCustomerDetailPage({
   const handleDownloadPDF = () => {
     if (!data) return;
     const monthLabel = `${MONTHS[month - 1]} ${year}`;
-    const doc = buildPDF(data, monthLabel);
+    const doc = buildPDF(data as CCDetail, monthLabel);
     doc.save(`CC-${data.customer.name.replace(/\s+/g, "_")}-${MONTHS[month - 1]}-${year}.pdf`);
   };
 
   const backUrl = `/cuentas-corrientes?month=${month}&year=${year}`;
-  const title = data?.customer.name ? `CC — ${data.customer.name}` : "Cuenta Corriente";
+  const title = data?.customer?.name ? `CC — ${data.customer.name}` : "Cuenta Corriente";
+
+  // ── Child redirect view ──────────────────────────────────────────────────────
+  if (!isLoading && data?.isChild) {
+    return (
+      <Layout title="Cuenta Corriente — Sede">
+        <div className="p-5 max-w-2xl mx-auto space-y-4">
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" size="icon" onClick={() => setLocation(backUrl)}>
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          </div>
+          <Card>
+            <CardContent className="flex flex-col items-center gap-4 py-10">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+                <Building2 className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <div className="text-center space-y-1">
+                <p className="text-sm font-semibold text-foreground">Esta es una sede</p>
+                <p className="text-sm text-muted-foreground">
+                  Su cuenta corriente está unificada bajo <span className="font-medium text-foreground">{data.parentName}</span>
+                </p>
+              </div>
+              <Button onClick={() => setLocation(`/cuentas-corrientes/${data.parentId}?month=${month}&year=${year}`)}>
+                Ver CC del grupo — {data.parentName}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </Layout>
+    );
+  }
 
   // Pending (unpaid) orders sum — for footer
   const pendingOrdersTotal = (data?.orders ?? [])
@@ -866,6 +912,47 @@ export default function CCCustomerDetailPage({
             </CardContent>
           </Card>
         </div>
+
+        {/* Subsidiaries breakdown */}
+        {data?.isParent && (data?.subsidiaries ?? []).length > 0 && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <Building2 className="h-4 w-4" />
+                Desglose por Sede
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border bg-muted/30">
+                    <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Sede</th>
+                    <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Facturación</th>
+                    <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Cobranza</th>
+                    <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Saldo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.subsidiaries!.map((s) => (
+                    <tr key={s.customerId} className="border-b border-border last:border-0">
+                      <td
+                        className="py-2 px-3 font-medium cursor-pointer text-primary hover:underline"
+                        onClick={() => setLocation(`/cuentas-corrientes/${s.customerId}?month=${month}&year=${year}`)}
+                      >
+                        {s.customerName}
+                      </td>
+                      <td className="py-2 px-3 text-right">${fmtInt(s.facturacion)}</td>
+                      <td className="py-2 px-3 text-right text-green-600">${fmtInt(s.cobranza)}</td>
+                      <td className={`py-2 px-3 text-right font-semibold ${s.saldo > 0 ? "text-destructive" : s.saldo < 0 ? "text-green-600" : "text-muted-foreground"}`}>
+                        ${fmtInt(Math.abs(s.saldo))} {s.saldo > 0 ? "a cobrar" : s.saldo < 0 ? "a favor" : ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       <PaymentModal

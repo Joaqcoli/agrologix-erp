@@ -387,5 +387,11 @@ export async function runMigrations() {
   await db.execute(sql.raw(`ALTER TABLE products ALTER COLUMN unit SET DEFAULT 'KG'`));
   await db.execute(sql.raw(`ALTER TABLE order_items ALTER COLUMN unit SET DEFAULT 'KG'`));
 
+  // ─── Grupos de clientes (parent-child) ──────────────────────────────────────
+  await db.execute(sql`
+    ALTER TABLE customers ADD COLUMN IF NOT EXISTS
+    parent_customer_id integer REFERENCES customers(id)
+  `);
+
   console.log("Migrations complete.");
 }
