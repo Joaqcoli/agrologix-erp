@@ -460,7 +460,7 @@ export default function StockPage() {
 
   // Always hide zero-stock rows
   const filteredStock = useMemo(() => {
-    const all = stockData ?? [];
+    const all = Array.isArray(stockData) ? stockData : [];
     return all.filter((pu) => {
       const matchName = pu.product.name.toLowerCase().includes(search.toLowerCase());
       const matchCat = categoryFilter === "all" || pu.product.category === categoryFilter;
