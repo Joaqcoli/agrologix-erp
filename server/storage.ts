@@ -2182,6 +2182,10 @@ export const storage = {
   },
 
   async getCCCustomerDetail(customerId: number, startDate: string, endDate: string) {
+    const [yearStr, monthStr] = startDate.split("-");
+    const month = parseInt(monthStr);
+    const year = parseInt(yearStr);
+
     const c = await this.getCustomer(customerId);
     if (!c) return null;
 
