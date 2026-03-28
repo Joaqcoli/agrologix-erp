@@ -166,7 +166,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Create initial units: from units array if provided, or from product.unit
       const initialUnits: string[] = Array.isArray(units) && units.length > 0
         ? units.map((u: string) => canonicalizeUnit(u))
-        : [canonicalizeUnit(data.unit ?? "kg")];
+        : [canonicalizeUnit(data.unit ?? "KG")];
       await storage.setProductUnits(product.id, initialUnits);
       return res.status(201).json(product);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
@@ -288,7 +288,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         items: z.array(z.object({
           productId: z.number().int().positive(),
           quantity: z.string(),
-          unit: z.enum(["kg", "pz", "caja", "saco", "litro", "tonelada", "CAJON", "maple", "atado", "bandeja"]),
+          unit: z.enum(["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"]),
           costPerUnit: z.string(),
         })).min(1),
       });

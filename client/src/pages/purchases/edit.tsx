@@ -12,11 +12,31 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { Plus, Trash2, ArrowLeft, Save, Calculator, Info } from "lucide-react";
+import { Plus, Trash2, ArrowLeft, Save, Calculator, Info, PackagePlus } from "lucide-react";
 import type { Product } from "@shared/schema";
 
-const UNITS = ["kg", "pz", "caja", "saco", "litro", "tonelada"] as const;
-type PurchaseItem = { productId: number; quantity: string; unit: typeof UNITS[number]; costPerUnit: string };
+const UNIT_OPTIONS = [
+  { value: "KG",      label: "KG" },
+  { value: "CAJON",   label: "CAJÓN" },
+  { value: "BOLSA",   label: "BOLSA" },
+  { value: "UNIDAD",  label: "UNIDAD" },
+  { value: "MAPLE",   label: "MAPLE" },
+  { value: "ATADO",   label: "ATADO" },
+  { value: "BANDEJA", label: "BANDEJA" },
+] as const;
+
+const PACKAGE_UNIT_SET = new Set(["CAJON", "BOLSA", "BANDEJA"]);
+const isPackageUnit = (unit: string) => PACKAGE_UNIT_SET.has(unit);
+const labelFor = (unit: string) => UNIT_OPTIONS.find((u) => u.value === unit)?.label ?? unit;
+
+type PurchaseItem = {
+  productId: number;
+  quantity: string;
+  unit: string;
+  costPerUnit: string;
+  weightPerPackage: string;
+  baseUnit: string; // actual base unit stored in DB (for submit conversion)
+};
 
 export default function EditPurchasePage({ id }: { id: number }) {
   const { toast } = useToast();
@@ -25,7 +45,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
   const [supplierName, setSupplierName] = useState("");
   const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
-  const [items, setItems] = useState<PurchaseItem[]>([{ productId: 0, quantity: "", unit: "kg", costPerUnit: "" }]);
+  const [items, setItems] = useState<PurchaseItem[]>([{ productId: 0, quantity: "", unit: "KG", costPerUnit: "", weightPerPackage: "", baseUnit: "KG" }]);
   const [initialized, setInitialized] = useState(false);
 
   const { data: purchase, isLoading: loadingPurchase } = useQuery<any>({
@@ -40,12 +60,22 @@ export default function EditPurchasePage({ id }: { id: number }) {
       setPurchaseDate(purchase.purchaseDate ? new Date(purchase.purchaseDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10));
       setNotes(purchase.notes ?? "");
       if (purchase.items?.length) {
-        setItems(purchase.items.map((item: any) => ({
-          productId: item.productId,
-          quantity: String(parseFloat(item.quantity)),
-          unit: item.unit,
-          costPerUnit: String(parseFloat(item.costPerUnit)),
-        })));
+        setItems(purchase.items.map((item: any) => {
+          const isPackage = item.purchaseUnit && item.purchaseUnit !== item.unit;
+          const wpp = parseFloat(item.weightPerPackage ?? "0") || 0;
+          return {
+            productId: item.productId,
+            quantity: isPackage
+              ? String(parseFloat(item.purchaseQty ?? item.quantity))
+              : String(parseFloat(item.quantity)),
+            unit: isPackage ? item.purchaseUnit : item.unit,
+            costPerUnit: isPackage && wpp > 0
+              ? String(parseFloat(item.costPerUnit) * wpp)
+              : String(parseFloat(item.costPerUnit)),
+            weightPerPackage: String(item.weightPerPackage ?? ""),
+            baseUnit: item.unit, // preserve DB base unit for submit
+          };
+        }));
       }
       setInitialized(true);
     }
@@ -63,15 +93,26 @@ export default function EditPurchasePage({ id }: { id: number }) {
     onError: (e: any) => toast({ title: "Error al guardar", description: e.message, variant: "destructive" }),
   });
 
-  const addItem = () => setItems([...items, { productId: 0, quantity: "", unit: "kg", costPerUnit: "" }]);
+  // Fix 1: unshift so new item appears at top
+  const addItem = () => setItems([{ productId: 0, quantity: "", unit: "KG", costPerUnit: "", weightPerPackage: "", baseUnit: "KG" }, ...items]);
   const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
 
   const updateItem = (i: number, field: keyof PurchaseItem, value: string | number) => {
     const updated = [...items];
-    updated[i] = { ...updated[i], [field]: value };
+    updated[i] = { ...updated[i], [field]: String(value) };
     if (field === "productId") {
       const product = (products ?? []).find((p) => p.id === Number(value));
-      if (product) updated[i].unit = product.unit as any;
+      if (product) {
+        updated[i].unit = product.unit as string;
+        updated[i].baseUnit = product.unit as string;
+      }
+    }
+    if (field === "unit") {
+      const unit = String(value);
+      if (!isPackageUnit(unit)) {
+        updated[i].weightPerPackage = "";
+        updated[i].baseUnit = unit;
+      }
     }
     setItems(updated);
   };
@@ -96,8 +137,11 @@ export default function EditPurchasePage({ id }: { id: number }) {
     if (!p) return null;
     const currentStock = parseFloat(p.currentStock as string);
     const currentAvg = parseFloat(p.averageCost as string);
-    const newQty = parseFloat(item.quantity) || 0;
-    const newCost = parseFloat(item.costPerUnit) || 0;
+    const wpp = parseFloat(item.weightPerPackage) || 0;
+    const isPackage = isPackageUnit(item.unit) && wpp > 0;
+    const newQty = isPackage ? (parseFloat(item.quantity) || 0) * wpp : (parseFloat(item.quantity) || 0);
+    const newCost = isPackage ? (parseFloat(item.costPerUnit) || 0) / wpp : (parseFloat(item.costPerUnit) || 0);
+    if (newQty <= 0 || newCost <= 0) return null;
     if (currentStock + newQty === 0) return newCost;
     return (currentStock * currentAvg + newQty * newCost) / (currentStock + newQty);
   };
@@ -113,12 +157,26 @@ export default function EditPurchasePage({ id }: { id: number }) {
       supplierName,
       purchaseDate,
       notes: notes || undefined,
-      items: validItems.map((i) => ({
-        productId: i.productId,
-        quantity: i.quantity,
-        unit: i.unit,
-        costPerUnit: i.costPerUnit,
-      })),
+      items: validItems.map((i) => {
+        const wpp = parseFloat(i.weightPerPackage) || 0;
+        const isPackage = isPackageUnit(i.unit) && wpp > 0;
+        if (isPackage) {
+          const baseQty = (parseFloat(i.quantity) * wpp).toFixed(4);
+          const baseCost = (parseFloat(i.costPerUnit) / wpp).toFixed(4);
+          return {
+            productId: i.productId,
+            quantity: baseQty,
+            unit: i.baseUnit || "KG",
+            costPerUnit: baseCost,
+          };
+        }
+        return {
+          productId: i.productId,
+          quantity: parseFloat(i.quantity).toFixed(4),
+          unit: i.unit,
+          costPerUnit: parseFloat(i.costPerUnit).toFixed(4),
+        };
+      }),
     });
   };
 
@@ -196,6 +254,8 @@ export default function EditPurchasePage({ id }: { id: number }) {
                 const product = activeProducts.find((p) => p.id === item.productId);
                 const currentAvg = item.productId ? getProductAvgCost(item.productId) : null;
                 const projectedAvg = item.productId && item.quantity && item.costPerUnit ? getProjectedAvgCost(item) : null;
+                const packageMode = isPackageUnit(item.unit);
+                const wpp = parseFloat(item.weightPerPackage) || 0;
 
                 return (
                   <div key={idx} className="rounded-md border border-border bg-card/50 p-4 space-y-3">
@@ -229,19 +289,19 @@ export default function EditPurchasePage({ id }: { id: number }) {
                       </div>
 
                       <div className="space-y-1.5">
-                        <Label>Unidad</Label>
+                        <Label>Unidad de compra</Label>
                         <Select value={item.unit} onValueChange={(v) => updateItem(idx, "unit", v)}>
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {UNITS.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                            {UNIT_OPTIONS.map((u) => <SelectItem key={u.value} value={u.value}>{u.label}</SelectItem>)}
                           </SelectContent>
                         </Select>
                       </div>
 
                       <div className="space-y-1.5">
-                        <Label>Cantidad *</Label>
+                        <Label>Cant. {labelFor(item.unit)} *</Label>
                         <Input
                           type="number"
                           min="0.0001"
@@ -254,9 +314,36 @@ export default function EditPurchasePage({ id }: { id: number }) {
                       </div>
                     </div>
 
+                    {packageMode && (
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <Label className="flex items-center gap-1">
+                            <PackagePlus className="h-3 w-3 text-muted-foreground" />
+                            Cant. base por {labelFor(item.unit)}
+                          </Label>
+                          <Input
+                            type="number" min="0.0001" step="0.0001"
+                            placeholder="ej. 18"
+                            value={item.weightPerPackage}
+                            onChange={(e) => updateItem(idx, "weightPerPackage", e.target.value)}
+                          />
+                        </div>
+                        {wpp > 0 && parseFloat(item.quantity) > 0 && (
+                          <div className="space-y-1.5">
+                            <Label className="text-muted-foreground">Total base ({item.baseUnit})</Label>
+                            <div className="flex h-9 items-center rounded-md border border-border bg-muted/40 px-3">
+                              <span className="text-sm font-semibold text-foreground">
+                                {(parseFloat(item.quantity) * wpp).toLocaleString("es-MX", { maximumFractionDigits: 4 })}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                       <div className="space-y-1.5">
-                        <Label>Costo por unidad *</Label>
+                        <Label>Costo por {labelFor(item.unit)} *</Label>
                         <div className="relative">
                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
                           <Input

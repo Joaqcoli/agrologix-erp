@@ -23,41 +23,19 @@ export type ParsedLine = {
 };
 
 // Valid units for the enum (must match DB enum)
-const VALID_UNITS = ["kg", "pz", "caja", "saco", "litro", "tonelada", "CAJON"] as const;
+const VALID_UNITS = ["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"] as const;
 type ValidUnit = typeof VALID_UNITS[number];
 
 // Map of keyword aliases → canonical unit
 const UNIT_MAP: Record<string, ValidUnit> = {
-  cajon: "CAJON",
-  cajones: "CAJON",
-  caja: "CAJON",
-  cajas: "CAJON",
-  bolsa: "saco",
-  bolsas: "saco",
-  saco: "saco",
-  sacos: "saco",
-  kg: "kg",
-  kilo: "kg",
-  kilos: "kg",
-  kilogramo: "kg",
-  kilogramos: "kg",
-  pz: "pz",
-  pieza: "pz",
-  piezas: "pz",
-  unidad: "pz",
-  unidades: "pz",
-  und: "pz",
-  un: "pz",
-  litro: "litro",
-  litros: "litro",
-  lt: "litro",
-  lts: "litro",
-  tonelada: "tonelada",
-  toneladas: "tonelada",
-  ton: "tonelada",
-  tons: "tonelada",
-  atado: "pz",
-  at: "pz",
+  cajon: "CAJON", cajones: "CAJON", caja: "CAJON", cajas: "CAJON",
+  bolsa: "BOLSA", bolsas: "BOLSA", saco: "BOLSA", sacos: "BOLSA",
+  kg: "KG", kilo: "KG", kilos: "KG", kilogramo: "KG", kilogramos: "KG",
+  pz: "UNIDAD", pieza: "UNIDAD", piezas: "UNIDAD",
+  unidad: "UNIDAD", unidades: "UNIDAD", und: "UNIDAD", un: "UNIDAD",
+  atado: "ATADO", at: "ATADO",
+  maple: "MAPLE", maples: "MAPLE",
+  bandeja: "BANDEJA", bandejas: "BANDEJA",
 };
 
 // Strip accents and normalize
@@ -221,7 +199,7 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
     return {
       raw: trimmed,
       quantity,
-      unit: unit ?? "kg",
+      unit: unit ?? "KG",
       rawProductName,
       productId: matched[0].id,
       productName: matched[0].name,

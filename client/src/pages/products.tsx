@@ -235,7 +235,7 @@ function UnitSelector({ selected, onChange }: { selected: Set<string>; onChange:
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
-const EMPTY_FORM = { name: "", description: "", unit: "kg" as const, category: "Verdura" as ProductCategory };
+const EMPTY_FORM = { name: "", description: "", unit: "KG" as const, category: "Verdura" as ProductCategory };
 
 export default function ProductsPage() {
   const { toast } = useToast();

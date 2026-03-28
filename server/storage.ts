@@ -51,9 +51,9 @@ function itemProfit(item: RawOrderItem): number {
 }
 
 // Is this unit a "bulto" (physical box/bag)?
-const BULTO_UNITS = new Set(["caja", "saco"]);
+const BULTO_UNITS = new Set(["CAJON", "BOLSA", "BANDEJA"]);
 function isBulto(unit: string): boolean {
-  return BULTO_UNITS.has(unit.toLowerCase());
+  return BULTO_UNITS.has(unit.toUpperCase());
 }
 
 export const storage = {
@@ -529,7 +529,7 @@ export const storage = {
     supplierName: string;
     purchaseDate: Date;
     notes?: string;
-    items: { productId: number; quantity: string; unit: "kg" | "pz" | "caja" | "saco" | "litro" | "tonelada" | "CAJON" | "maple" | "atado" | "bandeja"; costPerUnit: string }[];
+    items: { productId: number; quantity: string; unit: "KG" | "UNIDAD" | "CAJON" | "BOLSA" | "ATADO" | "MAPLE" | "BANDEJA"; costPerUnit: string }[];
   }): Promise<Purchase> {
     return db.transaction(async (tx) => {
       const purchaseDateStr = data.purchaseDate.toISOString().slice(0, 10);
@@ -871,13 +871,13 @@ export const storage = {
       data.items.map(async (item) => {
         let costPerUnit = "0";
         if (item.productId) {
-          costPerUnit = await this._getCostForUnit(item.productId, item.unit ?? "kg");
+          costPerUnit = await this._getCostForUnit(item.productId, item.unit ?? "KG");
         }
         return {
           orderId: order.id,
           productId: item.productId ?? null,
           quantity: item.quantity,
-          unit: (item.unit as any) ?? "kg",
+          unit: (item.unit as any) ?? "KG",
           pricePerUnit: null as any,
           costPerUnit,
           margin: null as any,
@@ -906,13 +906,13 @@ export const storage = {
       items.map(async (item) => {
         let costPerUnit = "0";
         if (item.productId) {
-          costPerUnit = await this._getCostForUnit(item.productId, item.unit ?? "kg");
+          costPerUnit = await this._getCostForUnit(item.productId, item.unit ?? "KG");
         }
         return {
           orderId,
           productId: item.productId ?? null,
           quantity: item.quantity,
-          unit: (item.unit as any) ?? "kg",
+          unit: (item.unit as any) ?? "KG",
           pricePerUnit: null as any,
           costPerUnit,
           margin: null as any,
@@ -1781,7 +1781,7 @@ export const storage = {
           name: normalizedName,
           sku: null,
           description: "",
-          unit: "kg" as any,
+          unit: "KG" as any,
           category: "Verdura",
           averageCost: "0",
           currentStock: "0",

@@ -17,7 +17,7 @@ import { useLocation } from "wouter";
 import { Plus, Trash2, ArrowLeft, Send, AlertTriangle, TrendingUp, TrendingDown } from "lucide-react";
 import type { Customer, Product } from "@shared/schema";
 
-const UNITS = ["kg", "pz", "caja", "saco", "litro", "tonelada"] as const;
+const UNITS = ["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"] as const;
 
 type OrderItem = {
   productId: number;
@@ -42,7 +42,7 @@ export default function NewOrderPage() {
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
   const [lowMarginConfirmed, setLowMarginConfirmed] = useState(false);
-  const [items, setItems] = useState<OrderItem[]>([{ productId: 0, quantity: "", unit: "kg", pricePerUnit: "" }]);
+  const [items, setItems] = useState<OrderItem[]>([{ productId: 0, quantity: "", unit: "KG", pricePerUnit: "" }]);
 
   const { data: customers } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
@@ -71,7 +71,7 @@ export default function NewOrderPage() {
     } catch {}
   };
 
-  const addItem = () => setItems([...items, { productId: 0, quantity: "", unit: "kg", pricePerUnit: "" }]);
+  const addItem = () => setItems([...items, { productId: 0, quantity: "", unit: "KG", pricePerUnit: "" }]);
 
   const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
 

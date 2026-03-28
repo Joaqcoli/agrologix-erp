@@ -18,22 +18,22 @@ import type { Product, Supplier } from "@shared/schema";
 
 // Todas las unidades disponibles para compra
 const PURCHASE_UNIT_OPTIONS = [
-  { value: "kg",      label: "KG" },
-  { value: "caja",    label: "CAJÓN" },
-  { value: "saco",    label: "BOLSA" },
-  { value: "pz",      label: "UNIDAD" },
-  { value: "maple",   label: "MAPLE" },
-  { value: "atado",   label: "ATADO" },
-  { value: "bandeja", label: "BANDEJA" },
+  { value: "KG",      label: "KG" },
+  { value: "CAJON",   label: "CAJÓN" },
+  { value: "BOLSA",   label: "BOLSA" },
+  { value: "UNIDAD",  label: "UNIDAD" },
+  { value: "MAPLE",   label: "MAPLE" },
+  { value: "ATADO",   label: "ATADO" },
+  { value: "BANDEJA", label: "BANDEJA" },
 ] as const;
 
 const BASE_UNIT_OPTIONS = [
-  { value: "kg",    label: "KG" },
-  { value: "pz",    label: "UNIDAD" },
-  { value: "atado", label: "ATADO" },
+  { value: "KG",     label: "KG" },
+  { value: "UNIDAD", label: "UNIDAD" },
+  { value: "ATADO",  label: "ATADO" },
 ] as const;
 
-const PACKAGE_UNIT_SET = new Set(["caja", "saco", "bandeja"]);
+const PACKAGE_UNIT_SET = new Set(["CAJON", "BOLSA", "BANDEJA"]);
 
 type PurchaseItem = {
   productId: number;
@@ -110,7 +110,7 @@ export default function NewPurchasePage() {
   const [paymentMethod, setPaymentMethod] = useState("cuenta_corriente");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<PurchaseItem[]>([{
-    productId: 0, productSearch: "", quantity: "", unit: "kg", weightPerPackage: "", baseUnit: "kg", costPerUnit: "", emptyCost: "",
+    productId: 0, productSearch: "", quantity: "", unit: "KG", weightPerPackage: "", baseUnit: "KG", costPerUnit: "", emptyCost: "",
   }]);
   const [newSupplierOpen, setNewSupplierOpen] = useState(false);
 
@@ -141,7 +141,7 @@ export default function NewPurchasePage() {
     return p?.category === "Huevos";
   };
 
-  const addItem = () => setItems([...items, { productId: 0, productSearch: "", quantity: "", unit: "kg", weightPerPackage: "", baseUnit: "kg", costPerUnit: "", emptyCost: "" }]);
+  const addItem = () => setItems([{ productId: 0, productSearch: "", quantity: "", unit: "KG", weightPerPackage: "", baseUnit: "KG", costPerUnit: "", emptyCost: "" }, ...items]);
   const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
 
   const updateItem = (i: number, field: keyof PurchaseItem, value: string | number) => {
@@ -154,11 +154,11 @@ export default function NewPurchasePage() {
         updated[i].productSearch = product.name;
         const defaultUnit = product.unit as string;
         updated[i].unit = defaultUnit;
-        if (product.category === "Huevos" && defaultUnit === "caja") {
-          updated[i].baseUnit = "maple";
+        if (product.category === "Huevos" && defaultUnit === "CAJON") {
+          updated[i].baseUnit = "MAPLE";
           updated[i].weightPerPackage = "12";
         } else if (isPackageUnit(defaultUnit)) {
-          updated[i].baseUnit = "kg";
+          updated[i].baseUnit = "KG";
           updated[i].weightPerPackage = "";
         } else {
           updated[i].baseUnit = defaultUnit;
@@ -171,11 +171,11 @@ export default function NewPurchasePage() {
       const unit = value as string;
       const productId = updated[i].productId;
       if (isPackageUnit(unit)) {
-        if (unit === "caja" && isEggsProduct(productId)) {
-          updated[i].baseUnit = "maple";
+        if (unit === "CAJON" && isEggsProduct(productId)) {
+          updated[i].baseUnit = "MAPLE";
           updated[i].weightPerPackage = "12";
         } else {
-          updated[i].baseUnit = "kg";
+          updated[i].baseUnit = "KG";
           updated[i].weightPerPackage = "";
         }
       } else {
@@ -259,7 +259,7 @@ export default function NewPurchasePage() {
             productId: Number(i.productId),
             quantity: parseFloat(i.quantity).toFixed(4),
             unit: i.unit,
-            costPerUnit: Math.round(parseFloat(i.costPerUnit)).toFixed(4),
+            costPerUnit: parseFloat(i.costPerUnit).toFixed(4),
           };
         }
       }),

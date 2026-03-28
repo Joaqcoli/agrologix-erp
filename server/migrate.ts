@@ -268,7 +268,7 @@ export async function runMigrations() {
   `);
 
   // Extend unit enum with new values (idempotent: IF NOT EXISTS)
-  for (const val of ["CAJON", "maple", "atado", "bandeja"]) {
+  for (const val of ["CAJON", "maple", "atado", "bandeja", "KG", "UNIDAD", "BOLSA", "MAPLE", "ATADO", "BANDEJA"]) {
     await db.execute(sql.raw(`ALTER TYPE unit ADD VALUE IF NOT EXISTS '${val}'`));
   }
 
@@ -355,6 +355,37 @@ export async function runMigrations() {
 
   // ─── Saldo inicial de cuentas corrientes ──────────────────────────────────────
   await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS opening_balance numeric(12,2) NOT NULL DEFAULT 0`);
+
+  // ─── Estandarización de unidades canónicas ───────────────────────────────────
+  // Migrate products.unit (enum column) → canonical uppercase
+  for (const [from, to] of [["kg","KG"],["pz","UNIDAD"],["caja","CAJON"],["saco","BOLSA"],["maple","MAPLE"],["atado","ATADO"],["bandeja","BANDEJA"],["litro","KG"],["tonelada","KG"]]) {
+    await db.execute(sql.raw(`UPDATE products SET unit = '${to}'::unit WHERE unit::text = '${from}'`));
+  }
+
+  // Migrate purchase_items.unit (enum column)
+  for (const [from, to] of [["kg","KG"],["pz","UNIDAD"],["caja","CAJON"],["saco","BOLSA"],["maple","MAPLE"],["atado","ATADO"],["bandeja","BANDEJA"],["litro","KG"],["tonelada","KG"]]) {
+    await db.execute(sql.raw(`UPDATE purchase_items SET unit = '${to}'::unit WHERE unit::text = '${from}'`));
+  }
+
+  // Migrate purchase_items.purchase_unit (nullable enum column)
+  for (const [from, to] of [["kg","KG"],["pz","UNIDAD"],["caja","CAJON"],["saco","BOLSA"],["maple","MAPLE"],["atado","ATADO"],["bandeja","BANDEJA"],["litro","KG"],["tonelada","KG"]]) {
+    await db.execute(sql.raw(`UPDATE purchase_items SET purchase_unit = '${to}'::unit WHERE purchase_unit::text = '${from}'`));
+  }
+
+  // Migrate order_items.unit (TEXT column)
+  await db.execute(sql.raw(`
+    UPDATE order_items SET unit = CASE unit
+      WHEN 'kg' THEN 'KG' WHEN 'pz' THEN 'UNIDAD'
+      WHEN 'caja' THEN 'CAJON' WHEN 'saco' THEN 'BOLSA'
+      WHEN 'maple' THEN 'MAPLE' WHEN 'atado' THEN 'ATADO'
+      WHEN 'bandeja' THEN 'BANDEJA' WHEN 'litro' THEN 'KG' WHEN 'tonelada' THEN 'KG'
+      ELSE unit END
+    WHERE unit IN ('kg','pz','caja','saco','maple','atado','bandeja','litro','tonelada')
+  `));
+
+  // Update column defaults
+  await db.execute(sql.raw(`ALTER TABLE products ALTER COLUMN unit SET DEFAULT 'KG'`));
+  await db.execute(sql.raw(`ALTER TABLE order_items ALTER COLUMN unit SET DEFAULT 'KG'`));
 
   console.log("Migrations complete.");
 }

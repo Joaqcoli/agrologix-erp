@@ -109,7 +109,7 @@ export default function IntakePage() {
           parsedIdx,
           resolvedProductId,
           resolvedProductName: resolvedProduct?.name ?? line.rawProductName,
-          unit: unitOverrides[parsedIdx] ?? line.unit ?? resolvedProduct?.unit ?? "kg",
+          unit: unitOverrides[parsedIdx] ?? line.unit ?? resolvedProduct?.unit ?? "KG",
         };
       }),
     [parsed, overrides, activeProducts, unitOverrides]

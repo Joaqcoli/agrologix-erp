@@ -3,7 +3,7 @@
  * Used by both server and client.
  */
 
-export type CanonicalUnit = "KG" | "CAJON" | "BOLSA" | "UNIDAD" | "ATADO" | "LITRO" | "TONELADA" | "PZ" | "MAPLE" | "BANDEJA";
+export type CanonicalUnit = "KG" | "CAJON" | "BOLSA" | "UNIDAD" | "ATADO" | "MAPLE" | "BANDEJA";
 
 export const ALL_CANONICAL_UNITS: CanonicalUnit[] = [
   "KG", "CAJON", "BOLSA", "UNIDAD", "ATADO", "MAPLE", "BANDEJA",
@@ -18,10 +18,8 @@ const INPUT_TO_CANONICAL: Record<string, CanonicalUnit> = {
   CAJA: "CAJON", CAJON: "CAJON", CAJONES: "CAJON", CAJAS: "CAJON",
   SACO: "BOLSA", SACOS: "BOLSA", BOLSA: "BOLSA", BOLSAS: "BOLSA",
   KG: "KG", KILO: "KG", KILOS: "KG", KILOGRAMO: "KG", KILOGRAMOS: "KG",
-  PZ: "PZ", PIEZA: "PZ", PIEZAS: "PZ",
+  PZ: "UNIDAD", PIEZA: "UNIDAD", PIEZAS: "UNIDAD",
   UNIDAD: "UNIDAD", UNIDADES: "UNIDAD", UN: "UNIDAD", U: "UNIDAD", UND: "UNIDAD",
-  LITRO: "LITRO", LITROS: "LITRO", LT: "LITRO", LTS: "LITRO",
-  TONELADA: "TONELADA", TONELADAS: "TONELADA", TON: "TONELADA", TONS: "TONELADA",
   ATADO: "ATADO", ATADOS: "ATADO", AT: "ATADO",
   MAPLE: "MAPLE", MAPLES: "MAPLE",
   BANDEJA: "BANDEJA", BANDEJAS: "BANDEJA",
@@ -36,38 +34,25 @@ export function canonicalizeUnit(input: string): CanonicalUnit {
 /** Map from Drizzle unit enum values to canonical forms */
 export function dbEnumToCanonical(unit: string): CanonicalUnit {
   const MAP: Record<string, CanonicalUnit> = {
-    caja: "CAJON",
-    saco: "BOLSA",
-    kg: "KG",
-    pz: "PZ",
-    litro: "LITRO",
-    tonelada: "TONELADA",
-    // extended values
-    cajon: "CAJON",
-    bolsa: "BOLSA",
-    unidad: "UNIDAD",
+    // Legacy lowercase values (pre-migration compat)
+    kg: "KG", kilo: "KG", kilos: "KG",
+    pz: "UNIDAD", pieza: "UNIDAD", piezas: "UNIDAD",
+    caja: "CAJON", cajon: "CAJON",
+    saco: "BOLSA", bolsa: "BOLSA",
     atado: "ATADO",
     maple: "MAPLE",
     bandeja: "BANDEJA",
+    // Canonical uppercase values (identity map)
+    kg_upper: "KG",
   };
-  return MAP[unit.toLowerCase()] ?? (unit.toUpperCase() as CanonicalUnit);
+  const lower = unit.toLowerCase();
+  return MAP[lower] ?? (unit.toUpperCase() as CanonicalUnit);
 }
 
-/** Map canonical back to the DB enum value used in order_items/purchase_items */
+/** Map canonical back to the DB enum value (now canonical IS the DB enum value) */
 export function canonicalToDbEnum(canonical: string): string {
-  const MAP: Record<string, string> = {
-    CAJON: "caja",
-    BOLSA: "saco",
-    KG: "kg",
-    PZ: "pz",
-    LITRO: "litro",
-    TONELADA: "tonelada",
-    UNIDAD: "pz",
-    ATADO: "atado",
-    MAPLE: "maple",
-    BANDEJA: "bandeja",
-  };
-  return MAP[canonical.toUpperCase()] ?? canonical.toLowerCase();
+  // After unit standardization, canonical values are stored directly in the DB
+  return canonical.toUpperCase();
 }
 
 /** Display label for canonical units */

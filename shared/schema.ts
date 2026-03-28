@@ -5,7 +5,7 @@ import { sql } from "drizzle-orm";
 
 export const roleEnum = pgEnum("role", ["admin", "operator"]);
 export const movementTypeEnum = pgEnum("movement_type", ["in", "out"]);
-export const unitEnum = pgEnum("unit", ["kg", "pz", "caja", "saco", "litro", "tonelada", "CAJON", "maple", "atado", "bandeja"]);
+export const unitEnum = pgEnum("unit", ["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"]);
 export const orderStatusEnum = pgEnum("order_status", ["draft", "approved", "cancelled"]);
 
 export const PRODUCT_CATEGORIES = ["Fruta", "Verdura", "Hortaliza Liviana", "Hortaliza Pesada", "Hongos/Hierbas", "Huevos"] as const;
@@ -45,7 +45,7 @@ export const products = pgTable("products", {
   name: text("name").notNull(),
   sku: text("sku").unique(),                                        // now nullable — kept for compat but not shown
   description: text("description"),
-  unit: unitEnum("unit").notNull().default("kg"),
+  unit: unitEnum("unit").notNull().default("KG"),
   category: text("category").default("Verdura"),                    // NEW
   averageCost: numeric("average_cost", { precision: 12, scale: 4 }).notNull().default("0"),
   currentStock: numeric("current_stock", { precision: 12, scale: 4 }).notNull().default("0"),
@@ -153,7 +153,7 @@ export const orderItems = pgTable("order_items", {
   orderId: integer("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
   productId: integer("product_id").references(() => products.id),
   quantity: numeric("quantity", { precision: 12, scale: 4 }).notNull(),
-  unit: text("unit").notNull().default("kg"),
+  unit: text("unit").notNull().default("KG"),
   pricePerUnit: numeric("price_per_unit", { precision: 12, scale: 4 }),
   costPerUnit: numeric("cost_per_unit", { precision: 12, scale: 4 }).notNull().default("0"),
   overrideCostPerUnit: numeric("override_cost_per_unit", { precision: 12, scale: 4 }),
@@ -248,10 +248,10 @@ export const insertPurchaseSchema = createInsertSchema(purchases).omit({ id: tru
   items: z.array(z.object({
     productId: z.number(),
     quantity: z.string(),
-    unit: z.enum(["kg", "pz", "caja", "saco", "litro", "tonelada", "CAJON", "maple", "atado", "bandeja"]),
+    unit: z.enum(["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"]),
     costPerUnit: z.string(),
     purchaseQty: z.string().optional(),
-    purchaseUnit: z.enum(["kg", "pz", "caja", "saco", "litro", "tonelada", "CAJON", "maple", "atado", "bandeja"]).optional(),
+    purchaseUnit: z.enum(["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"]).optional(),
     weightPerPackage: z.string().optional(),
     emptyCost: z.string().optional(),
   })).min(1, "Must have at least one item"),
@@ -264,7 +264,7 @@ export const insertOrderSchema = z.object({
   items: z.array(z.object({
     productId: z.number(),
     quantity: z.string(),
-    unit: z.enum(["kg", "pz", "caja", "saco", "litro", "tonelada", "CAJON", "maple", "atado", "bandeja"]),
+    unit: z.enum(["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"]),
     pricePerUnit: z.string(),
   })).min(1, "Must have at least one item"),
 });
