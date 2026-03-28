@@ -13,7 +13,7 @@ import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle, Check, X, Lock, ChevronsUpDown, Trash2, Plus, RotateCcw } from "lucide-react";
+import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle, Check, X, Lock, ChevronsUpDown, Trash2, Plus, Edit } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
@@ -48,6 +48,50 @@ type FullOrder = Order & {
   items: FullOrderItem[];
 };
 
+type ItemDraft = {
+  qty: string;
+  unit: string;
+  price: string;
+  cost: string;
+  productId: number | null;
+};
+
+type CalcItem = {
+  id: number;
+  item: FullOrderItem;
+  name: string;
+  qty: number;
+  unit: string;
+  pricePerUnit: number | null;
+  hasPrice: boolean;
+  subtotal: number;
+  totalConIva: number;
+  ivaRate: number;
+  costPerUnit: number;
+  effectiveCostPerUnit: number;
+  hasOverride: boolean;
+  totalCompra: number;
+  base: number;
+  diferencia: number;
+  pct: number;
+  isLowMargin: boolean;
+  bolsaType: string | null;
+};
+
+function hasDraftChanges(draft: ItemDraft, calc: CalcItem): boolean {
+  const origQty = fmt(calc.qty, 4).replace(/\.?0+$/, "");
+  const origUnit = dbEnumToCanonical(calc.unit).toLowerCase();
+  const origPrice = calc.hasPrice ? String(Math.round(calc.pricePerUnit!)) : "";
+  const origCost = String(Math.round(calc.effectiveCostPerUnit));
+  return (
+    draft.qty !== origQty ||
+    draft.unit !== origUnit ||
+    draft.price !== origPrice ||
+    draft.cost !== origCost ||
+    draft.productId !== (calc.item.productId ?? null)
+  );
+}
+
 // ─── ProductCombobox ───────────────────────────────────────────────────────────
 function ProductCombobox({
   value,
@@ -73,7 +117,6 @@ function ProductCombobox({
           role="combobox"
           aria-expanded={open}
           className="h-7 text-xs justify-between px-2 min-w-[140px] max-w-[200px]"
-          data-testid="combobox-product"
         >
           <span className="truncate">{selected?.name ?? "Sin producto"}</span>
           <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
@@ -99,7 +142,6 @@ function ProductCombobox({
                   setSearch("");
                 }}
                 className="text-xs"
-                data-testid={`product-option-${p.id}`}
               >
                 {p.name}
               </CommandItem>
@@ -114,151 +156,95 @@ function ProductCombobox({
 // ─── ItemRow ───────────────────────────────────────────────────────────────────
 function ItemRow({
   calc,
-  order,
   allProducts,
   hasIva,
   isDraft,
   isApproved,
   hasBolsaFv,
+  isEditing,
+  draft,
+  isSaving,
+  onStartEdit,
+  onFieldChange,
+  onSave,
+  onCancel,
   onDelete,
+  onProductSelect,
+  onBolsaToggle,
 }: {
-  calc: {
-    id: number;
-    item: FullOrderItem;
-    name: string;
-    qty: number;
-    unit: string;
-    pricePerUnit: number | null;
-    hasPrice: boolean;
-    subtotal: number;
-    totalConIva: number;
-    ivaRate: number;
-    costPerUnit: number;
-    effectiveCostPerUnit: number;
-    hasOverride: boolean;
-    totalCompra: number;
-    base: number;
-    diferencia: number;
-    pct: number;
-    isLowMargin: boolean;
-    bolsaType: string | null;
-  };
-  order: FullOrder;
+  calc: CalcItem;
   allProducts: Product[];
   hasIva: boolean;
   isDraft: boolean;
   isApproved: boolean;
   hasBolsaFv: boolean;
+  isEditing: boolean;
+  draft: ItemDraft | undefined;
+  isSaving: boolean;
+  onStartEdit: () => void;
+  onFieldChange: (field: keyof ItemDraft, value: string | number | null) => void;
+  onSave: () => void;
+  onCancel: () => void;
   onDelete: (itemId: number) => void;
+  onProductSelect: (productId: number | null) => void;
+  onBolsaToggle: (type: "bolsa" | "bolsa_propia") => void;
 }) {
-  const { toast } = useToast();
-  const [editingCell, setEditingCell] = useState<"qty" | "unit" | "price" | "product" | "cost" | null>(null);
-  const [draftValue, setDraftValue] = useState("");
-  const [origValue, setOrigValue] = useState("");
-
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const canEdit = isDraft || isApproved;
-
-  const startEdit = (cell: typeof editingCell, value: string) => {
-    setEditingCell(cell); setDraftValue(value); setOrigValue(value);
-  };
-  const cancelEdit = () => { setDraftValue(origValue); setEditingCell(null); };
-
-  const patchMutation = useMutation({
-    mutationFn: (data: Record<string, any>) =>
-      apiRequest("PATCH", `/api/orders/${order.id}/items/${calc.id}`, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/orders", order.id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/load-list"] });
-      toast({ title: "Línea guardada" });
-    },
-    onError: (e: any) => toast({ title: "Error al guardar", description: e.message, variant: "destructive" }),
-  });
-
-  const saveCellEdit = () => {
-    if (patchMutation.isPending) return;
-    const patch = ({
-      qty: { quantity: draftValue },
-      unit: { unit: draftValue },
-      price: { pricePerUnit: draftValue || null },
-      product: { productId: parseInt(draftValue) },
-      cost: { overrideCostPerUnit: draftValue || null },
-    } as Record<string, any>)[editingCell!];
-    patchMutation.mutate(patch, { onSuccess: () => setEditingCell(null) });
-  };
+  const isDirty = !!draft && hasDraftChanges(draft, calc);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") { e.preventDefault(); saveCellEdit(); }
-    if (e.key === "Escape") cancelEdit();
+    if (e.key === "Enter") { e.preventDefault(); onSave(); }
+    if (e.key === "Escape") { onCancel(); }
   };
 
-  const handleProductSelect = async (productId: number | null, _name: string) => {
-    if (!productId) { setEditingCell(null); return; }
-    let pricePerUnit: string | null = null;
-    try {
-      const res = await fetch(`/api/price-history/${order.customerId}/${productId}`, { credentials: "include" });
-      if (res.ok) {
-        const history = await res.json();
-        if (history?.pricePerUnit) pricePerUnit = String(Math.round(parseFloat(history.pricePerUnit)));
-      }
-    } catch { /* noop */ }
-    patchMutation.mutate({ productId, pricePerUnit }, { onSuccess: () => setEditingCell(null) });
-  };
+  // Live-compute subtotal/iva from draft for display while editing
+  const liveQty = isEditing && draft ? parseFloat(draft.qty) || 0 : calc.qty;
+  const livePrice = isEditing && draft ? parseFloat(draft.price) || 0 : calc.pricePerUnit ?? 0;
+  const liveSubtotal = liveQty * livePrice;
+  const liveTotalConIva = liveSubtotal * (1 + calc.ivaRate);
 
-  // Bolsa FV toggle
-  const handleBolsaToggle = (type: "bolsa" | "bolsa_propia") => {
-    const newType = calc.bolsaType === type ? null : type;
-    patchMutation.mutate({
-      bolsaType: newType,
-      overrideCostPerUnit: newType ? "0" : null,
-    });
-  };
+  const rowBg = isEditing
+    ? "bg-blue-50/30 dark:bg-blue-900/10 ring-1 ring-inset ring-blue-200/60 dark:ring-blue-800/50"
+    : isDirty
+    ? "bg-amber-50/60 dark:bg-amber-900/15"
+    : !calc.hasPrice
+    ? "bg-yellow-50/30 dark:bg-yellow-900/10"
+    : calc.isLowMargin
+    ? "bg-destructive/5"
+    : "";
 
   return (
     <tr
-      className={`border-b border-border last:border-0 group ${
-        !calc.hasPrice ? "bg-yellow-50/30 dark:bg-yellow-900/10"
-        : calc.isLowMargin ? "bg-destructive/5"
-        : "hover:bg-muted/30"
-      } transition-colors`}
+      className={`border-b border-border last:border-0 group ${rowBg} hover:bg-muted/20 transition-colors`}
       data-testid={`row-item-${calc.id}`}
     >
       {/* Qty */}
       <td className="py-2 px-2 font-medium text-foreground whitespace-nowrap text-xs">
-        {canEdit && editingCell === "qty" ? (
-          <div className="flex items-center gap-1">
-            <Input
-              type="number" value={draftValue} onChange={(e) => setDraftValue(e.target.value)}
-              onKeyDown={onKeyDown} step="0.01" min="0"
-              className="h-7 w-16 text-xs px-1.5 py-0" autoFocus
-              data-testid={`input-qty-${calc.id}`}
-            />
-            <button onClick={cancelEdit} className="text-muted-foreground hover:text-foreground">
-              <RotateCcw className="h-3 w-3" />
-            </button>
-          </div>
+        {isEditing && draft ? (
+          <Input
+            type="number"
+            value={draft.qty}
+            onChange={(e) => onFieldChange("qty", e.target.value)}
+            onKeyDown={onKeyDown}
+            step="0.01" min="0"
+            className="h-7 w-16 text-xs px-1.5 py-0"
+            autoFocus
+          />
         ) : (
           <span
             className={canEdit ? "cursor-pointer hover:underline" : ""}
-            onClick={canEdit ? () => startEdit("qty", fmt(calc.qty, 4).replace(/\.?0+$/, "")) : undefined}
+            onClick={canEdit ? onStartEdit : undefined}
           >
             {fmt(calc.qty, 4).replace(/\.?0+$/, "")}
           </span>
         )}
       </td>
+
       {/* Unit */}
       <td className="py-2 px-2 text-muted-foreground whitespace-nowrap text-xs">
-        {canEdit && editingCell === "unit" ? (
-          <Select
-            value={draftValue}
-            onValueChange={(v) => {
-              setDraftValue(v);
-              if (calc.item.productId) {
-                apiRequest("POST", `/api/products/${calc.item.productId}/units`, { unit: v }).catch(() => {});
-              }
-              patchMutation.mutate({ unit: v }, { onSuccess: () => setEditingCell(null) });
-            }}
-          >
+        {isEditing && draft ? (
+          <Select value={draft.unit} onValueChange={(v) => onFieldChange("unit", v)}>
             <SelectTrigger className="h-7 w-24 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               {ALL_CANONICAL_UNITS.map((u) => (
@@ -269,30 +255,31 @@ function ItemRow({
         ) : (
           <span
             className={canEdit ? "cursor-pointer hover:underline" : ""}
-            onClick={canEdit ? () => startEdit("unit", dbEnumToCanonical(calc.unit).toLowerCase()) : undefined}
+            onClick={canEdit ? onStartEdit : undefined}
           >
             {calc.unit}
           </span>
         )}
       </td>
+
       {/* Product */}
       <td className="py-2 px-2 text-xs">
         <div className="flex items-center gap-1.5 flex-wrap">
-          {canEdit && editingCell === "product" ? (
+          {isEditing && draft ? (
             <ProductCombobox
-              value={calc.item.productId}
-              onSelect={(id, name) => handleProductSelect(id, name)}
+              value={draft.productId}
+              onSelect={(id, name) => onProductSelect(id)}
               allProducts={allProducts}
             />
           ) : (
             <span
               className={`font-medium ${calc.item.product ? "text-foreground" : "text-muted-foreground italic"} ${canEdit ? "cursor-pointer hover:underline" : ""}`}
-              onClick={canEdit ? () => startEdit("product", String(calc.item.productId ?? "")) : undefined}
+              onClick={canEdit ? onStartEdit : undefined}
             >
               {calc.name}
             </span>
           )}
-          {!calc.item.product && editingCell !== "product" && <Badge variant="outline" className="text-[9px] py-0">Sin producto</Badge>}
+          {!calc.item.product && !isEditing && <Badge variant="outline" className="text-[9px] py-0">Sin producto</Badge>}
           {calc.isLowMargin && <Badge variant="destructive" className="text-[9px] py-0 px-1">Margen bajo</Badge>}
           {calc.bolsaType && (
             <Badge variant="outline" className="text-[9px] py-0 px-1 text-green-600 border-green-300">
@@ -305,79 +292,83 @@ function ItemRow({
           {hasBolsaFv && (
             <div className="flex items-center gap-1 ml-1">
               <button
-                onClick={() => handleBolsaToggle("bolsa")}
-                disabled={patchMutation.isPending}
+                onClick={() => onBolsaToggle("bolsa")}
+                disabled={isSaving}
                 className={`flex items-center gap-0.5 text-[10px] rounded px-1 py-0.5 border transition-colors ${calc.bolsaType === "bolsa" ? "bg-green-100 border-green-400 text-green-700 dark:bg-green-900/30 dark:text-green-400" : "border-border text-muted-foreground hover:border-green-400"}`}
               >
                 <span>Bolsa</span>
               </button>
               <button
-                onClick={() => handleBolsaToggle("bolsa_propia")}
-                disabled={patchMutation.isPending}
+                onClick={() => onBolsaToggle("bolsa_propia")}
+                disabled={isSaving}
                 className={`flex items-center gap-0.5 text-[10px] rounded px-1 py-0.5 border transition-colors ${calc.bolsaType === "bolsa_propia" ? "bg-blue-100 border-blue-400 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" : "border-border text-muted-foreground hover:border-blue-400"}`}
               >
                 <span>Bolsa propia</span>
               </button>
             </div>
           )}
+          {isDirty && !isEditing && (
+            <span className="text-[9px] text-amber-600 dark:text-amber-400 font-medium">● sin guardar</span>
+          )}
         </div>
       </td>
+
       {/* Price */}
       <td className="py-2 px-2 text-right whitespace-nowrap text-xs">
-        {canEdit && editingCell === "price" ? (
-          <div className="flex items-center gap-1 justify-end">
-            <Input
-              type="number" value={draftValue} onChange={(e) => setDraftValue(e.target.value)}
-              onKeyDown={onKeyDown} step="1" min="0"
-              className="h-7 w-24 text-xs px-1.5 py-0" autoFocus placeholder="Precio"
-              data-testid={`input-price-${calc.id}`}
-            />
-            <button onClick={cancelEdit} className="text-muted-foreground hover:text-foreground">
-              <RotateCcw className="h-3 w-3" />
-            </button>
-          </div>
+        {isEditing && draft ? (
+          <Input
+            type="number"
+            value={draft.price}
+            onChange={(e) => onFieldChange("price", e.target.value)}
+            onKeyDown={onKeyDown}
+            step="1" min="0"
+            className="h-7 w-24 text-xs px-1.5 py-0 text-right"
+            placeholder="Precio"
+          />
         ) : !calc.hasPrice ? (
           <Badge
             variant="destructive"
             className={`text-[9px] ${canEdit ? "cursor-pointer" : ""}`}
-            onClick={canEdit ? () => startEdit("price", "") : undefined}
+            onClick={canEdit ? onStartEdit : undefined}
           >Sin precio</Badge>
         ) : (
           <span
             className={`text-foreground ${canEdit ? "cursor-pointer hover:underline" : ""}`}
-            onClick={canEdit ? () => startEdit("price", String(Math.round(calc.pricePerUnit!))) : undefined}
+            onClick={canEdit ? onStartEdit : undefined}
           >
             ${fmtInt(calc.pricePerUnit!)}
           </span>
         )}
       </td>
+
       {/* Subtotal */}
       <td className="py-2 px-2 text-right text-foreground whitespace-nowrap text-xs">
-        {calc.hasPrice ? `$${fmtInt(calc.subtotal)}` : <span className="text-muted-foreground">—</span>}
+        {liveSubtotal > 0 ? `$${fmtInt(liveSubtotal)}` : <span className="text-muted-foreground">—</span>}
       </td>
+
       {hasIva && (
         <td className="py-2 px-2 text-right font-semibold text-primary whitespace-nowrap text-xs">
-          {calc.hasPrice ? `$${fmtInt(calc.totalConIva)}` : <span className="text-muted-foreground">—</span>}
+          {liveTotalConIva > 0 ? `$${fmtInt(liveTotalConIva)}` : <span className="text-muted-foreground">—</span>}
         </td>
       )}
-      {/* Costo */}
+
+      {/* Cost */}
       <td className="py-2 px-2 text-right text-muted-foreground whitespace-nowrap border-l border-border text-xs">
-        {canEdit && editingCell === "cost" ? (
-          <div className="flex items-center gap-1 justify-end">
-            <Input
-              type="number" value={draftValue} onChange={(e) => setDraftValue(e.target.value)}
-              onKeyDown={onKeyDown} step="1" min="0"
-              className="h-7 w-24 text-xs px-1.5 py-0" autoFocus placeholder="Costo"
-            />
-            <button onClick={cancelEdit} className="text-muted-foreground hover:text-foreground">
-              <RotateCcw className="h-3 w-3" />
-            </button>
-          </div>
+        {isEditing && draft ? (
+          <Input
+            type="number"
+            value={draft.cost}
+            onChange={(e) => onFieldChange("cost", e.target.value)}
+            onKeyDown={onKeyDown}
+            step="1" min="0"
+            className="h-7 w-24 text-xs px-1.5 py-0 text-right"
+            placeholder="Costo"
+          />
         ) : (
           <>
             <span
               className={canEdit ? "cursor-pointer hover:underline" : ""}
-              onClick={canEdit ? () => startEdit("cost", String(Math.round(calc.effectiveCostPerUnit))) : undefined}
+              onClick={canEdit ? onStartEdit : undefined}
             >
               ${fmtInt(calc.effectiveCostPerUnit)}
             </span>
@@ -387,6 +378,7 @@ function ItemRow({
           </>
         )}
       </td>
+
       <td className="py-2 px-2 text-right text-muted-foreground whitespace-nowrap text-xs">${fmtInt(calc.totalCompra)}</td>
       <td className={`py-2 px-2 text-right font-semibold whitespace-nowrap text-xs ${!calc.hasPrice ? "text-muted-foreground" : calc.diferencia >= 0 ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
         {calc.hasPrice ? `$${fmtInt(calc.diferencia)}` : "—"}
@@ -394,17 +386,76 @@ function ItemRow({
       <td className={`py-2 px-2 text-right font-bold whitespace-nowrap text-xs ${!calc.hasPrice ? "text-muted-foreground" : calc.isLowMargin ? "text-destructive" : "text-green-600 dark:text-green-400"}`}>
         {calc.hasPrice ? fmtPct(calc.pct) : "—"}
       </td>
-      {/* Delete */}
+
+      {/* Actions */}
       <td className="py-2 px-2 text-center w-14">
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button
-            onClick={() => onDelete(calc.id)}
-            className="p-0.5 rounded hover:bg-destructive/10 text-destructive"
-            data-testid={`button-delete-row-${calc.id}`}
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </div>
+        {isEditing ? (
+          <div className="flex items-center gap-0.5 justify-center">
+            <button
+              onClick={onSave}
+              disabled={isSaving}
+              className="p-0.5 rounded hover:bg-green-100 dark:hover:bg-green-900/30 text-green-600 disabled:opacity-50"
+              title="Guardar (Enter)"
+            >
+              <Check className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={onCancel}
+              className="p-0.5 rounded hover:bg-muted text-muted-foreground"
+              title="Cancelar (Esc)"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-0.5 justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            {canEdit && (
+              <button
+                onClick={onStartEdit}
+                className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                title="Editar"
+                data-testid={`button-edit-row-${calc.id}`}
+              >
+                <Edit className="h-3 w-3" />
+              </button>
+            )}
+            <Popover open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+              <PopoverTrigger asChild>
+                <button
+                  className="p-0.5 rounded hover:bg-destructive/10 text-destructive"
+                  title="Eliminar"
+                  data-testid={`button-delete-row-${calc.id}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-3" align="end" side="left">
+                <p className="text-xs font-medium mb-1">¿Eliminar esta línea?</p>
+                {isApproved && (
+                  <p className="text-[10px] text-muted-foreground mb-2">Se restituirá el stock.</p>
+                )}
+                <div className="flex gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="h-6 text-xs px-2"
+                    onClick={() => { setShowDeleteConfirm(false); onDelete(calc.id); }}
+                  >
+                    Sí
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 text-xs px-2"
+                    onClick={() => setShowDeleteConfirm(false)}
+                  >
+                    No
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+          </div>
+        )}
       </td>
     </tr>
   );
@@ -413,12 +464,14 @@ function ItemRow({
 // ─── AddItemRow ─────────────────────────────────────────────────────────────────
 function AddItemRow({
   orderId,
+  customerId,
   allProducts,
   hasIva,
   hasBolsaFv,
   onDone,
 }: {
   orderId: number;
+  customerId: number;
   allProducts: Product[];
   hasIva: boolean;
   hasBolsaFv: boolean;
@@ -447,7 +500,7 @@ function AddItemRow({
     setProductId(id);
     if (id) {
       try {
-        const res = await fetch(`/api/price-history/${orderId}/${id}`, { credentials: "include" });
+        const res = await fetch(`/api/price-history/${customerId}/${id}`, { credentials: "include" });
         if (res.ok) {
           const history = await res.json();
           if (history?.pricePerUnit && !price) setPrice(String(Math.round(parseFloat(history.pricePerUnit))));
@@ -471,10 +524,15 @@ function AddItemRow({
     });
   };
 
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") { e.preventDefault(); handleSave(); }
+    if (e.key === "Escape") onDone();
+  };
+
   return (
     <tr className="border-b border-border bg-green-50/20 dark:bg-green-900/10">
       <td className="py-1.5 px-2">
-        <Input type="number" value={qty} onChange={(e) => setQty(e.target.value)} step="1" min="0" className="h-7 w-16 text-xs px-1.5 py-0" placeholder="Cant." autoFocus />
+        <Input type="number" value={qty} onChange={(e) => setQty(e.target.value)} onKeyDown={onKeyDown} step="1" min="0" className="h-7 w-16 text-xs px-1.5 py-0" placeholder="Cant." autoFocus />
       </td>
       <td className="py-1.5 px-2">
         <Select value={unit} onValueChange={setUnit}>
@@ -508,7 +566,7 @@ function AddItemRow({
       <td className="py-1.5 px-2">
         <div className="flex items-center gap-0.5">
           <span className="text-xs text-muted-foreground">$</span>
-          <Input type="number" value={price} onChange={(e) => setPrice(e.target.value)} step="1" min="0" className="h-7 w-24 text-xs px-1.5 py-0" placeholder="Precio" />
+          <Input type="number" value={price} onChange={(e) => setPrice(e.target.value)} onKeyDown={onKeyDown} step="1" min="0" className="h-7 w-24 text-xs px-1.5 py-0" placeholder="Precio" />
         </div>
       </td>
       <td className="py-1.5 px-2 text-right text-xs text-muted-foreground">
@@ -538,10 +596,14 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const [lowMarginOk, setLowMarginOk] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [deleteItemId, setDeleteItemId] = useState<number | null>(null);
   const [addingItem, setAddingItem] = useState(false);
   const [hidePrecios, setHidePrecios] = useState(false);
 
+  // ── Edit state ────────────────────────────────────────────────────────────
+  const [drafts, setDrafts] = useState<Record<number, ItemDraft>>({});
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  // ── Mutations ─────────────────────────────────────────────────────────────
   const deleteMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/orders/${id}`),
     onSuccess: () => {
@@ -562,17 +624,64 @@ export default function OrderDetailPage({ id }: { id: number }) {
       queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/load-list"] });
       toast({ title: "Línea eliminada" });
-      setDeleteItemId(null);
     },
     onError: (e: any) => toast({ title: "Error al eliminar línea", description: e.message, variant: "destructive" }),
   });
 
-  const { data: order, isLoading } = useQuery<FullOrder>({
-    queryKey: ["/api/orders", id],
+  const saveAllMutation = useMutation({
+    mutationFn: async (patches: { itemId: number; data: Record<string, any> }[]) => {
+      await Promise.all(patches.map(({ itemId, data }) =>
+        apiRequest("PATCH", `/api/orders/${id}/items/${itemId}`, data)
+      ));
+    },
+    onMutate: async (patches) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/orders", id] });
+      const snapshot = queryClient.getQueryData(["/api/orders", id]);
+      queryClient.setQueryData(["/api/orders", id], (old: FullOrder | undefined) => {
+        if (!old) return old;
+        const patchMap = new Map(patches.map((p) => [p.itemId, p.data]));
+        return {
+          ...old,
+          items: old.items.map((item) => {
+            const patch = patchMap.get(item.id);
+            if (!patch) return item;
+            return {
+              ...item,
+              quantity: patch.quantity ?? item.quantity,
+              unit: patch.unit ?? item.unit,
+              pricePerUnit: patch.pricePerUnit !== undefined ? patch.pricePerUnit : item.pricePerUnit,
+              overrideCostPerUnit: patch.overrideCostPerUnit !== undefined ? patch.overrideCostPerUnit : item.overrideCostPerUnit,
+              productId: patch.productId !== undefined ? patch.productId : item.productId,
+            };
+          }),
+        };
+      });
+      return { snapshot };
+    },
+    onError: (e: any, _patches, ctx: any) => {
+      if (ctx?.snapshot) queryClient.setQueryData(["/api/orders", id], ctx.snapshot);
+      toast({ title: "Error al guardar", description: e.message, variant: "destructive" });
+    },
+    onSuccess: () => {
+      setDrafts({});
+      setEditingId(null);
+      toast({ title: "Cambios guardados" });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/load-list"] });
+    },
   });
 
-  const { data: allProducts = [] } = useQuery<Product[]>({
-    queryKey: ["/api/products"],
+  const bolsaMutation = useMutation({
+    mutationFn: ({ itemId, data }: { itemId: number; data: Record<string, any> }) =>
+      apiRequest("PATCH", `/api/orders/${id}/items/${itemId}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const approveMutation = useMutation({
@@ -586,6 +695,97 @@ export default function OrderDetailPage({ id }: { id: number }) {
     onError: (e: any) => toast({ title: "Error al aprobar", description: e.message, variant: "destructive" }),
   });
 
+  // ── Queries ───────────────────────────────────────────────────────────────
+  const { data: order, isLoading } = useQuery<FullOrder>({
+    queryKey: ["/api/orders", id],
+  });
+
+  const { data: allProducts = [] } = useQuery<Product[]>({
+    queryKey: ["/api/products"],
+  });
+
+  // ── Edit handlers ─────────────────────────────────────────────────────────
+  const handleStartEdit = (calc: CalcItem) => {
+    setEditingId(calc.id);
+    if (!drafts[calc.id]) {
+      setDrafts((prev) => ({
+        ...prev,
+        [calc.id]: {
+          qty: fmt(calc.qty, 4).replace(/\.?0+$/, ""),
+          unit: dbEnumToCanonical(calc.unit).toLowerCase(),
+          price: calc.hasPrice ? String(Math.round(calc.pricePerUnit!)) : "",
+          cost: String(Math.round(calc.effectiveCostPerUnit)),
+          productId: calc.item.productId ?? null,
+        },
+      }));
+    }
+  };
+
+  const handleFieldChange = (itemId: number, field: keyof ItemDraft, value: string | number | null) => {
+    setDrafts((prev) => ({
+      ...prev,
+      [itemId]: { ...prev[itemId]!, [field]: value as string },
+    }));
+  };
+
+  const handleSaveAll = (calcs: CalcItem[]) => {
+    const patches = calcs
+      .filter((c) => {
+        const d = drafts[c.id];
+        return d && hasDraftChanges(d, c);
+      })
+      .map((c) => {
+        const d = drafts[c.id]!;
+        return {
+          itemId: c.id,
+          data: {
+            quantity: d.qty,
+            unit: d.unit,
+            pricePerUnit: d.price || null,
+            overrideCostPerUnit: d.cost || null,
+            productId: d.productId,
+          },
+        };
+      });
+
+    if (patches.length === 0) {
+      setDrafts({});
+      setEditingId(null);
+      return;
+    }
+    saveAllMutation.mutate(patches);
+  };
+
+  const handleCancelEdit = (itemId: number) => {
+    setDrafts((prev) => {
+      const next = { ...prev };
+      delete next[itemId];
+      return next;
+    });
+    setEditingId(null);
+  };
+
+  const handleProductSelect = async (itemId: number, productId: number | null) => {
+    handleFieldChange(itemId, "productId", productId);
+    if (productId && order) {
+      try {
+        const res = await fetch(`/api/price-history/${order.customerId}/${productId}`, { credentials: "include" });
+        if (res.ok) {
+          const history = await res.json();
+          if (history?.pricePerUnit) {
+            handleFieldChange(itemId, "price", String(Math.round(parseFloat(history.pricePerUnit))));
+          }
+        }
+      } catch { /* noop */ }
+    }
+  };
+
+  const handleBolsaToggle = (itemId: number, currentBolsaType: string | null, type: "bolsa" | "bolsa_propia") => {
+    const newType = currentBolsaType === type ? null : type;
+    bolsaMutation.mutate({ itemId, data: { bolsaType: newType, overrideCostPerUnit: newType ? "0" : null } });
+  };
+
+  // ── Misc ──────────────────────────────────────────────────────────────────
   const formatDate = (d: string | Date) => {
     const s = typeof d === "string" ? d.slice(0, 10) : d.toISOString().slice(0, 10);
     return new Date(s + "T12:00:00").toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" });
@@ -601,7 +801,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
       let remitoDate: string | Date;
 
       if (order.remitoId) {
-        // Pedido con remito creado normalmente
         const res = await fetch(`/api/remitos/${order.remitoId}`, { credentials: "include" });
         if (!res.ok) throw new Error("No se pudo obtener el remito");
         const remito = await res.json();
@@ -609,7 +808,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
         remitoFolio = remito.folio;
         remitoDate = remito.issuedAt;
       } else {
-        // Pedido importado sin remito — construir desde el pedido
         remitoItems = order.items.map((item) => ({
           product: item.product ? { name: item.product.name, sku: (item.product as any).sku ?? "" } : null,
           quantity: String(item.quantity),
@@ -642,7 +840,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
         },
       };
 
-      // Merge bolsa lines for bolsaFv customers
       if (order.customer.bolsaFv) {
         const merged = new Map<string, RemitoItem>();
         for (const item of remito.order.items) {
@@ -687,6 +884,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
     }
   };
 
+  // ── Render ────────────────────────────────────────────────────────────────
   if (isLoading) {
     return (
       <Layout title="Detalle de Pedido">
@@ -727,7 +925,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const getItemName = (item: FullOrderItem) =>
     item.product?.name ?? (item as any).rawProductName ?? "Producto sin nombre";
 
-  const calcs = order.items.map((item) => {
+  const calcs: CalcItem[] = order.items.map((item) => {
     const qty = parseFloat(item.quantity as string);
     const hasPrice = item.pricePerUnit != null && parseFloat(item.pricePerUnit as string) > 0;
     const price = hasPrice ? parseFloat(item.pricePerUnit as string) : 0;
@@ -768,25 +966,18 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const unpricedCount = calcs.filter((c) => !c.hasPrice).length;
   const hasAnyLowMargin = calcs.some((c) => c.isLowMargin);
-
   const grandTotal = calcs.reduce((s, c) => s + c.subtotal, 0);
   const grandTotalConIva = calcs.reduce((s, c) => s + c.totalConIva, 0);
   const grandTotalCompra = calcs.reduce((s, c) => s + c.totalCompra, 0);
   const grandBase = hasIva ? grandTotalConIva : grandTotal;
   const grandDiff = grandBase - grandTotalCompra;
   const grandPct = grandBase > 0 ? grandDiff / grandBase : 0;
-
   const canApprove = isDraft && unpricedCount === 0 && (!hasAnyLowMargin || lowMarginOk);
-
-  const editHint = isDraft || isApproved ? "· Clic en celda para editar" : "";
-
-  const handleDeleteItem = (itemId: number) => {
-    if (isApproved) {
-      setDeleteItemId(itemId);
-    } else {
-      deleteItemMutation.mutate(itemId);
-    }
-  };
+  const isSaving = saveAllMutation.isPending || bolsaMutation.isPending;
+  const hasPendingDrafts = calcs.some((c) => {
+    const d = drafts[c.id];
+    return d && hasDraftChanges(d, c);
+  });
 
   return (
     <Layout title={`Pedido ${order.folio}`}>
@@ -805,6 +996,11 @@ export default function OrderDetailPage({ id }: { id: number }) {
               {order.lowMarginConfirmed && (
                 <Badge variant="outline" className="text-[10px] text-destructive border-destructive/50">
                   <AlertTriangle className="h-2.5 w-2.5 mr-1" /> Margen bajo confirmado
+                </Badge>
+              )}
+              {hasPendingDrafts && (
+                <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-400/60 animate-pulse">
+                  Cambios sin guardar
                 </Badge>
               )}
             </div>
@@ -885,7 +1081,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
           <Alert>
             <Lock className="h-4 w-4" />
             <AlertDescription className="text-sm">
-              Pedido aprobado. Podés editar cualquier campo de cada línea — el stock se ajusta automáticamente al cambiar cantidades, unidades o productos.
+              Pedido aprobado. Hacé clic en el lápiz o en cualquier celda para editar una línea. El stock se ajusta automáticamente.
             </AlertDescription>
           </Alert>
         )}
@@ -932,7 +1128,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold">
               Detalle de Productos ({order.items?.length ?? 0})
-              {editHint && <span className="text-xs text-muted-foreground font-normal ml-2">{editHint}</span>}
+              {(isDraft || isApproved) && <span className="text-xs text-muted-foreground font-normal ml-2">· Hover sobre fila para editar o eliminar</span>}
               {hasIva && <span className="text-xs text-muted-foreground font-normal ml-2">· IVA 10.5% / 21% huevo</span>}
             </CardTitle>
           </CardHeader>
@@ -961,18 +1157,27 @@ export default function OrderDetailPage({ id }: { id: number }) {
                     <ItemRow
                       key={c.id}
                       calc={c}
-                      order={order}
                       allProducts={allProducts}
                       hasIva={hasIva}
                       isDraft={isDraft}
                       isApproved={isApproved}
                       hasBolsaFv={hasBolsaFv}
-                      onDelete={handleDeleteItem}
+                      isEditing={editingId === c.id}
+                      draft={drafts[c.id]}
+                      isSaving={isSaving}
+                      onStartEdit={() => handleStartEdit(c)}
+                      onFieldChange={(field, value) => handleFieldChange(c.id, field, value)}
+                      onSave={() => handleSaveAll(calcs)}
+                      onCancel={() => handleCancelEdit(c.id)}
+                      onDelete={(itemId) => deleteItemMutation.mutate(itemId)}
+                      onProductSelect={(productId) => handleProductSelect(c.id, productId)}
+                      onBolsaToggle={(type) => handleBolsaToggle(c.id, c.bolsaType, type)}
                     />
                   ))}
                   {addingItem && (
                     <AddItemRow
                       orderId={id}
+                      customerId={order.customerId}
                       allProducts={allProducts}
                       hasIva={hasIva}
                       hasBolsaFv={hasBolsaFv}
@@ -1000,8 +1205,8 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 </tfoot>
               </table>
             </div>
-            {!addingItem && (
-              <div className="p-3 border-t border-border">
+            {!addingItem && (isDraft || isApproved) && (
+              <div className="p-3 border-t border-border flex items-center justify-between">
                 <Button
                   type="button"
                   variant="ghost"
@@ -1012,6 +1217,19 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 >
                   <Plus className="mr-1.5 h-3.5 w-3.5" /> Agregar producto
                 </Button>
+                {hasPendingDrafts && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="text-xs text-amber-700 border-amber-400/60 hover:bg-amber-50"
+                    onClick={() => handleSaveAll(calcs)}
+                    disabled={isSaving}
+                  >
+                    <Check className="mr-1.5 h-3.5 w-3.5" />
+                    {isSaving ? "Guardando..." : "Guardar todos los cambios"}
+                  </Button>
+                )}
               </div>
             )}
           </CardContent>
@@ -1036,28 +1254,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
               data-testid="button-confirm-delete-detail"
             >
               {deleteMutation.isPending ? "Eliminando..." : "Eliminar"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Delete item dialog (approved orders only) */}
-      <AlertDialog open={deleteItemId !== null} onOpenChange={(o) => !o && setDeleteItemId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>¿Eliminar línea?</AlertDialogTitle>
-            <AlertDialogDescription>
-              El pedido está aprobado. Eliminar esta línea restaurará el stock del producto automáticamente.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => deleteItemId && deleteItemMutation.mutate(deleteItemId)}
-              disabled={deleteItemMutation.isPending}
-            >
-              {deleteItemMutation.isPending ? "Eliminando..." : "Eliminar línea"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
