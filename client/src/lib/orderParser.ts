@@ -30,7 +30,7 @@ type ValidUnit = typeof VALID_UNITS[number];
 const UNIT_MAP: Record<string, ValidUnit> = {
   cajon: "CAJON", cajones: "CAJON", caja: "CAJON", cajas: "CAJON",
   bolsa: "BOLSA", bolsas: "BOLSA", saco: "BOLSA", sacos: "BOLSA",
-  kg: "KG", kilo: "KG", kilos: "KG", kilogramo: "KG", kilogramos: "KG",
+  kg: "KG", k: "KG", kilo: "KG", kilos: "KG", kilogramo: "KG", kilogramos: "KG",
   pz: "UNIDAD", pieza: "UNIDAD", piezas: "UNIDAD",
   unidad: "UNIDAD", unidades: "UNIDAD", und: "UNIDAD", un: "UNIDAD",
   atado: "ATADO", at: "ATADO",
@@ -138,6 +138,18 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
     const fracMatch = token.match(/^(\d+)\/(\d+)$/);
     if (fracMatch && parseInt(fracMatch[2]) > 0) {
       quantity = parseInt(fracMatch[1]) / parseInt(fracMatch[2]);
+      usedIndices.add(i);
+      continue;
+    }
+
+    // Compound number+unit token: "200g", "200gr", "2kg", "2k", "2kilo"
+    // Grams → divide by 1000 and set unit=KG; kg variants → unit=KG
+    const compoundMatch = token.match(/^(\d+(?:[.,]\d+)?)(g|gr|grs|gram|gramos|kg|k|kilo|kilos)$/i);
+    if (compoundMatch) {
+      const val = parseFloat(compoundMatch[1].replace(",", "."));
+      const suffix = compoundMatch[2].toLowerCase();
+      quantity = /^g(r|rs|ram|ramos)?$/.test(suffix) ? val / 1000 : val;
+      unit = "KG";
       usedIndices.add(i);
       continue;
     }

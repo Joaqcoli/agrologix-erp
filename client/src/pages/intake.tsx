@@ -42,19 +42,25 @@ const STATUS_BADGE_VARIANT: Record<string, "default" | "secondary" | "destructiv
 
 // ── Fuzzy product search (MEJORA 3) ────────────────────────────────────────────
 
+// Prepositions and articles that carry no product identity
+const STOP_WORDS = new Set(["de", "del", "la", "el", "lo", "los", "las", "un", "una", "y"]);
+
 function fuzzyScore(query: string, target: string): number {
   const q = normalize(query);
   const t = normalize(target);
   if (!q) return 0;
   if (t === q) return 100;
   if (t.includes(q)) return 80;
-  const qWords = q.split(" ").filter(Boolean);
-  const tWords = t.split(" ").filter(Boolean);
+  // Filter stop words and require minimum length to avoid false positives
+  // e.g. "de" inside "verdeo" would otherwise give "cebolla de verdeo" a spurious score
+  const qWords = q.split(" ").filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
+  const tWords = t.split(" ").filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
+  if (qWords.length === 0 || tWords.length === 0) return 0;
   let score = 0;
   for (const qw of qWords) {
     if (tWords.some((tw) => tw === qw)) score += 10;
     else if (tWords.some((tw) => tw.startsWith(qw) || qw.startsWith(tw))) score += 5;
-    else if (tWords.some((tw) => tw.includes(qw) || qw.includes(tw))) score += 2;
+    else if (tWords.some((tw) => tw.includes(qw) || qw.includes(tw)) && qw.length >= 4) score += 2;
   }
   return score;
 }
@@ -179,6 +185,8 @@ export default function IntakePage() {
   const [pendingMode, setPendingMode] = useState<"new" | "merge" | "replace">("new");
   // Custom product names typed by user when no product matches (MEJORA 3)
   const [customNames, setCustomNames] = useState<Record<number, string>>({});
+  // Manual quantity overrides for no_qty lines (MEJORA 1)
+  const [qtyOverrides, setQtyOverrides] = useState<Record<number, string>>({});
 
   const { data: customers } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
@@ -210,6 +218,7 @@ export default function IntakePage() {
     setParsed(result);
     setOverrides({});
     setCustomNames({});
+    setQtyOverrides({});
 
     // Pre-fill unit overrides: DB order history first, then localStorage (MEJORA 1)
     const initialUnitOverrides: Record<number, string> = {};
@@ -224,27 +233,31 @@ export default function IntakePage() {
     setStep("preview");
   };
 
-  // Lines that will actually be sent (excluding no_qty)
+  // Lines that will actually be sent (no_qty excluded unless user provided a manual qty)
   const validLines = useMemo(() =>
     parsed
       .map((line, parsedIdx) => ({ ...line, parsedIdx }))
-      .filter((l) => l.status !== "no_qty")
+      .filter((l) => l.status !== "no_qty" || qtyOverrides[l.parsedIdx] !== undefined)
       .map(({ parsedIdx, ...line }) => {
         const customName = customNames[parsedIdx];
         const resolvedProductId = customName ? null
           : (overrides[parsedIdx] !== undefined ? overrides[parsedIdx] : line.productId);
         const resolvedProduct = activeProducts.find((p) => p.id === resolvedProductId);
         const effectiveName = customName ?? resolvedProduct?.name ?? line.rawProductName;
+        const effectiveQty = qtyOverrides[parsedIdx] !== undefined
+          ? (parseFloat(qtyOverrides[parsedIdx]) || null)
+          : line.quantity;
         return {
           ...line,
           parsedIdx,
+          quantity: effectiveQty,
           resolvedProductId,
           resolvedProductName: effectiveName,
           rawProductName: effectiveName,
           unit: unitOverrides[parsedIdx] ?? line.unit ?? resolvedProduct?.unit ?? "KG",
         };
       }),
-    [parsed, overrides, activeProducts, unitOverrides, customNames]
+    [parsed, overrides, activeProducts, unitOverrides, customNames, qtyOverrides]
   );
 
   const submitMutation = useMutation({
@@ -484,7 +497,30 @@ export default function IntakePage() {
                             </Badge>
                           </div>
 
-                          {line.status !== "no_qty" && (
+                          {line.status === "no_qty" ? (
+                            /* no_qty: show editable quantity field so staff can fix it */
+                            line.rawProductName ? (
+                              <div className="flex flex-wrap items-center gap-3 mt-1.5">
+                                <div className="flex items-center gap-1.5">
+                                  <Input
+                                    type="number"
+                                    min="0"
+                                    step="any"
+                                    value={qtyOverrides[idx] ?? ""}
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      if (v !== "") setQtyOverrides({ ...qtyOverrides, [idx]: v });
+                                      else { const q = { ...qtyOverrides }; delete q[idx]; setQtyOverrides(q); }
+                                    }}
+                                    placeholder="Cant."
+                                    className="h-6 w-20 text-xs"
+                                  />
+                                  <span className="text-xs text-muted-foreground">{line.unit ?? "—"}</span>
+                                </div>
+                                <span className="text-xs font-medium text-foreground">{line.rawProductName}</span>
+                              </div>
+                            ) : null
+                          ) : (
                             <div className="flex flex-wrap items-center gap-3 mt-1.5">
                               {line.quantity !== null && (
                                 <span className="text-xs font-semibold text-foreground">
