@@ -87,7 +87,7 @@ function FuzzyProductPicker({
 
   const ranked = useMemo(() => {
     const q = query.trim();
-    if (!q) return products.slice(0, 8);
+    if (!q) return [];
     return [...products]
       .map((p) => ({ ...p, score: fuzzyScore(q, p.name) }))
       .filter((p) => p.score > 0)
@@ -122,8 +122,11 @@ function FuzzyProductPicker({
       />
       {open && (
         <div className="absolute z-50 w-full border border-border rounded-md bg-background shadow-md mt-0.5 max-h-44 overflow-y-auto">
-          {ranked.length === 0 && (
-            <p className="px-3 py-2 text-xs text-muted-foreground">Sin resultados. Escribe para buscar...</p>
+          {ranked.length === 0 && query.trim().length === 0 && (
+            <p className="px-3 py-2 text-xs text-muted-foreground">Escribe para buscar...</p>
+          )}
+          {ranked.length === 0 && query.trim().length > 0 && (
+            <p className="px-3 py-2 text-xs text-muted-foreground">Sin coincidencias.</p>
           )}
           {ranked.map((p) => (
             <button
