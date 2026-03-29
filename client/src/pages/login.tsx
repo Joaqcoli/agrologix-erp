@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Truck, Loader2, AlertCircle } from "lucide-react";
+import { Loader2, AlertCircle } from "lucide-react";
 
 export default function LoginPage() {
   const { user, login } = useAuth();
@@ -37,14 +37,8 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center gap-3 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary shadow-lg">
-            <Truck className="h-8 w-8 text-primary-foreground" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">AgroLogix</h1>
-            <p className="text-sm text-muted-foreground">Sistema ERP de Distribución</p>
-          </div>
+        <div className="flex flex-col items-center">
+          <img src="/logo.png" alt="Logo" style={{ maxWidth: "280px", width: "100%" }} />
         </div>
 
         <Card>

@@ -17,7 +17,6 @@ import {
   Package,
   ShoppingCart,
   LogOut,
-  Truck,
   FileText,
   ClipboardList,
   MessageSquarePlus,
@@ -56,16 +55,8 @@ export function AppSidebar() {
 
   return (
     <Sidebar>
-      <SidebarHeader className="p-4 border-b border-sidebar-border">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary">
-            <Truck className="h-5 w-5 text-primary-foreground" />
-          </div>
-          <div className="flex flex-col">
-            <span className="text-sm font-semibold text-sidebar-foreground leading-tight">AgroLogix</span>
-            <span className="text-xs text-muted-foreground leading-tight">Distribución de Produce</span>
-          </div>
-        </div>
+      <SidebarHeader className="p-4 border-b border-sidebar-border flex items-center justify-center">
+        <img src="/logo.png" alt="Logo" style={{ maxWidth: "160px", width: "100%" }} />
       </SidebarHeader>
 
       <SidebarContent className="py-3">
