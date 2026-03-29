@@ -2353,6 +2353,20 @@ export const storage = {
     };
   },
 
+  // Returns the most recently used unit per product (from order_items history)
+  async getProductUnitHistory(): Promise<{ productId: number; unit: string }[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT DISTINCT ON (product_id) product_id AS "productId", unit
+      FROM order_items
+      WHERE product_id IS NOT NULL
+      ORDER BY product_id, id DESC
+    `);
+    return (rows.rows as any[]).map((r) => ({
+      productId: Number(r.productId),
+      unit: r.unit as string,
+    }));
+  },
+
   // ─── Suppliers CRUD ───────────────────────────────────────────────────────────
 
   async getSuppliers(): Promise<Supplier[]> {

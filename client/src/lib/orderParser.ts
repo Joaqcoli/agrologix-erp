@@ -39,7 +39,7 @@ const UNIT_MAP: Record<string, ValidUnit> = {
 };
 
 // Strip accents and normalize
-function normalize(s: string): string {
+export function normalize(s: string): string {
   return s
     .toLowerCase()
     .normalize("NFD")
@@ -118,22 +118,50 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
 
-  const tokens = trimmed.split(/\s+/);
+  // Normalize unicode fractions before tokenizing
+  const UNICODE_FRACS: Record<string, string> = {
+    "\u00BD": "1/2", "\u00BC": "1/4", "\u00BE": "3/4",
+    "\u2153": "1/3", "\u2154": "2/3",
+  };
+  const preprocessed = trimmed.replace(/[\u00BD\u00BC\u00BE\u2153\u2154]/g, (m) => UNICODE_FRACS[m] ?? m);
+  const tokens = preprocessed.split(/\s+/);
 
   let quantity: number | null = null;
   let unit: string | null = null;
-  const remainingTokens: string[] = [];
+  const usedIndices = new Set<number>();
 
-  // Pass 1: find quantity (first number)
-  let quantityFound = false;
-  for (const token of tokens) {
-    if (!quantityFound && /^[\d]+([.,]\d+)?$/.test(token)) {
-      quantity = parseFloat(token.replace(",", "."));
-      quantityFound = true;
-    } else {
-      remainingTokens.push(token);
+  // Pass 1: find quantity — handles integers, decimals, fractions ("1/2"), and mixed numbers ("1 1/2")
+  for (let i = 0; i < tokens.length && quantity === null; i++) {
+    const token = tokens[i];
+
+    // Simple fraction: "1/2", "3/4"
+    const fracMatch = token.match(/^(\d+)\/(\d+)$/);
+    if (fracMatch && parseInt(fracMatch[2]) > 0) {
+      quantity = parseInt(fracMatch[1]) / parseInt(fracMatch[2]);
+      usedIndices.add(i);
+      continue;
+    }
+
+    // Plain number (int or decimal) — optionally followed by a fraction for mixed numbers "1 1/2"
+    if (/^(\d+)([.,]\d+)?$/.test(token)) {
+      const val = parseFloat(token.replace(",", "."));
+      if (i + 1 < tokens.length) {
+        const nextFrac = tokens[i + 1].match(/^(\d+)\/(\d+)$/);
+        if (nextFrac && parseInt(nextFrac[2]) > 0) {
+          quantity = val + parseInt(nextFrac[1]) / parseInt(nextFrac[2]);
+          usedIndices.add(i);
+          usedIndices.add(i + 1);
+          i++; // skip fraction token; loop condition stops after this iteration
+          continue;
+        }
+      }
+      quantity = val;
+      usedIndices.add(i);
+      continue;
     }
   }
+
+  const remainingTokens = tokens.filter((_, i) => !usedIndices.has(i));
 
   // Pass 2: find unit from remaining tokens
   const productTokens: string[] = [];

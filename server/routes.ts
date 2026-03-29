@@ -129,6 +129,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Specific sub-routes MUST come before /api/products/:id to avoid capture
+  app.get("/api/products/unit-history", requireAuth, async (req, res) => {
+    try {
+      return res.json(await storage.getProductUnitHistory());
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   app.get("/api/products/stock", requireAuth, async (req, res) => {
     try {
       const { category, search, onlyInStock } = req.query as { category?: string; search?: string; onlyInStock?: string };

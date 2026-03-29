@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Layout } from "@/components/layout";
@@ -15,7 +15,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { ArrowLeft, Sparkles, CheckCircle2, AlertTriangle, XCircle, Search, ChevronRight } from "lucide-react";
-import { parseOrderTextLocal, type ParsedLine } from "@/lib/orderParser";
+import { parseOrderTextLocal, type ParsedLine, normalize } from "@/lib/orderParser";
 import type { Customer, Product, ProductUnit } from "@shared/schema";
 import { canonicalizeUnit, ALL_CANONICAL_UNITS } from "@shared/units";
 
@@ -40,6 +40,117 @@ const STATUS_BADGE_VARIANT: Record<string, "default" | "secondary" | "destructiv
   no_qty: "destructive",
 };
 
+// ── Fuzzy product search (MEJORA 3) ────────────────────────────────────────────
+
+function fuzzyScore(query: string, target: string): number {
+  const q = normalize(query);
+  const t = normalize(target);
+  if (!q) return 0;
+  if (t === q) return 100;
+  if (t.includes(q)) return 80;
+  const qWords = q.split(" ").filter(Boolean);
+  const tWords = t.split(" ").filter(Boolean);
+  let score = 0;
+  for (const qw of qWords) {
+    if (tWords.some((tw) => tw === qw)) score += 10;
+    else if (tWords.some((tw) => tw.startsWith(qw) || qw.startsWith(tw))) score += 5;
+    else if (tWords.some((tw) => tw.includes(qw) || qw.includes(tw))) score += 2;
+  }
+  return score;
+}
+
+function FuzzyProductPicker({
+  products,
+  initialQuery,
+  selectedId,
+  onSelect,
+  onCustom,
+}: {
+  products: Array<{ id: number; name: string; sku?: string | null }>;
+  initialQuery: string;
+  selectedId: number | null;
+  onSelect: (id: number) => void;
+  onCustom: (name: string) => void;
+}) {
+  const [query, setQuery] = useState(initialQuery);
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const ranked = useMemo(() => {
+    const q = query.trim();
+    if (!q) return products.slice(0, 8);
+    return [...products]
+      .map((p) => ({ ...p, score: fuzzyScore(q, p.name) }))
+      .filter((p) => p.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10);
+  }, [query, products]);
+
+  const selected = selectedId ? products.find((p) => p.id === selectedId) : null;
+
+  if (selected && !open) {
+    return (
+      <div className="flex items-center gap-2 mt-1">
+        <span className="text-xs font-medium">{selected.name}</span>
+        <button
+          type="button"
+          onClick={() => { setOpen(true); setQuery(""); }}
+          className="text-[10px] text-muted-foreground underline"
+        >cambiar</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full mt-1 relative" ref={containerRef}>
+      <Input
+        value={query}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        placeholder="Buscar producto..."
+        className="h-7 text-xs"
+        data-testid="fuzzy-product-input"
+      />
+      {open && (
+        <div className="absolute z-50 w-full border border-border rounded-md bg-background shadow-md mt-0.5 max-h-44 overflow-y-auto">
+          {ranked.length === 0 && (
+            <p className="px-3 py-2 text-xs text-muted-foreground">Sin resultados. Escribe para buscar...</p>
+          )}
+          {ranked.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onMouseDown={() => { onSelect(p.id); setOpen(false); }}
+              className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 flex items-center justify-between"
+            >
+              <span>{p.name}</span>
+              {p.sku && <span className="text-[10px] text-muted-foreground">{p.sku}</span>}
+            </button>
+          ))}
+          {query.trim().length > 0 && (
+            <button
+              type="button"
+              onMouseDown={() => { onCustom(query.trim()); setOpen(false); }}
+              className="w-full text-left px-3 py-1.5 text-xs text-muted-foreground italic hover:bg-muted/50 border-t border-border"
+            >
+              Usar nombre: "{query.trim()}"
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function IntakePage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -63,10 +174,21 @@ export default function IntakePage() {
   // Merge dialog state
   const [mergeDialog, setMergeDialog] = useState<{ existingId: number; folio: string } | null>(null);
   const [pendingMode, setPendingMode] = useState<"new" | "merge" | "replace">("new");
+  // Custom product names typed by user when no product matches (MEJORA 3)
+  const [customNames, setCustomNames] = useState<Record<number, string>>({});
 
   const { data: customers } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
   const { data: stockData } = useQuery<(ProductUnit & { product: Product })[]>({ queryKey: ["/api/products/stock"] });
+  // Unit history from order_items — most recently used unit per product (MEJORA 1)
+  const { data: unitHistoryRaw = [] } = useQuery<{ productId: number; unit: string }[]>({
+    queryKey: ["/api/products/unit-history"],
+    staleTime: 5 * 60 * 1000,
+  });
+  const unitHistoryMap = useMemo(
+    () => new Map(unitHistoryRaw.map((r) => [r.productId, r.unit])),
+    [unitHistoryRaw]
+  );
 
   const activeCustomers = (customers ?? []).filter((c) => c.active);
   const filteredCustomers = useMemo(() =>
@@ -84,11 +206,14 @@ export default function IntakePage() {
     const result = parseOrderTextLocal(rawText, simpleProducts);
     setParsed(result);
     setOverrides({});
+    setCustomNames({});
 
-    // Pre-fill unit overrides from localStorage (last used unit per product)
+    // Pre-fill unit overrides: DB order history first, then localStorage (MEJORA 1)
     const initialUnitOverrides: Record<number, string> = {};
     result.forEach((line, idx) => {
       if (line.status === "no_qty" || !line.productId) return;
+      const histUnit = unitHistoryMap.get(line.productId);
+      if (histUnit) { initialUnitOverrides[idx] = histUnit; return; }
       const last = localStorage.getItem(`lastUnit_${line.productId}`);
       if (last) initialUnitOverrides[idx] = last;
     });
@@ -101,18 +226,22 @@ export default function IntakePage() {
     parsed
       .map((line, parsedIdx) => ({ ...line, parsedIdx }))
       .filter((l) => l.status !== "no_qty")
-      .map(({ parsedIdx, ...line }, idx) => {
-        const resolvedProductId = overrides[idx] !== undefined ? overrides[idx] : line.productId;
+      .map(({ parsedIdx, ...line }) => {
+        const customName = customNames[parsedIdx];
+        const resolvedProductId = customName ? null
+          : (overrides[parsedIdx] !== undefined ? overrides[parsedIdx] : line.productId);
         const resolvedProduct = activeProducts.find((p) => p.id === resolvedProductId);
+        const effectiveName = customName ?? resolvedProduct?.name ?? line.rawProductName;
         return {
           ...line,
           parsedIdx,
           resolvedProductId,
-          resolvedProductName: resolvedProduct?.name ?? line.rawProductName,
+          resolvedProductName: effectiveName,
+          rawProductName: effectiveName,
           unit: unitOverrides[parsedIdx] ?? line.unit ?? resolvedProduct?.unit ?? "KG",
         };
       }),
-    [parsed, overrides, activeProducts, unitOverrides]
+    [parsed, overrides, activeProducts, unitOverrides, customNames]
   );
 
   const submitMutation = useMutation({
@@ -171,9 +300,15 @@ export default function IntakePage() {
 
   const selectedCustomer = activeCustomers.find((c) => c.id === customerId);
 
-  const hasAmbiguous = validLines.some((l) => l.status === "ambiguous" && !overrides[parsed.indexOf(l)]);
-  const okCount = validLines.filter((l) => (overrides[parsed.indexOf(l)] !== undefined && overrides[parsed.indexOf(l)] > 0) || l.status === "ok").length;
-  const unresolved = validLines.filter((l) => !l.resolvedProductId).length;
+  const hasAmbiguous = validLines.some(
+    (l) => l.status === "ambiguous" && !overrides[l.parsedIdx] && !customNames[l.parsedIdx]
+  );
+  const okCount = validLines.filter(
+    (l) => l.status === "ok" || overrides[l.parsedIdx] !== undefined || customNames[l.parsedIdx]
+  ).length;
+  const unresolved = validLines.filter(
+    (l) => !l.resolvedProductId && !customNames[l.parsedIdx]
+  ).length;
 
   // Unit validation: check if resolved product has the requested unit in product_units
   // We iterate `parsed` (same index as render) so the Set stores parsed indices
@@ -322,7 +457,8 @@ export default function IntakePage() {
                 {parsed.map((line, idx) => {
                   const resolvedProductId = overrides[idx] !== undefined ? overrides[idx] : (line.productId ?? 0);
                   const resolvedProduct = activeProducts.find((p) => p.id === resolvedProductId);
-                  const effectiveStatus = line.status === "ambiguous" && resolvedProductId ? "ok" : line.status;
+                  const isResolved = !!(resolvedProductId || customNames[idx]);
+                  const effectiveStatus = (line.status === "ambiguous" || line.status === "no_product") && isResolved ? "ok" : line.status;
 
                   return (
                     <div
@@ -383,37 +519,26 @@ export default function IntakePage() {
                               )}
 
                               {/* Product display / picker */}
-                              {effectiveStatus === "ok" || resolvedProductId ? (
+                              {(effectiveStatus === "ok" || resolvedProductId || customNames[idx]) ? (
                                 <span className="text-xs text-foreground font-medium">
-                                  {resolvedProduct?.name ?? line.productName ?? line.rawProductName}
+                                  {customNames[idx] ?? resolvedProduct?.name ?? line.productName ?? line.rawProductName}
                                 </span>
                               ) : null}
 
                               {(line.status === "ambiguous" || line.status === "no_product") && (
-                                <div className="w-full mt-1">
-                                  <Select
-                                    value={String(resolvedProductId || "")}
-                                    onValueChange={(v) => setOverrides({ ...overrides, [idx]: Number(v) })}
-                                  >
-                                    <SelectTrigger className="h-7 text-xs" data-testid={`select-resolve-${idx}`}>
-                                      <SelectValue placeholder="Seleccionar producto..." />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {line.status === "ambiguous"
-                                        ? line.candidates.map((c) => (
-                                            <SelectItem key={c.id} value={String(c.id)} className="text-xs">
-                                              {c.name} <span className="text-muted-foreground ml-1">({c.sku})</span>
-                                            </SelectItem>
-                                          ))
-                                        : activeProducts.map((p) => (
-                                            <SelectItem key={p.id} value={String(p.id)} className="text-xs">
-                                              {p.name} <span className="text-muted-foreground ml-1">({p.sku})</span>
-                                            </SelectItem>
-                                          ))
-                                      }
-                                    </SelectContent>
-                                  </Select>
-                                </div>
+                                <FuzzyProductPicker
+                                  products={activeProducts}
+                                  initialQuery={line.rawProductName}
+                                  selectedId={resolvedProductId || null}
+                                  onSelect={(pid) => {
+                                    setOverrides({ ...overrides, [idx]: pid });
+                                    const n = { ...customNames }; delete n[idx]; setCustomNames(n);
+                                  }}
+                                  onCustom={(name) => {
+                                    setCustomNames({ ...customNames, [idx]: name });
+                                    const o = { ...overrides }; delete o[idx]; setOverrides(o);
+                                  }}
+                                />
                               )}
                             </div>
                           )}
