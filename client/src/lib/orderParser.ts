@@ -134,10 +134,17 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
   for (let i = 0; i < tokens.length && quantity === null; i++) {
     const token = tokens[i];
 
-    // Simple fraction: "1/2", "3/4"
-    const fracMatch = token.match(/^(\d+)\/(\d+)$/);
+    // Fraction with optional unit suffix: "1/2", "3/4", "1/2k", "1/2kg", "1/4kg"
+    const fracMatch = token.match(/^(\d+)\/(\d+)(g|gr|grs|gram|gramos|kg|k|kilo|kilos)?$/i);
     if (fracMatch && parseInt(fracMatch[2]) > 0) {
-      quantity = parseInt(fracMatch[1]) / parseInt(fracMatch[2]);
+      const val = parseInt(fracMatch[1]) / parseInt(fracMatch[2]);
+      const suffix = fracMatch[3]?.toLowerCase();
+      if (suffix) {
+        quantity = /^g(r|rs|ram|ramos)?$/.test(suffix) ? val / 1000 : val;
+        unit = "KG";
+      } else {
+        quantity = val;
+      }
       usedIndices.add(i);
       continue;
     }

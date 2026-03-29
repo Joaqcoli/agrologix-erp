@@ -30,7 +30,7 @@ const STATUS_LABEL: Record<string, string> = {
   ok: "OK",
   ambiguous: "Ambiguo",
   no_product: "Producto no encontrado",
-  no_qty: "Sin cantidad (ignorado)",
+  no_qty: "Sin cantidad",
 };
 
 const STATUS_BADGE_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
@@ -50,9 +50,10 @@ function fuzzyScore(query: string, target: string): number {
   const t = normalize(target);
   if (!q) return 0;
   if (t === q) return 100;
-  if (t.includes(q)) return 80;
-  // Filter stop words and require minimum length to avoid false positives
-  // e.g. "de" inside "verdeo" would otherwise give "cebolla de verdeo" a spurious score
+  // Full-string includes only when query is long enough — prevents short words like "de", "a"
+  // matching anything that contains them (e.g. "de" → "brote de alfalfa")
+  if (q.length >= 4 && t.includes(q)) return 80;
+  // Word-level matching — filter stop words and short words to avoid false positives
   const qWords = q.split(" ").filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
   const tWords = t.split(" ").filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
   if (qWords.length === 0 || tWords.length === 0) return 0;
@@ -60,7 +61,8 @@ function fuzzyScore(query: string, target: string): number {
   for (const qw of qWords) {
     if (tWords.some((tw) => tw === qw)) score += 10;
     else if (tWords.some((tw) => tw.startsWith(qw) || qw.startsWith(tw))) score += 5;
-    else if (tWords.some((tw) => tw.includes(qw) || qw.includes(tw)) && qw.length >= 4) score += 2;
+    // Substring only when both the query word AND match are long enough to be meaningful
+    else if (qw.length >= 4 && tWords.some((tw) => tw.length >= 4 && (tw.includes(qw) || qw.includes(tw)))) score += 2;
   }
   return score;
 }
