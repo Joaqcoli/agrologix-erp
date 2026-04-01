@@ -45,13 +45,16 @@ const MOTIVOS = ["Merma", "Rinde", "Otro"] as const;
 type Motivo = typeof MOTIVOS[number];
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
+function localStr(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return localStr(new Date());
 }
 function weekStartStr() {
   const d = new Date();
-  d.setDate(d.getDate() - d.getDay() + (d.getDay() === 0 ? -6 : 1)); // Monday
-  return d.toISOString().slice(0, 10);
+  const diff = d.getDay() === 0 ? -6 : 1 - d.getDay();
+  return localStr(new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff));
 }
 function monthStartStr() {
   const d = new Date();

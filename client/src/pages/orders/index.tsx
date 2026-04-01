@@ -38,7 +38,8 @@ const fmt = (v: number) => v.toLocaleString("es-MX", { minimumFractionDigits: 2,
 
 export default function OrdersPage() {
   const { toast } = useToast();
-  const today = new Date().toISOString().slice(0, 10);
+  const d0 = new Date();
+  const today = `${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,"0")}-${String(d0.getDate()).padStart(2,"0")}`;
   const [date, setDate] = useState(today);
   const [exporting, setExporting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<OrderSummary | null>(null);

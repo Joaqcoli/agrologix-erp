@@ -13,30 +13,31 @@ import { generateBolsaFvPDF, type BolsaFvRow } from "@/lib/pdf";
 const fmt = (n: number) =>
   "$" + Math.round(n).toLocaleString("es-MX");
 
+function localStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
 function todayRange(): [string, string] {
   const d = new Date();
-  const from = d.toISOString().slice(0, 10);
-  const next = new Date(d);
-  next.setDate(next.getDate() + 1);
-  return [from, next.toISOString().slice(0, 10)];
+  const from = localStr(d);
+  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+  return [from, localStr(next)];
 }
 
 function weekRange(): [string, string] {
   const d = new Date();
   const day = d.getDay(); // 0=Sun
   const diff = day === 0 ? -6 : 1 - day;
-  const mon = new Date(d);
-  mon.setDate(d.getDate() + diff);
-  const sun = new Date(mon);
-  sun.setDate(mon.getDate() + 7);
-  return [mon.toISOString().slice(0, 10), sun.toISOString().slice(0, 10)];
+  const mon = new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff);
+  const sun = new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff + 7);
+  return [localStr(mon), localStr(sun)];
 }
 
 function monthRange(): [string, string] {
   const d = new Date();
   const from = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
   const nextMonth = new Date(d.getFullYear(), d.getMonth() + 1, 1);
-  return [from, nextMonth.toISOString().slice(0, 10)];
+  return [from, localStr(nextMonth)];
 }
 
 function yearRange(): [string, string] {
@@ -437,7 +438,7 @@ export default function DashboardPage() {
                       {(bolsaData.rows ?? []).map((row, i) => (
                         <tr key={i} className={`border-b border-border last:border-0 ${i % 2 === 0 ? "" : "bg-muted/20"}`}>
                           <td className="py-1.5 px-2 text-muted-foreground whitespace-nowrap">
-                            {new Date(row.orderDate).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit" })}
+                            {new Date(String(row.orderDate).slice(0, 10) + "T12:00:00").toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit" })}
                           </td>
                           <td className="py-1.5 px-2 font-medium truncate max-w-[120px]">{row.customerName}</td>
                           <td className="py-1.5 px-2 text-muted-foreground truncate max-w-[120px]">{row.productName ?? "—"}</td>

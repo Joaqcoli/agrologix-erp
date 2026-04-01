@@ -43,8 +43,10 @@ export default function PurchaseDetailPage({ id }: { id: number }) {
     onError: (e: any) => toast({ title: "Error al eliminar", description: e.message, variant: "destructive" }),
   });
 
-  const formatDate = (d: string | Date) =>
-    new Date(d).toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" });
+  const formatDate = (d: string | Date) => {
+    const s = typeof d === "string" ? d.slice(0, 10) : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    return new Date(s + "T12:00:00").toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" });
+  };
 
   if (isLoading) {
     return (

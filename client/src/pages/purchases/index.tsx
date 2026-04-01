@@ -12,15 +12,20 @@ import { Plus, ShoppingCart, Calendar, ChevronRight } from "lucide-react";
 import type { Purchase } from "@shared/schema";
 
 export default function PurchasesPage() {
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  });
 
   const { data: purchases, isLoading } = useQuery<(Purchase & { itemCount: number })[]>({
     queryKey: ["/api/purchases", date],
     queryFn: () => apiRequest("GET", `/api/purchases?date=${date}`).then((r) => r.json()),
   });
 
-  const formatDate = (d: string | Date) =>
-    new Date(d).toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
+  const formatDate = (d: string | Date) => {
+    const s = typeof d === "string" ? d.slice(0, 10) : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    return new Date(s + "T12:00:00").toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
+  };
 
   const formatDateLong = (d: string) => {
     const [y, m, day] = d.split("-").map(Number);

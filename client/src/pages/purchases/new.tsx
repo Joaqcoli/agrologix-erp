@@ -35,6 +35,11 @@ const BASE_UNIT_OPTIONS = [
 
 const PACKAGE_UNIT_SET = new Set(["CAJON", "BOLSA", "BANDEJA"]);
 
+function todayLocal() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
 type PurchaseItem = {
   productId: number;
   productSearch: string;
@@ -106,7 +111,7 @@ export default function NewPurchasePage() {
   const [folio, setFolio] = useState("");
   const [supplierId, setSupplierId] = useState<number | null>(null);
   const [supplierName, setSupplierName] = useState("");  // fallback text
-  const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().slice(0, 10));
+  const [purchaseDate, setPurchaseDate] = useState(todayLocal);
   const [paymentMethod, setPaymentMethod] = useState("cuenta_corriente");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<PurchaseItem[]>([{

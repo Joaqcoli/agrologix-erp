@@ -39,7 +39,10 @@ export default function NewOrderPage() {
   const [, setLocation] = useLocation();
 
   const [customerId, setCustomerId] = useState<number>(0);
-  const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10));
+  const [orderDate, setOrderDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  });
   const [notes, setNotes] = useState("");
   const [lowMarginConfirmed, setLowMarginConfirmed] = useState(false);
   const [items, setItems] = useState<OrderItem[]>([{ productId: 0, quantity: "", unit: "KG", pricePerUnit: "" }]);

@@ -26,6 +26,11 @@ const UNIT_OPTIONS = [
 ] as const;
 
 const PACKAGE_UNIT_SET = new Set(["CAJON", "BOLSA", "BANDEJA"]);
+
+function todayLocal() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
 const isPackageUnit = (unit: string) => PACKAGE_UNIT_SET.has(unit);
 const labelFor = (unit: string) => UNIT_OPTIONS.find((u) => u.value === unit)?.label ?? unit;
 
@@ -43,7 +48,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
   const [, setLocation] = useLocation();
 
   const [supplierName, setSupplierName] = useState("");
-  const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().slice(0, 10));
+  const [purchaseDate, setPurchaseDate] = useState(todayLocal);
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<PurchaseItem[]>([{ productId: 0, quantity: "", unit: "KG", costPerUnit: "", weightPerPackage: "", baseUnit: "KG" }]);
   const [initialized, setInitialized] = useState(false);
@@ -57,7 +62,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
   useEffect(() => {
     if (purchase && !initialized) {
       setSupplierName(purchase.supplierName ?? "");
-      setPurchaseDate(purchase.purchaseDate ? new Date(purchase.purchaseDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10));
+      setPurchaseDate(purchase.purchaseDate ? String(purchase.purchaseDate).slice(0, 10) : todayLocal());
       setNotes(purchase.notes ?? "");
       if (purchase.items?.length) {
         setItems(purchase.items.map((item: any) => {
