@@ -153,25 +153,36 @@ export default function PurchaseDetailPage({ id }: { id: number }) {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground truncate">{item.product?.name}</p>
                     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-0.5">
-                      {item.purchaseUnit && item.weightPerPackage ? (
-                        <>
-                          <span className="text-xs text-muted-foreground">
-                            {parseFloat(item.purchaseQty ?? item.quantity).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {UNIT_LABELS[item.purchaseUnit] ?? item.purchaseUnit.toUpperCase()}
-                            {" × "}{parseFloat(item.weightPerPackage).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {UNIT_LABELS[item.unit] ?? item.unit.toUpperCase()}
-                            {" = "}<span className="font-medium text-foreground">{parseFloat(item.quantity).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {UNIT_LABELS[item.unit] ?? item.unit.toUpperCase()}</span>
-                            {" a $"}{parseFloat(item.costPerUnit).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/{UNIT_LABELS[item.unit] ?? item.unit}
-                          </span>
-                          {item.emptyCost && parseFloat(item.emptyCost) > 0 && (() => {
-                            const pkgQty = parseFloat(item.purchaseQty ?? item.quantity);
-                            const ec = parseFloat(item.emptyCost);
-                            return (
+                      {item.purchaseUnit && item.purchaseQty ? (() => {
+                        const pkgQty = parseFloat(item.purchaseQty);
+                        const pkgLabel = UNIT_LABELS[item.purchaseUnit] ?? item.purchaseUnit.toUpperCase();
+                        // Precio por unidad de envase: usar costPerPurchaseUnit si existe,
+                        // sino reconstruir desde costPerUnit × weightPerPackage (compras antiguas).
+                        const costPerPkg = item.costPerPurchaseUnit
+                          ? parseFloat(item.costPerPurchaseUnit)
+                          : item.weightPerPackage
+                            ? Math.round(parseFloat(item.costPerUnit) * parseFloat(item.weightPerPackage) * 100) / 100
+                            : parseFloat(item.costPerUnit);
+                        const ec = item.emptyCost ? parseFloat(item.emptyCost) : 0;
+                        return (
+                          <>
+                            <span className="text-xs text-muted-foreground">
+                              {pkgQty.toLocaleString("es-MX", { maximumFractionDigits: 4 })} {pkgLabel}
+                              {" × $"}{costPerPkg.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/{pkgLabel}
+                              {item.weightPerPackage ? (
+                                <span className="text-muted-foreground/60 ml-1">
+                                  ({parseFloat(item.weightPerPackage).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {UNIT_LABELS[item.unit] ?? item.unit.toUpperCase()}/{pkgLabel})
+                                </span>
+                              ) : null}
+                            </span>
+                            {ec > 0 && (
                               <span className="text-xs text-amber-600 dark:text-amber-400 block mt-0.5">
-                                + vacío ${ec.toLocaleString("es-MX")}/{UNIT_LABELS[item.purchaseUnit] ?? item.purchaseUnit} × {pkgQty.toLocaleString("es-MX", { maximumFractionDigits: 0 })} = ${(ec * pkgQty).toLocaleString("es-MX", { minimumFractionDigits: 0 })} total vacíos
+                                + vacío ${ec.toLocaleString("es-MX")}/{pkgLabel} × {pkgQty.toLocaleString("es-MX", { maximumFractionDigits: 0 })} = ${(ec * pkgQty).toLocaleString("es-MX", { minimumFractionDigits: 0 })} total vacíos
                               </span>
-                            );
-                          })()}
-                        </>
-                      ) : (
+                            )}
+                          </>
+                        );
+                      })() : (
                         <>
                           <span className="text-xs text-muted-foreground">
                             {parseFloat(item.quantity).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {UNIT_LABELS[item.unit] ?? item.unit.toUpperCase()}

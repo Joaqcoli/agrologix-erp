@@ -267,6 +267,7 @@ export const storage = {
           ...(item.purchaseUnit ? { purchaseUnit: item.purchaseUnit as any } : {}),
           ...(item.weightPerPackage ? { weightPerPackage: item.weightPerPackage } : {}),
           ...(item.emptyCost && parseFloat(item.emptyCost) > 0 ? { emptyCost: item.emptyCost } : {}),
+          ...(item.costPerPurchaseUnit ? { costPerPurchaseUnit: item.costPerPurchaseUnit } : {}),
         }))
       );
 
@@ -534,7 +535,7 @@ export const storage = {
     supplierName: string;
     purchaseDate: Date;
     notes?: string;
-    items: { productId: number; quantity: string; unit: "KG" | "UNIDAD" | "CAJON" | "BOLSA" | "ATADO" | "MAPLE" | "BANDEJA"; costPerUnit: string; costPerPurchaseUnit?: string; purchaseQty?: string }[];
+    items: { productId: number; quantity: string; unit: "KG" | "UNIDAD" | "CAJON" | "BOLSA" | "ATADO" | "MAPLE" | "BANDEJA"; costPerUnit: string; costPerPurchaseUnit?: string; purchaseQty?: string; purchaseUnit?: string; weightPerPackage?: string }[];
   }): Promise<Purchase> {
     return db.transaction(async (tx) => {
       const purchaseDateStr = data.purchaseDate.toISOString().slice(0, 10);
@@ -645,6 +646,10 @@ export const storage = {
           unit: item.unit,
           costPerUnit: item.costPerUnit,
           subtotal: item.subtotal,
+          ...(item.purchaseQty ? { purchaseQty: item.purchaseQty } : {}),
+          ...(item.purchaseUnit ? { purchaseUnit: item.purchaseUnit as any } : {}),
+          ...(item.weightPerPackage ? { weightPerPackage: item.weightPerPackage } : {}),
+          ...(item.costPerPurchaseUnit ? { costPerPurchaseUnit: item.costPerPurchaseUnit } : {}),
         }))
       );
 

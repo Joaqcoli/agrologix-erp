@@ -74,7 +74,9 @@ export default function EditPurchasePage({ id }: { id: number }) {
               ? String(parseFloat(item.purchaseQty ?? item.quantity))
               : String(parseFloat(item.quantity)),
             unit: isPackage ? item.purchaseUnit : item.unit,
-            costPerUnit: isPackage && wpp > 0
+            costPerUnit: item.costPerPurchaseUnit
+              ? String(parseFloat(item.costPerPurchaseUnit))
+              : isPackage && wpp > 0
               ? String(Math.round(parseFloat(item.costPerUnit) * wpp * 100) / 100)
               : String(Math.round(parseFloat(item.costPerUnit) * 100) / 100),
             weightPerPackage: item.weightPerPackage ? String(parseFloat(item.weightPerPackage)) : "",
@@ -175,6 +177,8 @@ export default function EditPurchasePage({ id }: { id: number }) {
             costPerUnit: baseCost,
             costPerPurchaseUnit: parseFloat(i.costPerUnit).toFixed(2),
             purchaseQty: parseFloat(i.quantity).toFixed(4),
+            purchaseUnit: i.unit,
+            weightPerPackage: i.weightPerPackage,
           };
         }
         return {

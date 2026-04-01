@@ -107,6 +107,7 @@ export const purchaseItems = pgTable("purchase_items", {
   purchaseUnit: unitEnum("purchase_unit"),
   weightPerPackage: numeric("weight_per_package", { precision: 12, scale: 4 }),
   emptyCost: numeric("empty_cost", { precision: 12, scale: 4 }).default("0"),
+  costPerPurchaseUnit: numeric("cost_per_purchase_unit", { precision: 12, scale: 2 }),
 });
 
 export const stockMovements = pgTable("stock_movements", {
@@ -255,6 +256,7 @@ export const insertPurchaseSchema = createInsertSchema(purchases).omit({ id: tru
     purchaseUnit: z.enum(["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"]).optional(),
     weightPerPackage: z.string().optional(),
     emptyCost: z.string().optional(),
+    costPerPurchaseUnit: z.string().optional(),
   })).min(1, "Must have at least one item"),
 });
 export const insertOrderSchema = z.object({

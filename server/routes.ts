@@ -296,6 +296,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           quantity: z.string(),
           unit: z.enum(["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"]),
           costPerUnit: z.string(),
+          costPerPurchaseUnit: z.string().optional(),
+          purchaseQty: z.string().optional(),
+          purchaseUnit: z.enum(["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"]).optional(),
+          weightPerPackage: z.string().optional(),
         })).min(1),
       });
       const data = schema.parse(req.body);
