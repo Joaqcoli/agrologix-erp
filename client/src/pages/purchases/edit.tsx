@@ -169,7 +169,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
           const baseQty = (parseFloat(i.quantity) * wpp).toFixed(4);
           const baseCost = (parseFloat(i.costPerUnit) / wpp).toFixed(4);
           return {
-            productId: i.productId,
+            productId: Number(i.productId),
             quantity: baseQty,
             unit: i.baseUnit || "KG",
             costPerUnit: baseCost,
@@ -178,7 +178,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
           };
         }
         return {
-          productId: i.productId,
+          productId: Number(i.productId),
           quantity: parseFloat(i.quantity).toFixed(4),
           unit: i.unit,
           costPerUnit: parseFloat(i.costPerUnit).toFixed(4),
