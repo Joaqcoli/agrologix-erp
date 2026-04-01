@@ -159,7 +159,7 @@ export default function PurchaseDetailPage({ id }: { id: number }) {
                             {parseFloat(item.purchaseQty ?? item.quantity).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {UNIT_LABELS[item.purchaseUnit] ?? item.purchaseUnit.toUpperCase()}
                             {" × "}{parseFloat(item.weightPerPackage).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {UNIT_LABELS[item.unit] ?? item.unit.toUpperCase()}
                             {" = "}<span className="font-medium text-foreground">{parseFloat(item.quantity).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {UNIT_LABELS[item.unit] ?? item.unit.toUpperCase()}</span>
-                            {" a $"}{parseFloat(item.costPerUnit).toLocaleString("es-MX", { minimumFractionDigits: 2 })}/{UNIT_LABELS[item.unit] ?? item.unit}
+                            {" a $"}{parseFloat(item.costPerUnit).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/{UNIT_LABELS[item.unit] ?? item.unit}
                           </span>
                           {item.emptyCost && parseFloat(item.emptyCost) > 0 && (() => {
                             const pkgQty = parseFloat(item.purchaseQty ?? item.quantity);
@@ -177,7 +177,7 @@ export default function PurchaseDetailPage({ id }: { id: number }) {
                             {parseFloat(item.quantity).toLocaleString("es-MX", { maximumFractionDigits: 4 })} {UNIT_LABELS[item.unit] ?? item.unit.toUpperCase()}
                           </span>
                           <span className="text-xs text-muted-foreground">
-                            × ${parseFloat(item.costPerUnit).toLocaleString("es-MX", { minimumFractionDigits: 2 })}/u
+                            × ${parseFloat(item.costPerUnit).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/u
                           </span>
                         </>
                       )}

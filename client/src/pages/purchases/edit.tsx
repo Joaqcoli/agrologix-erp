@@ -173,6 +173,8 @@ export default function EditPurchasePage({ id }: { id: number }) {
             quantity: baseQty,
             unit: i.baseUnit || "KG",
             costPerUnit: baseCost,
+            costPerPurchaseUnit: parseFloat(i.costPerUnit).toFixed(2),
+            purchaseQty: parseFloat(i.quantity).toFixed(4),
           };
         }
         return {

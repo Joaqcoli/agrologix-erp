@@ -201,6 +201,7 @@ export const storage = {
       quantity: string;
       unit: string;
       costPerUnit: string;
+      costPerPurchaseUnit?: string;
       purchaseQty?: string;
       purchaseUnit?: string;
       weightPerPackage?: string;
@@ -211,7 +212,11 @@ export const storage = {
     let total = 0;
     let totalEmptyCost = 0;
     const itemsWithSubtotal = data.items.map((item) => {
-      const subtotal = parseFloat(item.quantity) * parseFloat(item.costPerUnit);
+      // Use original purchase-unit price when available to avoid floating-point
+      // accumulation errors from costPerBase × totalBaseQty.
+      const subtotal = item.costPerPurchaseUnit && item.purchaseQty
+        ? Math.round(parseFloat(item.purchaseQty) * parseFloat(item.costPerPurchaseUnit) * 100) / 100
+        : Math.round(parseFloat(item.quantity) * parseFloat(item.costPerUnit) * 100) / 100;
       total += subtotal;
       const emptyCost = parseFloat(item.emptyCost ?? "0") || 0;
       const emptyQty = item.purchaseQty ? parseFloat(item.purchaseQty) : parseFloat(item.quantity);
@@ -529,7 +534,7 @@ export const storage = {
     supplierName: string;
     purchaseDate: Date;
     notes?: string;
-    items: { productId: number; quantity: string; unit: "KG" | "UNIDAD" | "CAJON" | "BOLSA" | "ATADO" | "MAPLE" | "BANDEJA"; costPerUnit: string }[];
+    items: { productId: number; quantity: string; unit: "KG" | "UNIDAD" | "CAJON" | "BOLSA" | "ATADO" | "MAPLE" | "BANDEJA"; costPerUnit: string; costPerPurchaseUnit?: string; purchaseQty?: string }[];
   }): Promise<Purchase> {
     return db.transaction(async (tx) => {
       const purchaseDateStr = data.purchaseDate.toISOString().slice(0, 10);
@@ -580,7 +585,9 @@ export const storage = {
       // ── PHASE 2: Aplicar nuevos items ─────────────────────────────────────────
       let total = 0;
       const itemsWithSubtotal = data.items.map((item) => {
-        const subtotal = Number(item.quantity) * Number(item.costPerUnit);
+        const subtotal = item.costPerPurchaseUnit && item.purchaseQty
+          ? Math.round(Number(item.purchaseQty) * Number(item.costPerPurchaseUnit) * 100) / 100
+          : Math.round(Number(item.quantity) * Number(item.costPerUnit) * 100) / 100;
         total += subtotal;
         return { ...item, subtotal: subtotal.toFixed(2) };
       });
