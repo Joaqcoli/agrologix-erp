@@ -66,6 +66,13 @@ interface ParsedOpeningBalance {
   amount: number;
 }
 
+interface ParsedHistoricalOrder {
+  customerName: string;
+  date: string;       // "2026-01-31" / "2026-02-28" / "2026-03-31"
+  amount: number;     // facturación del mes
+  monthCode: string;  // "ENE" | "FEB" | "MAR"
+}
+
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
 // Nombres a saltear en hojas CC (filas de resumen / totales / inactivos)
@@ -74,7 +81,7 @@ const CC_SKIP_NAMES = [
   "1° SEMANA", "2° SEMANA", "3° SEMANA", "4° SEMANA", "5° SEMANA",
   "VENTA DEL MES", "PROMEDIO VENTA X DIA", "PROMEDIO GCIA X DIA",
   "VENTA ACUMULADA", "GANANCIA ACUMULADA",
-  "ALUMNI", "ROSSO RISTORANTE", "NORTH SIDE", "ONNEG",
+  "ROSSO RISTORANTE", "NORTH SIDE",
   "LAS BRISAS", "HOWARD JOHNSON", "AL ESTRIBO",
 ];
 
@@ -115,8 +122,9 @@ const CLIENT_ALIASES: Record<string, string> = {
   //  este alias normaliza el nombre del único colegio que se creará nuevo)
   "COLEGIO ST CATHERINES MOORLANDS - CARBAJAL 3250": "COLEGIO ST CATHERINES MOORLANDS",
   // ── CC sheets: filas especiales ──────────────────────────────────────────────
-  "COLEGIOS":   "BLACK POT",       // fila resumen BLACK POT en hojas CC
+  "COLEGIOS":    "BLACK POT",      // fila resumen BLACK POT en hojas CC
   "ST CATERING": "S&T CATERING",  // variante sin ampersand
+  "A.U.P.A.":   "AUPA",           // Excel usa puntos; DB tiene "AUPA" (id=66)
 };
 
 const MONTH_MAP: Record<string, number> = {
@@ -216,13 +224,15 @@ function matchBlackPotChild(excelName: string): { id: number; name: string } | n
 }
 
 // ─── Contadores ───────────────────────────────────────────────────────────────
-let ordersCreated   = 0;
-let ordersSkipped   = 0;
+let ordersCreated    = 0;
+let ordersSkipped    = 0;
 let customersCreated = 0;
 let productsCreated  = 0;
 let paymentsCreated  = 0;
 let paymentsSkipped  = 0;
 let balancesUpdated  = 0;
+let histOrdersCreated = 0;
+let histOrdersSkipped = 0;
 const warnings: string[] = [];
 const errors:   string[] = [];
 
@@ -423,26 +433,39 @@ function parseSheet(sheet: XLSX.WorkSheet, sheetDate: string): ParsedBlock[] {
  *   fila 2+:      datos
  *
  * Solo de ENERO extrae opening_balance (col B = saldo diciembre).
- * De todos los meses extrae cobranza (col D) y retenciones (col E).
+ * De todos los meses extrae cobranza (col D), retenciones (col E)
+ * y facturación histórica (col C).
  */
+
+const MONTH_CODES: Record<number, string> = {
+  1: "ENE", 2: "FEB", 3: "MAR", 4: "ABR",
+};
+
 function parseCCSheet(
   sheet: XLSX.WorkSheet,
   monthNum: number,
   year: number,
   isFirstMonth: boolean,
-): { payments: ParsedPayment[]; openingBalances: ParsedOpeningBalance[] } {
+): {
+  payments: ParsedPayment[];
+  openingBalances: ParsedOpeningBalance[];
+  historicalOrders: ParsedHistoricalOrder[];
+} {
   const range = XLSX.utils.decode_range(sheet["!ref"] ?? "A1:A1");
   const maxRow = range.e.r;
   const payments: ParsedPayment[] = [];
   const openingBalances: ParsedOpeningBalance[] = [];
+  const historicalOrders: ParsedHistoricalOrder[] = [];
 
-  // Fecha de cobranza: último día del mes (o corte para abril en progreso)
-  let cobranzaDate: string;
+  const monthCode = MONTH_CODES[monthNum] ?? String(monthNum);
+
+  // Fecha: último día del mes (o corte para abril en progreso)
+  let monthDate: string;
   if (monthNum === 4 && year === 2026) {
-    cobranzaDate = APRIL_CUT_DATE;
+    monthDate = APRIL_CUT_DATE;
   } else {
-    const lastDay = new Date(year, monthNum, 0); // day=0 → último día del mes anterior
-    cobranzaDate = lastDay.toISOString().slice(0, 10);
+    const lastDay = new Date(year, monthNum, 0);
+    monthDate = lastDay.toISOString().slice(0, 10);
   }
 
   for (let r = 1; r <= maxRow; r++) {
@@ -456,10 +479,11 @@ function parseCCSheet(
     if (/^(subtotal|cliente[s]?)\b/i.test(colA)) continue;
 
     const colB = cellNum(sheet, 1, r); // saldo anterior
+    const colC = cellNum(sheet, 2, r); // facturación
     const colD = cellNum(sheet, 3, r); // cobranza
     const colE = cellNum(sheet, 4, r); // retenciones
 
-    if (colB === 0 && colD === 0 && colE === 0) continue;
+    if (colB === 0 && colC === 0 && colD === 0 && colE === 0) continue;
 
     const customerName = colAUp;
 
@@ -468,10 +492,20 @@ function parseCCSheet(
       openingBalances.push({ customerName, amount: Math.abs(colB) });
     }
 
+    // Facturación histórica → pedido sintético
+    if (colC !== 0) {
+      historicalOrders.push({
+        customerName,
+        date: monthDate,
+        amount: Math.abs(colC),
+        monthCode,
+      });
+    }
+
     if (colD !== 0) {
       payments.push({
         customerName,
-        date: cobranzaDate,
+        date: monthDate,
         amount: Math.abs(colD),
         method: "TRANSFERENCIA",
         notes: "Cobranza",
@@ -481,7 +515,7 @@ function parseCCSheet(
     if (colE !== 0) {
       payments.push({
         customerName,
-        date: cobranzaDate,
+        date: monthDate,
         amount: Math.abs(colE),
         method: "RETENCION",
         notes: "Retención",
@@ -489,7 +523,7 @@ function parseCCSheet(
     }
   }
 
-  return { payments, openingBalances };
+  return { payments, openingBalances, historicalOrders };
 }
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
@@ -606,6 +640,93 @@ async function findOrCreateProduct(rawName: string): Promise<number> {
   const id = ins.rows[0].id;
   productCache.set(key, id);
   return id;
+}
+
+// ─── Importar pedido de facturación histórica ─────────────────────────────────
+let histProductId: number | null = null;
+
+async function getHistProduct(): Promise<number> {
+  if (histProductId !== null) return histProductId;
+  const res = await pool.query(
+    "SELECT id FROM products WHERE lower(trim(name)) = 'facturación histórica' LIMIT 1",
+  );
+  if (res.rows.length > 0) {
+    histProductId = res.rows[0].id;
+    return histProductId!;
+  }
+  if (DRY_RUN) {
+    histProductId = -9999;
+    return -9999;
+  }
+  const ins = await pool.query(
+    `INSERT INTO products (name, category, active, average_cost, current_stock)
+     VALUES ('FACTURACIÓN HISTÓRICA', 'Histórico', true, 0, 0) RETURNING id`,
+  );
+  histProductId = ins.rows[0].id;
+  console.log(`  ✓ Producto creado: "FACTURACIÓN HISTÓRICA" (id=${histProductId})`);
+  return histProductId!;
+}
+
+async function importHistoricalOrder(order: ParsedHistoricalOrder): Promise<void> {
+  const customerId = await findOrCreateCustomer(order.customerName, false, !CC_ONLY);
+  if (customerId === null) return;
+  if (customerId < 0 && DRY_RUN) {
+    console.log(
+      `  [DRY] HIST order: "${order.customerName}" ${order.date}  ` +
+      `total=$${order.amount.toLocaleString("es-AR")}  folio=PV-HIST-${order.monthCode}-${Math.abs(customerId)}`,
+    );
+    histOrdersCreated++;
+    return;
+  }
+
+  const folio = `PV-HIST-${order.monthCode}-${customerId}`;
+
+  if (!DRY_RUN) {
+    const dup = await pool.query(
+      "SELECT id FROM orders WHERE folio = $1 LIMIT 1",
+      [folio],
+    );
+    if (dup.rows.length > 0) {
+      histOrdersSkipped++;
+      return;
+    }
+  }
+
+  if (DRY_RUN) {
+    console.log(
+      `  [DRY] HIST order: "${order.customerName}" ${order.date}  ` +
+      `total=$${order.amount.toLocaleString("es-AR")}  folio=${folio}`,
+    );
+    histOrdersCreated++;
+    return;
+  }
+
+  const productId = await getHistProduct();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const orderRes = await client.query(
+      `INSERT INTO orders
+         (folio, customer_id, order_date, status, total, notes, created_by, approved_by, approved_at)
+       VALUES ($1, $2, $3, 'approved', $4, 'Facturación histórica importada', 1, 1, now())
+       RETURNING id`,
+      [folio, customerId, order.date, order.amount],
+    );
+    const orderId = orderRes.rows[0].id;
+    await client.query(
+      `INSERT INTO order_items
+         (order_id, product_id, quantity, unit, price_per_unit, subtotal, raw_product_name)
+       VALUES ($1, $2, 1, 'UNIDAD', $3, $3, 'FACTURACIÓN HISTÓRICA')`,
+      [orderId, productId > 0 ? productId : null, order.amount],
+    );
+    await client.query("COMMIT");
+    histOrdersCreated++;
+  } catch (e: any) {
+    await client.query("ROLLBACK");
+    errors.push(`HIST order "${order.customerName}" ${order.date}: ${e.message}`);
+  } finally {
+    client.release();
+  }
 }
 
 // ─── Importar un bloque de pedido ─────────────────────────────────────────────
@@ -753,11 +874,22 @@ async function main() {
 
   // En modo CC_ONLY: limpiar DB antes de reimportar
   if (CC_ONLY && !DRY_RUN) {
-    console.log("🗑  Limpiando pagos enero-marzo 2026...");
+    console.log("🗑  Limpiando datos enero-marzo 2026...");
     const del = await pool.query(
       "DELETE FROM payments WHERE date >= '2026-01-01' AND date < '2026-04-01'",
     );
     console.log(`   Pagos eliminados: ${del.rowCount}`);
+    // Eliminar pedidos históricos de ene-mar (order_items primero por FK)
+    const histIds = await pool.query(
+      `SELECT id FROM orders WHERE folio LIKE 'PV-HIST-%'
+       AND order_date >= '2026-01-01' AND order_date < '2026-04-01'`,
+    );
+    if (histIds.rows.length > 0) {
+      const ids = histIds.rows.map((r: any) => r.id);
+      await pool.query(`DELETE FROM order_items WHERE order_id = ANY($1::int[])`, [ids]);
+      await pool.query(`DELETE FROM orders WHERE id = ANY($1::int[])`, [ids]);
+      console.log(`   Pedidos históricos eliminados: ${ids.length}`);
+    }
     const rst = await pool.query("UPDATE customers SET opening_balance = 0");
     console.log(`   opening_balance reseteado en ${rst.rowCount} clientes\n`);
   }
@@ -776,8 +908,9 @@ async function main() {
       return monthOf(a) - monthOf(b);
     });
 
-  const allOpeningBalances: ParsedOpeningBalance[] = [];
-  const allCCPayments:      ParsedPayment[]         = [];
+  const allOpeningBalances:  ParsedOpeningBalance[]   = [];
+  const allCCPayments:       ParsedPayment[]           = [];
+  const allHistoricalOrders: ParsedHistoricalOrder[]   = [];
 
   for (let i = 0; i < ccSorted.length; i++) {
     const sheetName = ccSorted[i];
@@ -794,16 +927,18 @@ async function main() {
 
     const isFirstMonth = (i === 0); // ENERO → extrae opening_balance
     const sheet = workbook.Sheets[sheetName];
-    const { payments, openingBalances } = parseCCSheet(sheet, monthNum, 2026, isFirstMonth);
+    const { payments, openingBalances, historicalOrders } = parseCCSheet(sheet, monthNum, 2026, isFirstMonth);
 
     const monthName = Object.keys(MONTH_MAP).find((k) => MONTH_MAP[k] === monthNum) ?? String(monthNum);
     console.log(`💳 ${monthName}:`);
     console.log(`   Saldos iniciales : ${openingBalances.length}`);
     console.log(`   Pagos            : ${payments.filter((p) => p.method === "TRANSFERENCIA").length} cobranzas + ${payments.filter((p) => p.method === "RETENCION").length} retenciones`);
+    console.log(`   Facturación hist : ${historicalOrders.length} clientes`);
     console.log();
 
     allOpeningBalances.push(...openingBalances);
     allCCPayments.push(...payments);
+    allHistoricalOrders.push(...historicalOrders);
   }
 
   // ── Aplicar saldos iniciales ──
@@ -888,6 +1023,33 @@ async function main() {
   // ════════════════════════════════════════════════════════════
   let totalLines = 0;
 
+  // ── Agregar pedidos del mismo cliente+mes antes de importar ──
+  // (ocurre cuando dos filas del Excel mapean al mismo cliente DB)
+  const histMergeMap = new Map<string, ParsedHistoricalOrder>();
+  for (const ho of allHistoricalOrders) {
+    const aliased = (CLIENT_ALIASES[ho.customerName.toUpperCase()] ?? ho.customerName).toUpperCase();
+    const key = `${ho.date}__${aliased}`;
+    if (histMergeMap.has(key)) {
+      histMergeMap.get(key)!.amount += ho.amount;
+    } else {
+      histMergeMap.set(key, { ...ho, customerName: aliased });
+    }
+  }
+  const mergedHistOrders = Array.from(histMergeMap.values());
+  if (mergedHistOrders.length < allHistoricalOrders.length) {
+    console.log(`  (${allHistoricalOrders.length - mergedHistOrders.length} filas combinadas por cliente duplicado)\n`);
+  }
+
+  // ── Importar pedidos de facturación histórica ──
+  console.log(`\n🧾 Facturación histórica: ${mergedHistOrders.length} pedidos\n`);
+  for (const ho of mergedHistOrders) {
+    try {
+      await importHistoricalOrder(ho);
+    } catch (e: any) {
+      errors.push(`HIST "${ho.customerName}" ${ho.date}: ${e.message}`);
+    }
+  }
+
   if (CC_ONLY) {
     // Saltar pedidos de día en modo CC_ONLY
     console.log("\n(Modo CC_ONLY: hojas de pedidos omitidas)\n");
@@ -935,6 +1097,8 @@ async function main() {
   console.log(`  Saldos iniciales set   : ${balancesUpdated}`);
   console.log(`  Pagos insertados       : ${paymentsCreated}`);
   console.log(`  Pagos duplicados       : ${paymentsSkipped}`);
+  console.log(`  Pedidos históricos     : ${histOrdersCreated}`);
+  console.log(`  Pedidos hist. omitidos : ${histOrdersSkipped}`);
   console.log(`  Errores                : ${errors.length}`);
   console.log(`  Advertencias           : ${warnings.length}`);
 
