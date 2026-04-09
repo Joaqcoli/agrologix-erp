@@ -24,7 +24,8 @@ if (fs.existsSync(envPath)) {
 }
 
 // ─── Args ─────────────────────────────────────────────────────────────────────
-const DRY_RUN = process.argv.includes("--dry-run");
+const DRY_RUN  = process.argv.includes("--dry-run");
+const CC_ONLY  = process.argv.includes("--cc-only");
 const FILE_PATH = path.resolve(process.cwd(), "attached_assets/info 2026.xlsx");
 
 // ─── DB ───────────────────────────────────────────────────────────────────────
@@ -74,7 +75,7 @@ const CC_SKIP_NAMES = [
   "VENTA DEL MES", "PROMEDIO VENTA X DIA", "PROMEDIO GCIA X DIA",
   "VENTA ACUMULADA", "GANANCIA ACUMULADA",
   "ALUMNI", "ROSSO RISTORANTE", "NORTH SIDE", "ONNEG",
-  "LAS BRISAS", "HOWARD JOHNSON", "COLEGIOS", "AL ESTRIBO",
+  "LAS BRISAS", "HOWARD JOHNSON", "AL ESTRIBO",
 ];
 
 // Aliases para normalizar nombres de clientes entre hojas.
@@ -87,8 +88,13 @@ const CLIENT_ALIASES: Record<string, string> = {
   "PAULA CASEROS":      "PAULA CASERO",
   "FV S.A":             "FV",
   "FV S.A.":            "FV",
-  // ── Lusqtoff: CC tiene sufijo de dirección, DB/pedidos no ─────────────────
-  "LUSQTOFF - IRALA":   "LUSQTOFF",
+  // ── Lusqtoff: sedes en DB tienen prefijo "SEDE:" en col B del Excel ────────
+  // El parser ya construye "LUSQTOFF - IRALA" / "LUSQTOFF - MORENO" desde col B.
+  // CC usa "LUSQTOFF - IRALA" → mapear a la sede correcta en DB
+  "LUSQTOFF - IRALA":   "LUSQTOFF - SEDE IRALA",
+  "LUSQTOFF - MORENO":  "LUSQTOFF - SEDE MORENO",
+  // "LUSQTOFF" a secas (sin sede) → cliente padre
+  // no hay alias: si aparece solo, resuelve directamente a id=89
   // ── Universidad: pedidos dicen "DE MORENO", DB no ────────────────────────
   "UNIVERSIDAD DE MORENO": "UNIVERSIDAD MORENO",
   // ── Rakus: DB tiene "RAKUS CAFE", normalizar todas las variantes ──────────
@@ -108,6 +114,9 @@ const CLIENT_ALIASES: Record<string, string> = {
   // (los que ya se resuelven vía matchBlackPotChild() no necesitan alias;
   //  este alias normaliza el nombre del único colegio que se creará nuevo)
   "COLEGIO ST CATHERINES MOORLANDS - CARBAJAL 3250": "COLEGIO ST CATHERINES MOORLANDS",
+  // ── CC sheets: filas especiales ──────────────────────────────────────────────
+  "COLEGIOS":   "BLACK POT",       // fila resumen BLACK POT en hojas CC
+  "ST CATERING": "S&T CATERING",  // variante sin ampersand
 };
 
 const MONTH_MAP: Record<string, number> = {
@@ -499,10 +508,17 @@ function nextFolio(): string {
   return `PV-${String(folioCounter).padStart(5, "0")}`;
 }
 
-async function findOrCreateCustomer(name: string, hasIva: boolean): Promise<number> {
+/**
+ * Busca (y opcionalmente crea) un cliente por nombre.
+ * allowCreate=false → warn + return null si no se encuentra (usado en CC_ONLY).
+ */
+async function findOrCreateCustomer(
+  name: string,
+  hasIva: boolean,
+  allowCreate = true,
+): Promise<number | null> {
   const aliased = CLIENT_ALIASES[name.toUpperCase()] ?? name;
   if (aliased !== name) {
-    // log alias resolution only once per unique pair
     if (!customerCache.has(`__alias__${name.toLowerCase()}`)) {
       console.log(`  [alias] "${name}" → "${aliased}"`);
       customerCache.set(`__alias__${name.toLowerCase()}`, -999);
@@ -528,6 +544,11 @@ async function findOrCreateCustomer(name: string, hasIva: boolean): Promise<numb
     console.log(`  [bp]  "${name}" → "${bpMatch.name}" (sede de BLACK POT, id=${bpMatch.id})`);
     customerCache.set(key, bpMatch.id);
     return bpMatch.id;
+  }
+
+  if (!allowCreate) {
+    warnings.push(`[CC] Cliente no encontrado en DB (skipped): "${name}"`);
+    return null;
   }
 
   // ¿Es un hijo nuevo de BLACK POT?
@@ -589,7 +610,7 @@ async function findOrCreateProduct(rawName: string): Promise<number> {
 
 // ─── Importar un bloque de pedido ─────────────────────────────────────────────
 async function importBlock(block: ParsedBlock): Promise<void> {
-  const customerId = await findOrCreateCustomer(block.customerName, block.hasIva);
+  const customerId = await findOrCreateCustomer(block.customerName, block.hasIva, true);
 
   if (!DRY_RUN) {
     // Duplicado = mismo cliente + misma fecha + mismo remito (o ambos sin remito).
@@ -686,8 +707,12 @@ async function importBlock(block: ParsedBlock): Promise<void> {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
   console.log(`\n📂 Archivo : ${FILE_PATH}`);
-  if (DRY_RUN) {
+  if (DRY_RUN && CC_ONLY) {
+    console.log("🔍 MODO DRY-RUN + CC-ONLY — solo CC, sin tocar la DB\n");
+  } else if (DRY_RUN) {
     console.log("🔍 MODO DRY-RUN — no se tocará la DB\n");
+  } else if (CC_ONLY) {
+    console.log("♻️  MODO CC-ONLY — limpiar y reimportar pagos/balances enero-marzo\n");
   } else {
     console.log("⚠️  MODO REAL — se escribirá en la DB\n");
   }
@@ -726,16 +751,30 @@ async function main() {
   // ════════════════════════════════════════════════════════════
   console.log("══ CUENTAS CORRIENTES ══════════════════════════════\n");
 
-  // Ordenar por mes
-  const ccSorted = [...ccSheets].sort((a, b) => {
-    const monthOf = (name: string) => {
-      for (const [k, v] of Object.entries(MONTH_MAP)) {
-        if (name.toUpperCase().includes(k)) return v;
-      }
-      return 99;
-    };
-    return monthOf(a) - monthOf(b);
-  });
+  // En modo CC_ONLY: limpiar DB antes de reimportar
+  if (CC_ONLY && !DRY_RUN) {
+    console.log("🗑  Limpiando pagos enero-marzo 2026...");
+    const del = await pool.query(
+      "DELETE FROM payments WHERE date >= '2026-01-01' AND date < '2026-04-01'",
+    );
+    console.log(`   Pagos eliminados: ${del.rowCount}`);
+    const rst = await pool.query("UPDATE customers SET opening_balance = 0");
+    console.log(`   opening_balance reseteado en ${rst.rowCount} clientes\n`);
+  }
+
+  // Ordenar por mes; en CC_ONLY procesar solo ENERO-MARZO (no ABRIL)
+  const CC_MONTHS_ONLY = ["ENERO", "FEBRERO", "MARZO"];
+  const ccSorted = [...ccSheets]
+    .filter((n) => !CC_ONLY || CC_MONTHS_ONLY.some((m) => n.toUpperCase().includes(m)))
+    .sort((a, b) => {
+      const monthOf = (name: string) => {
+        for (const [k, v] of Object.entries(MONTH_MAP)) {
+          if (name.toUpperCase().includes(k)) return v;
+        }
+        return 99;
+      };
+      return monthOf(a) - monthOf(b);
+    });
 
   const allOpeningBalances: ParsedOpeningBalance[] = [];
   const allCCPayments:      ParsedPayment[]         = [];
@@ -770,13 +809,14 @@ async function main() {
   // ── Aplicar saldos iniciales ──
   console.log(`📊 Saldos iniciales (opening_balance de Diciembre 2025): ${allOpeningBalances.length}\n`);
   for (const ob of allOpeningBalances) {
-    let cid: number;
+    let cid: number | null;
     try {
-      cid = await findOrCreateCustomer(ob.customerName, false);
+      cid = await findOrCreateCustomer(ob.customerName, false, !CC_ONLY);
     } catch (e: any) {
       errors.push(`opening_balance "${ob.customerName}": ${e.message}`);
       continue;
     }
+    if (cid === null) continue;
 
     if (DRY_RUN) {
       console.log(`  [DRY] UPDATE opening_balance: "${ob.customerName}" = $${ob.amount.toLocaleString("es-AR")}`);
@@ -798,13 +838,14 @@ async function main() {
   // ── Aplicar pagos CC ──
   console.log(`\n💵 Pagos CC (cobranzas + retenciones): ${allCCPayments.length}\n`);
   for (const p of allCCPayments) {
-    let cid: number;
+    let cid: number | null;
     try {
-      cid = await findOrCreateCustomer(p.customerName, false);
+      cid = await findOrCreateCustomer(p.customerName, false, !CC_ONLY);
     } catch (e: any) {
       errors.push(`Pago CC "${p.customerName}": ${e.message}`);
       continue;
     }
+    if (cid === null) continue;
 
     if (DRY_RUN) {
       console.log(
@@ -845,9 +886,13 @@ async function main() {
   // ════════════════════════════════════════════════════════════
   // 2. PEDIDOS DE ABRIL
   // ════════════════════════════════════════════════════════════
-  console.log("\n══ PEDIDOS DE ABRIL ════════════════════════════════\n");
-
   let totalLines = 0;
+
+  if (CC_ONLY) {
+    // Saltar pedidos de día en modo CC_ONLY
+    console.log("\n(Modo CC_ONLY: hojas de pedidos omitidas)\n");
+  } else {
+  console.log("\n══ PEDIDOS DE ABRIL ════════════════════════════════\n");
 
   for (const sheetName of daySheets) {
     const sheetDate = parseDateFromSheetName(sheetName)!;
@@ -874,6 +919,7 @@ async function main() {
       }
     }
   }
+  } // end else (CC_ONLY)
 
   // ════════════════════════════════════════════════════════════
   // 3. RESUMEN
