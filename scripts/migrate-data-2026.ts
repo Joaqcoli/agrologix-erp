@@ -531,7 +531,7 @@ function parseCCSheet(
 async function initFolioCounter(): Promise<void> {
   const res = await pool.query(
     `SELECT COALESCE(MAX(CAST(REPLACE(folio,'PV-','') AS INTEGER)),0) AS max
-     FROM orders WHERE folio LIKE 'PV-%'`,
+     FROM orders WHERE folio ~ '^PV-\\d+$'`,
   );
   folioCounter = Number(res.rows[0].max);
   console.log(`  Folio counter iniciado en PV-${String(folioCounter).padStart(5, "0")}\n`);
@@ -642,6 +642,21 @@ async function findOrCreateProduct(rawName: string): Promise<number> {
   return id;
 }
 
+// ─── Cache has_iva por customer_id ────────────────────────────────────────────
+const customerHasIvaCache = new Map<number, boolean>();
+
+async function getCustomerHasIva(customerId: number): Promise<boolean> {
+  if (customerId < 0) return false; // ID ficticio en dry-run
+  if (customerHasIvaCache.has(customerId)) return customerHasIvaCache.get(customerId)!;
+  const res = await pool.query("SELECT has_iva FROM customers WHERE id = $1", [customerId]);
+  const v = res.rows[0]?.has_iva ?? false;
+  customerHasIvaCache.set(customerId, v);
+  return v;
+}
+
+// IVA rate del producto "FACTURACIÓN HISTÓRICA" (no es HUEVO → 10.5%)
+const HIST_IVA = 1.105;
+
 // ─── Importar pedido de facturación histórica ─────────────────────────────────
 let histProductId: number | null = null;
 
@@ -670,34 +685,37 @@ async function getHistProduct(): Promise<number> {
 async function importHistoricalOrder(order: ParsedHistoricalOrder): Promise<void> {
   const customerId = await findOrCreateCustomer(order.customerName, false, !CC_ONLY);
   if (customerId === null) return;
-  if (customerId < 0 && DRY_RUN) {
+
+  // Para clientes con has_iva=true, itemBilling() aplica ×1.105 sobre price_per_unit.
+  // El Excel ya incluye IVA → guardamos price_per_unit = amount / 1.105 para que
+  // la CC calcule correctamente: (amount/1.105) × 1.105 = amount.
+  // Para clientes sin IVA: price_per_unit = amount directamente.
+  const hasIva = customerId > 0 ? await getCustomerHasIva(customerId) : false;
+  const pricePerUnit = hasIva ? order.amount / HIST_IVA : order.amount;
+
+  const folio = customerId > 0
+    ? `PV-HIST-${order.monthCode}-${customerId}`
+    : `PV-HIST-${order.monthCode}-fake${Math.abs(customerId)}`;
+
+  const ivaNote = hasIva
+    ? `  [IVA adj: price_per_unit=$${pricePerUnit.toFixed(2)} → ×${HIST_IVA} = $${order.amount}]`
+    : "";
+
+  if (DRY_RUN) {
     console.log(
       `  [DRY] HIST order: "${order.customerName}" ${order.date}  ` +
-      `total=$${order.amount.toLocaleString("es-AR")}  folio=PV-HIST-${order.monthCode}-${Math.abs(customerId)}`,
+      `total=$${order.amount.toLocaleString("es-AR")}  folio=${folio}${ivaNote}`,
     );
     histOrdersCreated++;
     return;
   }
 
-  const folio = `PV-HIST-${order.monthCode}-${customerId}`;
-
-  if (!DRY_RUN) {
-    const dup = await pool.query(
-      "SELECT id FROM orders WHERE folio = $1 LIMIT 1",
-      [folio],
-    );
-    if (dup.rows.length > 0) {
-      histOrdersSkipped++;
-      return;
-    }
-  }
-
-  if (DRY_RUN) {
-    console.log(
-      `  [DRY] HIST order: "${order.customerName}" ${order.date}  ` +
-      `total=$${order.amount.toLocaleString("es-AR")}  folio=${folio}`,
-    );
-    histOrdersCreated++;
+  const dup = await pool.query(
+    "SELECT id FROM orders WHERE folio = $1 LIMIT 1",
+    [folio],
+  );
+  if (dup.rows.length > 0) {
+    histOrdersSkipped++;
     return;
   }
 
@@ -716,8 +734,8 @@ async function importHistoricalOrder(order: ParsedHistoricalOrder): Promise<void
     await client.query(
       `INSERT INTO order_items
          (order_id, product_id, quantity, unit, price_per_unit, subtotal, raw_product_name)
-       VALUES ($1, $2, 1, 'UNIDAD', $3, $3, 'FACTURACIÓN HISTÓRICA')`,
-      [orderId, productId > 0 ? productId : null, order.amount],
+       VALUES ($1, $2, 1, 'UNIDAD', $3, $4, 'FACTURACIÓN HISTÓRICA')`,
+      [orderId, productId > 0 ? productId : null, pricePerUnit, order.amount],
     );
     await client.query("COMMIT");
     histOrdersCreated++;
