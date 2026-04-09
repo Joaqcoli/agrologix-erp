@@ -2037,10 +2037,10 @@ export const storage = {
 
     // Get payments & withholdings in period
     const [paymentsInPeriod, paymentsBefore, withholdingsInPeriod, withholdingsBefore] = await Promise.all([
-      db.execute(drizzleSql`SELECT customer_id AS "customerId", SUM(amount)::text AS total FROM payments WHERE date >= ${startDate} AND date < ${endDate} GROUP BY customer_id`),
-      db.execute(drizzleSql`SELECT customer_id AS "customerId", SUM(amount)::text AS total FROM payments WHERE date < ${startDate} GROUP BY customer_id`),
-      db.execute(drizzleSql`SELECT customer_id AS "customerId", SUM(amount)::text AS total FROM withholdings WHERE date >= ${startDate} AND date < ${endDate} GROUP BY customer_id`),
-      db.execute(drizzleSql`SELECT customer_id AS "customerId", SUM(amount)::text AS total FROM withholdings WHERE date < ${startDate} GROUP BY customer_id`),
+      db.execute(drizzleSql`SELECT customer_id AS "customerId", SUM(amount)::text AS total FROM payments WHERE date >= ${startDate} AND date < ${endDate} AND method != 'RETENCION' GROUP BY customer_id`),
+      db.execute(drizzleSql`SELECT customer_id AS "customerId", SUM(amount)::text AS total FROM payments WHERE date < ${startDate} AND method != 'RETENCION' GROUP BY customer_id`),
+      db.execute(drizzleSql`SELECT customer_id AS "customerId", SUM(amount)::text AS total FROM payments WHERE date >= ${startDate} AND date < ${endDate} AND method = 'RETENCION' GROUP BY customer_id`),
+      db.execute(drizzleSql`SELECT customer_id AS "customerId", SUM(amount)::text AS total FROM payments WHERE date < ${startDate} AND method = 'RETENCION' GROUP BY customer_id`),
     ]);
 
     const toMap = (rows: any[]): Map<number, number> => {
@@ -2246,22 +2246,26 @@ export const storage = {
         FROM payments p
         WHERE p.customer_id = ANY(ARRAY[${idArr}]::int[])
           AND p.date >= '${startDate}' AND p.date < '${endDate}'
+          AND p.method != 'RETENCION'
         ORDER BY p.date DESC
       `)),
       db.execute(drizzleSql.raw(`
         SELECT * FROM payments
         WHERE customer_id = ANY(ARRAY[${idArr}]::int[])
           AND date < '${startDate}'
+          AND method != 'RETENCION'
       `)),
       db.execute(drizzleSql.raw(`
-        SELECT * FROM withholdings
+        SELECT * FROM payments
         WHERE customer_id = ANY(ARRAY[${idArr}]::int[])
           AND date >= '${startDate}' AND date < '${endDate}'
+          AND method = 'RETENCION'
       `)),
       db.execute(drizzleSql.raw(`
-        SELECT * FROM withholdings
+        SELECT * FROM payments
         WHERE customer_id = ANY(ARRAY[${idArr}]::int[])
           AND date < '${startDate}'
+          AND method = 'RETENCION'
       `)),
       db.execute(drizzleSql.raw(`
         SELECT o.id, o.folio, o.order_date::text AS "orderDate", o.total::text AS total,

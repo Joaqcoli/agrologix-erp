@@ -1,0 +1,912 @@
+/**
+ * migrate-data-2026.ts
+ *
+ * Importa datos históricos 2026 desde attached_assets/info 2026.xlsx
+ *
+ * Uso:
+ *   npx tsx scripts/migrate-data-2026.ts --dry-run   ← solo muestra qué haría
+ *   npx tsx scripts/migrate-data-2026.ts             ← ejecuta la migración
+ */
+
+import { createRequire } from "module";
+const XLSX: typeof import("xlsx") = createRequire(import.meta.url)("xlsx");
+import * as fs from "fs";
+import * as path from "path";
+import { Pool } from "pg";
+
+// ─── Cargar .env ──────────────────────────────────────────────────────────────
+const envPath = path.resolve(process.cwd(), ".env");
+if (fs.existsSync(envPath)) {
+  for (const line of fs.readFileSync(envPath, "utf8").split("\n")) {
+    const m = line.match(/^([^#=]+)=(.*)$/);
+    if (m) process.env[m[1].trim()] = m[2].trim();
+  }
+}
+
+// ─── Args ─────────────────────────────────────────────────────────────────────
+const DRY_RUN = process.argv.includes("--dry-run");
+const FILE_PATH = path.resolve(process.cwd(), "attached_assets/info 2026.xlsx");
+
+// ─── DB ───────────────────────────────────────────────────────────────────────
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL?.includes("supabase") ? { rejectUnauthorized: false } : undefined,
+});
+
+// ─── Tipos ────────────────────────────────────────────────────────────────────
+interface ParsedItem {
+  rawName: string;
+  quantity: number;
+  unit: string;
+  pricePerUnit: number;
+  subtotal: number;
+  costPerUnit: number;
+}
+
+interface ParsedBlock {
+  customerName: string;
+  remitoNum: string | null;
+  orderDate: string;       // ISO: "2026-04-01"
+  hasIva: boolean;
+  items: ParsedItem[];
+  blockTotal: number;
+}
+
+interface ParsedPayment {
+  customerName: string;
+  date: string;            // ISO: "2026-01-31"
+  amount: number;
+  method: string;          // TRANSFERENCIA | RETENCION
+  notes: string;
+}
+
+interface ParsedOpeningBalance {
+  customerName: string;
+  amount: number;
+}
+
+// ─── Constantes ───────────────────────────────────────────────────────────────
+
+// Nombres a saltear en hojas CC (filas de resumen / totales / inactivos)
+const CC_SKIP_NAMES = [
+  "CONTADO", "TOTAL", "FERIADO CANTINA",
+  "1° SEMANA", "2° SEMANA", "3° SEMANA", "4° SEMANA", "5° SEMANA",
+  "VENTA DEL MES", "PROMEDIO VENTA X DIA", "PROMEDIO GCIA X DIA",
+  "VENTA ACUMULADA", "GANANCIA ACUMULADA",
+  "ALUMNI", "ROSSO RISTORANTE", "NORTH SIDE", "ONNEG",
+  "LAS BRISAS", "HOWARD JOHNSON", "COLEGIOS", "AL ESTRIBO",
+];
+
+// Aliases para normalizar nombres de clientes entre hojas.
+// Clave = nombre en MAYÚSCULAS tal como aparece en el Excel.
+// Valor = nombre exacto en la DB (o nombre canónico a crear).
+const CLIENT_ALIASES: Record<string, string> = {
+  // ── Variantes generales ───────────────────────────────────────────────────
+  "MARQUESA":           "LA MARQUESA",
+  "PAULA":              "PAULA CASERO",
+  "PAULA CASEROS":      "PAULA CASERO",
+  "FV S.A":             "FV",
+  "FV S.A.":            "FV",
+  // ── Lusqtoff: CC tiene sufijo de dirección, DB/pedidos no ─────────────────
+  "LUSQTOFF - IRALA":   "LUSQTOFF",
+  // ── Universidad: pedidos dicen "DE MORENO", DB no ────────────────────────
+  "UNIVERSIDAD DE MORENO": "UNIVERSIDAD MORENO",
+  // ── Rakus: DB tiene "RAKUS CAFE", normalizar todas las variantes ──────────
+  "RAKUS":              "RAKUS CAFE",
+  "RAKUS CAFE - PADUA": "RAKUS CAFE",
+  // ── Catering (Excel dice solo "CATERING") ────────────────────────────────
+  "CATERING":           "S&T CATERING",
+  // ── Carlota: dos variantes en Excel → un solo cliente nuevo ──────────────
+  "CARLOTA VIANDAS":    "CARLOTA CARAF VIANDAS",
+  // ── Fabric: dos variantes en Excel → mismo local en DB ───────────────────
+  "FABRIC - MORENO":    "FABRIC SUSHI - GORRITI",
+  "FABRIC SUSHI":       "FABRIC SUSHI - GORRITI",
+  // ── Café Martínez: variantes de dirección en Excel → nombre canónico DB ──
+  "CAFE MARTINEZ - MORENO CENTRO":  "CAFE MARTINEZ - MORENO",
+  "CAFE MARTINEZ - MORENO GORRITI": "CAFE MARTINEZ - CAAMAÑO",
+  // ── Colegios BLACK POT: Excel lleva dirección, DB solo el nombre corto ────
+  // (los que ya se resuelven vía matchBlackPotChild() no necesitan alias;
+  //  este alias normaliza el nombre del único colegio que se creará nuevo)
+  "COLEGIO ST CATHERINES MOORLANDS - CARBAJAL 3250": "COLEGIO ST CATHERINES MOORLANDS",
+};
+
+const MONTH_MAP: Record<string, number> = {
+  ENERO: 1, FEBRERO: 2, MARZO: 3, ABRIL: 4,
+  MAYO: 5, JUNIO: 6, JULIO: 7, AGOSTO: 8,
+  SEPTIEMBRE: 9, OCTUBRE: 10, NOVIEMBRE: 11, DICIEMBRE: 12,
+};
+
+// Fecha tope para April en progreso (hoy)
+const APRIL_CUT_DATE = "2026-04-09";
+
+// Nombres canónicos de clientes nuevos que deben crearse como hijos de BLACK POT
+const BLACKPOT_NEW_CHILDREN = new Set([
+  "COLEGIO ST CATHERINES MOORLANDS",
+]);
+
+// ─── Caché de hijos de BLACK POT (cargado al inicio) ─────────────────────────
+let blackPotChildren: { id: number; name: string }[] = [];
+let blackPotParentId: number | null = null;
+
+async function initBlackPotChildren(): Promise<void> {
+  const parentRes = await pool.query(
+    "SELECT id FROM customers WHERE UPPER(trim(name)) = 'BLACK POT' LIMIT 1",
+  );
+  if (parentRes.rows.length === 0) {
+    console.log("  ⚠  Cliente BLACK POT no encontrado en DB — se omite resolución de sedes\n");
+    return;
+  }
+  const parentId = parentRes.rows[0].id;
+  blackPotParentId = parentId;
+  const childRes = await pool.query(
+    "SELECT id, name FROM customers WHERE parent_customer_id = $1 ORDER BY id",
+    [parentId],
+  );
+  blackPotChildren = childRes.rows;
+  console.log(`  ✓ BLACK POT (id=${parentId}): ${blackPotChildren.length} sedes cargadas`);
+  blackPotChildren.forEach((c) => console.log(`    id=${c.id}  "${c.name}"`));
+  console.log();
+}
+
+/**
+ * Intenta asociar un nombre del Excel con un hijo de BLACK POT en la DB.
+ *
+ * Estrategia (en orden de prioridad):
+ *  1. DB name es prefijo del Excel name  → "COLEGIO SJCB" ⊂ "COLEGIO SJCB - VIRREY DEL PINO"
+ *  2. Excel name (sin dirección) es prefijo del DB name → handles typos breves
+ *  3. Si hay múltiples candidatos con el mismo prefijo, desambigua por la
+ *     palabra de localización que aparece después de " | " en el nombre de DB
+ *  4. Palabras clave del DB name (no genéricas) todas presentes en Excel name
+ *     → "COLEGIO MASTER COLLAGE" ↔ "MASTER COLLAGE (OHHIGINS)"
+ */
+function matchBlackPotChild(excelName: string): { id: number; name: string } | null {
+  if (blackPotChildren.length === 0) return null;
+  const upper = excelName.toUpperCase().trim();
+
+  // 1. Exact match (handled earlier, but cheap check)
+  const exact = blackPotChildren.find((c) => c.name.toUpperCase() === upper);
+  if (exact) return exact;
+
+  // 2. DB name is a prefix of the Excel name
+  //    (e.g. DB="COLEGIO SJCB", Excel="COLEGIO SJCB - VIRREY DEL PINO 3299")
+  const prefixMatches = blackPotChildren.filter((c) => {
+    const db = c.name.toUpperCase();
+    return upper.startsWith(db + " ") || upper.startsWith(db + "-") || upper.startsWith(db + "|");
+  });
+  if (prefixMatches.length === 1) return prefixMatches[0];
+
+  // 3. Strip address from Excel name (before " - ") and try both-direction prefix
+  const stripped = upper.split(" - ")[0].trim();
+  const strippedMatches = blackPotChildren.filter((c) => {
+    const db = c.name.toUpperCase();
+    return db.startsWith(stripped) || stripped.startsWith(db);
+  });
+  if (strippedMatches.length === 1) return strippedMatches[0];
+
+  // 3b. Ambiguous: multiple DB names share the same prefix → disambiguate by
+  //     location keyword (word after " | " in DB name) found in full Excel name
+  if (strippedMatches.length > 1) {
+    const byLocation = strippedMatches.find((c) => {
+      const parts = c.name.toUpperCase().split(" | ");
+      if (parts.length < 2) return false;
+      const location = parts[parts.length - 1].trim();
+      return upper.includes(location);
+    });
+    if (byLocation) return byLocation;
+    return strippedMatches[0]; // fallback: first candidate
+  }
+
+  // 4. Significant-word overlap: all non-generic words of the DB name appear
+  //    in the Excel name (handles "MASTER COLLAGE (OHHIGINS)" ↔ "COLEGIO MASTER COLLAGE")
+  const COMMON = new Set(["COLEGIO", "SAN", "ST", "DE", "DEL", "LA", "LAS", "LOS", "EL"]);
+  const wordMatch = blackPotChildren.find((c) => {
+    const sig = c.name.toUpperCase().split(/\s+/).filter((w) => w.length > 3 && !COMMON.has(w));
+    return sig.length > 0 && sig.every((w) => upper.includes(w));
+  });
+  return wordMatch ?? null;
+}
+
+// ─── Contadores ───────────────────────────────────────────────────────────────
+let ordersCreated   = 0;
+let ordersSkipped   = 0;
+let customersCreated = 0;
+let productsCreated  = 0;
+let paymentsCreated  = 0;
+let paymentsSkipped  = 0;
+let balancesUpdated  = 0;
+const warnings: string[] = [];
+const errors:   string[] = [];
+
+// ─── Caché de clientes y productos ───────────────────────────────────────────
+const customerCache = new Map<string, number>();   // lower(name) → id
+const productCache  = new Map<string, number>();   // lower(name) → id
+let folioCounter = 0;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Convierte cualquier valor monetario a número */
+function parseMoney(raw: unknown): number {
+  if (raw === null || raw === undefined || raw === "") return 0;
+  const s = String(raw).replace(/\$/g, "").trim();
+  if (s === "-" || s === "$ -" || s === "$  -" || s === "") return 0;
+  // "52.000,00" (punto miles, coma decimal) → 52000
+  if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) {
+    return parseFloat(s.replace(/\./g, "").replace(",", "."));
+  }
+  const clean = s.replace(/,/g, "");
+  return parseFloat(clean) || 0;
+}
+
+/** Normaliza texto de unidad a valores aceptados por la DB */
+function normalizeUnit(raw: string): string {
+  const u = raw.trim().toUpperCase();
+  if (["CAJÓN", "CAJON", "CAJA", "CAJAS", "CAJONES"].includes(u)) return "CAJON";
+  if (["KG", "KGS", "KILO", "KILOS"].includes(u)) return "KG";
+  if (["BOLSA", "BOLSAS", "SACO", "SACOS"].includes(u)) return "BOLSA";
+  if (["UNIDAD", "UNIDADES", "UN", "UNI"].includes(u)) return "UNIDAD";
+  if (["ATADO", "ATADOS"].includes(u)) return "ATADO";
+  if (["LITRO", "LITROS", "LT", "LTS"].includes(u)) return "LITRO";
+  if (["TONELADA", "TON", "TONS"].includes(u)) return "TONELADA";
+  if (["MAPLE", "MAPLES"].includes(u)) return "MAPLE";
+  if (["BANDEJA", "BANDEJAS"].includes(u)) return "BANDEJA";
+  if (["PZ", "PZA", "PIEZA", "PIEZAS"].includes(u)) return "PZ";
+  return u;
+}
+
+/** "01-04-2026 " → "2026-04-01" */
+function parseDateFromSheetName(name: string): string | null {
+  const m = name.trim().match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (!m) return null;
+  return `${m[3]}-${m[2]}-${m[1]}`;
+}
+
+function cellStr(sheet: XLSX.WorkSheet, col: number, row: number): string {
+  const addr = XLSX.utils.encode_cell({ c: col, r: row });
+  const cell = sheet[addr];
+  if (!cell) return "";
+  return String(cell.v ?? "").trim();
+}
+
+function cellNum(sheet: XLSX.WorkSheet, col: number, row: number): number {
+  const addr = XLSX.utils.encode_cell({ c: col, r: row });
+  const cell = sheet[addr];
+  if (!cell) return 0;
+  if (typeof cell.v === "number") return cell.v;
+  return parseMoney(cell.v);
+}
+
+function isRowEmpty(sheet: XLSX.WorkSheet, row: number): boolean {
+  for (let c = 0; c <= 10; c++) {
+    const addr = XLSX.utils.encode_cell({ c, r: row });
+    if (sheet[addr] && String(sheet[addr].v ?? "").trim() !== "") return false;
+  }
+  return true;
+}
+
+// ─── Parser de hoja de día ────────────────────────────────────────────────────
+/**
+ * Estructura de cada bloque en hojas de día:
+ *   fila 1: col A = nombre cliente [+ " - dirección"]  col D = "rto: XX"  col E = fecha
+ *   fila 2: CANTIDAD | UNIDAD | PRODUCTO | PRECIO | TOTAL | TOTAL+IVA | … | COSTO
+ *   filas 3+: qty | unit | producto | precio | subtotal | … | costo
+ *   fila N: vacío o None,None,None,None,total_block
+ */
+function parseSheet(sheet: XLSX.WorkSheet, sheetDate: string): ParsedBlock[] {
+  const range = XLSX.utils.decode_range(sheet["!ref"] ?? "A1:A1");
+  const maxRow = range.e.r;
+  const blocks: ParsedBlock[] = [];
+  let r = 0;
+
+  while (r <= maxRow) {
+    const colA = cellStr(sheet, 0, r);
+    const colD = cellStr(sheet, 3, r); // formato habitual
+    const colE = cellStr(sheet, 4, r); // formato colegios
+
+    // Detectar encabezado de cliente: col A no vacío, no "CANTIDAD",
+    // y "rto" aparece en col D (clientes habituales) o col E (colegios)
+    const rtoCol   = /rto/i.test(colD) ? colD : /rto/i.test(colE) ? colE : "";
+    const isClientHeader =
+      colA !== "" &&
+      colA.toUpperCase() !== "CANTIDAD" &&
+      rtoCol !== "";
+
+    if (!isClientHeader) {
+      r++;
+      continue;
+    }
+
+    // Si col B contiene "SEDE: XXXX", construir nombre compuesto
+    // Ej. colA="LUSQTOFF"  colB="SEDE: IRALA"  → "LUSQTOFF - IRALA"
+    const colB = cellStr(sheet, 1, r);
+    const sedeMatch = colB.match(/^SEDE:\s*(.+)/i);
+    const customerName = sedeMatch
+      ? `${colA.trim()} - ${sedeMatch[1].trim()}`
+      : colA.trim();
+
+    const remitoMatch  = rtoCol.match(/rto\s*[:\-]?\s*(\S+)/i);
+    const remitoNum    = remitoMatch ? remitoMatch[1] : null;
+    r++;
+
+    // Buscar fila de títulos (contiene CANTIDAD en col A)
+    let titleRow = -1;
+    for (let t = r; t <= Math.min(r + 3, maxRow); t++) {
+      if (/cantidad/i.test(cellStr(sheet, 0, t))) {
+        titleRow = t;
+        break;
+      }
+    }
+    if (titleRow === -1) {
+      warnings.push(`[${sheetDate}] Sin fila de títulos para "${customerName}" (fila ${r + 1})`);
+      r++;
+      continue;
+    }
+
+    const hasTivaCol = /total.*iva/i.test(cellStr(sheet, 5, titleRow));
+    r = titleRow + 1;
+
+    const items: ParsedItem[] = [];
+    let blockTotal = 0;
+
+    while (r <= maxRow) {
+      if (isRowEmpty(sheet, r)) break;
+
+      const a = cellStr(sheet, 0, r); // cantidad
+      const b = cellStr(sheet, 1, r); // unidad
+      const c = cellStr(sheet, 2, r); // producto
+
+      // Fila de total del bloque
+      if (a === "" && cellNum(sheet, 4, r) !== 0 && c === "" && b === "") {
+        blockTotal = cellNum(sheet, 4, r);
+        r++;
+        continue;
+      }
+
+      // Fila de totales con texto "TOTAL / SUBTOTAL"
+      if (/^(total|subtotal|suma)/i.test(a)) {
+        blockTotal = cellNum(sheet, 4, r);
+        r++;
+        continue;
+      }
+
+      const qty = parseFloat(a.replace(",", "."));
+      if (isNaN(qty) || qty <= 0) {
+        r++;
+        continue;
+      }
+
+      // Sin nombre de producto → skip
+      if (c === "") {
+        r++;
+        continue;
+      }
+
+      items.push({
+        rawName:     c.trim(),
+        quantity:    qty,
+        unit:        normalizeUnit(b || "KG"),
+        pricePerUnit: cellNum(sheet, 3, r),   // col D = PRECIO
+        subtotal:    cellNum(sheet, 4, r),    // col E = TOTAL
+        costPerUnit: cellNum(sheet, 8, r),    // col I = COSTO
+      });
+      r++;
+    }
+
+    // Avanzar filas vacías entre bloques
+    while (r <= maxRow && isRowEmpty(sheet, r)) r++;
+
+    if (items.length === 0) {
+      warnings.push(`[${sheetDate}] "${customerName}" sin productos, bloque ignorado`);
+      continue;
+    }
+
+    if (blockTotal === 0) blockTotal = items.reduce((s, i) => s + i.subtotal, 0);
+
+    blocks.push({ customerName, remitoNum, orderDate: sheetDate, hasIva: hasTivaCol, items, blockTotal });
+  }
+
+  return blocks;
+}
+
+// ─── Parser de hoja CC ────────────────────────────────────────────────────────
+/**
+ * Estructura:
+ *   fila 1 (r=0): headers  A=CLIENTE  B=SALDOS_MES_ANT  C=FACTURACION  D=COBRANZA  E=RETENCIONES  F=SALDO
+ *   fila 2+:      datos
+ *
+ * Solo de ENERO extrae opening_balance (col B = saldo diciembre).
+ * De todos los meses extrae cobranza (col D) y retenciones (col E).
+ */
+function parseCCSheet(
+  sheet: XLSX.WorkSheet,
+  monthNum: number,
+  year: number,
+  isFirstMonth: boolean,
+): { payments: ParsedPayment[]; openingBalances: ParsedOpeningBalance[] } {
+  const range = XLSX.utils.decode_range(sheet["!ref"] ?? "A1:A1");
+  const maxRow = range.e.r;
+  const payments: ParsedPayment[] = [];
+  const openingBalances: ParsedOpeningBalance[] = [];
+
+  // Fecha de cobranza: último día del mes (o corte para abril en progreso)
+  let cobranzaDate: string;
+  if (monthNum === 4 && year === 2026) {
+    cobranzaDate = APRIL_CUT_DATE;
+  } else {
+    const lastDay = new Date(year, monthNum, 0); // day=0 → último día del mes anterior
+    cobranzaDate = lastDay.toISOString().slice(0, 10);
+  }
+
+  for (let r = 1; r <= maxRow; r++) {
+    const colA = cellStr(sheet, 0, r).trim();
+    if (!colA) continue;
+
+    const colAUp = colA.toUpperCase();
+
+    // Saltear filas de resumen / totales / clientes inactivos
+    if (CC_SKIP_NAMES.some((s) => colAUp.startsWith(s))) continue;
+    if (/^(subtotal|cliente[s]?)\b/i.test(colA)) continue;
+
+    const colB = cellNum(sheet, 1, r); // saldo anterior
+    const colD = cellNum(sheet, 3, r); // cobranza
+    const colE = cellNum(sheet, 4, r); // retenciones
+
+    if (colB === 0 && colD === 0 && colE === 0) continue;
+
+    const customerName = colAUp;
+
+    // Saldo inicial: solo de ENERO (saldo diciembre → opening_balance)
+    if (isFirstMonth && colB !== 0) {
+      openingBalances.push({ customerName, amount: Math.abs(colB) });
+    }
+
+    if (colD !== 0) {
+      payments.push({
+        customerName,
+        date: cobranzaDate,
+        amount: Math.abs(colD),
+        method: "TRANSFERENCIA",
+        notes: "Cobranza",
+      });
+    }
+
+    if (colE !== 0) {
+      payments.push({
+        customerName,
+        date: cobranzaDate,
+        amount: Math.abs(colE),
+        method: "RETENCION",
+        notes: "Retención",
+      });
+    }
+  }
+
+  return { payments, openingBalances };
+}
+
+// ─── DB helpers ───────────────────────────────────────────────────────────────
+
+async function initFolioCounter(): Promise<void> {
+  const res = await pool.query(
+    `SELECT COALESCE(MAX(CAST(REPLACE(folio,'PV-','') AS INTEGER)),0) AS max
+     FROM orders WHERE folio LIKE 'PV-%'`,
+  );
+  folioCounter = Number(res.rows[0].max);
+  console.log(`  Folio counter iniciado en PV-${String(folioCounter).padStart(5, "0")}\n`);
+}
+
+function nextFolio(): string {
+  folioCounter++;
+  return `PV-${String(folioCounter).padStart(5, "0")}`;
+}
+
+async function findOrCreateCustomer(name: string, hasIva: boolean): Promise<number> {
+  const aliased = CLIENT_ALIASES[name.toUpperCase()] ?? name;
+  if (aliased !== name) {
+    // log alias resolution only once per unique pair
+    if (!customerCache.has(`__alias__${name.toLowerCase()}`)) {
+      console.log(`  [alias] "${name}" → "${aliased}"`);
+      customerCache.set(`__alias__${name.toLowerCase()}`, -999);
+    }
+  }
+  name = aliased;
+  const key = name.toLowerCase().trim();
+  if (customerCache.has(key)) return customerCache.get(key)!;
+
+  const res = await pool.query(
+    "SELECT id FROM customers WHERE lower(trim(name)) = lower(trim($1)) LIMIT 1",
+    [name],
+  );
+  if (res.rows.length > 0) {
+    console.log(`  [ok]  "${name}" → id=${res.rows[0].id}`);
+    customerCache.set(key, res.rows[0].id);
+    return res.rows[0].id;
+  }
+
+  // Intentar resolución como sede de BLACK POT
+  const bpMatch = matchBlackPotChild(name);
+  if (bpMatch) {
+    console.log(`  [bp]  "${name}" → "${bpMatch.name}" (sede de BLACK POT, id=${bpMatch.id})`);
+    customerCache.set(key, bpMatch.id);
+    return bpMatch.id;
+  }
+
+  // ¿Es un hijo nuevo de BLACK POT?
+  const isBPChild = BLACKPOT_NEW_CHILDREN.has(name.toUpperCase());
+  const parentNote = isBPChild && blackPotParentId ? ` (hijo de BLACK POT id=${blackPotParentId})` : "";
+
+  warnings.push(`[NUEVO] Cliente no encontrado en DB: "${name}"${parentNote}`);
+  customersCreated++;
+
+  if (DRY_RUN) {
+    const fakeId = -(customerCache.size + 1);
+    customerCache.set(key, fakeId);
+    return fakeId;
+  }
+
+  const parentId = isBPChild ? blackPotParentId : null;
+  const ins = await pool.query(
+    `INSERT INTO customers (name, has_iva, bolsa_fv, cc_type, active, parent_customer_id)
+     VALUES ($1, $2, false, 'por_saldo', true, $3) RETURNING id`,
+    [name, hasIva, parentId],
+  );
+  const id = ins.rows[0].id;
+  customerCache.set(key, id);
+  console.log(`  ✓ Cliente creado: "${name}" (id=${id})${parentNote}`);
+  return id;
+}
+
+async function findOrCreateProduct(rawName: string): Promise<number> {
+  const key = rawName.toLowerCase().trim();
+  if (productCache.has(key)) return productCache.get(key)!;
+
+  const res = await pool.query(
+    "SELECT id FROM products WHERE lower(trim(name)) = lower(trim($1)) LIMIT 1",
+    [rawName],
+  );
+  if (res.rows.length > 0) {
+    productCache.set(key, res.rows[0].id);
+    return res.rows[0].id;
+  }
+
+  warnings.push(`Producto nuevo: "${rawName}"`);
+  productsCreated++;
+
+  if (DRY_RUN) {
+    const fakeId = -(productCache.size + 1);
+    productCache.set(key, fakeId);
+    return fakeId;
+  }
+
+  const ins = await pool.query(
+    `INSERT INTO products (name, category, active, average_cost, current_stock)
+     VALUES ($1, 'Verdura', true, 0, 0) RETURNING id`,
+    [rawName],
+  );
+  const id = ins.rows[0].id;
+  productCache.set(key, id);
+  return id;
+}
+
+// ─── Importar un bloque de pedido ─────────────────────────────────────────────
+async function importBlock(block: ParsedBlock): Promise<void> {
+  const customerId = await findOrCreateCustomer(block.customerName, block.hasIva);
+
+  if (!DRY_RUN) {
+    // Duplicado = mismo cliente + misma fecha + mismo remito (o ambos sin remito).
+    // Distinto remito el mismo día = pedidos diferentes → NO es duplicado.
+    const notesVal = block.remitoNum ? `Remito ${block.remitoNum}` : null;
+    const exists = await pool.query(
+      `SELECT id FROM orders
+       WHERE customer_id = $1
+         AND order_date::date = $2::date
+         AND notes IS NOT DISTINCT FROM $3
+       LIMIT 1`,
+      [customerId, block.orderDate, notesVal],
+    );
+    if (exists.rows.length > 0) {
+      ordersSkipped++;
+      warnings.push(
+        `Pedido duplicado: "${block.customerName}" el ${block.orderDate} remito=${block.remitoNum ?? "–"} (order id=${exists.rows[0].id})`,
+      );
+      return;
+    }
+  }
+
+  const total = block.blockTotal || block.items.reduce((s, i) => s + i.subtotal, 0);
+
+  if (DRY_RUN) {
+    console.log(
+      `  [DRY] Order: "${block.customerName}" ${block.orderDate}  ` +
+      `items=${block.items.length}  total=$${total.toFixed(0)}`,
+    );
+    ordersCreated++;
+    return;
+  }
+
+  // Insertar dentro de una transacción
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const folio = nextFolio();
+    const orderRes = await client.query(
+      `INSERT INTO orders
+         (folio, customer_id, order_date, status, total, notes, created_by, approved_by, approved_at)
+       VALUES ($1, $2, $3, 'approved', $4, $5, 1, 1, now())
+       RETURNING id`,
+      [
+        folio,
+        customerId,
+        block.orderDate,
+        total,
+        block.remitoNum ? `Remito ${block.remitoNum}` : null,
+      ],
+    );
+    const orderId = orderRes.rows[0].id;
+
+    for (const item of block.items) {
+      let productId: number;
+      try {
+        productId = await findOrCreateProduct(item.rawName);
+      } catch (e: any) {
+        errors.push(`${folio} "${block.customerName}" producto "${item.rawName}": ${e.message}`);
+        continue;
+      }
+
+      await client.query(
+        `INSERT INTO order_items
+           (order_id, product_id, quantity, unit, price_per_unit, cost_per_unit,
+            subtotal, raw_product_name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          orderId,
+          productId > 0 ? productId : null,
+          item.quantity,
+          item.unit,
+          item.pricePerUnit || null,
+          item.costPerUnit || 0,
+          item.subtotal,
+          item.rawName,
+        ],
+      );
+    }
+
+    await client.query("COMMIT");
+    ordersCreated++;
+  } catch (e: any) {
+    await client.query("ROLLBACK");
+    // devolver folio si se incrementó
+    folioCounter--;
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+async function main() {
+  console.log(`\n📂 Archivo : ${FILE_PATH}`);
+  if (DRY_RUN) {
+    console.log("🔍 MODO DRY-RUN — no se tocará la DB\n");
+  } else {
+    console.log("⚠️  MODO REAL — se escribirá en la DB\n");
+  }
+
+  // Verificar conexión
+  try {
+    await pool.query("SELECT 1");
+    console.log("✓ Conexión a DB OK\n");
+  } catch (e: any) {
+    console.error("✗ No se pudo conectar:", e.message);
+    process.exit(1);
+  }
+
+  // Cargar sedes de BLACK POT para resolución de colegios
+  await initBlackPotChildren();
+
+  // Inicializar folio counter solo en modo real
+  if (!DRY_RUN) {
+    await initFolioCounter();
+  }
+
+  const workbook = XLSX.readFile(FILE_PATH, { cellDates: false, raw: false });
+  const sheetNames = workbook.SheetNames;
+
+  // Separar hojas CC vs hojas de día
+  const ccSheets  = sheetNames.filter((n) => n.toUpperCase().includes("CUENTAS CORRIENTES"));
+  const daySheets = sheetNames.filter((n) => parseDateFromSheetName(n) !== null);
+
+  console.log(`📋 Hojas totales: ${sheetNames.length}`);
+  console.log(`   CC    : ${ccSheets.length} → ${ccSheets.join(" | ")}`);
+  console.log(`   Días  : ${daySheets.length} → ${daySheets.map((s) => s.trim()).join(" | ")}`);
+  console.log();
+
+  // ════════════════════════════════════════════════════════════
+  // 1. CUENTAS CORRIENTES
+  // ════════════════════════════════════════════════════════════
+  console.log("══ CUENTAS CORRIENTES ══════════════════════════════\n");
+
+  // Ordenar por mes
+  const ccSorted = [...ccSheets].sort((a, b) => {
+    const monthOf = (name: string) => {
+      for (const [k, v] of Object.entries(MONTH_MAP)) {
+        if (name.toUpperCase().includes(k)) return v;
+      }
+      return 99;
+    };
+    return monthOf(a) - monthOf(b);
+  });
+
+  const allOpeningBalances: ParsedOpeningBalance[] = [];
+  const allCCPayments:      ParsedPayment[]         = [];
+
+  for (let i = 0; i < ccSorted.length; i++) {
+    const sheetName = ccSorted[i];
+    const sheetUpper = sheetName.toUpperCase();
+
+    let monthNum = 0;
+    for (const [k, v] of Object.entries(MONTH_MAP)) {
+      if (sheetUpper.includes(k)) { monthNum = v; break; }
+    }
+    if (monthNum === 0) {
+      warnings.push(`CC: hoja "${sheetName}" sin mes reconocido, ignorada`);
+      continue;
+    }
+
+    const isFirstMonth = (i === 0); // ENERO → extrae opening_balance
+    const sheet = workbook.Sheets[sheetName];
+    const { payments, openingBalances } = parseCCSheet(sheet, monthNum, 2026, isFirstMonth);
+
+    const monthName = Object.keys(MONTH_MAP).find((k) => MONTH_MAP[k] === monthNum) ?? String(monthNum);
+    console.log(`💳 ${monthName}:`);
+    console.log(`   Saldos iniciales : ${openingBalances.length}`);
+    console.log(`   Pagos            : ${payments.filter((p) => p.method === "TRANSFERENCIA").length} cobranzas + ${payments.filter((p) => p.method === "RETENCION").length} retenciones`);
+    console.log();
+
+    allOpeningBalances.push(...openingBalances);
+    allCCPayments.push(...payments);
+  }
+
+  // ── Aplicar saldos iniciales ──
+  console.log(`📊 Saldos iniciales (opening_balance de Diciembre 2025): ${allOpeningBalances.length}\n`);
+  for (const ob of allOpeningBalances) {
+    let cid: number;
+    try {
+      cid = await findOrCreateCustomer(ob.customerName, false);
+    } catch (e: any) {
+      errors.push(`opening_balance "${ob.customerName}": ${e.message}`);
+      continue;
+    }
+
+    if (DRY_RUN) {
+      console.log(`  [DRY] UPDATE opening_balance: "${ob.customerName}" = $${ob.amount.toLocaleString("es-AR")}`);
+      balancesUpdated++;
+      continue;
+    }
+
+    try {
+      await pool.query(
+        "UPDATE customers SET opening_balance = $1 WHERE id = $2",
+        [ob.amount, cid],
+      );
+      balancesUpdated++;
+    } catch (e: any) {
+      errors.push(`opening_balance "${ob.customerName}": ${e.message}`);
+    }
+  }
+
+  // ── Aplicar pagos CC ──
+  console.log(`\n💵 Pagos CC (cobranzas + retenciones): ${allCCPayments.length}\n`);
+  for (const p of allCCPayments) {
+    let cid: number;
+    try {
+      cid = await findOrCreateCustomer(p.customerName, false);
+    } catch (e: any) {
+      errors.push(`Pago CC "${p.customerName}": ${e.message}`);
+      continue;
+    }
+
+    if (DRY_RUN) {
+      console.log(
+        `  [DRY] INSERT payment: "${p.customerName}" ${p.date}  ` +
+        `$${p.amount.toLocaleString("es-AR")}  ${p.method}`,
+      );
+      paymentsCreated++;
+      continue;
+    }
+
+    if (cid < 0) {
+      // ID ficticio de dry-run en cliente nuevo → skip real insert
+      paymentsCreated++;
+      continue;
+    }
+
+    // Evitar duplicados
+    const dup = await pool.query(
+      "SELECT id FROM payments WHERE customer_id=$1 AND date=$2 AND amount=$3 AND method=$4 LIMIT 1",
+      [cid, p.date, p.amount, p.method],
+    );
+    if (dup.rows.length > 0) {
+      paymentsSkipped++;
+      continue;
+    }
+
+    try {
+      await pool.query(
+        "INSERT INTO payments (customer_id, date, amount, method, notes, created_by) VALUES ($1,$2,$3,$4,$5,1)",
+        [cid, p.date, p.amount, p.method, p.notes || null],
+      );
+      paymentsCreated++;
+    } catch (e: any) {
+      errors.push(`Pago "${p.customerName}" ${p.date}: ${e.message}`);
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // 2. PEDIDOS DE ABRIL
+  // ════════════════════════════════════════════════════════════
+  console.log("\n══ PEDIDOS DE ABRIL ════════════════════════════════\n");
+
+  let totalLines = 0;
+
+  for (const sheetName of daySheets) {
+    const sheetDate = parseDateFromSheetName(sheetName)!;
+    const sheet = workbook.Sheets[sheetName];
+
+    let blocks: ParsedBlock[];
+    try {
+      blocks = parseSheet(sheet, sheetDate);
+    } catch (e: any) {
+      errors.push(`Hoja "${sheetName}": error al parsear — ${e.message}`);
+      continue;
+    }
+
+    const sheetLines = blocks.reduce((s, b) => s + b.items.length, 0);
+    totalLines += sheetLines;
+
+    console.log(`📅 ${sheetName.trim()}: ${blocks.length} clientes, ${sheetLines} líneas`);
+
+    for (const block of blocks) {
+      try {
+        await importBlock(block);
+      } catch (e: any) {
+        errors.push(`"${sheetName.trim()}" "${block.customerName}": ${e.message}`);
+      }
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // 3. RESUMEN
+  // ════════════════════════════════════════════════════════════
+  console.log("\n" + "═".repeat(55));
+  console.log(`📊 RESUMEN${DRY_RUN ? " (DRY-RUN)" : ""}`);
+  console.log("═".repeat(55));
+  console.log(`  Pedidos importados     : ${ordersCreated}`);
+  console.log(`  Pedidos omitidos       : ${ordersSkipped}  (ya existían)`);
+  console.log(`  Clientes nuevos        : ${customersCreated}`);
+  console.log(`  Productos nuevos       : ${productsCreated}`);
+  console.log(`  Líneas de pedido       : ${totalLines}`);
+  console.log(`  Saldos iniciales set   : ${balancesUpdated}`);
+  console.log(`  Pagos insertados       : ${paymentsCreated}`);
+  console.log(`  Pagos duplicados       : ${paymentsSkipped}`);
+  console.log(`  Errores                : ${errors.length}`);
+  console.log(`  Advertencias           : ${warnings.length}`);
+
+  if (warnings.length > 0) {
+    console.log("\n⚠️  ADVERTENCIAS:");
+    warnings.forEach((w) => console.log("  ⚠  " + w));
+  }
+
+  if (errors.length > 0) {
+    console.log("\n✗ ERRORES:");
+    errors.forEach((e) => console.log("  ✗  " + e));
+  }
+
+  console.log("═".repeat(55) + "\n");
+  await pool.end();
+}
+
+main().catch((e) => {
+  console.error("✗ Error fatal:", e.message, e.stack);
+  process.exit(1);
+});
