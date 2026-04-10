@@ -2757,35 +2757,84 @@ export const storage = {
     `);
 
     // 6) Deuda a proveedores (all-time)
+    // Agrego cada lado por separado para evitar join cartesiano
     const deudaRow = await db.execute(drizzleSql`
       SELECT
-        COALESCE(SUM(p.total::numeric), 0) - COALESCE(SUM(sp.amount::numeric), 0) AS deuda
+        COALESCE(SUM(comp.total_pendiente), 0)
+          - COALESCE(SUM(pag.total_pagado), 0) AS deuda
       FROM suppliers s
-      LEFT JOIN purchases p ON p.supplier_id = s.id
-      LEFT JOIN supplier_payments sp ON sp.supplier_id = s.id
+      LEFT JOIN (
+        SELECT supplier_id, SUM(total::numeric) AS total_pendiente
+        FROM purchases
+        WHERE is_paid = false OR payment_method = 'cuenta_corriente'
+        GROUP BY supplier_id
+      ) comp ON comp.supplier_id = s.id
+      LEFT JOIN (
+        SELECT supplier_id, SUM(amount::numeric) AS total_pagado
+        FROM supplier_payments
+        WHERE method != 'VALE'
+        GROUP BY supplier_id
+      ) pag ON pag.supplier_id = s.id
       WHERE s.active = true
     `);
 
     // 7) Deuda de clientes (all-time AR balance)
+    // Incluye: opening_balance + facturación con IVA - cobranza - retenciones
+    // Rollup: hijos acumulados en padre mediante COALESCE(parent_customer_id, id)
     const deudaClientesRow = await db.execute(drizzleSql`
-      SELECT COALESCE(SUM(GREATEST(0,
-        COALESCE(o.total_sum, 0) - COALESCE(p.paid_sum, 0) - COALESCE(w.with_sum, 0)
-      )), 0) AS deuda_clientes
-      FROM customers c
-      LEFT JOIN (
-        SELECT customer_id, SUM(total::numeric) AS total_sum
-        FROM orders WHERE status = 'approved'
-        GROUP BY customer_id
-      ) o ON o.customer_id = c.id
-      LEFT JOIN (
-        SELECT customer_id, SUM(amount::numeric) AS paid_sum
-        FROM payments GROUP BY customer_id
-      ) p ON p.customer_id = c.id
-      LEFT JOIN (
-        SELECT customer_id, SUM(amount::numeric) AS with_sum
-        FROM withholdings GROUP BY customer_id
-      ) w ON w.customer_id = c.id
-      WHERE c.active = true
+      WITH ventas_por_padre AS (
+        SELECT
+          COALESCE(c.parent_customer_id, c.id) AS parent_id,
+          SUM(
+            CASE
+              WHEN oi.price_per_unit::numeric = 0 THEN 0
+              WHEN c.has_iva = true AND (
+                p.name ILIKE '%huevo%' OR p.name ILIKE '%maple%' OR p.category ILIKE '%huevo%'
+              ) THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
+              WHEN c.has_iva = true
+              THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+              ELSE oi.quantity::numeric * oi.price_per_unit::numeric
+            END
+          ) AS facturacion
+        FROM orders o
+        JOIN customers c ON c.id = o.customer_id
+        JOIN order_items oi ON oi.order_id = o.id
+        LEFT JOIN products p ON p.id = oi.product_id
+        WHERE o.status = 'approved'
+        GROUP BY COALESCE(c.parent_customer_id, c.id)
+      ),
+      pagos_por_padre AS (
+        SELECT
+          COALESCE(c.parent_customer_id, c.id) AS parent_id,
+          SUM(CASE WHEN py.method != 'RETENCION' THEN py.amount::numeric ELSE 0 END) AS cobranza,
+          SUM(CASE WHEN py.method  = 'RETENCION' THEN py.amount::numeric ELSE 0 END) AS retenciones
+        FROM payments py
+        JOIN customers c ON c.id = py.customer_id
+        GROUP BY COALESCE(c.parent_customer_id, c.id)
+      ),
+      opening_por_padre AS (
+        SELECT
+          COALESCE(parent_customer_id, id) AS parent_id,
+          SUM(opening_balance::numeric) AS total_opening
+        FROM customers
+        WHERE active = true
+        GROUP BY COALESCE(parent_customer_id, id)
+      ),
+      saldos AS (
+        SELECT GREATEST(0,
+          COALESCE(ob.total_opening, 0)
+          + COALESCE(v.facturacion,  0)
+          - COALESCE(py.cobranza,    0)
+          - COALESCE(py.retenciones, 0)
+        ) AS saldo_positivo
+        FROM customers c
+        LEFT JOIN ventas_por_padre  v  ON v.parent_id  = c.id
+        LEFT JOIN pagos_por_padre   py ON py.parent_id = c.id
+        LEFT JOIN opening_por_padre ob ON ob.parent_id = c.id
+        WHERE c.active = true AND c.parent_customer_id IS NULL
+      )
+      SELECT COALESCE(SUM(saldo_positivo), 0) AS deuda_clientes
+      FROM saldos
     `);
 
     // 8) Stock valorizado actual (real-time, no date filter)
