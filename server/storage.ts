@@ -18,11 +18,14 @@ import { getHistoricalMonthStats, isHistoricalMonth } from "./historical-stats";
 // ─── CC Helpers ────────────────────────────────────────────────────────────────
 const IVA_HUEVO = 0.21;
 const IVA_DEFAULT = 0.105;
-function ivaRate(productName: string): number {
-  return productName.toUpperCase().includes("HUEVO") ? IVA_HUEVO : IVA_DEFAULT;
+function ivaRate(productName: string, productCategory?: string): number {
+  const n = productName.toUpperCase();
+  const cat = (productCategory ?? "").toUpperCase();
+  if (n.includes("HUEVO") || n.includes("MAPLE") || cat.includes("HUEVO")) return IVA_HUEVO;
+  return IVA_DEFAULT;
 }
 
-// Items enriched with product name for IVA computation
+// Items enriched with product name/category for IVA computation
 type RawOrderItem = {
   orderId: number;
   customerId: number;
@@ -33,22 +36,21 @@ type RawOrderItem = {
   overrideCostPerUnit: string | null;
   unit: string;
   productName: string;
+  productCategory: string;
 };
 
 // Compute billing amount for one item (with or without IVA)
 function itemBilling(item: RawOrderItem, hasIva: boolean): number {
   if (!item.pricePerUnit || parseFloat(item.pricePerUnit) === 0) return 0;
   const subtotal = parseFloat(item.quantity) * parseFloat(item.pricePerUnit);
-  return hasIva ? subtotal * (1 + ivaRate(item.productName)) : subtotal;
+  return hasIva ? subtotal * (1 + ivaRate(item.productName, item.productCategory)) : subtotal;
 }
 
-// Compute gross profit for one item (always neto, no IVA)
-function itemProfit(item: RawOrderItem): number {
-  if (!item.pricePerUnit || parseFloat(item.pricePerUnit) === 0) return 0;
+// Compute gross profit for one item (revenue with IVA minus cost)
+function itemProfit(item: RawOrderItem, hasIva: boolean): number {
   const qty = parseFloat(item.quantity);
-  const price = parseFloat(item.pricePerUnit);
   const cost = parseFloat(item.overrideCostPerUnit ?? item.costPerUnit ?? "0");
-  return qty * (price - cost);
+  return itemBilling(item, hasIva) - qty * cost;
 }
 
 // Is this unit a "bulto" (physical box/bag)?
@@ -1992,7 +1994,8 @@ export const storage = {
         oi.cost_per_unit::text AS "costPerUnit",
         oi.override_cost_per_unit::text AS "overrideCostPerUnit",
         oi.unit::text AS "unit",
-        COALESCE(p.name, oi.raw_product_name, '') AS "productName"
+        COALESCE(p.name, oi.raw_product_name, '') AS "productName",
+        COALESCE(p.category, '') AS "productCategory"
       FROM orders o
       JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN products p ON p.id = oi.product_id
@@ -2166,10 +2169,11 @@ export const storage = {
       if (isBulto(item.unit)) bultosMes += parseFloat(item.quantity);
     }
 
-    // Ganancia bruta
+    // Ganancia bruta (revenue with IVA minus cost)
     let gananciaMes = 0;
     for (const item of itemsInPeriod) {
-      gananciaMes += itemProfit(item);
+      const c = customerMap.get(item.customerId);
+      gananciaMes += itemProfit(item, c?.hasIva ?? false);
     }
     gananciaMes = Math.round(gananciaMes);
 
@@ -2667,17 +2671,36 @@ export const storage = {
 
   // ─── Dashboard Stats ─────────────────────────────────────────────────────────
   async getDashboardStats(from: string, to: string) {
-    // 1) Ventas + ganancia bruta en el período (approved orders)
+    // 1) Ventas + ganancia bruta en el período (approved orders, IVA diferenciado por producto)
     const salesRow = await db.execute(drizzleSql`
       SELECT
-        COALESCE(SUM(o.total::numeric), 0) AS ventas,
-        COALESCE(SUM(o.total::numeric), 0)
-          - COALESCE(SUM(oi_cost.cost_total), 0) AS ganancia_bruta
+        COALESCE(SUM(
+          CASE
+            WHEN oi.price_per_unit::numeric = 0 THEN 0
+            WHEN c.has_iva = true AND (
+              p.name ILIKE '%huevo%' OR p.name ILIKE '%maple%' OR p.category ILIKE '%huevo%'
+            ) THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
+            WHEN c.has_iva = true
+            THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+            ELSE oi.quantity::numeric * oi.price_per_unit::numeric
+          END
+        ), 0) AS ventas,
+        COALESCE(SUM(
+          CASE
+            WHEN oi.price_per_unit::numeric = 0 THEN 0
+            WHEN c.has_iva = true AND (
+              p.name ILIKE '%huevo%' OR p.name ILIKE '%maple%' OR p.category ILIKE '%huevo%'
+            ) THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
+            WHEN c.has_iva = true
+            THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+            ELSE oi.quantity::numeric * oi.price_per_unit::numeric
+          END
+          - oi.quantity::numeric * COALESCE(oi.override_cost_per_unit, oi.cost_per_unit)::numeric
+        ), 0) AS ganancia_bruta
       FROM orders o
-      LEFT JOIN LATERAL (
-        SELECT SUM(oi.quantity::numeric * oi.cost_per_unit::numeric) AS cost_total
-        FROM order_items oi WHERE oi.order_id = o.id
-      ) oi_cost ON true
+      JOIN customers c ON c.id = o.customer_id
+      JOIN order_items oi ON oi.order_id = o.id
+      LEFT JOIN products p ON p.id = oi.product_id
       WHERE o.status = 'approved'
         AND o.order_date >= ${from}::timestamp
         AND o.order_date < ${to}::timestamp
