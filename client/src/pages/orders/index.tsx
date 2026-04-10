@@ -174,12 +174,12 @@ export default function OrdersPage() {
                   </p>
                   <p className="text-[10px] text-muted-foreground mt-0.5">costo promedio ponderado</p>
                 </div>
-                <div className={`rounded-md bg-background border p-3 ${margenPct < 30 ? "border-destructive/50" : "border-border"}`}>
+                <div className="rounded-md bg-background border border-border p-3">
                   <p className="text-xs text-muted-foreground uppercase tracking-wide">Margen</p>
-                  <p className={`text-lg font-bold mt-1 ${margenPct < 30 ? "text-destructive" : "text-green-600 dark:text-green-400"}`} data-testid="text-margen-dia">
+                  <p className="text-lg font-bold mt-1 text-green-600 dark:text-green-400" data-testid="text-margen-dia">
                     ${fmt(margenDollar)}
                   </p>
-                  <p className={`text-xs font-semibold mt-0.5 ${margenPct < 30 ? "text-destructive" : "text-green-600 dark:text-green-400"}`}>
+                  <p className="text-xs font-semibold mt-0.5 text-green-600 dark:text-green-400">
                     {margenPct.toFixed(1)}%
                   </p>
                 </div>

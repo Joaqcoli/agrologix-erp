@@ -53,6 +53,7 @@ type Stats = {
   rindeTotal: number;
   ganancia_real: number;
   diasPeriodo: number;
+  diasTrabajados: number;
   vaciosRecibidosPeriodo: { qty: number; pesos: number };
   vaciosEntregadosPeriodo: { pesos: number; qty: number };
   vaciosEnPoder: { qty: number; pesos: number };
@@ -119,8 +120,9 @@ export default function DashboardPage() {
 
   const s = stats;
   const diasPeriodo = s?.diasPeriodo ?? 1;
-  const ventasDia = s ? s.ventas / diasPeriodo : 0;
-  const gananciaDia = s ? s.ganancia_real / diasPeriodo : 0;
+  const diasTrabajados = s?.diasTrabajados ?? 1;
+  const ventasDia = s ? s.ventas / diasTrabajados : 0;
+  const gananciaDia = s ? s.ganancia_real / diasTrabajados : 0;
 
   const PERIOD_LABELS: Record<Period, string> = {
     hoy: "Hoy", semana: "Esta semana", mes: "Este mes", año: "Este año", custom: "Personalizado",

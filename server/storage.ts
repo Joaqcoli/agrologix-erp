@@ -2669,6 +2669,17 @@ export const storage = {
       WHERE o.status = 'approved'
         AND o.order_date >= ${from}::timestamp
         AND o.order_date < ${to}::timestamp
+        AND (o.notes IS NULL OR o.notes NOT LIKE '%Facturación histórica importada%')
+    `);
+
+    // 2) Días trabajados (días con al menos 1 pedido aprobado no-histórico)
+    const diasRow = await db.execute(drizzleSql`
+      SELECT COUNT(DISTINCT order_date)::int AS dias_trabajados
+      FROM orders
+      WHERE status = 'approved'
+        AND order_date >= ${from}::timestamp
+        AND order_date < ${to}::timestamp
+        AND (notes IS NULL OR notes NOT LIKE '%Facturación histórica importada%')
     `);
 
     // 3) Totales merma/rinde del período
@@ -2766,6 +2777,7 @@ export const storage = {
     `);
 
     const s = (salesRow.rows[0] as any) ?? {};
+    const dt = (diasRow.rows[0] as any) ?? {};
     const m = (mermaRow.rows[0] as any) ?? {};
     const vr = (vaciosRecibidosRow.rows[0] as any) ?? {};
     const ve = (vaciosEntregadosRow.rows[0] as any) ?? {};
@@ -2793,6 +2805,8 @@ export const storage = {
     const enPoderQty = Math.max(0, histQty - histEntregadosQty);
     const enPoderPesos = Math.max(0, histPesos - histValesPesos);
 
+    const diasTrabajados = Math.max(1, parseInt(dt.dias_trabajados ?? "0") || 1);
+
     return {
       ventas,
       ganancia_bruta,
@@ -2800,6 +2814,7 @@ export const storage = {
       rindeTotal,
       ganancia_real,
       diasPeriodo,
+      diasTrabajados,
       vaciosRecibidosPeriodo: { qty: parseFloat(vr.qty ?? "0"), pesos: parseFloat(vr.pesos ?? "0") },
       vaciosEntregadosPeriodo: { pesos: parseFloat(ve.pesos ?? "0"), qty: avgCost > 0 ? Math.round(parseFloat(ve.pesos ?? "0") / avgCost) : 0 },
       vaciosEnPoder: { qty: enPoderQty, pesos: enPoderPesos },
