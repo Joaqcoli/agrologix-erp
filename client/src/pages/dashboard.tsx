@@ -88,12 +88,25 @@ function MetricCard({
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
-type Period = "hoy" | "semana" | "mes" | "año" | "custom";
+type Period = "hoy" | "semana" | "mes" | "año" | "pormes" | "custom";
+
+function monthInputRange(ym: string): [string, string] {
+  const [y, m] = ym.split("-").map(Number);
+  const from = `${y}-${String(m).padStart(2, "0")}-01`;
+  const nextM = m === 12 ? 1 : m + 1;
+  const nextY = m === 12 ? y + 1 : y;
+  const to = `${nextY}-${String(nextM).padStart(2, "0")}-01`;
+  return [from, to];
+}
 
 export default function DashboardPage() {
   const [period, setPeriod] = useState<Period>("mes");
   const [customFrom, setCustomFrom] = useState(() => monthRange()[0]);
   const [customTo, setCustomTo] = useState(() => monthRange()[1]);
+  const d0 = new Date();
+  const [selectedMonth, setSelectedMonth] = useState(
+    `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, "0")}`
+  );
   const [bolsaFilter, setBolsaFilter] = useState<"all" | "bolsa" | "bolsa_propia">("all");
 
   const [from, to] = useMemo((): [string, string] => {
@@ -101,8 +114,9 @@ export default function DashboardPage() {
     if (period === "semana") return weekRange();
     if (period === "mes") return monthRange();
     if (period === "año") return yearRange();
+    if (period === "pormes") return monthInputRange(selectedMonth);
     return [customFrom, customTo];
-  }, [period, customFrom, customTo]);
+  }, [period, customFrom, customTo, selectedMonth]);
 
   const { data: stats, isLoading } = useQuery<Stats>({
     queryKey: ["/api/dashboard/stats", from, to],
@@ -125,7 +139,8 @@ export default function DashboardPage() {
   const gananciaDia = s ? s.ganancia_real / diasTrabajados : 0;
 
   const PERIOD_LABELS: Record<Period, string> = {
-    hoy: "Hoy", semana: "Esta semana", mes: "Este mes", año: "Este año", custom: "Personalizado",
+    hoy: "Hoy", semana: "Esta semana", mes: "Este mes", año: "Este año",
+    pormes: "Por mes", custom: "Personalizado",
   };
 
   const ajusteNeto = (s?.rindeTotal ?? 0) - (s?.mermaTotal ?? 0);
@@ -146,7 +161,7 @@ export default function DashboardPage() {
 
           {/* Period Filters */}
           <div className="flex flex-wrap items-center gap-2">
-            {(["hoy", "semana", "mes", "año"] as Period[]).map((p) => (
+            {(["hoy", "semana", "mes", "año", "pormes", "custom"] as Period[]).map((p) => (
               <Button
                 key={p}
                 size="sm"
@@ -157,16 +172,21 @@ export default function DashboardPage() {
                 {PERIOD_LABELS[p]}
               </Button>
             ))}
-            <Button
-              size="sm"
-              variant={period === "custom" ? "default" : "outline"}
-              className="h-7 text-xs"
-              onClick={() => setPeriod("custom")}
-            >
-              Personalizado
-            </Button>
           </div>
         </div>
+
+        {/* Month picker */}
+        {period === "pormes" && (
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-muted-foreground">Mes</label>
+            <Input
+              type="month"
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="h-7 text-xs w-36"
+            />
+          </div>
+        )}
 
         {/* Custom date range */}
         {period === "custom" && (
