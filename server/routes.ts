@@ -5,6 +5,7 @@ import { storage } from "./storage";
 import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema, insertPaymentSchema, insertWithholdingSchema, insertSupplierSchema, insertSupplierPaymentSchema } from "@shared/schema";
 import { z } from "zod";
 import { canonicalizeUnit } from "@shared/units";
+import { getHistoricalMonthStats } from "./historical-stats";
 
 // IVA helpers
 const IVA_HUEVO = 0.21;
@@ -72,6 +73,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const stats = await storage.getDashboardStats(from, to);
       return res.json(stats);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/dashboard/historical", requireAuth, (req, res) => {
+    const month = parseInt(req.query.month as string);
+    const year  = parseInt(req.query.year  as string);
+    if (isNaN(month) || isNaN(year)) return res.status(400).json({ error: "month and year are required" });
+    const stats = getHistoricalMonthStats(month, year);
+    if (!stats) return res.status(404).json({ error: "No historical data for this period" });
+    return res.json(stats);
   });
 
   app.get("/api/dashboard/bolsa-fv", requireAuth, async (req, res) => {

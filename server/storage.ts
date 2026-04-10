@@ -13,6 +13,7 @@ import {
 import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
 import bcrypt from "bcryptjs";
+import { getHistoricalMonthStats, isHistoricalMonth } from "./historical-stats";
 
 // ─── CC Helpers ────────────────────────────────────────────────────────────────
 const IVA_HUEVO = 0.21;
@@ -2173,8 +2174,19 @@ export const storage = {
     gananciaMes = Math.round(gananciaMes);
 
     // Promedios
-    const promedioDia = Math.round(ventaMes / daysInMonth);
-    const promedioGanancia = Math.round(gananciaMes / daysInMonth);
+    let promedioDia = Math.round(ventaMes / daysInMonth);
+    let promedioGanancia = Math.round(gananciaMes / daysInMonth);
+    let semanas = weekTotals;
+
+    // Override gananciaMes/promedios/semanas for historical months (Jan/Feb/Mar 2026)
+    const histStats = getHistoricalMonthStats(month, year);
+    if (histStats) {
+      gananciaMes = Math.round(histStats.ganancia_bruta);
+      promedioDia = Math.round(histStats.promedioDia);
+      promedioGanancia = Math.round(histStats.promedioGanancia);
+      semanas = histStats.semanas.map((s) => ({ ...s, total: Math.round(s.total) }));
+    }
+
     const margenPct = ventaMes > 0 ? (gananciaMes / ventaMes) * 100 : 0;
 
     return {
@@ -2183,7 +2195,7 @@ export const storage = {
       daysInMonth,
       customers: rowsWithPct,
       totals,
-      semanas: weekTotals,
+      semanas,
       ventaMes,
       bultosMes: Math.round(bultosMes),
       gananciaMes,
@@ -2786,11 +2798,11 @@ export const storage = {
     const dc = (deudaClientesRow.rows[0] as any) ?? {};
     const sv = (stockValRow.rows[0] as any) ?? {};
 
-    const ventas = parseFloat(s.ventas ?? "0");
-    const ganancia_bruta = parseFloat(s.ganancia_bruta ?? "0");
+    let ventas = parseFloat(s.ventas ?? "0");
+    let ganancia_bruta = parseFloat(s.ganancia_bruta ?? "0");
     const mermaTotal = parseFloat(m.merma ?? "0");
     const rindeTotal = parseFloat(m.rinde ?? "0");
-    const ganancia_real = ganancia_bruta + rindeTotal - mermaTotal;
+    let ganancia_real = ganancia_bruta + rindeTotal - mermaTotal;
 
     // Días en el período
     const fromMs = new Date(from).getTime();
@@ -2805,7 +2817,19 @@ export const storage = {
     const enPoderQty = Math.max(0, histQty - histEntregadosQty);
     const enPoderPesos = Math.max(0, histPesos - histValesPesos);
 
-    const diasTrabajados = Math.max(1, parseInt(dt.dias_trabajados ?? "0") || 1);
+    let diasTrabajados = Math.max(1, parseInt(dt.dias_trabajados ?? "0") || 1);
+
+    // Override ventas/ganancia for historical months (Jan/Feb/Mar 2026)
+    const histMonth = isHistoricalMonth(from, to);
+    if (histMonth) {
+      const hs = getHistoricalMonthStats(histMonth.month, histMonth.year);
+      if (hs) {
+        ventas = hs.ventas;
+        ganancia_bruta = hs.ganancia_bruta;
+        ganancia_real = hs.ganancia_bruta; // no merma/rinde data for historical months
+        diasTrabajados = hs.diasTrabajados;
+      }
+    }
 
     return {
       ventas,
