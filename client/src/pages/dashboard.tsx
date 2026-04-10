@@ -90,6 +90,9 @@ function MetricCard({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 type Period = "hoy" | "semana" | "mes" | "año" | "pormes" | "custom";
 
+const MONTH_NAMES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
+                     "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+
 function monthInputRange(ym: string): [string, string] {
   const [y, m] = ym.split("-").map(Number);
   const from = `${y}-${String(m).padStart(2, "0")}-01`;
@@ -97,6 +100,19 @@ function monthInputRange(ym: string): [string, string] {
   const nextY = m === 12 ? y + 1 : y;
   const to = `${nextY}-${String(nextM).padStart(2, "0")}-01`;
   return [from, to];
+}
+
+function buildMonthOptions() {
+  const opts: { value: string; label: string }[] = [];
+  const now = new Date();
+  const endY = now.getFullYear();
+  const endM = now.getMonth() + 1;
+  let y = 2026, m = 1;
+  while (y < endY || (y === endY && m <= endM)) {
+    opts.push({ value: `${y}-${String(m).padStart(2, "0")}`, label: `${MONTH_NAMES[m - 1]} ${y}` });
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return opts;
 }
 
 export default function DashboardPage() {
@@ -175,16 +191,19 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Month picker */}
+        {/* Month dropdown */}
         {period === "pormes" && (
           <div className="flex items-center gap-2">
             <label className="text-xs text-muted-foreground">Mes</label>
-            <Input
-              type="month"
+            <select
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(e.target.value)}
-              className="h-7 text-xs w-36"
-            />
+              className="h-7 text-xs rounded-md border border-input bg-background px-2 pr-6 text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              {buildMonthOptions().map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
           </div>
         )}
 
