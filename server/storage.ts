@@ -800,7 +800,9 @@ export const storage = {
         const items = await db.select().from(orderItems).where(eq(orderItems.orderId, o.id));
         // For approved orders with a remito, show existing remito folio
         let suggestedRemito = `VA-${String(nextRemitoNum).padStart(6, "0")}`;
-        if (o.remitoId) {
+        if (o.remitoNum != null) {
+          suggestedRemito = `VA-${String(o.remitoNum).padStart(5, "0")}`;
+        } else if (o.remitoId) {
           const [existingRemito] = await db.select().from(remitos).where(eq(remitos.id, o.remitoId)).limit(1);
           suggestedRemito = existingRemito?.folio ?? suggestedRemito;
         } else if (o.status === "draft") {
@@ -1328,11 +1330,11 @@ export const storage = {
 
   async generateOrderFolio(): Promise<string> {
     const [row] = await db
-      .select({ maxNum: drizzleSql<number>`COALESCE(MAX(CAST(REPLACE(folio, 'PV-', '') AS INTEGER)), 0)` })
+      .select({ maxNum: drizzleSql<number>`COALESCE(MAX(CAST(SUBSTRING(folio FROM 4) AS INTEGER)), 0)` })
       .from(orders)
-      .where(drizzleSql`folio LIKE 'PV-%'`);
+      .where(drizzleSql`folio ~ '^(VA|PV)-\\d+$'`);
     const nextNum = (Number(row?.maxNum) || 0) + 1;
-    return `PV-${String(nextNum).padStart(5, "0")}`;
+    return `VA-${String(nextNum).padStart(5, "0")}`;
   },
 
   async createOrder(data: {
@@ -1971,9 +1973,9 @@ export const storage = {
       .onConflictDoNothing();
   },
 
-  async getPendingOrdersForCustomer(customerId: number): Promise<{ id: number; folio: string; total: string; orderDate: string }[]> {
+  async getPendingOrdersForCustomer(customerId: number): Promise<{ id: number; folio: string; remitoNum: number | null; total: string; orderDate: string }[]> {
     const result = await db
-      .select({ id: orders.id, folio: orders.folio, total: orders.total, orderDate: orders.orderDate })
+      .select({ id: orders.id, folio: orders.folio, remitoNum: orders.remitoNum, total: orders.total, orderDate: orders.orderDate })
       .from(orders)
       .where(and(eq(orders.customerId, customerId), eq(orders.status, "approved")))
       .orderBy(desc(orders.orderDate))
@@ -2309,7 +2311,8 @@ export const storage = {
       `)),
       db.execute(drizzleSql.raw(`
         SELECT o.id, o.folio, o.order_date::text AS "orderDate", o.total::text AS total,
-               o.invoice_number AS "invoiceNumber", o.customer_id AS "customerId"
+               o.invoice_number AS "invoiceNumber", o.customer_id AS "customerId",
+               o.remito_num AS "remitoNum"
         FROM orders o
         WHERE o.customer_id = ANY(ARRAY[${idArr}]::int[])
           AND o.status = 'approved'

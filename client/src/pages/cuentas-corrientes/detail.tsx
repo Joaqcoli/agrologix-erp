@@ -32,6 +32,7 @@ type FilterType = "mes" | "semana" | "dia";
 type OrderRow = {
   id: number;
   folio: string;
+  remitoNum: number | null;
   orderDate: string;
   total: number;
   invoiceNumber?: string | null;
@@ -145,7 +146,7 @@ function SubsidiaryDetailModal({
     for (const o of subOrders) {
       if (y > 270) { doc.addPage(); y = margin; }
       doc.text(fmtDate(o.orderDate), margin, y);
-      doc.text(o.folio, margin + 22, y);
+      doc.text(formatRemito(o), margin + 22, y);
       doc.text(o.invoiceNumber ?? "—", margin + 80, y);
       doc.text(`$${Math.round(o.total).toLocaleString("es-AR")}`, pageW - margin, y, { align: "right" });
       y += 5;
@@ -201,7 +202,7 @@ function SubsidiaryDetailModal({
               <tbody>
                 {subOrders.map((o) => (
                   <tr key={o.id} className={`border-b border-border last:border-0 ${o.isPaid ? "bg-green-50/30" : ""}`}>
-                    <td className="py-1.5 px-3 font-mono font-medium">{o.folio}</td>
+                    <td className="py-1.5 px-3 font-mono font-medium">{formatRemito(o)}</td>
                     <td className="py-1.5 px-3 text-muted-foreground">{fmtDate(o.orderDate)}</td>
                     <td className="py-1.5 px-3 text-muted-foreground">{o.invoiceNumber || "—"}</td>
                     <td className={`py-1.5 px-3 text-right font-semibold ${o.isPaid ? "line-through text-muted-foreground" : ""}`}>
@@ -266,7 +267,14 @@ type CCDetail = {
   subsidiaries?: SubsidiaryRow[];
 };
 
-type PendingOrder = { id: number; folio: string; total: string; orderDate: string };
+type PendingOrder = { id: number; folio: string; remitoNum: number | null; total: string; orderDate: string };
+
+function formatRemito(order: { remitoNum?: number | null; folio?: string | null }): string {
+  if (order.remitoNum != null) return `VA-${String(order.remitoNum).padStart(5, "0")}`;
+  const f = order.folio ?? "";
+  const m = f.match(/^(?:VA|PV)-?(\d+)$/);
+  return m ? `VA-${m[1].padStart(5, "0")}` : (f || "-");
+}
 
 // ── PDF generation ─────────────────────────────────────────────────────────────
 
@@ -316,7 +324,7 @@ function buildPDF(data: CCDetail, monthLabel: string) {
     for (const o of unpaidOrders) {
       if (y > 270) { doc.addPage(); y = margin; }
       doc.text(fmtDate(o.orderDate), margin, y);
-      doc.text(o.folio, margin + 20, y);
+      doc.text(formatRemito(o), margin + 20, y);
       doc.text(o.invoiceNumber ?? "—", margin + 90, y);
       doc.text(fmtMoney(o.total), pageW - margin, y, { align: "right" });
       y += 6;
@@ -346,7 +354,7 @@ function buildPDF(data: CCDetail, monthLabel: string) {
     for (const o of data.orders) {
       if (y > 270) { doc.addPage(); y = margin; }
       doc.text(fmtDate(o.orderDate), margin + 1, y);
-      doc.text(o.folio, margin + 22, y);
+      doc.text(formatRemito(o), margin + 22, y);
       doc.text(o.invoiceNumber ?? "—", margin + 90, y);
       doc.text(fmtMoney(o.total), pageW - margin - 1, y, { align: "right" });
       y += 5;
@@ -520,7 +528,7 @@ function PaymentModal({
                           onCheckedChange={() => toggleOrder(o.id)}
                           className="shrink-0"
                         />
-                        <span className="text-xs font-mono font-medium">{o.folio}</span>
+                        <span className="text-xs font-mono font-medium">{formatRemito(o)}</span>
                         <span className="text-xs text-muted-foreground ml-auto">
                           ${Math.round(parseFloat(o.total)).toLocaleString("es-AR")}
                         </span>
@@ -1017,7 +1025,7 @@ export default function CCCustomerDetailPage({
                           className="py-2 px-3 font-mono font-medium text-primary cursor-pointer hover:underline"
                           onClick={() => setLocation(`/orders/${o.id}`)}
                         >
-                          {o.folio}
+                          {formatRemito(o)}
                         </td>
                         <td className="py-2 px-3 text-muted-foreground">{fmtDate(o.orderDate)}</td>
                         {data?.isParent && (

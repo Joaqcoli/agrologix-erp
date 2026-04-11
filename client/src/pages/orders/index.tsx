@@ -36,6 +36,13 @@ const STATUS_CONFIG = {
 
 const fmt = (v: number) => v.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+const formatRemito = (order: { remitoNum?: number | null; folio?: string | null }) => {
+  if (order.remitoNum != null) return `VA-${String(order.remitoNum).padStart(5, "0")}`;
+  const f = order.folio ?? "";
+  const m = f.match(/^(?:VA|PV)-?(\d+)$/);
+  return m ? `VA-${m[1].padStart(5, "0")}` : (f || "-");
+};
+
 export default function OrdersPage() {
   const { toast } = useToast();
   const d0 = new Date();
@@ -293,7 +300,7 @@ export default function OrdersPage() {
             <AlertDialogTitle>¿Eliminar pedido?</AlertDialogTitle>
             <AlertDialogDescription>
               Estás por eliminar el pedido de <strong>{deleteTarget?.customerName}</strong>{" "}
-              ({deleteTarget?.folio}). Esta acción no se puede deshacer.
+              ({deleteTarget ? formatRemito(deleteTarget) : ""}). Esta acción no se puede deshacer.
               Los ítems del pedido también serán eliminados.
             </AlertDialogDescription>
           </AlertDialogHeader>
