@@ -292,15 +292,13 @@ async function generateCCPDF(opts: {
   const { clientLabel, saldoAnterior, orderRows, total, periodLabel } = opts;
 
   // ── Colors ─────────────────────────────────────────────────────────────────
-  const DARK_GREEN:  [number, number, number] = [45,  80,  22];   // #2d5016
-  const MED_GREEN:   [number, number, number] = [58,  95,  30];   // #3a5f1e
-  const WHITE:       [number, number, number] = [255, 255, 255];
-  const GRAY_BG:     [number, number, number] = [224, 224, 224];  // #e0e0e0
-  const GRAY_LITE:   [number, number, number] = [244, 244, 244];  // #f4f4f4
-  const GRAY_LINE:   [number, number, number] = [221, 221, 221];  // #dddddd
-  const TBL_BORDER:  [number, number, number] = [204, 204, 204];  // #cccccc
-  const GRAY_TEXT:   [number, number, number] = [102, 102, 102];  // #666
-  const NEAR_BLACK:  [number, number, number] = [30,  30,  30];
+  const OLIVE:     [number, number, number] = [61,  95,  47];   // table header + separator
+  const FOOT_GRN:  [number, number, number] = [38,  68,  22];   // footer dark bar
+  const WHITE:     [number, number, number] = [255, 255, 255];
+  const GRAY_LITE: [number, number, number] = [245, 245, 245];  // alternate row bg
+  const GRAY_LINE: [number, number, number] = [200, 200, 200];  // thin separators
+  const GRAY_TEXT: [number, number, number] = [150, 150, 150];  // muted labels
+  const BLACK:     [number, number, number] = [30,  30,  30];
 
   const pageW = 210;
   const pageH = 297;
@@ -312,109 +310,105 @@ async function generateCCPDF(opts: {
   const todayFmt = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
 
   // ── Column positions ────────────────────────────────────────────────────────
-  // FECHA 12% | N REMITO 25% | N FACTURA 28% | MONTO 35%
-  const fechaW   = tblW * 0.12;
-  const remitoW  = tblW * 0.25;
+  // FECHA 20% | N° REMITO 27% | N° FACTURA 27% | MONTO 26%
+  const fechaW   = tblW * 0.20;   // 36mm
+  const remitoW  = tblW * 0.27;   // 48.6mm
+  const facturaW = tblW * 0.27;   // 48.6mm
   const fechaX   = mx;
   const remitoX  = fechaX + fechaW;
   const facturaX = remitoX + remitoW;
-  const montoX   = mx + tblW;   // right edge — text right-aligned from here
+  const montoX   = mx + tblW;     // 195mm — right-align anchor
 
-  // ── Footer dimensions ───────────────────────────────────────────────────────
-  const footGrayH  = 14;
-  const footGreenH = 10;
-  const footH      = footGrayH + footGreenH;
-  const footY      = pageH - footH;
+  // ── Footer ──────────────────────────────────────────────────────────────────
+  const footContactH = 20;
+  const footBarH     = 12;
+  const footH        = footContactH + footBarH;
+  const footY        = pageH - footH;   // 265mm
 
   const drawFooter = () => {
-    // Gray contact section
-    doc.setFillColor(...GRAY_BG);
-    doc.rect(0, footY, pageW, footGrayH, "F");
-    const col3W = pageW / 3;
+    // Thin separator line above contact section
+    doc.setDrawColor(...GRAY_LINE);
+    doc.setLineWidth(0.4);
+    doc.line(mx, footY, pageW - mx, footY);
+
+    // Three contact columns (white bg, labels bold, values normal)
+    const col3W = tblW / 3;
     const labels = ["WhatsApp", "Email", "Website"];
     const values = ["11-7123-2459", "vegetalesargentinos.srl@gmail.com", "www.vegetalesargentinos.com"];
     for (let i = 0; i < 3; i++) {
-      const cx = i * col3W + col3W / 2;
-      doc.setTextColor(...GRAY_TEXT);
-      doc.setFont("helvetica", "normal"); doc.setFontSize(6);
-      doc.text(labels[i], cx, footY + 4.5, { align: "center" });
-      doc.setTextColor(...NEAR_BLACK);
-      doc.setFont("helvetica", "bold"); doc.setFontSize(7);
-      doc.text(values[i], cx, footY + 10, { align: "center" });
+      const colX = mx + i * col3W;
+      doc.setTextColor(...BLACK);
+      doc.setFont("helvetica", "bold"); doc.setFontSize(8.5);
+      doc.text(labels[i], colX, footY + 7);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(7.5);
+      doc.text(values[i], colX, footY + 13.5);
     }
-    // Dark green company section
-    const greenY = footY + footGrayH;
-    doc.setFillColor(...DARK_GREEN);
-    doc.rect(0, greenY, pageW, footGreenH, "F");
+
+    // Dark green bar at very bottom
+    const barY = footY + footContactH;
+    doc.setFillColor(...FOOT_GRN);
+    doc.rect(0, barY, pageW, footBarH, "F");
     doc.setTextColor(...WHITE);
-    doc.setFont("helvetica", "bold"); doc.setFontSize(7);
-    doc.text("CUIT : 30-71855184-2", pageW - mx, greenY + 3.5, { align: "right" });
-    doc.setFontSize(8.5);
-    doc.text("VEGETALES ARGENTINOS SRL", pageW - mx, greenY + 8, { align: "right" });
+    doc.setFont("helvetica", "normal"); doc.setFontSize(7);
+    doc.text("CUIT : 30-71855184-2", pageW - mx, barY + 4.5, { align: "right" });
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+    doc.text("VEGETALES ARGENTINOS SRL", pageW - mx, barY + 9.5, { align: "right" });
   };
 
-  // ── Header ─────────────────────────────────────────────────────────────────
-  const hdrH = 50;
-  doc.setFillColor(...DARK_GREEN);
-  doc.rect(0, 0, pageW, hdrH, "F");
-
+  // ── Header (white background) ───────────────────────────────────────────────
   const logoData = await loadLogoJpeg();
   let logoW = 0;
-  const logoH = 22;
+  const logoH = 26;
   if (logoData) {
-    logoW = Math.min(logoH * logoData.aspect, 44);
-    const logoY = (hdrH - logoH) / 2;
-    doc.addImage(logoData.base64, "JPEG", mx, logoY, logoW, logoH);
+    logoW = Math.min(logoH * logoData.aspect, 80);
+    doc.addImage(logoData.base64, "JPEG", mx, 8, logoW, logoH);
   }
 
-  // Company info — to the right of logo, within left ~55% of page
-  const textX = mx + (logoW > 0 ? logoW + 5 : 0);
-  doc.setTextColor(...WHITE);
-  doc.setFont("helvetica", "bold"); doc.setFontSize(10);
-  doc.text("VEGETALES ARGENTINOS SRL", textX, 16);
-  doc.setFont("helvetica", "normal"); doc.setFontSize(8);
-  doc.text("CUIT: 30-71855184-2",               textX, 22);
-  doc.text("WhatsApp: 11-7123-2459",             textX, 27.5);
-  doc.text("vegetalesargentinos.srl@gmail.com",  textX, 33);
-  doc.text("www.vegetalesargentinos.com",        textX, 38.5);
-
-  // Right column — "CTA. CTE." + period
-  doc.setFont("helvetica", "bold"); doc.setFontSize(36);
-  doc.text("CTA. CTE.", pageW - mx, 28, { align: "right" });
-  doc.setFont("helvetica", "normal"); doc.setFontSize(10);
-  doc.text(periodLabel, pageW - mx, 37, { align: "right" });
-
-  // ── Client section ─────────────────────────────────────────────────────────
-  const clientY = hdrH + 5;
-  const clientH = 10;
-  doc.setDrawColor(...GRAY_LINE);
-  doc.setLineWidth(0.3);
-  doc.line(0, clientY, pageW, clientY);
-  doc.line(0, clientY + clientH, pageW, clientY + clientH);
-  doc.setTextColor(...NEAR_BLACK);
-  doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-  doc.text(clientLabel, mx, clientY + 6.5);
+  // Right: FECHA (gray small) → CTA. CTE. (bold large) → period (gray small)
+  doc.setTextColor(...GRAY_TEXT);
   doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
-  doc.text(`FECHA: ${todayFmt}`, pageW - mx, clientY + 6.5, { align: "right" });
+  doc.text(`FECHA :  ${todayFmt}`, pageW - mx, 13, { align: "right" });
+  doc.setTextColor(...BLACK);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(18);
+  doc.text("CTA. CTE.", pageW - mx, 26, { align: "right" });
+  doc.setTextColor(...GRAY_TEXT);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
+  doc.text(periodLabel, pageW - mx, 34, { align: "right" });
 
-  // ── Table ──────────────────────────────────────────────────────────────────
-  const TH      = 11;   // table header height
-  const RH      =  9;   // data row height
-  const TOTAL_H = 12;   // total bar height
-  const contentBottom = footY - 5;
+  // ── Separator bar (dark olive) ───────────────────────────────────────────────
+  const sepY = 41;
+  doc.setFillColor(...OLIVE);
+  doc.rect(0, sepY, pageW, 2.5, "F");
 
-  let y = clientY + clientH + 5;
-  let pageTableStartY = y;
+  // ── "Cliente: NAME" ─────────────────────────────────────────────────────────
+  const clientY = sepY + 7;
+  doc.setTextColor(...BLACK);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(13);
+  doc.text(clientLabel, mx, clientY + 6);
+
+  // Thin gray line below client label
+  const clientLineY = clientY + 11;
+  doc.setDrawColor(...GRAY_LINE);
+  doc.setLineWidth(0.4);
+  doc.line(mx, clientLineY, pageW - mx, clientLineY);
+
+  // ── Table ───────────────────────────────────────────────────────────────────
+  const TH = 13;   // table header height
+  const RH = 14;   // data row height (tall rows as in template)
+  // Reserve space for TOTAL (line + text ≈ 20mm) + 5mm gap above it
+  const contentBottom = footY - 25;
+
+  let y = clientLineY + 4;
 
   const drawTH = () => {
-    doc.setFillColor(...MED_GREEN);
+    doc.setFillColor(...OLIVE);
     doc.rect(mx, y, tblW, TH, "F");
     doc.setTextColor(...WHITE);
-    doc.setFont("helvetica", "bold"); doc.setFontSize(7.5);
-    doc.text("FECHA",     fechaX + fechaW / 2,   y + 7.5, { align: "center" });
-    doc.text("N REMITO",  remitoX + 3.5,          y + 7.5);
-    doc.text("N FACTURA", facturaX + 3.5,         y + 7.5);
-    doc.text("MONTO",     montoX - 4.2,           y + 7.5, { align: "right" });
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+    doc.text("FECHA",      fechaX + fechaW / 2,     y + 9, { align: "center" });
+    doc.text("N° REMITO",  remitoX + remitoW / 2,   y + 9, { align: "center" });
+    doc.text("N° FACTURA", facturaX + facturaW / 2, y + 9, { align: "center" });
+    doc.text("MONTO",      montoX - 5,              y + 9, { align: "right" });
     y += TH;
   };
   drawTH();
@@ -430,54 +424,48 @@ async function generateCCPDF(opts: {
   }
 
   for (let i = 0; i < allRows.length; i++) {
-    if (y + RH + TOTAL_H > contentBottom) {
+    if (y + RH > contentBottom) {
       drawFooter();
       doc.addPage();
       y = 10;
-      pageTableStartY = y;
       drawTH();
     }
     const row = allRows[i];
     doc.setFillColor(...(i % 2 === 0 ? WHITE : GRAY_LITE));
     doc.rect(mx, y, tblW, RH, "F");
-    doc.setFontSize(8);
+    doc.setFontSize(9);
+    doc.setTextColor(...BLACK);
 
     // FECHA — centered
-    doc.setTextColor(...NEAR_BLACK);
     doc.setFont("helvetica", row.bold ? "bold" : "normal");
-    doc.text(row.fecha, fechaX + fechaW / 2, y + 6, { align: "center" });
+    doc.text(row.fecha, fechaX + fechaW / 2, y + 9, { align: "center" });
 
-    // N REMITO — left padded
+    // N° REMITO — left padded
     doc.setFont("helvetica", row.bold ? "bold" : "normal");
-    doc.text(row.remito, remitoX + 3.5, y + 6);
+    doc.text(row.remito, remitoX + 4, y + 9);
 
-    // N FACTURA — left padded, always normal weight
+    // N° FACTURA — left padded, normal weight
     doc.setFont("helvetica", "normal");
-    doc.text(row.factura, facturaX + 3.5, y + 6);
+    doc.text(row.factura, facturaX + 4, y + 9);
 
-    // MONTO — right padded, always bold
+    // MONTO — right padded, bold
     doc.setFont("helvetica", "bold");
-    doc.text(fmtM(row.monto), montoX - 4.2, y + 6, { align: "right" });
+    doc.text(fmtM(row.monto), montoX - 5, y + 9, { align: "right" });
 
     y += RH;
   }
 
-  // ── Total bar (attached to last row) ───────────────────────────────────────
-  const totalBarY = y;
-  doc.setFillColor(...MED_GREEN);
-  doc.rect(mx, totalBarY, tblW, TOTAL_H, "F");
-  doc.setTextColor(...WHITE);
-  doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-  doc.text("TOTAL A PAGAR", remitoX + 3.5, totalBarY + 8);
-  doc.setFontSize(11);
-  doc.text(fmtM(Math.max(0, total)), montoX - 4.2, totalBarY + 8, { align: "right" });
+  // ── TOTAL — fixed near bottom (lots of white space above if few rows) ────────
+  const totalLineY = footY - 22;
+  doc.setDrawColor(...GRAY_LINE);
+  doc.setLineWidth(0.4);
+  doc.line(mx, totalLineY, pageW - mx, totalLineY);
+  doc.setTextColor(...BLACK);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(11);
+  doc.text("TOTAL:", facturaX + facturaW - 2, totalLineY + 11, { align: "right" });
+  doc.text(fmtM(Math.max(0, total)), montoX - 5, totalLineY + 11, { align: "right" });
 
-  // Outer table border
-  doc.setDrawColor(...TBL_BORDER);
-  doc.setLineWidth(0.3);
-  doc.rect(mx, pageTableStartY, tblW, totalBarY + TOTAL_H - pageTableStartY, "S");
-
-  // ── Footer on last page ────────────────────────────────────────────────────
+  // ── Footer on last page ─────────────────────────────────────────────────────
   drawFooter();
 
   doc.setTextColor(0, 0, 0);
