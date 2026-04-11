@@ -1753,6 +1753,30 @@ export const storage = {
     return updated;
   },
 
+  async resetAllStock(asMerma: boolean): Promise<{ affected: number }> {
+    const allPu = await db.select().from(productUnits)
+      .where(drizzleSql`${productUnits.stockQty}::numeric > 0 AND ${productUnits.isActive} = true`);
+    if (allPu.length === 0) return { affected: 0 };
+
+    for (const pu of allPu) {
+      const currentQty = parseFloat(pu.stockQty as string);
+      if (asMerma) {
+        await db.insert(stockMovements).values({
+          productId: pu.productId,
+          movementType: "out",
+          quantity: currentQty.toFixed(4),
+          unitCost: pu.avgCost as string,
+          referenceType: "adjustment",
+          referenceId: pu.id,
+          notes: "Merma",
+        });
+      }
+      await db.update(productUnits).set({ stockQty: "0" }).where(eq(productUnits.id, pu.id));
+      await db.update(products).set({ currentStock: "0" }).where(eq(products.id, pu.productId));
+    }
+    return { affected: allPu.length };
+  },
+
   async addStockAdjustments(items: { productId: number; unit: string; qty: number }[]): Promise<void> {
     for (const item of items) {
       const canonicalUnit = item.unit.trim().toUpperCase();

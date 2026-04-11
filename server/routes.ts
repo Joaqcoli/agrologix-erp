@@ -273,6 +273,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
+  app.post("/api/stock/reset", requireAuth, async (req, res) => {
+    try {
+      const { asMerma } = z.object({ asMerma: z.boolean() }).parse(req.body);
+      const result = await storage.resetAllStock(asMerma);
+      return res.json(result);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   // ─── Price History ─────────────────────────────────────────────────────────
   app.get("/api/price-history/:customerId/:productId", requireAuth, async (req, res) => {
     const record = await storage.getLastPrice(Number(req.params.customerId), Number(req.params.productId));

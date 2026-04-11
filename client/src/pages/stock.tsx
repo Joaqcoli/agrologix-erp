@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
-import { Search, Package, Plus, CheckCircle2, AlertCircle, Warehouse, ChevronDown, ChevronUp, History, TrendingDown, TrendingUp } from "lucide-react";
+import { Search, Package, Plus, CheckCircle2, AlertCircle, Warehouse, ChevronDown, ChevronUp, History, TrendingDown, TrendingUp, Trash2 } from "lucide-react";
 import type { Product, ProductUnit } from "@shared/schema";
 import { PRODUCT_CATEGORIES } from "@shared/schema";
 import { parseQuantityAndUnit } from "@/lib/parseQuantityAndUnit";
@@ -141,6 +141,89 @@ function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null;
             disabled={!adjustment || isNaN(adj) || adjustMutation.isPending || (reason === "Otro" && !otherText.trim())}
           >
             {adjustMutation.isPending ? "Ajustando..." : "Confirmar ajuste"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Reset Stock Dialog ───────────────────────────────────────────────────────
+function ResetStockDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const [mode, setMode] = useState<"merma" | "silent" | null>(null);
+
+  const resetMutation = useMutation({
+    mutationFn: (asMerma: boolean) =>
+      apiRequest("POST", "/api/stock/reset", { asMerma }).then((r) => r.json()),
+    onSuccess: (data: { affected: number }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stock-movements"] });
+      toast({
+        title: "Stock limpiado",
+        description: `${data.affected} producto${data.affected !== 1 ? "s" : ""} llevado${data.affected !== 1 ? "s" : ""} a 0${mode === "merma" ? " — registrado como merma" : ""}`,
+      });
+      setMode(null);
+      onClose();
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const handleClose = () => { setMode(null); onClose(); };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose(); }}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-destructive">
+            <Trash2 className="h-4 w-4" /> Limpiar Stock
+          </DialogTitle>
+          <DialogDescription>
+            Esta acción pondrá en <strong>0</strong> el stock de todos los productos.
+            ¿Querés registrarlo como merma o solo limpiar sin registrar?
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid grid-cols-2 gap-3 mt-2">
+          <button
+            onClick={() => setMode("merma")}
+            className={`rounded-lg border-2 p-3 text-left transition-colors focus:outline-none ${
+              mode === "merma"
+                ? "border-destructive bg-destructive/5"
+                : "border-border hover:border-destructive/50 hover:bg-muted/40"
+            }`}
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <TrendingDown className={`h-4 w-4 ${mode === "merma" ? "text-destructive" : "text-muted-foreground"}`} />
+              <span className="text-sm font-semibold">Como merma</span>
+            </div>
+            <p className="text-xs text-muted-foreground">Registra la baja en el historial de ajustes con motivo "Merma"</p>
+          </button>
+          <button
+            onClick={() => setMode("silent")}
+            className={`rounded-lg border-2 p-3 text-left transition-colors focus:outline-none ${
+              mode === "silent"
+                ? "border-primary bg-primary/5"
+                : "border-border hover:border-primary/50 hover:bg-muted/40"
+            }`}
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <Trash2 className={`h-4 w-4 ${mode === "silent" ? "text-primary" : "text-muted-foreground"}`} />
+              <span className="text-sm font-semibold">Solo limpiar</span>
+            </div>
+            <p className="text-xs text-muted-foreground">Pone el stock en 0 sin registrar ningún movimiento</p>
+          </button>
+        </div>
+
+        <DialogFooter className="gap-2 mt-2">
+          <Button variant="outline" onClick={handleClose}>Cancelar</Button>
+          <Button
+            variant="destructive"
+            disabled={!mode || resetMutation.isPending}
+            onClick={() => mode && resetMutation.mutate(mode === "merma")}
+          >
+            {resetMutation.isPending ? "Limpiando..." : "Confirmar"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -433,6 +516,7 @@ export default function StockPage() {
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [adjustTarget, setAdjustTarget] = useState<ProductUnitWithProduct | null>(null);
   const [loadOpen, setLoadOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
 
   // Free-text entry state
   const [step, setStep] = useState<"input" | "preview">("input");
@@ -524,11 +608,21 @@ export default function StockPage() {
     <Layout title="Stock">
       <div className="p-6 space-y-6">
         {/* Header */}
-        <div>
-          <h2 className="text-xl font-semibold text-foreground flex items-center gap-2">
-            <Warehouse className="h-5 w-5 text-primary" /> Stock
-          </h2>
-          <p className="text-sm text-muted-foreground mt-0.5">Stock actual por producto y unidad</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-foreground flex items-center gap-2">
+              <Warehouse className="h-5 w-5 text-primary" /> Stock
+            </h2>
+            <p className="text-sm text-muted-foreground mt-0.5">Stock actual por producto y unidad</p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-destructive border-destructive/30 hover:bg-destructive/5 hover:text-destructive"
+            onClick={() => setResetOpen(true)}
+          >
+            <Trash2 className="mr-2 h-3.5 w-3.5" /> Limpiar Stock
+          </Button>
         </div>
 
         {/* ── FREE-TEXT STOCK ENTRY (collapsible) ── */}
@@ -771,6 +865,7 @@ export default function StockPage() {
       </div>
 
       <AdjustStockDialog pu={adjustTarget} onClose={() => setAdjustTarget(null)} />
+      <ResetStockDialog open={resetOpen} onClose={() => setResetOpen(false)} />
     </Layout>
   );
 }
