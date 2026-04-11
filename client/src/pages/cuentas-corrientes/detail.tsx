@@ -123,38 +123,22 @@ function SubsidiaryDetailModal({
     [orders, subsidiary?.customerId]
   );
 
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     if (!subsidiary) return;
-    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-    const pageW = 210;
-    const margin = 14;
-    let y = margin;
-    doc.setFontSize(14); doc.setFont("helvetica", "bold");
-    doc.text("AgroLogix", margin, y);
-    doc.setFontSize(9); doc.setFont("helvetica", "normal");
-    doc.text(periodLabel, pageW - margin, y, { align: "right" });
-    y += 5;
-    doc.setFontSize(10); doc.setFont("helvetica", "bold");
-    doc.text(subsidiary.customerName + " (Sede)", margin, y);
-    y += 5; doc.setDrawColor(180, 180, 180); doc.line(margin, y, pageW - margin, y); y += 5;
-    doc.setFontSize(8); doc.setFont("helvetica", "bold");
-    doc.text("Fecha", margin, y); doc.text("Folio", margin + 22, y);
-    doc.text("Nro. Factura", margin + 80, y);
-    doc.text("Total", pageW - margin, y, { align: "right" });
-    y += 4; doc.line(margin, y, pageW - margin, y); y += 4;
-    doc.setFont("helvetica", "normal");
-    for (const o of subOrders) {
-      if (y > 270) { doc.addPage(); y = margin; }
-      doc.text(fmtDate(o.orderDate), margin, y);
-      doc.text(formatRemito(o), margin + 22, y);
-      doc.text(o.invoiceNumber ?? "—", margin + 80, y);
-      doc.text(`$${Math.round(o.total).toLocaleString("es-AR")}`, pageW - margin, y, { align: "right" });
-      y += 5;
-    }
-    y += 3; doc.setDrawColor(120, 120, 120); doc.line(margin, y, pageW - margin, y); y += 5;
-    doc.setFontSize(9); doc.setFont("helvetica", "bold");
-    doc.text("TOTAL FACTURADO", margin, y);
-    doc.text(`$${Math.round(subsidiary.facturacion).toLocaleString("es-AR")}`, pageW - margin, y, { align: "right" });
+    const fmtD = (d: string) =>
+      new Date(d.replace(/\s.+$/, "T00:00:00")).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
+    const doc = await generateCCPDF({
+      clientLabel: `Sede: ${subsidiary.customerName}`,
+      saldoAnterior: 0,
+      orderRows: subOrders.map((o) => ({
+        fecha: fmtD(o.orderDate),
+        remito: formatRemito(o),
+        factura: o.invoiceNumber ?? "—",
+        monto: o.total,
+      })),
+      total: subsidiary.facturacion,
+      periodLabel,
+    });
     doc.save(`CC-${subsidiary.customerName.replace(/\s+/g, "_")}-${periodLabel}.pdf`);
   };
 
@@ -278,120 +262,131 @@ function formatRemito(order: { remitoNum?: number | null; folio?: string | null 
 
 // ── PDF generation ─────────────────────────────────────────────────────────────
 
-function buildPDF(data: CCDetail, monthLabel: string) {
-  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+async function loadLogoJpeg(): Promise<string | null> {
+  try {
+    const res = await fetch("/logo.png");
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el); el.onerror = reject; el.src = objUrl;
+    });
+    URL.revokeObjectURL(objUrl);
+    const cvs = document.createElement("canvas");
+    cvs.width = img.naturalWidth; cvs.height = img.naturalHeight;
+    const ctx = cvs.getContext("2d")!;
+    ctx.fillStyle = "white"; ctx.fillRect(0, 0, cvs.width, cvs.height);
+    ctx.drawImage(img, 0, 0);
+    return cvs.toDataURL("image/jpeg", 0.92);
+  } catch { return null; }
+}
+
+async function generateCCPDF(opts: {
+  clientLabel: string;
+  saldoAnterior: number;
+  orderRows: { fecha: string; remito: string; factura: string; monto: number }[];
+  total: number;
+  periodLabel: string;
+}): Promise<jsPDF> {
+  const { clientLabel, saldoAnterior, orderRows, total, periodLabel } = opts;
+  const G_DARK: [number, number, number] = [27, 94, 32];
+  const G_MED:  [number, number, number] = [56, 142, 60];
+  const G_LITE: [number, number, number] = [232, 245, 233];
+  const WHITE:  [number, number, number] = [255, 255, 255];
+  const NEAR_BLACK: [number, number, number] = [30, 30, 30];
   const pageW = 210;
-  const margin = 14;
-  let y = margin;
+  const mx = 12;
 
-  const setH = (size: number, bold = false) => {
-    doc.setFontSize(size);
-    doc.setFont("helvetica", bold ? "bold" : "normal");
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const fmtM = (n: number) => `$${Math.round(n).toLocaleString("es-AR")}`;
+  const todayFmt = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
+
+  // ── Header block ────────────────────────────────────────────────────────────
+  const hdrH = 46;
+  doc.setFillColor(...G_DARK);
+  doc.rect(0, 0, pageW, hdrH, "F");
+
+  const logo = await loadLogoJpeg();
+  if (logo) doc.addImage(logo, "JPEG", mx, 7, 22, 22);
+  const tx = logo ? mx + 26 : mx;
+
+  doc.setTextColor(...WHITE);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(11);
+  doc.text("VEGETALES ARGENTINOS SRL", tx, 15);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(7.5);
+  doc.text("CUIT: 30-71855184-2",               tx, 21);
+  doc.text("WhatsApp: 11-7123-2459",             tx, 27);
+  doc.text("vegetalesargentinos.srl@gmail.com",  tx, 32.5);
+  doc.text("www.vegetalesargentinos.com",        tx, 38);
+
+  doc.setFont("helvetica", "bold"); doc.setFontSize(24);
+  doc.text("CTA. CTE.", pageW - mx, 23, { align: "right" });
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
+  doc.text(periodLabel, pageW - mx, 31, { align: "right" });
+
+  // ── Client bar ──────────────────────────────────────────────────────────────
+  doc.setFillColor(...G_MED);
+  doc.rect(0, hdrH, pageW, 10, "F");
+  doc.setTextColor(...WHITE);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+  doc.text(clientLabel, mx, hdrH + 6.5);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
+  doc.text(`FECHA: ${todayFmt}`, pageW - mx, hdrH + 6.5, { align: "right" });
+
+  // ── Table ───────────────────────────────────────────────────────────────────
+  const tblW = pageW - mx * 2;
+  const COL = { fecha: mx + 2, remito: mx + 22, factura: mx + 80, monto: pageW - mx - 2 };
+  const TH = 7;
+  let y = hdrH + 12;
+
+  const drawTH = () => {
+    doc.setFillColor(...G_DARK);
+    doc.rect(mx, y, tblW, TH, "F");
+    doc.setTextColor(...WHITE);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(8);
+    doc.text("FECHA",     COL.fecha,   y + 5);
+    doc.text("N REMITO",  COL.remito,  y + 5);
+    doc.text("N FACTURA", COL.factura, y + 5);
+    doc.text("MONTO",     COL.monto,   y + 5, { align: "right" });
+    y += TH;
   };
+  drawTH();
 
-  setH(14, true);
-  doc.text("AgroLogix", margin, y);
-  setH(9);
-  doc.text(monthLabel, pageW - margin, y, { align: "right" });
-  y += 5;
-  setH(10, true);
-  doc.text(data.customer.name, margin, y);
-  y += 4;
-  doc.setDrawColor(180, 180, 180);
-  doc.line(margin, y, pageW - margin, y);
-  y += 5;
+  // Build full row list (saldo anterior first if > 0)
+  type FullRow = { fecha: string; remito: string; factura: string; monto: number; bold?: boolean };
+  const allRows: FullRow[] = [];
+  if (saldoAnterior > 0) {
+    allRows.push({ fecha: "—", remito: "SALDO ANTERIOR", factura: "—", monto: saldoAnterior, bold: true });
+  }
+  allRows.push(...orderRows);
 
-  const fmtDate = (d: string) => {
-    const dt = new Date(d.replace(/\s.+$/, "T00:00:00"));
-    return dt.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
-  };
-  const fmtMoney = (n: number) => `$${Math.round(n).toLocaleString("es-AR")}`;
-  const isPorRemito = data.customer.ccType === "por_remito";
-
-  if (isPorRemito) {
-    const unpaidOrders = data.orders.filter((o) => !o.isPaid);
-    setH(9, true);
-    doc.text("Fecha", margin, y);
-    doc.text("Descripción", margin + 20, y);
-    doc.text("Nro. Factura", margin + 90, y);
-    doc.text("Monto", pageW - margin, y, { align: "right" });
-    y += 4;
-    doc.setDrawColor(120, 120, 120);
-    doc.line(margin, y, pageW - margin, y);
-    y += 5;
-    setH(9);
-    let total = 0;
-    for (const o of unpaidOrders) {
-      if (y > 270) { doc.addPage(); y = margin; }
-      doc.text(fmtDate(o.orderDate), margin, y);
-      doc.text(formatRemito(o), margin + 20, y);
-      doc.text(o.invoiceNumber ?? "—", margin + 90, y);
-      doc.text(fmtMoney(o.total), pageW - margin, y, { align: "right" });
-      y += 6;
-      total += o.total;
-    }
-    y += 2;
-    doc.setDrawColor(120, 120, 120);
-    doc.line(margin, y, pageW - margin, y);
-    y += 5;
-    setH(10, true);
-    doc.text("TOTAL PENDIENTE", margin, y);
-    doc.text(fmtMoney(total), pageW - margin, y, { align: "right" });
-  } else {
-    setH(9, true);
-    doc.text("Saldo anterior", margin, y);
-    doc.text(fmtMoney(data.saldoMesAnterior), pageW - margin, y, { align: "right" });
-    y += 7;
-    doc.setFillColor(240, 240, 240);
-    doc.rect(margin, y - 4, pageW - margin * 2, 6, "F");
-    setH(8, true);
-    doc.text("Fecha", margin + 1, y);
-    doc.text("Descripción", margin + 22, y);
-    doc.text("Nro. Factura", margin + 90, y);
-    doc.text("Monto", pageW - margin - 1, y, { align: "right" });
-    y += 4;
-    setH(8);
-    for (const o of data.orders) {
-      if (y > 270) { doc.addPage(); y = margin; }
-      doc.text(fmtDate(o.orderDate), margin + 1, y);
-      doc.text(formatRemito(o), margin + 22, y);
-      doc.text(o.invoiceNumber ?? "—", margin + 90, y);
-      doc.text(fmtMoney(o.total), pageW - margin - 1, y, { align: "right" });
-      y += 5;
-    }
-    doc.setTextColor(22, 163, 74);
-    for (const p of data.payments) {
-      if (y > 270) { doc.addPage(); y = margin; doc.setTextColor(22, 163, 74); }
-      const amt = parseFloat(p.amount as string);
-      doc.text(p.date, margin + 1, y);
-      const desc = `Pago ${p.method.replace(/_/g, " ")}${(p as PaymentRow).orderFolio ? ` (${(p as PaymentRow).orderFolio})` : ""}`;
-      doc.text(desc, margin + 22, y);
-      doc.text("-" + fmtMoney(amt), pageW - margin - 1, y, { align: "right" });
-      y += 5;
-    }
-    doc.setTextColor(37, 99, 235);
-    for (const w of data.withholdings) {
-      if (y > 270) { doc.addPage(); y = margin; doc.setTextColor(37, 99, 235); }
-      const amt = parseFloat(w.amount as string);
-      doc.text(w.date, margin + 1, y);
-      doc.text(`Retención ${w.type}`, margin + 22, y);
-      doc.text("-" + fmtMoney(amt), pageW - margin - 1, y, { align: "right" });
-      y += 5;
-    }
-    doc.setTextColor(0, 0, 0);
-    y += 2;
-    doc.setDrawColor(120, 120, 120);
-    doc.line(margin, y, pageW - margin, y);
-    y += 5;
-    setH(10, true);
-    doc.text("SALDO ACTUAL", margin, y);
-    const saldo = data.saldo;
-    if (saldo > 0) doc.setTextColor(220, 38, 38);
-    else if (saldo < 0) doc.setTextColor(22, 163, 74);
-    doc.text(fmtMoney(saldo), pageW - margin, y, { align: "right" });
-    doc.setTextColor(0, 0, 0);
+  const RH = 7;
+  doc.setFontSize(8);
+  for (let i = 0; i < allRows.length; i++) {
+    if (y + RH > 270) { doc.addPage(); y = 10; drawTH(); }
+    const row = allRows[i];
+    doc.setFillColor(...(i % 2 === 0 ? WHITE : G_LITE));
+    doc.rect(mx, y, tblW, RH, "F");
+    doc.setTextColor(...(row.bold ? G_DARK : NEAR_BLACK));
+    doc.setFont("helvetica", row.bold ? "bold" : "normal");
+    doc.text(row.fecha,           COL.fecha,   y + 5);
+    doc.text(row.remito,          COL.remito,  y + 5);
+    doc.text(row.factura,         COL.factura, y + 5);
+    doc.text(fmtM(row.monto),     COL.monto,   y + 5, { align: "right" });
+    y += RH;
   }
 
+  // ── Total bar ───────────────────────────────────────────────────────────────
+  y += 2;
+  doc.setFillColor(...G_DARK);
+  doc.rect(mx, y, tblW, 9, "F");
+  doc.setTextColor(...WHITE);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(10);
+  doc.text("TOTAL A PAGAR", COL.fecha, y + 6);
+  doc.text(fmtM(Math.max(0, total)), COL.monto, y + 6, { align: "right" });
+
+  doc.setTextColor(0, 0, 0);
   return doc;
 }
 
@@ -801,9 +796,24 @@ export default function CCCustomerDetailPage({
     return dt.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
   };
 
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     if (!data) return;
-    const doc = buildPDF(data as CCDetail, periodLabel);
+    const fmtD = (d: string) =>
+      new Date(d.replace(/\s.+$/, "T00:00:00")).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
+    const doc = await generateCCPDF({
+      clientLabel: `Cliente: ${data.customer.name}`,
+      saldoAnterior: data.saldoMesAnterior,
+      orderRows: (data.orders ?? [])
+        .filter((o) => !o.isPaid)
+        .map((o) => ({
+          fecha: fmtD(o.orderDate),
+          remito: formatRemito(o),
+          factura: o.invoiceNumber ?? "—",
+          monto: o.total,
+        })),
+      total: Math.max(0, data.saldo),
+      periodLabel,
+    });
     doc.save(`CC-${data.customer.name.replace(/\s+/g, "_")}-${periodLabel.replace(/[\s/]/g, "_")}.pdf`);
   };
 
