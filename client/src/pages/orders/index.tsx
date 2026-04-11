@@ -257,7 +257,7 @@ export default function OrdersPage() {
                                   {formatDate(o.orderDate)}
                                 </span>
                                 <span className="text-xs text-muted-foreground font-mono">
-                                  Remito: <span className="font-semibold text-foreground">{o.suggestedRemito}</span>
+                                  Remito: <span className="font-semibold text-foreground">{formatRemito(o)}</span>
                                 </span>
                               </div>
                             </div>

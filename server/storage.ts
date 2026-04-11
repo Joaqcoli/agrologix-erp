@@ -2364,9 +2364,11 @@ export const storage = {
       return {
         id: o.id,
         folio: o.folio,
+        remitoNum: o.remitoNum ?? null,
         orderDate: o.orderDate,
         total: billingTotal,
         invoiceNumber: o.invoiceNumber ?? null,
+        customerId: o.customerId ?? null,
         paidAmount,
         isPaid: paidAmount >= billingTotal,
       };
