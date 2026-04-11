@@ -816,7 +816,9 @@ export default function OrderDetailPage({ id }: { id: number }) {
           subtotal: String(item.subtotal),
           bolsaType: (item as any).bolsaType ?? null,
         }));
-        remitoFolio = order.notes?.match(/Remito\s+(\S+)/i)?.[1] ?? order.folio;
+        remitoFolio = order.remitoNum != null
+          ? String(order.remitoNum)
+          : (order.notes?.match(/Remito\s+(\S+)/i)?.[1] ?? order.folio);
         remitoDate = order.orderDate;
       }
 

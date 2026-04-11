@@ -396,5 +396,8 @@ export async function runMigrations() {
   // ─── purchase_items: costo por unidad de compra original ─────────────────
   await db.execute(sql`ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS cost_per_purchase_unit NUMERIC(12,2)`);
 
+  // ─── orders: número de remito del papel (del Excel de días) ───────────────
+  await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS remito_num integer`);
+
   console.log("Migrations complete.");
 }

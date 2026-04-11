@@ -26,6 +26,7 @@ if (fs.existsSync(envPath)) {
 // ─── Args ─────────────────────────────────────────────────────────────────────
 const DRY_RUN  = process.argv.includes("--dry-run");
 const CC_ONLY  = process.argv.includes("--cc-only");
+const DIA_ONLY = process.argv.includes("--dia-only");
 const FILE_PATH = path.resolve(process.cwd(), "attached_assets/info 2026.xlsx");
 
 // ─── DB ───────────────────────────────────────────────────────────────────────
@@ -46,7 +47,7 @@ interface ParsedItem {
 
 interface ParsedBlock {
   customerName: string;
-  remitoNum: string | null;
+  remitoNum: number | null;
   orderDate: string;       // ISO: "2026-04-01"
   hasIva: boolean;
   items: ParsedItem[];
@@ -237,9 +238,9 @@ const warnings: string[] = [];
 const errors:   string[] = [];
 
 // ─── Caché de clientes y productos ───────────────────────────────────────────
-const customerCache = new Map<string, number>();   // lower(name) → id
-const productCache  = new Map<string, number>();   // lower(name) → id
-let folioCounter = 0;
+const customerCache    = new Map<string, number>();   // lower(name) → id
+const productCache     = new Map<string, number>();   // lower(name) → id
+const customerFolioMap = new Map<number, number>();   // customerId → max VA folio num
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -318,12 +319,24 @@ function parseSheet(sheet: XLSX.WorkSheet, sheetDate: string): ParsedBlock[] {
 
   while (r <= maxRow) {
     const colA = cellStr(sheet, 0, r);
+    const colC = cellStr(sheet, 2, r); // formato clientes con IVA (colegios, cafés)
     const colD = cellStr(sheet, 3, r); // formato habitual
-    const colE = cellStr(sheet, 4, r); // formato colegios
+    const colE = cellStr(sheet, 4, r); // formato colegios (legacy)
+
+    // "rto: <número>" estricto para evitar falsos positivos (ej. "PORTOBELLO" contiene "rto")
+    const isRto     = (s: string) => /rto\s*[:\-]?\s*\d+/i.test(s);
+    // Número entero puro en la celda (sin texto "rto:")
+    const isBareInt = (s: string) => /^\s*\d+\s*$/.test(s);
 
     // Detectar encabezado de cliente: col A no vacío, no "CANTIDAD",
-    // y "rto" aparece en col D (clientes habituales) o col E (colegios)
-    const rtoCol   = /rto/i.test(colD) ? colD : /rto/i.test(colE) ? colE : "";
+    // y "rto: N" (o número puro) aparece en col D, E o C
+    const rtoCol =
+      isRto(colD)     ? colD :
+      isRto(colE)     ? colE :
+      isRto(colC)     ? colC :
+      isBareInt(colD) ? colD :
+      isBareInt(colE) ? colE :
+      isBareInt(colC) ? colC : "";
     const isClientHeader =
       colA !== "" &&
       colA.toUpperCase() !== "CANTIDAD" &&
@@ -342,8 +355,11 @@ function parseSheet(sheet: XLSX.WorkSheet, sheetDate: string): ParsedBlock[] {
       ? `${colA.trim()} - ${sedeMatch[1].trim()}`
       : colA.trim();
 
-    const remitoMatch  = rtoCol.match(/rto\s*[:\-]?\s*(\S+)/i);
-    const remitoNum    = remitoMatch ? remitoMatch[1] : null;
+    // Extraer número de remito: desde "rto: 18" o desde número puro "18"
+    const rmitoMatch = rtoCol.match(/rto\s*[:\-]?\s*(\d+)/i);
+    const remitoNum: number | null = rmitoMatch
+      ? parseInt(rmitoMatch[1])
+      : isBareInt(rtoCol) ? parseInt(rtoCol.trim()) : null;
     r++;
 
     // Buscar fila de títulos (contiene CANTIDAD en col A)
@@ -528,18 +544,22 @@ function parseCCSheet(
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
-async function initFolioCounter(): Promise<void> {
+async function initFolioCounters(): Promise<void> {
   const res = await pool.query(
-    `SELECT COALESCE(MAX(CAST(REPLACE(folio,'PV-','') AS INTEGER)),0) AS max
-     FROM orders WHERE folio ~ '^PV-\\d+$'`,
+    `SELECT customer_id, MAX(CAST(REPLACE(folio,'VA-','') AS INTEGER)) AS max_folio
+     FROM orders WHERE folio ~ '^VA-\\d+$'
+     GROUP BY customer_id`,
   );
-  folioCounter = Number(res.rows[0].max);
-  console.log(`  Folio counter iniciado en PV-${String(folioCounter).padStart(5, "0")}\n`);
+  for (const row of res.rows) {
+    customerFolioMap.set(Number(row.customer_id), Number(row.max_folio));
+  }
+  console.log(`  Folio counters VA por cliente: ${customerFolioMap.size} cliente(s) con historial\n`);
 }
 
-function nextFolio(): string {
-  folioCounter++;
-  return `PV-${String(folioCounter).padStart(5, "0")}`;
+function nextFolioForCustomer(customerId: number): string {
+  const next = (customerFolioMap.get(customerId) ?? 0) + 1;
+  customerFolioMap.set(customerId, next);
+  return `VA-${String(next).padStart(5, "0")}`;
 }
 
 /**
@@ -752,16 +772,15 @@ async function importBlock(block: ParsedBlock): Promise<void> {
   const customerId = await findOrCreateCustomer(block.customerName, block.hasIva, true);
 
   if (!DRY_RUN) {
-    // Duplicado = mismo cliente + misma fecha + mismo remito (o ambos sin remito).
+    // Duplicado = mismo cliente + misma fecha + mismo remito_num (o ambos sin remito).
     // Distinto remito el mismo día = pedidos diferentes → NO es duplicado.
-    const notesVal = block.remitoNum ? `Remito ${block.remitoNum}` : null;
     const exists = await pool.query(
       `SELECT id FROM orders
        WHERE customer_id = $1
          AND order_date::date = $2::date
-         AND notes IS NOT DISTINCT FROM $3
+         AND remito_num IS NOT DISTINCT FROM $3
        LIMIT 1`,
-      [customerId, block.orderDate, notesVal],
+      [customerId, block.orderDate, block.remitoNum],
     );
     if (exists.rows.length > 0) {
       ordersSkipped++;
@@ -788,19 +807,13 @@ async function importBlock(block: ParsedBlock): Promise<void> {
   try {
     await client.query("BEGIN");
 
-    const folio = nextFolio();
+    const folio = nextFolioForCustomer(customerId!);
     const orderRes = await client.query(
       `INSERT INTO orders
-         (folio, customer_id, order_date, status, total, notes, created_by, approved_by, approved_at)
-       VALUES ($1, $2, $3, 'approved', $4, $5, 1, 1, now())
+         (folio, customer_id, order_date, status, total, remito_num, notes, created_by, approved_by, approved_at)
+       VALUES ($1, $2, $3, 'approved', $4, $5, $6, 1, 1, now())
        RETURNING id`,
-      [
-        folio,
-        customerId,
-        block.orderDate,
-        total,
-        block.remitoNum ? `Remito ${block.remitoNum}` : null,
-      ],
+      [folio, customerId, block.orderDate, total, block.remitoNum, null],
     );
     const orderId = orderRes.rows[0].id;
 
@@ -836,7 +849,8 @@ async function importBlock(block: ParsedBlock): Promise<void> {
   } catch (e: any) {
     await client.query("ROLLBACK");
     // devolver folio si se incrementó
-    folioCounter--;
+    const curMax = customerFolioMap.get(customerId!) ?? 1;
+    customerFolioMap.set(customerId!, Math.max(0, curMax - 1));
     throw e;
   } finally {
     client.release();
@@ -848,10 +862,14 @@ async function main() {
   console.log(`\n📂 Archivo : ${FILE_PATH}`);
   if (DRY_RUN && CC_ONLY) {
     console.log("🔍 MODO DRY-RUN + CC-ONLY — solo CC, sin tocar la DB\n");
+  } else if (DRY_RUN && DIA_ONLY) {
+    console.log("🔍 MODO DRY-RUN + DIA-ONLY — solo días nuevos, sin tocar la DB\n");
   } else if (DRY_RUN) {
     console.log("🔍 MODO DRY-RUN — no se tocará la DB\n");
   } else if (CC_ONLY) {
     console.log("♻️  MODO CC-ONLY — limpiar y reimportar pagos/balances enero-marzo\n");
+  } else if (DIA_ONLY) {
+    console.log("📅 MODO DIA-ONLY — importar solo hojas de días nuevos\n");
   } else {
     console.log("⚠️  MODO REAL — se escribirá en la DB\n");
   }
@@ -868,9 +886,9 @@ async function main() {
   // Cargar sedes de BLACK POT para resolución de colegios
   await initBlackPotChildren();
 
-  // Inicializar folio counter solo en modo real
+  // Inicializar folio counters solo en modo real
   if (!DRY_RUN) {
-    await initFolioCounter();
+    await initFolioCounters();
   }
 
   const workbook = XLSX.readFile(FILE_PATH, { cellDates: false, raw: false });
@@ -888,6 +906,13 @@ async function main() {
   // ════════════════════════════════════════════════════════════
   // 1. CUENTAS CORRIENTES
   // ════════════════════════════════════════════════════════════
+  const allOpeningBalances:  ParsedOpeningBalance[]   = [];
+  const allCCPayments:       ParsedPayment[]           = [];
+  const allHistoricalOrders: ParsedHistoricalOrder[]   = [];
+
+  if (DIA_ONLY) {
+    console.log("(Modo DIA-ONLY: CC omitida)\n");
+  } else {
   console.log("══ CUENTAS CORRIENTES ══════════════════════════════\n");
 
   // En modo CC_ONLY: limpiar DB antes de reimportar
@@ -925,10 +950,6 @@ async function main() {
       };
       return monthOf(a) - monthOf(b);
     });
-
-  const allOpeningBalances:  ParsedOpeningBalance[]   = [];
-  const allCCPayments:       ParsedPayment[]           = [];
-  const allHistoricalOrders: ParsedHistoricalOrder[]   = [];
 
   for (let i = 0; i < ccSorted.length; i++) {
     const sheetName = ccSorted[i];
@@ -1035,36 +1056,39 @@ async function main() {
       errors.push(`Pago "${p.customerName}" ${p.date}: ${e.message}`);
     }
   }
+  } // end if (!DIA_ONLY) for CC
 
   // ════════════════════════════════════════════════════════════
   // 2. PEDIDOS DE ABRIL
   // ════════════════════════════════════════════════════════════
   let totalLines = 0;
 
-  // ── Agregar pedidos del mismo cliente+mes antes de importar ──
-  // (ocurre cuando dos filas del Excel mapean al mismo cliente DB)
-  const histMergeMap = new Map<string, ParsedHistoricalOrder>();
-  for (const ho of allHistoricalOrders) {
-    const aliased = (CLIENT_ALIASES[ho.customerName.toUpperCase()] ?? ho.customerName).toUpperCase();
-    const key = `${ho.date}__${aliased}`;
-    if (histMergeMap.has(key)) {
-      histMergeMap.get(key)!.amount += ho.amount;
-    } else {
-      histMergeMap.set(key, { ...ho, customerName: aliased });
+  if (!DIA_ONLY) {
+    // ── Agregar pedidos del mismo cliente+mes antes de importar ──
+    // (ocurre cuando dos filas del Excel mapean al mismo cliente DB)
+    const histMergeMap = new Map<string, ParsedHistoricalOrder>();
+    for (const ho of allHistoricalOrders) {
+      const aliased = (CLIENT_ALIASES[ho.customerName.toUpperCase()] ?? ho.customerName).toUpperCase();
+      const key = `${ho.date}__${aliased}`;
+      if (histMergeMap.has(key)) {
+        histMergeMap.get(key)!.amount += ho.amount;
+      } else {
+        histMergeMap.set(key, { ...ho, customerName: aliased });
+      }
     }
-  }
-  const mergedHistOrders = Array.from(histMergeMap.values());
-  if (mergedHistOrders.length < allHistoricalOrders.length) {
-    console.log(`  (${allHistoricalOrders.length - mergedHistOrders.length} filas combinadas por cliente duplicado)\n`);
-  }
+    const mergedHistOrders = Array.from(histMergeMap.values());
+    if (mergedHistOrders.length < allHistoricalOrders.length) {
+      console.log(`  (${allHistoricalOrders.length - mergedHistOrders.length} filas combinadas por cliente duplicado)\n`);
+    }
 
-  // ── Importar pedidos de facturación histórica ──
-  console.log(`\n🧾 Facturación histórica: ${mergedHistOrders.length} pedidos\n`);
-  for (const ho of mergedHistOrders) {
-    try {
-      await importHistoricalOrder(ho);
-    } catch (e: any) {
-      errors.push(`HIST "${ho.customerName}" ${ho.date}: ${e.message}`);
+    // ── Importar pedidos de facturación histórica ──
+    console.log(`\n🧾 Facturación histórica: ${mergedHistOrders.length} pedidos\n`);
+    for (const ho of mergedHistOrders) {
+      try {
+        await importHistoricalOrder(ho);
+      } catch (e: any) {
+        errors.push(`HIST "${ho.customerName}" ${ho.date}: ${e.message}`);
+      }
     }
   }
 
@@ -1076,6 +1100,22 @@ async function main() {
 
   for (const sheetName of daySheets) {
     const sheetDate = parseDateFromSheetName(sheetName)!;
+
+    // En DIA_ONLY: saltar fechas que ya tienen pedidos aprobados en la DB
+    if (DIA_ONLY) {
+      const existsRes = await pool.query(
+        `SELECT COUNT(*) FROM orders
+         WHERE order_date::date = $1::date
+           AND status = 'approved'
+           AND (notes IS NULL OR notes NOT LIKE '%Facturación histórica importada%')`,
+        [sheetDate],
+      );
+      if (Number(existsRes.rows[0].count) > 0) {
+        console.log(`📅 ${sheetName.trim()}: ya existe en DB (${existsRes.rows[0].count} pedidos) → OMITIDA`);
+        continue;
+      }
+    }
+
     const sheet = workbook.Sheets[sheetName];
 
     let blocks: ParsedBlock[];

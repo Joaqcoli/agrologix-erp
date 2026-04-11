@@ -143,6 +143,7 @@ export const orders = pgTable("orders", {
   notes: text("notes"),
   lowMarginConfirmed: boolean("low_margin_confirmed").notNull().default(false),
   remitoId: integer("remito_id"),
+  remitoNum: integer("remito_num"),
   createdBy: integer("created_by").references(() => users.id),
   approvedBy: integer("approved_by").references(() => users.id),
   approvedAt: timestamp("approved_at"),
