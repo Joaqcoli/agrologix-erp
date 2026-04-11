@@ -2947,4 +2947,59 @@ export const storage = {
       })),
     };
   },
+
+  // ─── Commissions Detail ───────────────────────────────────────────────────
+  async getSalespersons(): Promise<string[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT DISTINCT salesperson_name
+      FROM customers
+      WHERE salesperson_name IS NOT NULL
+        AND commission_pct::numeric > 0
+        AND active = true
+      ORDER BY salesperson_name
+    `);
+    return rows.rows.map((r: any) => String(r.salesperson_name));
+  },
+
+  async getCommissionDetail(salesperson: string, month: number, year: number): Promise<{
+    rows: { orderDate: string; customerName: string; total: number; commissionPct: number; commissionAmount: number }[];
+    totalVentas: number;
+    totalComision: number;
+  }> {
+    const from = `${year}-${String(month).padStart(2, "0")}-01`;
+    const nextM = month === 12 ? 1 : month + 1;
+    const nextY = month === 12 ? year + 1 : year;
+    const to = `${nextY}-${String(nextM).padStart(2, "0")}-01`;
+
+    const result = await db.execute(drizzleSql`
+      SELECT
+        o.order_date::date::text AS order_date,
+        c.name AS customer_name,
+        o.total::numeric AS total,
+        c.commission_pct::numeric AS commission_pct,
+        o.total::numeric * c.commission_pct::numeric / 100 AS commission_amount
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      WHERE c.salesperson_name = ${salesperson}
+        AND c.commission_pct::numeric > 0
+        AND o.status = 'approved'
+        AND o.order_date >= ${from}::timestamp
+        AND o.order_date < ${to}::timestamp
+      ORDER BY o.order_date, c.name
+    `);
+
+    const rows = result.rows.map((r: any) => ({
+      orderDate: String(r.order_date),
+      customerName: String(r.customer_name),
+      total: parseFloat(r.total ?? "0"),
+      commissionPct: parseFloat(r.commission_pct ?? "0"),
+      commissionAmount: parseFloat(r.commission_amount ?? "0"),
+    }));
+
+    return {
+      rows,
+      totalVentas: rows.reduce((sum, r) => sum + r.total, 0),
+      totalComision: rows.reduce((sum, r) => sum + r.commissionAmount, 0),
+    };
+  },
 };

@@ -93,6 +93,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Commissions ───────────────────────────────────────────────────────────
+  app.get("/api/commissions/salespersons", requireAuth, async (_req, res) => {
+    try {
+      return res.json(await storage.getSalespersons());
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/commissions/detail", requireAuth, async (req, res) => {
+    try {
+      const { salesperson, month, year } = req.query as { salesperson?: string; month?: string; year?: string };
+      if (!salesperson || !month || !year) return res.status(400).json({ error: "salesperson, month and year are required" });
+      const data = await storage.getCommissionDetail(salesperson, parseInt(month), parseInt(year));
+      return res.json(data);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Customers ─────────────────────────────────────────────────────────────
   app.get("/api/customers", requireAuth, async (req, res) => {
     try {

@@ -461,3 +461,94 @@ export function generateBolsaFvPDF(rows: BolsaFvRow[], grandTotal: number, from:
 
   doc.save(`BolsaFV-${from}-${to}.pdf`);
 }
+
+export type ComisionRow = {
+  orderDate: string;
+  customerName: string;
+  total: number;
+  commissionPct: number;
+  commissionAmount: number;
+};
+
+export function generateComisionesPDF(
+  vendedor: string,
+  monthLabel: string,
+  rows: ComisionRow[],
+  totalVentas: number,
+  totalComision: number,
+) {
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const pageW = 210;
+  const margin = 15;
+  let y = margin;
+
+  const fmtDate = (d: string) =>
+    new Date(d + "T12:00:00").toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const fmtMoney = (v: number) =>
+    `$${v.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  // Header bar
+  doc.setFillColor(29, 78, 216);
+  doc.rect(0, 0, pageW, 28, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(16);
+  doc.setFont("helvetica", "bold");
+  doc.text("Reporte de Comisiones", margin, 13);
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Vendedor: ${vendedor}  —  Período: ${monthLabel}`, margin, 22);
+
+  y = 38;
+
+  const cols = {
+    fecha:    margin,
+    cliente:  margin + 26,
+    total:    margin + 122,
+    pct:      margin + 148,
+    comision: margin + 163,
+  };
+
+  doc.setFillColor(29, 78, 216);
+  doc.rect(margin, y, pageW - margin * 2, 7, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(7);
+  doc.setFont("helvetica", "bold");
+  doc.text("Fecha",    cols.fecha + 1,    y + 4.5);
+  doc.text("Cliente",  cols.cliente + 1,  y + 4.5);
+  doc.text("Total",    cols.total + 1,    y + 4.5);
+  doc.text("%",        cols.pct + 1,      y + 4.5);
+  doc.text("Comisión", cols.comision + 1, y + 4.5);
+  y += 9;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7);
+  rows.forEach((row, i) => {
+    if (y > 270) { doc.addPage(); y = margin; }
+    if (i % 2 === 0) {
+      doc.setFillColor(248, 248, 255);
+      doc.rect(margin, y - 2, pageW - margin * 2, 7, "F");
+    }
+    doc.setTextColor(30, 30, 30);
+    doc.text(fmtDate(row.orderDate),                  cols.fecha + 1,    y + 3);
+    doc.text((row.customerName ?? "").slice(0, 42),   cols.cliente + 1,  y + 3);
+    doc.text(fmtMoney(row.total),                     cols.total + 24,   y + 3, { align: "right" });
+    doc.text(`${row.commissionPct.toFixed(1)}%`,      cols.pct + 1,      y + 3);
+    doc.text(fmtMoney(row.commissionAmount),          pageW - margin - 2, y + 3, { align: "right" });
+    y += 7;
+  });
+
+  // Totals footer
+  y += 4;
+  if (y > 270) { doc.addPage(); y = margin; }
+  doc.setFillColor(29, 78, 216);
+  doc.rect(margin, y, pageW - margin * 2, 10, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.text("TOTAL VENTAS:", cols.cliente + 1, y + 6.5);
+  doc.text(fmtMoney(totalVentas), cols.total + 24, y + 6.5, { align: "right" });
+  doc.text("TOTAL COMISIÓN:", cols.pct - 2, y + 6.5);
+  doc.text(fmtMoney(totalComision), pageW - margin - 2, y + 6.5, { align: "right" });
+
+  doc.save(`Comisiones-${vendedor.replace(/\s+/g, "-")}-${monthLabel.replace(/\s+/g, "-")}.pdf`);
+}

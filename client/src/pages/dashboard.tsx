@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,8 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TrendingUp, Package, Truck, AlertTriangle, Users, Download } from "lucide-react";
-import { generateBolsaFvPDF, type BolsaFvRow } from "@/lib/pdf";
+import { generateBolsaFvPDF, generateComisionesPDF, type BolsaFvRow, type ComisionRow } from "@/lib/pdf";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const fmt = (n: number) =>
@@ -87,6 +89,136 @@ function MetricCard({
   );
 }
 
+// ─── Comisiones Modal ─────────────────────────────────────────────────────────
+function ComisionesModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const d0 = new Date();
+  const [selectedVendedor, setSelectedVendedor] = useState("");
+  const [selectedMonth, setSelectedMonth] = useState(
+    `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, "0")}`
+  );
+
+  const { data: salespersons } = useQuery<string[]>({
+    queryKey: ["/api/commissions/salespersons"],
+    queryFn: () => fetch("/api/commissions/salespersons", { credentials: "include" }).then((r) => r.json()),
+    enabled: open,
+  });
+
+  useEffect(() => {
+    if (salespersons && salespersons.length > 0 && !selectedVendedor) {
+      setSelectedVendedor(salespersons[0]);
+    }
+  }, [salespersons, selectedVendedor]);
+
+  const [y, m] = selectedMonth.split("-").map(Number);
+  const { data: detail, isLoading: detailLoading } = useQuery<{
+    rows: ComisionRow[];
+    totalVentas: number;
+    totalComision: number;
+  }>({
+    queryKey: ["/api/commissions/detail", selectedVendedor, selectedMonth],
+    queryFn: () =>
+      fetch(`/api/commissions/detail?salesperson=${encodeURIComponent(selectedVendedor)}&month=${m}&year=${y}`, {
+        credentials: "include",
+      }).then((r) => r.json()),
+    enabled: open && !!selectedVendedor,
+  });
+
+  const monthOptions = buildMonthOptions();
+  const monthLabel = monthOptions.find((o) => o.value === selectedMonth)?.label ?? selectedMonth;
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col gap-3">
+        <DialogHeader>
+          <DialogTitle>Detalle de Comisiones</DialogTitle>
+        </DialogHeader>
+
+        <div className="flex flex-wrap gap-3 items-end">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">Vendedor</label>
+            <Select value={selectedVendedor} onValueChange={setSelectedVendedor}>
+              <SelectTrigger className="w-48">
+                <SelectValue placeholder="Seleccionar vendedor" />
+              </SelectTrigger>
+              <SelectContent>
+                {(salespersons ?? []).map((s) => (
+                  <SelectItem key={s} value={s}>{s}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">Período</label>
+            <Select value={selectedMonth} onValueChange={setSelectedMonth}>
+              <SelectTrigger className="w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {monthOptions.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {detail && (detail.rows ?? []).length > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              onClick={() => generateComisionesPDF(selectedVendedor, monthLabel, detail.rows, detail.totalVentas, detail.totalComision)}
+            >
+              <Download className="h-3.5 w-3.5 mr-1" /> PDF
+            </Button>
+          )}
+        </div>
+
+        <div className="overflow-y-auto flex-1">
+          {detailLoading ? (
+            <div className="space-y-2">
+              {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+            </div>
+          ) : !detail || (detail.rows ?? []).length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">Sin pedidos en el período</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left pb-1.5 text-xs text-muted-foreground font-medium">Fecha</th>
+                  <th className="text-left pb-1.5 text-xs text-muted-foreground font-medium">Cliente</th>
+                  <th className="text-right pb-1.5 text-xs text-muted-foreground font-medium">Total</th>
+                  <th className="text-right pb-1.5 text-xs text-muted-foreground font-medium">%</th>
+                  <th className="text-right pb-1.5 text-xs text-muted-foreground font-medium">Comisión</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(detail.rows ?? []).map((row, i) => (
+                  <tr key={i} className={`border-b border-border/50 last:border-0 ${i % 2 !== 0 ? "bg-muted/20" : ""}`}>
+                    <td className="py-1.5 text-xs text-muted-foreground whitespace-nowrap pr-3">
+                      {new Date(row.orderDate + "T12:00:00").toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" })}
+                    </td>
+                    <td className="py-1.5 pr-2">{row.customerName}</td>
+                    <td className="py-1.5 text-right text-xs tabular-nums">{fmt(row.total)}</td>
+                    <td className="py-1.5 text-right text-xs text-muted-foreground tabular-nums pl-3">{row.commissionPct.toFixed(1)}%</td>
+                    <td className="py-1.5 text-right font-medium tabular-nums pl-3">{fmt(row.commissionAmount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-border">
+                  <td colSpan={2} className="pt-2 text-xs font-semibold">Total</td>
+                  <td className="pt-2 text-right text-xs font-bold tabular-nums">{fmt(detail.totalVentas)}</td>
+                  <td />
+                  <td className="pt-2 text-right font-bold text-green-600 tabular-nums">{fmt(detail.totalComision)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 type Period = "hoy" | "semana" | "mes" | "año" | "pormes" | "custom";
 
@@ -124,6 +256,7 @@ export default function DashboardPage() {
     `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, "0")}`
   );
   const [bolsaFilter, setBolsaFilter] = useState<"all" | "bolsa" | "bolsa_propia">("all");
+  const [comisionesOpen, setComisionesOpen] = useState(false);
 
   const [from, to] = useMemo((): [string, string] => {
     if (period === "hoy") return todayRange();
@@ -393,9 +526,14 @@ export default function DashboardPage() {
           {(!s || (s.comisiones ?? []).length > 0) && (
             <Card className={s && (s.comisiones ?? []).length > 1 ? "sm:col-span-2" : ""}>
               <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
-                  <Users className="h-3.5 w-3.5" /> Comisiones vendedores
-                </CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                    <Users className="h-3.5 w-3.5" /> Comisiones vendedores
+                  </CardTitle>
+                  <Button size="sm" variant="ghost" className="h-6 text-[11px] px-2" onClick={() => setComisionesOpen(true)}>
+                    Ver detalle
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="pt-0">
                 {isLoading ? <Skeleton className="h-12 w-full" /> : s && (s.comisiones ?? []).length === 0 ? (
@@ -514,6 +652,8 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <ComisionesModal open={comisionesOpen} onClose={() => setComisionesOpen(false)} />
     </Layout>
   );
 }
