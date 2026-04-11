@@ -873,6 +873,7 @@ export const storage = {
       parseStatus?: string;
     }[];
   }): Promise<Order> {
+    const remitoNum = await this.getNextRemitoNumForCustomer(data.customerId);
     const [order] = await db.insert(orders).values({
       folio: data.folio,
       customerId: data.customerId,
@@ -882,6 +883,7 @@ export const storage = {
       total: "0",
       status: "draft",
       lowMarginConfirmed: false,
+      remitoNum,
     }).returning();
 
     const itemsToInsert = await Promise.all(
@@ -1328,13 +1330,21 @@ export const storage = {
     return { rows, grandTotal };
   },
 
+  async getNextRemitoNumForCustomer(customerId: number): Promise<number> {
+    const [row] = await db
+      .select({ maxNum: drizzleSql<number | null>`MAX(remito_num)` })
+      .from(orders)
+      .where(drizzleSql`customer_id = ${customerId} AND remito_num IS NOT NULL`);
+    return (Number(row?.maxNum) || 0) + 1;
+  },
+
   async generateOrderFolio(): Promise<string> {
     const [row] = await db
       .select({ maxNum: drizzleSql<number>`COALESCE(MAX(CAST(SUBSTRING(folio FROM 4) AS INTEGER)), 0)` })
       .from(orders)
       .where(drizzleSql`folio ~ '^(VA|PV)-\\d+$'`);
     const nextNum = (Number(row?.maxNum) || 0) + 1;
-    return `VA-${String(nextNum).padStart(5, "0")}`;
+    return `VA-${String(nextNum).padStart(6, "0")}`;
   },
 
   async createOrder(data: {
@@ -1363,6 +1373,7 @@ export const storage = {
       })
     );
 
+    const remitoNum = await this.getNextRemitoNumForCustomer(data.customerId);
     const [order] = await db.insert(orders).values({
       folio: data.folio,
       customerId: data.customerId,
@@ -1372,6 +1383,7 @@ export const storage = {
       createdBy: data.createdBy,
       total: total.toFixed(2),
       status: "draft",
+      remitoNum,
     }).returning();
 
     await db.insert(orderItems).values(

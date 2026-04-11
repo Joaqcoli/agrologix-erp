@@ -24,9 +24,10 @@ if (fs.existsSync(envPath)) {
 }
 
 // ─── Args ─────────────────────────────────────────────────────────────────────
-const DRY_RUN  = process.argv.includes("--dry-run");
-const CC_ONLY  = process.argv.includes("--cc-only");
-const DIA_ONLY = process.argv.includes("--dia-only");
+const DRY_RUN    = process.argv.includes("--dry-run");
+const CC_ONLY    = process.argv.includes("--cc-only");
+const DIA_ONLY   = process.argv.includes("--dia-only");
+const FIX_REMITO = process.argv.includes("--fix-remito");
 const FILE_PATH = path.resolve(process.cwd(), "attached_assets/info 2026.xlsx");
 
 // ─── DB ───────────────────────────────────────────────────────────────────────
@@ -234,6 +235,8 @@ let paymentsSkipped  = 0;
 let balancesUpdated  = 0;
 let histOrdersCreated = 0;
 let histOrdersSkipped = 0;
+let remitoFixed      = 0;
+let remitoSkipped    = 0;
 const warnings: string[] = [];
 const errors:   string[] = [];
 
@@ -559,7 +562,7 @@ async function initFolioCounters(): Promise<void> {
 function nextFolioForCustomer(customerId: number): string {
   const next = (customerFolioMap.get(customerId) ?? 0) + 1;
   customerFolioMap.set(customerId, next);
-  return `VA-${String(next).padStart(5, "0")}`;
+  return `VA-${String(next).padStart(6, "0")}`;
 }
 
 /**
@@ -860,7 +863,11 @@ async function importBlock(block: ParsedBlock): Promise<void> {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
   console.log(`\n📂 Archivo : ${FILE_PATH}`);
-  if (DRY_RUN && CC_ONLY) {
+  if (FIX_REMITO && DRY_RUN) {
+    console.log("🔍 MODO FIX-REMITO DRY-RUN — muestra qué remito_num se asignaría a cada pedido\n");
+  } else if (FIX_REMITO) {
+    console.log("🔧 MODO FIX-REMITO — actualiza remito_num en pedidos existentes desde Excel\n");
+  } else if (DRY_RUN && CC_ONLY) {
     console.log("🔍 MODO DRY-RUN + CC-ONLY — solo CC, sin tocar la DB\n");
   } else if (DRY_RUN && DIA_ONLY) {
     console.log("🔍 MODO DRY-RUN + DIA-ONLY — solo días nuevos, sin tocar la DB\n");
@@ -902,6 +909,105 @@ async function main() {
   console.log(`   CC    : ${ccSheets.length} → ${ccSheets.join(" | ")}`);
   console.log(`   Días  : ${daySheets.length} → ${daySheets.map((s) => s.trim()).join(" | ")}`);
   console.log();
+
+  // ════════════════════════════════════════════════════════════
+  // MODO FIX-REMITO: actualizar remito_num en pedidos existentes
+  // ════════════════════════════════════════════════════════════
+  if (FIX_REMITO) {
+    console.log("══ FIX-REMITO ══════════════════════════════════════\n");
+    for (const sheetName of daySheets) {
+      const sheetDate = parseDateFromSheetName(sheetName)!;
+      const sheet = workbook.Sheets[sheetName];
+      let blocks: ParsedBlock[];
+      try {
+        blocks = parseSheet(sheet, sheetDate);
+      } catch (e: any) {
+        errors.push(`Hoja "${sheetName}": error al parsear — ${e.message}`);
+        continue;
+      }
+
+      for (const block of blocks) {
+        if (block.remitoNum === null) {
+          warnings.push(`[${sheetDate}] "${block.customerName}": sin remito_num en Excel, omitido`);
+          remitoSkipped++;
+          continue;
+        }
+
+        const customerId = await findOrCreateCustomer(block.customerName, block.hasIva, false);
+        if (!customerId || customerId < 0) {
+          warnings.push(`[${sheetDate}] "${block.customerName}": cliente no encontrado, omitido`);
+          remitoSkipped++;
+          continue;
+        }
+
+        // Buscar pedido existente: mismo cliente + fecha
+        const res = await pool.query(
+          `SELECT id, remito_num FROM orders
+           WHERE customer_id = $1 AND order_date::date = $2::date
+             AND (notes IS NULL OR notes NOT LIKE '%histórica%')
+           ORDER BY id LIMIT 1`,
+          [customerId, sheetDate],
+        );
+
+        if (res.rows.length === 0) {
+          warnings.push(`[${sheetDate}] "${block.customerName}": pedido no encontrado en DB, omitido`);
+          remitoSkipped++;
+          continue;
+        }
+
+        const row = res.rows[0];
+        const orderId: number = row.id;
+        const currentRemito: number | null = row.remito_num;
+
+        if (currentRemito === block.remitoNum) {
+          remitoSkipped++;
+          continue;
+        }
+
+        if (DRY_RUN) {
+          console.log(
+            `  [DRY] UPDATE order id=${orderId} "${block.customerName}" ${sheetDate}: ` +
+            `remito_num ${currentRemito ?? "NULL"} → ${block.remitoNum}`,
+          );
+          remitoFixed++;
+          continue;
+        }
+
+        try {
+          await pool.query(
+            "UPDATE orders SET remito_num = $1 WHERE id = $2",
+            [block.remitoNum, orderId],
+          );
+          console.log(
+            `  ✓ order id=${orderId} "${block.customerName}" ${sheetDate}: ` +
+            `remito_num ${currentRemito ?? "NULL"} → ${block.remitoNum}`,
+          );
+          remitoFixed++;
+        } catch (e: any) {
+          errors.push(`UPDATE remito order id=${orderId}: ${e.message}`);
+        }
+      }
+    }
+
+    console.log("\n" + "═".repeat(55));
+    console.log(`📊 RESUMEN FIX-REMITO${DRY_RUN ? " (DRY-RUN)" : ""}`);
+    console.log("═".repeat(55));
+    console.log(`  Remitos actualizados : ${remitoFixed}`);
+    console.log(`  Omitidos             : ${remitoSkipped}`);
+    console.log(`  Errores              : ${errors.length}`);
+    console.log(`  Advertencias         : ${warnings.length}`);
+    if (warnings.length > 0) {
+      console.log("\n⚠️  ADVERTENCIAS:");
+      warnings.forEach((w) => console.log("  ⚠  " + w));
+    }
+    if (errors.length > 0) {
+      console.log("\n✗ ERRORES:");
+      errors.forEach((e) => console.log("  ✗  " + e));
+    }
+    console.log("═".repeat(55) + "\n");
+    await pool.end();
+    return;
+  }
 
   // ════════════════════════════════════════════════════════════
   // 1. CUENTAS CORRIENTES

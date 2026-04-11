@@ -37,10 +37,10 @@ const STATUS_CONFIG = {
 const fmt = (v: number) => v.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const formatRemito = (order: { remitoNum?: number | null; folio?: string | null }) => {
-  if (order.remitoNum != null) return `VA-${String(order.remitoNum).padStart(5, "0")}`;
+  if (order.remitoNum != null) return `VA-${String(order.remitoNum).padStart(6, "0")}`;
   const f = order.folio ?? "";
   const m = f.match(/^(?:VA|PV)-?(\d+)$/);
-  return m ? `VA-${m[1].padStart(5, "0")}` : (f || "-");
+  return m ? `VA-${m[1].padStart(6, "0")}` : (f || "-");
 };
 
 export default function OrdersPage() {

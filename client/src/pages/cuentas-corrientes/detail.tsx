@@ -270,10 +270,10 @@ type CCDetail = {
 type PendingOrder = { id: number; folio: string; remitoNum: number | null; total: string; orderDate: string };
 
 function formatRemito(order: { remitoNum?: number | null; folio?: string | null }): string {
-  if (order.remitoNum != null) return `VA-${String(order.remitoNum).padStart(5, "0")}`;
+  if (order.remitoNum != null) return `VA-${String(order.remitoNum).padStart(6, "0")}`;
   const f = order.folio ?? "";
   const m = f.match(/^(?:VA|PV)-?(\d+)$/);
-  return m ? `VA-${m[1].padStart(5, "0")}` : (f || "-");
+  return m ? `VA-${m[1].padStart(6, "0")}` : (f || "-");
 }
 
 // ── PDF generation ─────────────────────────────────────────────────────────────
