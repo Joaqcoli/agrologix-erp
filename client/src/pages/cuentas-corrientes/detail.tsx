@@ -262,7 +262,7 @@ function formatRemito(order: { remitoNum?: number | null; folio?: string | null 
 
 // ── PDF generation ─────────────────────────────────────────────────────────────
 
-async function loadLogoJpeg(): Promise<string | null> {
+async function loadLogoJpeg(): Promise<{ base64: string; aspect: number } | null> {
   try {
     const res = await fetch("/logo.png");
     if (!res.ok) return null;
@@ -278,7 +278,7 @@ async function loadLogoJpeg(): Promise<string | null> {
     const ctx = cvs.getContext("2d")!;
     ctx.fillStyle = "white"; ctx.fillRect(0, 0, cvs.width, cvs.height);
     ctx.drawImage(img, 0, 0);
-    return cvs.toDataURL("image/jpeg", 0.92);
+    return { base64: cvs.toDataURL("image/jpeg", 0.92), aspect: img.naturalWidth / img.naturalHeight };
   } catch { return null; }
 }
 
@@ -290,101 +290,195 @@ async function generateCCPDF(opts: {
   periodLabel: string;
 }): Promise<jsPDF> {
   const { clientLabel, saldoAnterior, orderRows, total, periodLabel } = opts;
-  const G_DARK: [number, number, number] = [27, 94, 32];
-  const G_MED:  [number, number, number] = [56, 142, 60];
-  const G_LITE: [number, number, number] = [232, 245, 233];
-  const WHITE:  [number, number, number] = [255, 255, 255];
-  const NEAR_BLACK: [number, number, number] = [30, 30, 30];
+
+  // ── Colors ─────────────────────────────────────────────────────────────────
+  const DARK_GREEN:  [number, number, number] = [45,  80,  22];   // #2d5016
+  const MED_GREEN:   [number, number, number] = [58,  95,  30];   // #3a5f1e
+  const WHITE:       [number, number, number] = [255, 255, 255];
+  const GRAY_BG:     [number, number, number] = [224, 224, 224];  // #e0e0e0
+  const GRAY_LITE:   [number, number, number] = [244, 244, 244];  // #f4f4f4
+  const GRAY_LINE:   [number, number, number] = [221, 221, 221];  // #dddddd
+  const TBL_BORDER:  [number, number, number] = [204, 204, 204];  // #cccccc
+  const GRAY_TEXT:   [number, number, number] = [102, 102, 102];  // #666
+  const NEAR_BLACK:  [number, number, number] = [30,  30,  30];
+
   const pageW = 210;
-  const mx = 12;
+  const pageH = 297;
+  const mx    = 15;
+  const tblW  = pageW - mx * 2;   // 180mm
 
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const fmtM = (n: number) => `$${Math.round(n).toLocaleString("es-AR")}`;
   const todayFmt = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
 
-  // ── Header block ────────────────────────────────────────────────────────────
-  const hdrH = 46;
-  doc.setFillColor(...G_DARK);
+  // ── Column positions ────────────────────────────────────────────────────────
+  // FECHA 12% | N REMITO 25% | N FACTURA 28% | MONTO 35%
+  const fechaW   = tblW * 0.12;
+  const remitoW  = tblW * 0.25;
+  const fechaX   = mx;
+  const remitoX  = fechaX + fechaW;
+  const facturaX = remitoX + remitoW;
+  const montoX   = mx + tblW;   // right edge — text right-aligned from here
+
+  // ── Footer dimensions ───────────────────────────────────────────────────────
+  const footGrayH  = 14;
+  const footGreenH = 10;
+  const footH      = footGrayH + footGreenH;
+  const footY      = pageH - footH;
+
+  const drawFooter = () => {
+    // Gray contact section
+    doc.setFillColor(...GRAY_BG);
+    doc.rect(0, footY, pageW, footGrayH, "F");
+    const col3W = pageW / 3;
+    const labels = ["WhatsApp", "Email", "Website"];
+    const values = ["11-7123-2459", "vegetalesargentinos.srl@gmail.com", "www.vegetalesargentinos.com"];
+    for (let i = 0; i < 3; i++) {
+      const cx = i * col3W + col3W / 2;
+      doc.setTextColor(...GRAY_TEXT);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(6);
+      doc.text(labels[i], cx, footY + 4.5, { align: "center" });
+      doc.setTextColor(...NEAR_BLACK);
+      doc.setFont("helvetica", "bold"); doc.setFontSize(7);
+      doc.text(values[i], cx, footY + 10, { align: "center" });
+    }
+    // Dark green company section
+    const greenY = footY + footGrayH;
+    doc.setFillColor(...DARK_GREEN);
+    doc.rect(0, greenY, pageW, footGreenH, "F");
+    doc.setTextColor(...WHITE);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(7);
+    doc.text("CUIT : 30-71855184-2", pageW - mx, greenY + 3.5, { align: "right" });
+    doc.setFontSize(8.5);
+    doc.text("VEGETALES ARGENTINOS SRL", pageW - mx, greenY + 8, { align: "right" });
+  };
+
+  // ── Header ─────────────────────────────────────────────────────────────────
+  const hdrH = 50;
+  doc.setFillColor(...DARK_GREEN);
   doc.rect(0, 0, pageW, hdrH, "F");
 
-  const logo = await loadLogoJpeg();
-  if (logo) doc.addImage(logo, "JPEG", mx, 7, 22, 22);
-  const tx = logo ? mx + 26 : mx;
+  const logoData = await loadLogoJpeg();
+  let logoW = 0;
+  const logoH = 22;
+  if (logoData) {
+    logoW = Math.min(logoH * logoData.aspect, 44);
+    const logoY = (hdrH - logoH) / 2;
+    doc.addImage(logoData.base64, "JPEG", mx, logoY, logoW, logoH);
+  }
 
+  // Company info — to the right of logo, within left ~55% of page
+  const textX = mx + (logoW > 0 ? logoW + 5 : 0);
   doc.setTextColor(...WHITE);
-  doc.setFont("helvetica", "bold"); doc.setFontSize(11);
-  doc.text("VEGETALES ARGENTINOS SRL", tx, 15);
-  doc.setFont("helvetica", "normal"); doc.setFontSize(7.5);
-  doc.text("CUIT: 30-71855184-2",               tx, 21);
-  doc.text("WhatsApp: 11-7123-2459",             tx, 27);
-  doc.text("vegetalesargentinos.srl@gmail.com",  tx, 32.5);
-  doc.text("www.vegetalesargentinos.com",        tx, 38);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(10);
+  doc.text("VEGETALES ARGENTINOS SRL", textX, 16);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+  doc.text("CUIT: 30-71855184-2",               textX, 22);
+  doc.text("WhatsApp: 11-7123-2459",             textX, 27.5);
+  doc.text("vegetalesargentinos.srl@gmail.com",  textX, 33);
+  doc.text("www.vegetalesargentinos.com",        textX, 38.5);
 
-  doc.setFont("helvetica", "bold"); doc.setFontSize(24);
-  doc.text("CTA. CTE.", pageW - mx, 23, { align: "right" });
-  doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
-  doc.text(periodLabel, pageW - mx, 31, { align: "right" });
+  // Right column — "CTA. CTE." + period
+  doc.setFont("helvetica", "bold"); doc.setFontSize(36);
+  doc.text("CTA. CTE.", pageW - mx, 28, { align: "right" });
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10);
+  doc.text(periodLabel, pageW - mx, 37, { align: "right" });
 
-  // ── Client bar ──────────────────────────────────────────────────────────────
-  doc.setFillColor(...G_MED);
-  doc.rect(0, hdrH, pageW, 10, "F");
-  doc.setTextColor(...WHITE);
+  // ── Client section ─────────────────────────────────────────────────────────
+  const clientY = hdrH + 5;
+  const clientH = 10;
+  doc.setDrawColor(...GRAY_LINE);
+  doc.setLineWidth(0.3);
+  doc.line(0, clientY, pageW, clientY);
+  doc.line(0, clientY + clientH, pageW, clientY + clientH);
+  doc.setTextColor(...NEAR_BLACK);
   doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-  doc.text(clientLabel, mx, hdrH + 6.5);
+  doc.text(clientLabel, mx, clientY + 6.5);
   doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
-  doc.text(`FECHA: ${todayFmt}`, pageW - mx, hdrH + 6.5, { align: "right" });
+  doc.text(`FECHA: ${todayFmt}`, pageW - mx, clientY + 6.5, { align: "right" });
 
-  // ── Table ───────────────────────────────────────────────────────────────────
-  const tblW = pageW - mx * 2;
-  const COL = { fecha: mx + 2, remito: mx + 22, factura: mx + 80, monto: pageW - mx - 2 };
-  const TH = 7;
-  let y = hdrH + 12;
+  // ── Table ──────────────────────────────────────────────────────────────────
+  const TH      = 11;   // table header height
+  const RH      =  9;   // data row height
+  const TOTAL_H = 12;   // total bar height
+  const contentBottom = footY - 5;
+
+  let y = clientY + clientH + 5;
+  let pageTableStartY = y;
 
   const drawTH = () => {
-    doc.setFillColor(...G_DARK);
+    doc.setFillColor(...MED_GREEN);
     doc.rect(mx, y, tblW, TH, "F");
     doc.setTextColor(...WHITE);
-    doc.setFont("helvetica", "bold"); doc.setFontSize(8);
-    doc.text("FECHA",     COL.fecha,   y + 5);
-    doc.text("N REMITO",  COL.remito,  y + 5);
-    doc.text("N FACTURA", COL.factura, y + 5);
-    doc.text("MONTO",     COL.monto,   y + 5, { align: "right" });
+    doc.setFont("helvetica", "bold"); doc.setFontSize(7.5);
+    doc.text("FECHA",     fechaX + fechaW / 2,   y + 7.5, { align: "center" });
+    doc.text("N REMITO",  remitoX + 3.5,          y + 7.5);
+    doc.text("N FACTURA", facturaX + 3.5,         y + 7.5);
+    doc.text("MONTO",     montoX - 4.2,           y + 7.5, { align: "right" });
     y += TH;
   };
   drawTH();
 
-  // Build full row list (saldo anterior first if > 0)
+  // Build row list
   type FullRow = { fecha: string; remito: string; factura: string; monto: number; bold?: boolean };
   const allRows: FullRow[] = [];
   if (saldoAnterior > 0) {
-    allRows.push({ fecha: "—", remito: "SALDO ANTERIOR", factura: "—", monto: saldoAnterior, bold: true });
+    allRows.push({ fecha: "---", remito: "SALDO ANTERIOR", factura: "---", monto: saldoAnterior, bold: true });
   }
-  allRows.push(...orderRows);
+  for (const r of orderRows) {
+    allRows.push({ fecha: r.fecha, remito: r.remito, factura: r.factura || "---", monto: r.monto });
+  }
 
-  const RH = 7;
-  doc.setFontSize(8);
   for (let i = 0; i < allRows.length; i++) {
-    if (y + RH > 270) { doc.addPage(); y = 10; drawTH(); }
+    if (y + RH + TOTAL_H > contentBottom) {
+      drawFooter();
+      doc.addPage();
+      y = 10;
+      pageTableStartY = y;
+      drawTH();
+    }
     const row = allRows[i];
-    doc.setFillColor(...(i % 2 === 0 ? WHITE : G_LITE));
+    doc.setFillColor(...(i % 2 === 0 ? WHITE : GRAY_LITE));
     doc.rect(mx, y, tblW, RH, "F");
-    doc.setTextColor(...(row.bold ? G_DARK : NEAR_BLACK));
+    doc.setFontSize(8);
+
+    // FECHA — centered
+    doc.setTextColor(...NEAR_BLACK);
     doc.setFont("helvetica", row.bold ? "bold" : "normal");
-    doc.text(row.fecha,           COL.fecha,   y + 5);
-    doc.text(row.remito,          COL.remito,  y + 5);
-    doc.text(row.factura,         COL.factura, y + 5);
-    doc.text(fmtM(row.monto),     COL.monto,   y + 5, { align: "right" });
+    doc.text(row.fecha, fechaX + fechaW / 2, y + 6, { align: "center" });
+
+    // N REMITO — left padded
+    doc.setFont("helvetica", row.bold ? "bold" : "normal");
+    doc.text(row.remito, remitoX + 3.5, y + 6);
+
+    // N FACTURA — left padded, always normal weight
+    doc.setFont("helvetica", "normal");
+    doc.text(row.factura, facturaX + 3.5, y + 6);
+
+    // MONTO — right padded, always bold
+    doc.setFont("helvetica", "bold");
+    doc.text(fmtM(row.monto), montoX - 4.2, y + 6, { align: "right" });
+
     y += RH;
   }
 
-  // ── Total bar ───────────────────────────────────────────────────────────────
-  y += 2;
-  doc.setFillColor(...G_DARK);
-  doc.rect(mx, y, tblW, 9, "F");
+  // ── Total bar (attached to last row) ───────────────────────────────────────
+  const totalBarY = y;
+  doc.setFillColor(...MED_GREEN);
+  doc.rect(mx, totalBarY, tblW, TOTAL_H, "F");
   doc.setTextColor(...WHITE);
-  doc.setFont("helvetica", "bold"); doc.setFontSize(10);
-  doc.text("TOTAL A PAGAR", COL.fecha, y + 6);
-  doc.text(fmtM(Math.max(0, total)), COL.monto, y + 6, { align: "right" });
+  doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+  doc.text("TOTAL A PAGAR", remitoX + 3.5, totalBarY + 8);
+  doc.setFontSize(11);
+  doc.text(fmtM(Math.max(0, total)), montoX - 4.2, totalBarY + 8, { align: "right" });
+
+  // Outer table border
+  doc.setDrawColor(...TBL_BORDER);
+  doc.setLineWidth(0.3);
+  doc.rect(mx, pageTableStartY, tblW, totalBarY + TOTAL_H - pageTableStartY, "S");
+
+  // ── Footer on last page ────────────────────────────────────────────────────
+  drawFooter();
 
   doc.setTextColor(0, 0, 0);
   return doc;
