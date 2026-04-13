@@ -69,6 +69,11 @@ export async function generateRemitoPDF(data: RemitoData, opts?: { hidePrecios?:
   const fmtMoney = (v: number) =>
     `$${v.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+  // ── Sort items alphabetically by product name ───────────────────────────────
+  data.order.items = [...data.order.items].sort((a, b) =>
+    (a.product?.name ?? "").localeCompare(b.product?.name ?? "", "es", { sensitivity: "base" })
+  );
+
   // ── Totals ─────────────────────────────────────────────────────────────────
   let totalSinIva = 0;
   let totalConIva = 0;

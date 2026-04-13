@@ -270,13 +270,21 @@ export default function IntakePage() {
       mode: "new" | "merge" | "replace";
       existingOrderId?: number;
     }) => {
-      const items = validLines.map((line) => ({
-        productId: line.resolvedProductId ?? null,
-        quantity: String(line.quantity ?? 1),
-        unit: line.unit, // already has unitOverride applied
-        rawProductName: line.rawProductName,
-        parseStatus: line.resolvedProductId ? "ok" : line.status,
-      }));
+      const items = [...validLines]
+        .sort((a, b) =>
+          (a.resolvedProductName ?? a.rawProductName ?? "").localeCompare(
+            b.resolvedProductName ?? b.rawProductName ?? "",
+            "es",
+            { sensitivity: "base" }
+          )
+        )
+        .map((line) => ({
+          productId: line.resolvedProductId ?? null,
+          quantity: String(line.quantity ?? 1),
+          unit: line.unit, // already has unitOverride applied
+          rawProductName: line.rawProductName,
+          parseStatus: line.resolvedProductId ? "ok" : line.status,
+        }));
 
       const res = await apiRequest("POST", "/api/orders/intake", {
         customerId,
