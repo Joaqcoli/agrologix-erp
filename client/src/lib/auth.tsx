@@ -5,7 +5,7 @@ export type AuthUser = {
   id: number;
   name: string;
   email: string;
-  role: "admin" | "operator";
+  role: "admin" | "operator" | "vendedor";
   active: boolean;
   createdAt: string;
 };
@@ -43,7 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     const data = await r.json();
     setUser(data.user);
-    setLocation("/");
+    setLocation(data.user.role === "vendedor" ? "/vendedor/dashboard" : "/");
   };
 
   const logout = async () => {

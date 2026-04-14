@@ -2,6 +2,8 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import * as XLSX from "xlsx";
 import { storage } from "./storage";
+import { db } from "./db";
+import { sql as drizzleSql } from "drizzle-orm";
 import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema, insertPaymentSchema, insertWithholdingSchema, insertSupplierSchema, insertSupplierPaymentSchema } from "@shared/schema";
 import { z } from "zod";
 import { canonicalizeUnit } from "@shared/units";
@@ -30,6 +32,14 @@ declare module "express-session" {
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.session.userId) {
     return res.status(401).json({ error: "Not authenticated" });
+  }
+  next();
+}
+
+function requireVendedor(req: Request, res: Response, next: NextFunction) {
+  if (!req.session.userId) return res.status(401).json({ error: "Not authenticated" });
+  if (req.session.userRole !== "vendedor" && req.session.userRole !== "admin") {
+    return res.status(403).json({ error: "Forbidden" });
   }
   next();
 }
@@ -969,6 +979,155 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       return res.json(await storage.getSupplierEmptiesDetail(Number(req.params.supplierId)));
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Vendedor ───────────────────────────────────────────────────────────────
+  app.get("/api/vendedor/dashboard", requireVendedor, async (req, res) => {
+    try {
+      const user = await storage.getUserById(req.session.userId!);
+      if (!user) return res.status(401).json({ error: "User not found" });
+      const { from, to } = req.query as { from?: string; to?: string };
+      if (!from || !to) return res.status(400).json({ error: "from and to are required" });
+
+      const salesRow = await db.execute(drizzleSql`
+        SELECT
+          COALESCE(SUM(
+            CASE
+              WHEN oi.price_per_unit::numeric = 0 THEN 0
+              WHEN c.has_iva = true AND (p.name ILIKE '%huevo%' OR p.category ILIKE '%huevo%')
+                THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
+              WHEN c.has_iva = true
+                THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+              ELSE oi.quantity::numeric * oi.price_per_unit::numeric
+            END
+          ), 0) AS ventas,
+          COALESCE(SUM(
+            c.commission_pct::numeric / 100 *
+            CASE
+              WHEN oi.price_per_unit::numeric = 0 THEN 0
+              WHEN c.has_iva = true AND (p.name ILIKE '%huevo%' OR p.category ILIKE '%huevo%')
+                THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
+              WHEN c.has_iva = true
+                THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+              ELSE oi.quantity::numeric * oi.price_per_unit::numeric
+            END
+          ), 0) AS comisiones
+        FROM orders o
+        JOIN customers c ON c.id = o.customer_id
+        JOIN order_items oi ON oi.order_id = o.id
+        LEFT JOIN products p ON p.id = oi.product_id
+        WHERE o.status = 'approved'
+          AND o.order_date >= ${from}::timestamp
+          AND o.order_date < ${to}::timestamp
+          AND c.salesperson_name = ${user.name}
+      `);
+
+      const clientesRow = await db.execute(drizzleSql`
+        SELECT COUNT(*)::int AS total
+        FROM customers
+        WHERE salesperson_name = ${user.name} AND active = true
+      `);
+
+      const r = (salesRow.rows as any[])[0] ?? {};
+      const clientesTotal = ((clientesRow.rows as any[])[0]?.total) ?? 0;
+      return res.json({
+        ventas: parseFloat(r.ventas ?? "0"),
+        comisiones: parseFloat(r.comisiones ?? "0"),
+        clientesAsignados: Number(clientesTotal),
+      });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/vendedor/orders", requireVendedor, async (req, res) => {
+    try {
+      const user = await storage.getUserById(req.session.userId!);
+      if (!user) return res.status(401).json({ error: "User not found" });
+      const { date } = req.query as { date?: string };
+
+      const rows = await db.execute(drizzleSql`
+        SELECT
+          o.id,
+          o.folio,
+          o.order_date::text AS "orderDate",
+          o.status,
+          o.total::text AS total,
+          o.remito_num AS "remitoNum",
+          c.name AS "customerName",
+          c.has_iva AS "hasIva",
+          c.commission_pct::text AS "commissionPct",
+          COUNT(oi.id)::int AS "itemCount",
+          COALESCE(SUM(
+            CASE
+              WHEN oi.price_per_unit::numeric = 0 THEN 0
+              WHEN c.has_iva = true AND (p.name ILIKE '%huevo%' OR p.category ILIKE '%huevo%')
+                THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
+              WHEN c.has_iva = true
+                THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+              ELSE oi.quantity::numeric * oi.price_per_unit::numeric
+            END
+          ), 0)::text AS "totalConIva"
+        FROM orders o
+        JOIN customers c ON c.id = o.customer_id
+        LEFT JOIN order_items oi ON oi.order_id = o.id
+        LEFT JOIN products p ON p.id = oi.product_id
+        WHERE c.salesperson_name = ${user.name}
+          ${date ? drizzleSql`AND o.order_date::date = ${date}::date` : drizzleSql``}
+        GROUP BY o.id, o.folio, o.order_date, o.status, o.total, o.remito_num, c.name, c.has_iva, c.commission_pct
+        ORDER BY o.order_date DESC, o.id DESC
+      `);
+      return res.json(rows.rows);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/vendedor/orders/:id", requireVendedor, async (req, res) => {
+    try {
+      const user = await storage.getUserById(req.session.userId!);
+      if (!user) return res.status(401).json({ error: "User not found" });
+      const order = await storage.getOrder(Number(req.params.id));
+      if (!order) return res.status(404).json({ error: "Not found" });
+      if (order.customer.salespersonName !== user.name && req.session.userRole !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      // Strip cost fields from items
+      const safeItems = order.items.map(({ costPerUnit: _c, overrideCostPerUnit: _oc, margin: _m, ...rest }: any) => rest);
+      return res.json({ ...order, items: safeItems });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/vendedor/customers", requireVendedor, async (req, res) => {
+    try {
+      const user = await storage.getUserById(req.session.userId!);
+      if (!user) return res.status(401).json({ error: "User not found" });
+      const rows = await db.execute(drizzleSql`
+        SELECT * FROM customers
+        WHERE salesperson_name = ${user.name} AND active = true
+        ORDER BY name
+      `);
+      return res.json(rows.rows);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/vendedor/customers", requireVendedor, async (req, res) => {
+    try {
+      const user = await storage.getUserById(req.session.userId!);
+      if (!user) return res.status(401).json({ error: "User not found" });
+      const data = insertCustomerSchema.parse({ ...req.body, salespersonName: user.name });
+      return res.status(201).json(await storage.createCustomer(data));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.patch("/api/vendedor/customers/:id", requireVendedor, async (req, res) => {
+    try {
+      const user = await storage.getUserById(req.session.userId!);
+      if (!user) return res.status(401).json({ error: "User not found" });
+      const customer = await storage.getCustomer(Number(req.params.id));
+      if (!customer) return res.status(404).json({ error: "Not found" });
+      if (customer.salespersonName !== user.name && req.session.userRole !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const data = insertCustomerSchema.partial().parse(req.body);
+      return res.json(await storage.updateCustomer(Number(req.params.id), data));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   return httpServer;

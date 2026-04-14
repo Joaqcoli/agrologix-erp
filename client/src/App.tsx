@@ -1,10 +1,10 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, Redirect } from "wouter";
 import { Component, type ReactNode } from "react";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { AuthProvider } from "@/lib/auth";
+import { AuthProvider, useAuth } from "@/lib/auth";
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null };
@@ -40,13 +40,23 @@ import CuentasCorrientesPage from "@/pages/cuentas-corrientes/index";
 import CCCustomerDetailPage from "@/pages/cuentas-corrientes/detail";
 import SuppliersPage from "@/pages/suppliers/index";
 import SupplierCCPage from "@/pages/suppliers/cc";
+import VendedorDashboard from "@/pages/vendedor/dashboard";
+import VendedorOrders from "@/pages/vendedor/orders";
+import VendedorOrderDetail from "@/pages/vendedor/order-detail";
+import VendedorCustomers from "@/pages/vendedor/customers";
 import NotFound from "@/pages/not-found";
+
+function RootPage() {
+  const { user } = useAuth();
+  if (user?.role === "vendedor") return <Redirect to="/vendedor/dashboard" />;
+  return <DashboardPage />;
+}
 
 function Router() {
   return (
     <Switch>
       <Route path="/login" component={LoginPage} />
-      <Route path="/" component={DashboardPage} />
+      <Route path="/" component={RootPage} />
       <Route path="/customers" component={CustomersPage} />
       <Route path="/products" component={ProductsPage} />
       <Route path="/purchases" component={PurchasesPage} />
@@ -87,6 +97,12 @@ function Router() {
           return <SupplierCCPage supplierId={Number(params.id)} month={month} year={year} />;
         }}
       </Route>
+      <Route path="/vendedor/dashboard" component={VendedorDashboard} />
+      <Route path="/vendedor/orders" component={VendedorOrders} />
+      <Route path="/vendedor/orders/:id">
+        {(params) => <VendedorOrderDetail id={Number(params.id)} />}
+      </Route>
+      <Route path="/vendedor/customers" component={VendedorCustomers} />
       <Route component={NotFound} />
     </Switch>
   );

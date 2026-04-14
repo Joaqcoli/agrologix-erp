@@ -3,7 +3,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 
-export const roleEnum = pgEnum("role", ["admin", "operator"]);
+export const roleEnum = pgEnum("role", ["admin", "operator", "vendedor"]);
 export const movementTypeEnum = pgEnum("movement_type", ["in", "out"]);
 export const unitEnum = pgEnum("unit", ["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"]);
 export const orderStatusEnum = pgEnum("order_status", ["draft", "approved", "cancelled"]);

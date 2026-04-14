@@ -12,6 +12,12 @@ export async function runMigrations() {
 
   await db.execute(sql`
     DO $$ BEGIN
+      ALTER TYPE role ADD VALUE IF NOT EXISTS 'vendedor';
+    EXCEPTION WHEN others THEN null; END $$;
+  `);
+
+  await db.execute(sql`
+    DO $$ BEGIN
       CREATE TYPE movement_type AS ENUM ('in', 'out');
     EXCEPTION WHEN duplicate_object THEN null; END $$;
   `);
