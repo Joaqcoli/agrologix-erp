@@ -14,6 +14,7 @@ export type ParsedLine = {
   raw: string;
   quantity: number | null;
   unit: string | null;
+  unitFromText: boolean; // true si la unidad fue extraída del texto; false si es fallback de products.unit
   rawProductName: string;
   productId: number | null;
   productName: string | null;
@@ -128,6 +129,7 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
 
   let quantity: number | null = null;
   let unit: string | null = null;
+  let unitFromText = false; // se vuelve true si la unidad vino del texto (no de fallback)
   const usedIndices = new Set<number>();
 
   // Pass 1: find quantity — handles integers, decimals, fractions ("1/2"), and mixed numbers ("1 1/2")
@@ -142,6 +144,7 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
       if (suffix) {
         quantity = /^g(r|rs|ram|ramos)?$/.test(suffix) ? val / 1000 : val;
         unit = "KG";
+        unitFromText = true;
       } else {
         quantity = val;
       }
@@ -157,6 +160,7 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
       const suffix = compoundMatch[2].toLowerCase();
       quantity = /^g(r|rs|ram|ramos)?$/.test(suffix) ? val / 1000 : val;
       unit = "KG";
+      unitFromText = true;
       usedIndices.add(i);
       continue;
     }
@@ -188,6 +192,7 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
     const normToken = normalize(token);
     if (UNIT_MAP[normToken]) {
       unit = UNIT_MAP[normToken];
+      unitFromText = true; // unidad explícita en el texto
     } else {
       productTokens.push(token);
     }
@@ -201,6 +206,7 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
       raw: trimmed,
       quantity: null,
       unit,
+      unitFromText,
       rawProductName,
       productId: null,
       productName: null,
@@ -215,6 +221,7 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
       raw: trimmed,
       quantity,
       unit,
+      unitFromText,
       rawProductName: "",
       productId: null,
       productName: null,
@@ -230,6 +237,7 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
       raw: trimmed,
       quantity,
       unit,
+      unitFromText,
       rawProductName,
       productId: null,
       productName: null,
@@ -239,14 +247,16 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
   }
 
   if (matched.length === 1) {
-    // Use product's default unit if none provided
+    // Use product's default unit if none provided (no es del texto)
     const product = products.find((p) => p.id === matched[0].id);
     if (!unit && product) unit = product.unit;
+    // unitFromText ya refleja si la unidad vino del texto; el fallback de product.unit no la cambia
 
     return {
       raw: trimmed,
       quantity,
       unit: unit ?? "KG",
+      unitFromText,
       rawProductName,
       productId: matched[0].id,
       productName: matched[0].name,
@@ -260,6 +270,7 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
     raw: trimmed,
     quantity,
     unit: unit ?? "kg",
+    unitFromText,
     rawProductName,
     productId: null,
     productName: null,

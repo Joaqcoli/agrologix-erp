@@ -225,10 +225,12 @@ export default function IntakePage() {
     setCustomNames({});
     setQtyOverrides({});
 
-    // Pre-fill unit overrides: DB order history first, then localStorage (MEJORA 1)
+    // Pre-fill unit overrides: DB order history first, then localStorage
+    // SOLO cuando el usuario NO escribió una unidad en el texto (line.unitFromText = false)
     const initialUnitOverrides: Record<number, string> = {};
     result.forEach((line, idx) => {
       if (line.status === "no_qty" || !line.productId) return;
+      if (line.unitFromText) return; // respetar lo que el usuario escribió
       const histUnit = unitHistoryMap.get(line.productId);
       if (histUnit) {
         initialUnitOverrides[idx] = histUnit;
