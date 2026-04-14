@@ -825,7 +825,7 @@ export const storage = {
         }
         totalCosto = items.reduce((sum, item) => {
           const qty = parseFloat(item.quantity as string);
-          const cost = item.costPerUnit ? parseFloat(item.costPerUnit as string) : 0;
+          const cost = parseFloat((item.overrideCostPerUnit ?? item.costPerUnit ?? "0") as string);
           return sum + qty * cost;
         }, 0);
 
