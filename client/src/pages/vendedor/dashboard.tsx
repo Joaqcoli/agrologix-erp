@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { TrendingUp, Users, DollarSign, BarChart3 } from "lucide-react";
+import { BarChart3, Users } from "lucide-react";
 
 const fmt = (n: number) => "$" + Math.round(n).toLocaleString("es-MX");
 
@@ -45,31 +45,6 @@ function getRange(mode: RangeMode, customFrom: string, customTo: string): [strin
   return [customFrom, customTo];
 }
 
-function MetricCard({
-  title, value, sub, icon: Icon, loading, highlight,
-}: {
-  title: string; value: string; sub?: string; icon?: React.ElementType; loading: boolean; highlight?: boolean;
-}) {
-  return (
-    <Card className={highlight ? "border-primary/40 bg-primary/5" : ""}>
-      <CardHeader className="pb-1 flex flex-row items-center justify-between gap-1">
-        <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{title}</CardTitle>
-        {Icon && <Icon className="h-4 w-4 text-muted-foreground" />}
-      </CardHeader>
-      <CardContent className="pt-0">
-        {loading ? (
-          <Skeleton className="h-8 w-28" />
-        ) : (
-          <>
-            <p className={`text-2xl font-bold ${highlight ? "text-primary" : "text-foreground"}`}>{value}</p>
-            {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
-          </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
 const RANGE_BTNS: { label: string; value: RangeMode }[] = [
   { label: "Hoy", value: "hoy" },
   { label: "Semana", value: "semana" },
@@ -90,9 +65,6 @@ export default function VendedorDashboard() {
     queryFn: () => fetch(`/api/vendedor/dashboard?from=${from}&to=${to}`).then((r) => r.json()),
   });
 
-  const pctComision = stats && stats.ventas > 0
-    ? ((stats.comisiones / stats.ventas) * 100).toFixed(1)
-    : "0.0";
 
   return (
     <VendedorLayout title="Dashboard">
@@ -148,47 +120,29 @@ export default function VendedorDashboard() {
                 <div className="rounded-md bg-background border border-border p-3">
                   <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Ventas</p>
                   <p className="text-lg font-bold text-foreground mt-1">{fmt(stats.ventas)}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">sin IVA</p>
                 </div>
                 <div className="rounded-md bg-background border border-border p-3">
                   <p className="text-xs text-muted-foreground uppercase tracking-wide">Comisión</p>
                   <p className="text-lg font-bold text-green-600 dark:text-green-400 mt-1">{fmt(stats.comisiones)}</p>
-                  <p className="text-xs font-semibold text-green-600 dark:text-green-400 mt-0.5">{pctComision}% sobre ventas</p>
                 </div>
                 <div className="rounded-md bg-background border border-border p-3">
                   <p className="text-xs text-muted-foreground uppercase tracking-wide">Clientes</p>
                   <p className="text-lg font-bold text-foreground mt-1">{stats.clientesAsignados}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">asignados</p>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <Users className="h-3 w-3 text-muted-foreground" />
+                    <p className="text-[10px] text-muted-foreground">asignados</p>
+                  </div>
                 </div>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {/* Metric cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <MetricCard
-            title="Total Ventas"
-            value={fmt(stats?.ventas ?? 0)}
-            sub="sin IVA"
-            icon={TrendingUp}
-            loading={isLoading}
-            highlight
-          />
-          <MetricCard
-            title="Total Comisionado"
-            value={fmt(stats?.comisiones ?? 0)}
-            sub={`${pctComision}% s/ventas`}
-            icon={DollarSign}
-            loading={isLoading}
-          />
-          <MetricCard
-            title="Clientes Asignados"
-            value={String(stats?.clientesAsignados ?? 0)}
-            icon={Users}
-            loading={isLoading}
-          />
-        </div>
+        {isLoading && (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-20 w-full rounded-lg" />)}
+          </div>
+        )}
       </div>
     </VendedorLayout>
   );

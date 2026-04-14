@@ -62,11 +62,8 @@ export default function VendedorOrders() {
 
   const approved = orders.filter((o) => o.status === "approved");
 
-  // Commission always on total sin IVA (o.total = sum of subtotals without IVA)
+  // All amounts in sin IVA (o.total = sum of subtotals without IVA)
   const totalVendido = approved.reduce((s, o) => s + parseFloat(o.total || "0"), 0);
-  const totalConIvaSum = approved.reduce((s, o) => {
-    return s + (o.hasIva ? parseFloat(o.totalConIva || "0") : parseFloat(o.total || "0"));
-  }, 0);
   const totalComisiones = approved.reduce((s, o) => {
     const pct = parseFloat(o.commissionPct || "0") / 100;
     return s + parseFloat(o.total || "0") * pct;
@@ -117,13 +114,11 @@ export default function VendedorOrders() {
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 <div className="rounded-md bg-background border border-border p-3">
                   <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Vendido</p>
-                  <p className="text-lg font-bold text-foreground mt-1">{fmt(totalConIvaSum)}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">incl. IVA según cliente</p>
+                  <p className="text-lg font-bold text-foreground mt-1">{fmt(totalVendido)}</p>
                 </div>
                 <div className="rounded-md bg-background border border-border p-3">
                   <p className="text-xs text-muted-foreground uppercase tracking-wide">Comisión</p>
                   <p className="text-lg font-bold text-green-600 dark:text-green-400 mt-1">{fmt(totalComisiones)}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">sobre neto sin IVA</p>
                 </div>
                 <div className="rounded-md bg-background border border-border p-3">
                   <p className="text-xs text-muted-foreground uppercase tracking-wide">Pedidos / Clientes</p>
@@ -159,11 +154,7 @@ export default function VendedorOrders() {
               const cfg = STATUS_CONFIG[order.status] ?? STATUS_CONFIG.draft;
               const StatusIcon = cfg.icon;
               const commPct = parseFloat(order.commissionPct || "0");
-              // Commission on total without IVA
               const comision = parseFloat(order.total || "0") * (commPct / 100);
-              const vendidoDisplay = order.hasIva
-                ? parseFloat(order.totalConIva || "0")
-                : parseFloat(order.total || "0");
 
               return (
                 <Link key={order.id} href={`/vendedor/orders/${order.id}`}>
@@ -183,11 +174,6 @@ export default function VendedorOrders() {
                               <Badge variant="secondary" className="text-[10px]">
                                 {order.itemCount} prod.
                               </Badge>
-                              {order.hasIva && (
-                                <Badge variant="outline" className="text-[10px] text-primary border-primary/40">
-                                  Con IVA
-                                </Badge>
-                              )}
                             </div>
                             <p className="text-sm font-semibold text-foreground mt-1 truncate">
                               {order.customerName}
@@ -210,15 +196,8 @@ export default function VendedorOrders() {
                         </div>
                         <div className="flex items-center gap-3 shrink-0">
                           <div className="text-right">
-                            <p className="text-xs text-muted-foreground">
-                              {order.hasIva ? "Total + IVA" : "Total"}
-                            </p>
-                            <p className="text-base font-bold text-foreground">{fmt(vendidoDisplay)}</p>
-                            {order.hasIva && (
-                              <p className="text-[10px] text-muted-foreground">
-                                Neto: {fmt(order.total)}
-                              </p>
-                            )}
+                            <p className="text-xs text-muted-foreground">Total</p>
+                            <p className="text-base font-bold text-foreground">{fmt(order.total)}</p>
                           </div>
                           <ChevronRight className="h-4 w-4 text-muted-foreground" />
                         </div>
