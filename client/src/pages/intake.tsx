@@ -473,7 +473,7 @@ export default function IntakePage() {
                     <Badge variant="default">{okCount} OK</Badge>
                     {unresolved > 0 && <Badge variant="secondary">{unresolved} sin producto</Badge>}
                     {unitMismatchIndices.size > 0 && (
-                      <Badge variant="outline" className="text-yellow-600 border-yellow-500/40">{unitMismatchIndices.size} unidad sin registrar</Badge>
+                      <Badge variant="outline" className="text-yellow-600 border-yellow-500/40">{unitMismatchIndices.size} con unidad nueva</Badge>
                     )}
                     {parsed.filter((l) => l.status === "no_qty").length > 0 && (
                       <Badge variant="destructive">{parsed.filter((l) => l.status === "no_qty").length} ignoradas</Badge>
@@ -544,28 +544,22 @@ export default function IntakePage() {
                               {line.quantity !== null && (
                                 <span className="text-xs font-semibold text-foreground">
                                   {line.quantity} {unitOverrides[idx] ?? line.unit ?? "—"}
-                                  {unitMismatchIndices.has(idx) && (
-                                    <Badge variant="outline" className="ml-2 text-[10px] text-yellow-600 border-yellow-500/40 align-middle">
-                                      unidad sin registrar
-                                    </Badge>
-                                  )}
                                 </span>
                               )}
-                              {unitMismatchIndices.has(idx) && (
+                              {line.status !== "no_qty" && (
                                 <div className="w-full mt-1">
                                   <Select
-                                    value={unitOverrides[idx] ?? ""}
+                                    value={unitOverrides[idx] ?? line.unit ?? ""}
                                     onValueChange={(v) => {
                                       setUnitOverrides({ ...unitOverrides, [idx]: v });
                                       if (resolvedProductId) {
-                                        // Immediately register the unit for the product
                                         apiRequest("POST", `/api/products/${resolvedProductId}/units`, { unit: v }).catch(() => {});
                                         try { localStorage.setItem(`lastUnit_${resolvedProductId}`, v); } catch { /* quota exceeded */ }
                                       }
                                     }}
                                   >
-                                    <SelectTrigger className="h-7 text-xs w-48" data-testid={`select-unit-${idx}`}>
-                                      <SelectValue placeholder="Registrar como..." />
+                                    <SelectTrigger className="h-7 text-xs w-40" data-testid={`select-unit-${idx}`}>
+                                      <SelectValue placeholder="Unidad..." />
                                     </SelectTrigger>
                                     <SelectContent>
                                       {ALL_CANONICAL_UNITS.map((u) => (

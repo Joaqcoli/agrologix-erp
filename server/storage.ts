@@ -307,7 +307,9 @@ export const storage = {
         if (existingPU) {
           const puStock = parseFloat(existingPU.stockQty as string);
           const puCost = parseFloat(existingPU.avgCost as string);
-          newPuAvgCost = puStock + newQty === 0 ? newCost : (puStock * puCost + newQty * newCost) / (puStock + newQty);
+          newPuAvgCost = newCost === 0
+            ? puCost
+            : (puStock + newQty === 0 ? newCost : (puStock * puCost + newQty * newCost) / (puStock + newQty));
 
           // Recalcular weight_per_unit como promedio ponderado de unidades base por envase
           if (isPackagePurchase) {
@@ -346,9 +348,9 @@ export const storage = {
         // ── products.currentStock + averageCost: costo promedio ponderado ─────────
         const currentStock = parseFloat(product.currentStock as string);
         const currentAvgCost = parseFloat(product.averageCost as string);
-        const newAvgCost = currentStock + newQty === 0
-          ? newCost
-          : (currentStock * currentAvgCost + newQty * newCost) / (currentStock + newQty);
+        const newAvgCost = newCost === 0
+          ? currentAvgCost
+          : (currentStock + newQty === 0 ? newCost : (currentStock * currentAvgCost + newQty * newCost) / (currentStock + newQty));
         const previousCost = product.averageCost as string;
 
         await tx.update(products).set({
@@ -2002,6 +2004,10 @@ export const storage = {
 
   async updateOrderInvoiceNumber(id: number, invoiceNumber: string | null): Promise<void> {
     await db.execute(drizzleSql`UPDATE orders SET invoice_number = ${invoiceNumber} WHERE id = ${id}`);
+  },
+
+  async updateOrderRemitoNum(id: number, remitoNum: number | null): Promise<void> {
+    await db.execute(drizzleSql`UPDATE orders SET remito_num = ${remitoNum} WHERE id = ${id}`);
   },
 
   // fromDate: inclusive (>=), toDate: exclusive (<)

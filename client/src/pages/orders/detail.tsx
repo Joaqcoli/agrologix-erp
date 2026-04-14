@@ -80,7 +80,7 @@ type CalcItem = {
 
 function hasDraftChanges(draft: ItemDraft, calc: CalcItem): boolean {
   const origQty = fmt(calc.qty, 4).replace(/\.?0+$/, "");
-  const origUnit = dbEnumToCanonical(calc.unit).toLowerCase();
+  const origUnit = dbEnumToCanonical(calc.unit);
   const origPrice = calc.hasPrice ? String(Math.round(calc.pricePerUnit!)) : "";
   const origCost = String(Math.round(calc.effectiveCostPerUnit));
   return (
@@ -248,7 +248,7 @@ function ItemRow({
             <SelectTrigger className="h-7 w-24 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               {ALL_CANONICAL_UNITS.map((u) => (
-                <SelectItem key={u} value={u.toLowerCase()}>{u}</SelectItem>
+                <SelectItem key={u} value={u}>{u}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -602,7 +602,12 @@ export default function OrderDetailPage({ id }: { id: number }) {
   // ── Edit state ────────────────────────────────────────────────────────────
   const [drafts, setDrafts] = useState<Record<number, ItemDraft>>({});
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [zeroCostPending, setZeroCostPending] = useState<{ patches: { itemId: number; data: Record<string, any> }[] } | null>(null);
+  type ZeroCostItem = { itemId: number; productName: string; patch: { itemId: number; data: Record<string, any> } };
+  type ZeroCostState = { queue: ZeroCostItem[]; resolved: { itemId: number; data: Record<string, any> }[]; others: { itemId: number; data: Record<string, any> }[] } | null;
+  const [zeroCostState, setZeroCostState] = useState<ZeroCostState>(null);
+  // Remito num inline edit
+  const [editingRemitoNum, setEditingRemitoNum] = useState(false);
+  const [remitoNumInput, setRemitoNumInput] = useState("");
 
   // ── Mutations ─────────────────────────────────────────────────────────────
   const deleteMutation = useMutation({
@@ -685,6 +690,18 @@ export default function OrderDetailPage({ id }: { id: number }) {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const remitoNumMutation = useMutation({
+    mutationFn: (remitoNum: number | null) =>
+      apiRequest("PATCH", `/api/orders/${id}/remito-num`, { remitoNum }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      setEditingRemitoNum(false);
+      toast({ title: "Remito actualizado" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const approveMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/orders/${id}/approve`),
     onSuccess: () => {
@@ -713,7 +730,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
         ...prev,
         [calc.id]: {
           qty: fmt(calc.qty, 4).replace(/\.?0+$/, ""),
-          unit: dbEnumToCanonical(calc.unit).toLowerCase(),
+          unit: dbEnumToCanonical(calc.unit),
           price: calc.hasPrice ? String(Math.round(calc.pricePerUnit!)) : "",
           cost: String(Math.round(calc.effectiveCostPerUnit)),
           productId: calc.item.productId ?? null,
@@ -762,7 +779,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
             quantity: d.qty,
             unit: d.unit,
             pricePerUnit: d.price || null,
-            overrideCostPerUnit: d.cost || null,
+            overrideCostPerUnit: d.cost !== "" ? d.cost : null,
             productId: d.productId,
           },
         };
@@ -774,30 +791,43 @@ export default function OrderDetailPage({ id }: { id: number }) {
       return;
     }
 
-    // MEJORA 3: if any patch has $0 cost and no bolsaType, ask about stock
-    const hasZeroCost = patches.some((p) => {
+    // If any patch has $0 cost and no bolsaType, ask per-line about stock
+    const zeroCostItems = patches.filter((p) => {
       const cost = p.data.overrideCostPerUnit;
       const calc = calcs.find((c) => c.id === p.itemId);
       return (cost === "0" || cost === 0) && !calc?.bolsaType;
     });
-    if (hasZeroCost) {
-      setZeroCostPending({ patches });
+    const otherPatches = patches.filter((p) => {
+      const cost = p.data.overrideCostPerUnit;
+      const calc = calcs.find((c) => c.id === p.itemId);
+      return !((cost === "0" || cost === 0) && !calc?.bolsaType);
+    });
+
+    if (zeroCostItems.length > 0) {
+      const queue = zeroCostItems.map((patch) => {
+        const calc = calcs.find((c) => c.id === patch.itemId);
+        return { itemId: patch.itemId, productName: calc?.name ?? "Producto", patch };
+      });
+      setZeroCostState({ queue, resolved: [], others: otherPatches });
       return;
     }
 
     saveAllMutation.mutate(patches);
   };
 
-  const handleZeroCostConfirm = (affectStock: boolean) => {
-    if (!zeroCostPending) return;
-    const patches = zeroCostPending.patches.map((p) => {
-      if (!affectStock && (p.data.overrideCostPerUnit === "0" || p.data.overrideCostPerUnit === 0)) {
-        return { ...p, data: { ...p.data, bolsaType: "sin_stock" } };
-      }
-      return p;
-    });
-    setZeroCostPending(null);
-    saveAllMutation.mutate(patches);
+  const handleZeroCostAnswer = (affectStock: boolean) => {
+    if (!zeroCostState || zeroCostState.queue.length === 0) return;
+    const [current, ...remaining] = zeroCostState.queue;
+    const resolvedPatch = !affectStock
+      ? { ...current.patch, data: { ...current.patch.data, bolsaType: "sin_stock" } }
+      : current.patch;
+    const newResolved = [...zeroCostState.resolved, resolvedPatch];
+    if (remaining.length === 0) {
+      setZeroCostState(null);
+      saveAllMutation.mutate([...newResolved, ...zeroCostState.others]);
+    } else {
+      setZeroCostState({ ...zeroCostState, queue: remaining, resolved: newResolved });
+    }
   };
 
   const handleCancelEdit = (itemId: number) => {
@@ -977,7 +1007,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
     const price = hasPrice ? parseFloat(item.pricePerUnit as string) : 0;
     const storedCost = parseFloat((item.costPerUnit as string) ?? "0");
     const override = item.overrideCostPerUnit;
-    const hasOverride = override != null && parseFloat(override as string) > 0;
+    const hasOverride = override != null && override !== "";
     const effectiveCostPerUnit = hasOverride ? parseFloat(override as string) : storedCost;
     const name = getItemName(item);
     const subtotal = qty * price;
@@ -1035,7 +1065,44 @@ export default function OrderDetailPage({ id }: { id: number }) {
           </Button>
           <div className="flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-xl font-bold text-foreground">{order.folio}</h2>
+              <h2 className="text-xl font-bold text-foreground">
+                {order.remitoNum != null
+                  ? `VA-${String(order.remitoNum).padStart(6, "0")}`
+                  : order.folio}
+              </h2>
+              {order.remitoNum != null && (
+                editingRemitoNum ? (
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-muted-foreground">VA-</span>
+                    <Input
+                      type="number"
+                      min="1"
+                      value={remitoNumInput}
+                      onChange={(e) => setRemitoNumInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { const n = parseInt(remitoNumInput); if (!isNaN(n) && n > 0) remitoNumMutation.mutate(n); }
+                        if (e.key === "Escape") setEditingRemitoNum(false);
+                      }}
+                      className="h-6 w-20 text-xs px-1.5"
+                      autoFocus
+                    />
+                    <button
+                      onClick={() => { const n = parseInt(remitoNumInput); if (!isNaN(n) && n > 0) remitoNumMutation.mutate(n); }}
+                      className="p-0.5 rounded hover:bg-green-100 text-green-600"
+                    ><Check className="h-3 w-3" /></button>
+                    <button
+                      onClick={() => setEditingRemitoNum(false)}
+                      className="p-0.5 rounded hover:bg-muted text-muted-foreground"
+                    ><X className="h-3 w-3" /></button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => { setRemitoNumInput(String(order.remitoNum)); setEditingRemitoNum(true); }}
+                    className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                    title="Editar número de remito"
+                  >editar</button>
+                )
+              )}
               <Badge variant={sc.variant}>{sc.label}</Badge>
               {hasIva && <Badge variant="outline" className="text-[10px] text-primary border-primary/40">Con IVA</Badge>}
               {hasBolsaFv && <Badge variant="outline" className="text-[10px] text-green-600 border-green-300">Bolsa FV</Badge>}
@@ -1282,21 +1349,26 @@ export default function OrderDetailPage({ id }: { id: number }) {
         </Card>
       </div>
 
-      {/* Zero-cost dialog */}
-      <AlertDialog open={!!zeroCostPending} onOpenChange={(o) => !o && setZeroCostPending(null)}>
+      {/* Zero-cost dialog — per item, sequential */}
+      <AlertDialog open={!!(zeroCostState && zeroCostState.queue.length > 0)} onOpenChange={(o) => !o && setZeroCostState(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Costo $0 detectado</AlertDialogTitle>
+            <AlertDialogTitle>Costo $0 — {zeroCostState?.queue[0]?.productName}</AlertDialogTitle>
             <AlertDialogDescription>
-              Una o más líneas tienen costo $0. ¿Querés que descuenten stock al aprobar el pedido?
+              Esta línea tiene costo $0. ¿Querés que descuente stock al aprobar el pedido?
+              {zeroCostState && zeroCostState.queue.length > 1 && (
+                <span className="block mt-1 text-xs text-muted-foreground">
+                  ({zeroCostState.queue.length} líneas por revisar)
+                </span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setZeroCostPending(null)}>Cancelar</AlertDialogCancel>
-            <AlertDialogAction className="bg-secondary text-secondary-foreground hover:bg-secondary/80" onClick={() => handleZeroCostConfirm(false)}>
+            <AlertDialogCancel onClick={() => setZeroCostState(null)}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction className="bg-secondary text-secondary-foreground hover:bg-secondary/80" onClick={() => handleZeroCostAnswer(false)}>
               No descontar stock
             </AlertDialogAction>
-            <AlertDialogAction onClick={() => handleZeroCostConfirm(true)}>
+            <AlertDialogAction onClick={() => handleZeroCostAnswer(true)}>
               Sí, descontar stock
             </AlertDialogAction>
           </AlertDialogFooter>

@@ -155,7 +155,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const validItems = items.filter((i) => i.productId && parseFloat(i.quantity) > 0 && parseFloat(i.costPerUnit) > 0);
+    const validItems = items.filter((i) => i.productId && parseFloat(i.quantity) > 0 && i.costPerUnit !== "" && parseFloat(i.costPerUnit) >= 0);
     if (!validItems.length) {
       toast({ title: "Sin productos válidos", description: "Agrega al menos un producto con cantidad y costo.", variant: "destructive" });
       return;

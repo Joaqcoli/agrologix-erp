@@ -541,6 +541,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // PATCH /api/orders/:id/remito-num — update remito number inline
+  app.patch("/api/orders/:id/remito-num", requireAuth, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { remitoNum } = req.body as { remitoNum?: number | null };
+      await storage.updateOrderRemitoNum(id, remitoNum ?? null);
+      return res.json({ ok: true });
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
   // ─── Export ────────────────────────────────────────────────────────────────
   // Export all orders for a date as XLSX
   app.get("/api/orders/export", requireAuth, async (req, res) => {
