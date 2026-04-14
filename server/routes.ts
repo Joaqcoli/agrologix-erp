@@ -454,6 +454,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         pricePerUnit: z.string().nullable().optional(),
         overrideCostPerUnit: z.string().nullable().optional(),
         bolsaType: z.string().nullable().optional(),
+        isBonification: z.boolean().optional(),
       });
       const patch = schema.parse(req.body);
 

@@ -40,6 +40,7 @@ const fmtInt = (v: number) => Math.round(v).toLocaleString("es-MX");
 type FullOrderItem = OrderItem & {
   overrideCostPerUnit?: string | null;
   bolsaType?: string | null;
+  isBonification?: boolean | null;
   product?: (Product & { [key: string]: any }) | null;
 };
 
@@ -76,6 +77,7 @@ type CalcItem = {
   pct: number;
   isLowMargin: boolean;
   bolsaType: string | null;
+  isBonification: boolean;
 };
 
 function hasDraftChanges(draft: ItemDraft, calc: CalcItem): boolean {
@@ -286,6 +288,11 @@ function ItemRow({
               {calc.bolsaType === "bolsa_propia" ? "Bolsa propia" : "Bolsa"}
             </Badge>
           )}
+          {calc.isBonification && (
+            <Badge variant="outline" className="text-[9px] py-0 px-1 text-purple-600 border-purple-300">
+              Bonificación
+            </Badge>
+          )}
           {hasIva && calc.hasPrice && (
             <span className="text-[10px] text-muted-foreground">IVA {(calc.ivaRate * 100).toFixed(1)}%</span>
           )}
@@ -325,6 +332,11 @@ function ItemRow({
             className="h-7 w-24 text-xs px-1.5 py-0 text-right"
             placeholder="Precio"
           />
+        ) : calc.isBonification ? (
+          <span
+            className={`text-purple-600 dark:text-purple-400 ${canEdit ? "cursor-pointer hover:underline" : ""}`}
+            onClick={canEdit ? onStartEdit : undefined}
+          >$0</span>
         ) : !calc.hasPrice ? (
           <Badge
             variant="destructive"
@@ -605,6 +617,10 @@ export default function OrderDetailPage({ id }: { id: number }) {
   type ZeroCostItem = { itemId: number; productName: string; patch: { itemId: number; data: Record<string, any> } };
   type ZeroCostState = { queue: ZeroCostItem[]; resolved: { itemId: number; data: Record<string, any> }[]; others: { itemId: number; data: Record<string, any> }[] } | null;
   const [zeroCostState, setZeroCostState] = useState<ZeroCostState>(null);
+  // Bonification (price=0) dialog queue
+  type BonifItem = { itemId: number; productName: string; patch: { itemId: number; data: Record<string, any> } };
+  type BonifState = { queue: BonifItem[]; resolved: { itemId: number; data: Record<string, any> }[]; others: { itemId: number; data: Record<string, any> }[] } | null;
+  const [bonifState, setBonifState] = useState<BonifState>(null);
   // Remito num inline edit
   const [editingRemitoNum, setEditingRemitoNum] = useState(false);
   const [remitoNumInput, setRemitoNumInput] = useState("");
@@ -636,9 +652,10 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const saveAllMutation = useMutation({
     mutationFn: async (patches: { itemId: number; data: Record<string, any> }[]) => {
-      await Promise.all(patches.map(({ itemId, data }) =>
-        apiRequest("PATCH", `/api/orders/${id}/items/${itemId}`, data)
-      ));
+      // Sequential (not parallel) to avoid race condition on orders.total recalculation
+      for (const { itemId, data } of patches) {
+        await apiRequest("PATCH", `/api/orders/${id}/items/${itemId}`, data);
+      }
     },
     onMutate: async (patches) => {
       await queryClient.cancelQueries({ queryKey: ["/api/orders", id] });
@@ -778,7 +795,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
           data: {
             quantity: d.qty,
             unit: d.unit,
-            pricePerUnit: d.price || null,
+            pricePerUnit: d.price !== "" ? d.price : null,
             overrideCostPerUnit: d.cost !== "" ? d.cost : null,
             productId: d.productId,
           },
@@ -788,6 +805,26 @@ export default function OrderDetailPage({ id }: { id: number }) {
     if (patches.length === 0) {
       setDrafts({});
       setEditingId(null);
+      return;
+    }
+
+    // If any patch sets price to $0, ask per-line: bonification?
+    const zeroPriceItems = patches.filter((p) => {
+      const price = p.data.pricePerUnit;
+      const calc = calcs.find((c) => c.id === p.itemId);
+      return (price === "0" || price === 0) && !(calc?.item as any)?.isBonification;
+    });
+    const nonZeroPricePatches = patches.filter((p) => {
+      const price = p.data.pricePerUnit;
+      const calc = calcs.find((c) => c.id === p.itemId);
+      return !((price === "0" || price === 0) && !(calc?.item as any)?.isBonification);
+    });
+    if (zeroPriceItems.length > 0) {
+      const queue = zeroPriceItems.map((patch) => {
+        const calc = calcs.find((c) => c.id === patch.itemId);
+        return { itemId: patch.itemId, productName: calc?.name ?? "Producto", patch };
+      });
+      setBonifState({ queue, resolved: [], others: nonZeroPricePatches });
       return;
     }
 
@@ -830,6 +867,40 @@ export default function OrderDetailPage({ id }: { id: number }) {
     }
   };
 
+  const handleBonifAnswer = (isBonification: boolean) => {
+    if (!bonifState || bonifState.queue.length === 0) return;
+    const [current, ...remaining] = bonifState.queue;
+    const resolvedPatch = { ...current.patch, data: { ...current.patch.data, isBonification } };
+    const newResolved = [...bonifState.resolved, resolvedPatch];
+    if (remaining.length === 0) {
+      setBonifState(null);
+      const allPatches = [...newResolved, ...bonifState.others];
+      // Now check for zero-cost items before saving
+      const zeroCostItems = allPatches.filter((p) => {
+        const cost = p.data.overrideCostPerUnit;
+        const calc = (order?.items ?? []).find((i) => i.id === p.itemId);
+        return (cost === "0" || cost === 0) && !(calc as any)?.bolsaType;
+      });
+      const otherPatches = allPatches.filter((p) => {
+        const cost = p.data.overrideCostPerUnit;
+        const calc = (order?.items ?? []).find((i) => i.id === p.itemId);
+        return !((cost === "0" || cost === 0) && !(calc as any)?.bolsaType);
+      });
+      if (zeroCostItems.length > 0) {
+        const queue = zeroCostItems.map((patch) => ({
+          itemId: patch.itemId,
+          productName: (order?.items ?? []).find((i) => i.id === patch.itemId)?.product?.name ?? "Producto",
+          patch,
+        }));
+        setZeroCostState({ queue, resolved: [], others: otherPatches });
+      } else {
+        saveAllMutation.mutate(allPatches);
+      }
+    } else {
+      setBonifState({ ...bonifState, queue: remaining, resolved: newResolved });
+    }
+  };
+
   const handleCancelEdit = (itemId: number) => {
     setDrafts((prev) => {
       const next = { ...prev };
@@ -868,7 +939,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const handleDownloadRemito = async () => {
     try {
       if (!order) return;
-      type RemitoItem = { product: { name: string; sku: string } | null; quantity: string; unit: string; pricePerUnit: string; subtotal: string; bolsaType?: string | null };
+      type RemitoItem = { product: { name: string; sku: string } | null; quantity: string; unit: string; pricePerUnit: string; subtotal: string; bolsaType?: string | null; isBonification?: boolean | null };
 
       let remitoItems: RemitoItem[];
       let remitoFolio: string;
@@ -889,6 +960,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
           pricePerUnit: String(item.pricePerUnit ?? "0"),
           subtotal: String(item.subtotal),
           bolsaType: (item as any).bolsaType ?? null,
+          isBonification: (item as any).isBonification ?? false,
         }));
         remitoFolio = order.remitoNum != null
           ? String(order.remitoNum)
@@ -1003,8 +1075,12 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const calcs: CalcItem[] = order.items.map((item) => {
     const qty = parseFloat(item.quantity as string);
-    const hasPrice = item.pricePerUnit != null && parseFloat(item.pricePerUnit as string) > 0;
-    const price = hasPrice ? parseFloat(item.pricePerUnit as string) : 0;
+    const isBonif = !!(item as any).isBonification;
+    // Bonification items have price $0 intentionally — treated as "has price" for approval purposes
+    const hasPrice = isBonif || (item.pricePerUnit != null && parseFloat(item.pricePerUnit as string) > 0);
+    const price = (isBonif || (item.pricePerUnit != null && parseFloat(item.pricePerUnit as string) >= 0 && item.pricePerUnit !== null))
+      ? parseFloat(item.pricePerUnit as string ?? "0")
+      : 0;
     const storedCost = parseFloat((item.costPerUnit as string) ?? "0");
     const override = item.overrideCostPerUnit;
     const hasOverride = override != null && override !== "";
@@ -1035,12 +1111,13 @@ export default function OrderDetailPage({ id }: { id: number }) {
       base,
       diferencia,
       pct,
-      isLowMargin: hasPrice && pct < LOW_MARGIN,
+      isLowMargin: hasPrice && !isBonif && pct < LOW_MARGIN,
       bolsaType: (item as any).bolsaType ?? null,
+      isBonification: isBonif,
     };
   });
 
-  const unpricedCount = calcs.filter((c) => !c.hasPrice).length;
+  const unpricedCount = calcs.filter((c) => !c.hasPrice && !c.isBonification).length;
   const hasAnyLowMargin = calcs.some((c) => c.isLowMargin);
   const grandTotal = calcs.reduce((s, c) => s + c.subtotal, 0);
   const grandTotalConIva = calcs.reduce((s, c) => s + c.totalConIva, 0);
@@ -1348,6 +1425,32 @@ export default function OrderDetailPage({ id }: { id: number }) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Bonification dialog — price $0, per item, sequential */}
+      <AlertDialog open={!!(bonifState && bonifState.queue.length > 0)} onOpenChange={(o) => !o && setBonifState(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Precio $0 — {bonifState?.queue[0]?.productName}</AlertDialogTitle>
+            <AlertDialogDescription>
+              El precio es $0. ¿Es una bonificación?
+              {bonifState && bonifState.queue.length > 1 && (
+                <span className="block mt-1 text-xs text-muted-foreground">
+                  ({bonifState.queue.length} líneas por revisar)
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setBonifState(null)}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction className="bg-secondary text-secondary-foreground hover:bg-secondary/80" onClick={() => handleBonifAnswer(false)}>
+              No, precio normal $0
+            </AlertDialogAction>
+            <AlertDialogAction className="bg-purple-600 hover:bg-purple-700 text-white" onClick={() => handleBonifAnswer(true)}>
+              Sí, es bonificación
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Zero-cost dialog — per item, sequential */}
       <AlertDialog open={!!(zeroCostState && zeroCostState.queue.length > 0)} onOpenChange={(o) => !o && setZeroCostState(null)}>

@@ -21,6 +21,7 @@ type RemitoData = {
       unit: string;
       pricePerUnit: string;
       subtotal: string;
+      isBonification?: boolean | null;
     }[];
     total: string;
   };
@@ -284,7 +285,8 @@ export async function generateRemitoPDF(data: RemitoData, opts?: { hidePrecios?:
     const qty    = parseFloat(item.quantity);
     const sub    = parseFloat(item.subtotal);
     const price  = parseFloat(item.pricePerUnit);
-    const pName  = item.product?.name ?? "Producto sin nombre";
+    const isBonif = !!(item as any).isBonification;
+    const pName  = (item.product?.name ?? "Producto sin nombre") + (isBonif ? " (Bonificacion)" : "");
     const unit   = item.unit.toUpperCase();
     const iva    = itemIvaRate(pName);
     const subIva = sub * (1 + iva);

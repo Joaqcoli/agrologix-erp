@@ -165,6 +165,7 @@ export const orderItems = pgTable("order_items", {
   rawProductName: text("raw_product_name"),
   parseStatus: text("parse_status"),
   bolsaType: text("bolsa_type"), // null | 'bolsa' | 'bolsa_propia'
+  isBonification: boolean("is_bonification").default(false),
 });
 
 // ─── Product Units (stock + cost per unit per product) ─────────────────────────

@@ -1038,6 +1038,7 @@ export const storage = {
       pricePerUnit?: string | null;
       overrideCostPerUnit?: string | null;
       bolsaType?: string | null;
+      isBonification?: boolean;
     },
     customerId: number,
   ): Promise<{ item: OrderItem; orderTotal: string }> {
@@ -1120,6 +1121,7 @@ export const storage = {
       if (newCostPerUnit !== undefined) updateData.costPerUnit = newCostPerUnit;
       if (margin !== null) updateData.margin = margin.toFixed(4);
       if (patch.bolsaType !== undefined) updateData.bolsaType = patch.bolsaType;
+      if (patch.isBonification !== undefined) updateData.isBonification = patch.isBonification;
 
       const [updated] = await tx.update(orderItems).set(updateData).where(eq(orderItems.id, itemId)).returning();
 
