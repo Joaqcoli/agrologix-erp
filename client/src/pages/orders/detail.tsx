@@ -602,6 +602,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   // ── Edit state ────────────────────────────────────────────────────────────
   const [drafts, setDrafts] = useState<Record<number, ItemDraft>>({});
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [zeroCostPending, setZeroCostPending] = useState<{ patches: { itemId: number; data: Record<string, any> }[] } | null>(null);
 
   // ── Mutations ─────────────────────────────────────────────────────────────
   const deleteMutation = useMutation({
@@ -726,6 +727,25 @@ export default function OrderDetailPage({ id }: { id: number }) {
       ...prev,
       [itemId]: { ...prev[itemId]!, [field]: value as string },
     }));
+
+    // MEJORA 2: auto-fetch cost when unit changes
+    if (field === "unit" && value && typeof value === "string") {
+      const productId = drafts[itemId]?.productId ?? order?.items.find((i) => i.id === itemId)?.productId ?? null;
+      if (productId) {
+        fetch(`/api/products/${productId}/cost-for-unit?unit=${encodeURIComponent(value)}`, { credentials: "include" })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            if (data?.cost !== undefined) {
+              setDrafts((prev) =>
+                prev[itemId]
+                  ? { ...prev, [itemId]: { ...prev[itemId]!, cost: String(Math.round(parseFloat(data.cost))) } }
+                  : prev
+              );
+            }
+          })
+          .catch(() => {});
+      }
+    }
   };
 
   const handleSaveAll = (calcs: CalcItem[]) => {
@@ -753,6 +773,30 @@ export default function OrderDetailPage({ id }: { id: number }) {
       setEditingId(null);
       return;
     }
+
+    // MEJORA 3: if any patch has $0 cost and no bolsaType, ask about stock
+    const hasZeroCost = patches.some((p) => {
+      const cost = p.data.overrideCostPerUnit;
+      const calc = calcs.find((c) => c.id === p.itemId);
+      return (cost === "0" || cost === 0) && !calc?.bolsaType;
+    });
+    if (hasZeroCost) {
+      setZeroCostPending({ patches });
+      return;
+    }
+
+    saveAllMutation.mutate(patches);
+  };
+
+  const handleZeroCostConfirm = (affectStock: boolean) => {
+    if (!zeroCostPending) return;
+    const patches = zeroCostPending.patches.map((p) => {
+      if (!affectStock && (p.data.overrideCostPerUnit === "0" || p.data.overrideCostPerUnit === 0)) {
+        return { ...p, data: { ...p.data, bolsaType: "sin_stock" } };
+      }
+      return p;
+    });
+    setZeroCostPending(null);
     saveAllMutation.mutate(patches);
   };
 
@@ -1237,6 +1281,27 @@ export default function OrderDetailPage({ id }: { id: number }) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Zero-cost dialog */}
+      <AlertDialog open={!!zeroCostPending} onOpenChange={(o) => !o && setZeroCostPending(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Costo $0 detectado</AlertDialogTitle>
+            <AlertDialogDescription>
+              Una o más líneas tienen costo $0. ¿Querés que descuenten stock al aprobar el pedido?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setZeroCostPending(null)}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction className="bg-secondary text-secondary-foreground hover:bg-secondary/80" onClick={() => handleZeroCostConfirm(false)}>
+              No descontar stock
+            </AlertDialogAction>
+            <AlertDialogAction onClick={() => handleZeroCostConfirm(true)}>
+              Sí, descontar stock
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Delete order dialog */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>

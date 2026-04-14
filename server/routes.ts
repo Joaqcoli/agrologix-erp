@@ -233,6 +233,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // GET /api/products/:id/cost-for-unit?unit=CAJON — cost lookup for any unit
+  app.get("/api/products/:id/cost-for-unit", requireAuth, async (req, res) => {
+    try {
+      const unit = String(req.query.unit ?? "KG");
+      const cost = await storage._getCostForUnit(Number(req.params.id), unit);
+      return res.json({ cost });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // PUT /api/products/:id/units — replace unit set (idempotent diff)
   app.put("/api/products/:id/units", requireAuth, async (req, res) => {
     try {

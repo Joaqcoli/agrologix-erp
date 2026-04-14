@@ -230,7 +230,11 @@ export default function IntakePage() {
     result.forEach((line, idx) => {
       if (line.status === "no_qty" || !line.productId) return;
       const histUnit = unitHistoryMap.get(line.productId);
-      if (histUnit) { initialUnitOverrides[idx] = histUnit; return; }
+      if (histUnit) {
+        initialUnitOverrides[idx] = histUnit;
+        try { localStorage.setItem(`lastUnit_${line.productId}`, histUnit); } catch {}
+        return;
+      }
       const last = localStorage.getItem(`lastUnit_${line.productId}`);
       if (last) initialUnitOverrides[idx] = last;
     });
