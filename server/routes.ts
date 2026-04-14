@@ -1002,14 +1002,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             END
           ), 0) AS ventas,
           COALESCE(SUM(
-            c.commission_pct::numeric / 100 *
             CASE
               WHEN oi.price_per_unit::numeric = 0 THEN 0
-              WHEN c.has_iva = true AND (p.name ILIKE '%huevo%' OR p.category ILIKE '%huevo%')
-                THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
-              WHEN c.has_iva = true
-                THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
-              ELSE oi.quantity::numeric * oi.price_per_unit::numeric
+              ELSE c.commission_pct::numeric / 100 * oi.quantity::numeric * oi.price_per_unit::numeric
             END
           ), 0) AS comisiones
         FROM orders o
