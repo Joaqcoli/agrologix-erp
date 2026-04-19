@@ -1749,25 +1749,49 @@ export const storage = {
     await db.update(productUnits).set({ isActive: false }).where(eq(productUnits.id, id));
   },
 
-  async adjustProductUnitStock(id: number, adjustment: number, notes?: string): Promise<ProductUnit> {
+  async adjustProductUnitStock(id: number, adjustment: number, notes?: string, avgCost?: number): Promise<ProductUnit> {
     const [pu] = await db.select().from(productUnits).where(eq(productUnits.id, id)).limit(1);
     if (!pu) throw new Error("ProductUnit not found");
-    const newStock = parseFloat(pu.stockQty as string) + adjustment;
-    const [updated] = await db.update(productUnits).set({ stockQty: newStock.toFixed(4) }).where(eq(productUnits.id, id)).returning();
-    // Sync products.currentStock
-    const allPu = await db.select().from(productUnits).where(eq(productUnits.productId, pu.productId));
-    const totalStock = allPu.reduce((s, p) => s + parseFloat(p.stockQty as string), 0);
-    await db.update(products).set({ currentStock: totalStock.toFixed(4) }).where(eq(products.id, pu.productId));
-    // Record in stock_movements (unitCost stores result stock for history display)
-    await db.insert(stockMovements).values({
-      productId: pu.productId,
-      movementType: adjustment >= 0 ? "in" : "out",
-      quantity: Math.abs(adjustment).toFixed(4),
-      unitCost: newStock.toFixed(4),
-      referenceType: "adjustment",
-      referenceId: pu.id,
-      notes: notes ?? null,
-    });
+
+    let updated = pu;
+
+    if (adjustment !== 0) {
+      const newStock = parseFloat(pu.stockQty as string) + adjustment;
+      const updateFields: Record<string, any> = { stockQty: newStock.toFixed(4) };
+      if (avgCost !== undefined) updateFields.avgCost = avgCost.toFixed(4);
+      [updated] = await db.update(productUnits).set(updateFields).where(eq(productUnits.id, id)).returning();
+      // Sync products.currentStock
+      const allPu = await db.select().from(productUnits).where(eq(productUnits.productId, pu.productId));
+      const totalStock = allPu.reduce((s, p) => s + parseFloat(p.stockQty as string), 0);
+      await db.update(products).set({ currentStock: totalStock.toFixed(4) }).where(eq(products.id, pu.productId));
+      // Record in stock_movements
+      await db.insert(stockMovements).values({
+        productId: pu.productId,
+        movementType: adjustment >= 0 ? "in" : "out",
+        quantity: Math.abs(adjustment).toFixed(4),
+        unitCost: newStock.toFixed(4),
+        referenceType: "adjustment",
+        referenceId: pu.id,
+        notes: notes ?? null,
+      });
+    } else if (avgCost !== undefined) {
+      // Cost-only update: no movement recorded
+      [updated] = await db.update(productUnits)
+        .set({ avgCost: avgCost.toFixed(4) })
+        .where(eq(productUnits.id, id))
+        .returning();
+    }
+
+    // Sync products.averageCost if cost was updated
+    if (avgCost !== undefined) {
+      const allPu = await db.select().from(productUnits).where(eq(productUnits.productId, pu.productId));
+      const totalStockForAvg = allPu.reduce((s, p) => s + parseFloat(p.stockQty as string), 0);
+      const weightedCost = totalStockForAvg > 0
+        ? allPu.reduce((s, p) => s + parseFloat(p.stockQty as string) * parseFloat(p.avgCost as string), 0) / totalStockForAvg
+        : avgCost;
+      await db.update(products).set({ averageCost: weightedCost.toFixed(4) }).where(eq(products.id, pu.productId));
+    }
+
     return updated;
   },
 

@@ -41,7 +41,7 @@ type AdjustmentMovement = {
   createdAt: string;
 };
 
-const MOTIVOS = ["Merma", "Rinde", "Otro"] as const;
+const MOTIVOS = ["Merma", "Rinde", "Corrección", "Otro"] as const;
 type Motivo = typeof MOTIVOS[number];
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
@@ -67,11 +67,12 @@ function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null;
   const [adjustment, setAdjustment] = useState("");
   const [reason, setReason] = useState<Motivo>("Merma");
   const [otherText, setOtherText] = useState("");
+  const [newCost, setNewCost] = useState("");
 
   const finalNotes = reason === "Otro" ? otherText.trim() : reason;
 
   const adjustMutation = useMutation({
-    mutationFn: async (data: { adjustment: number; notes?: string }) => {
+    mutationFn: async (data: { adjustment: number; notes?: string; avgCost?: number }) => {
       const res = await apiRequest("PATCH", `/api/product-units/${pu!.id}/adjust`, data);
       return res.json();
     },
@@ -79,7 +80,7 @@ function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null;
       queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stock-movements"] });
-      toast({ title: "Stock ajustado" });
+      toast({ title: "Stock actualizado" });
       onClose();
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -89,13 +90,30 @@ function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null;
     setAdjustment("");
     setReason("Merma");
     setOtherText("");
+    setNewCost("");
     onClose();
   };
 
   if (!pu) return null;
   const adj = parseFloat(adjustment);
   const currentStock = parseFloat(pu.stockQty as string);
+  const currentCost = parseFloat(pu.avgCost as string);
   const newStock = isNaN(adj) ? currentStock : currentStock + adj;
+  const hasValidAdj = !!adjustment && !isNaN(adj);
+  const hasValidCost = !!newCost && !isNaN(parseFloat(newCost)) && parseFloat(newCost) >= 0;
+  const isDisabled =
+    (!hasValidAdj && !hasValidCost) ||
+    adjustMutation.isPending ||
+    (hasValidAdj && reason === "Otro" && !otherText.trim());
+
+  const handleConfirm = () => {
+    const payload: { adjustment: number; notes?: string; avgCost?: number } = {
+      adjustment: hasValidAdj ? adj : 0,
+    };
+    if (hasValidAdj) payload.notes = finalNotes || undefined;
+    if (hasValidCost) payload.avgCost = parseFloat(newCost);
+    adjustMutation.mutate(payload);
+  };
 
   return (
     <Dialog open={!!pu} onOpenChange={(o) => { if (!o) handleClose(); }}>
@@ -105,42 +123,68 @@ function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null;
           <DialogDescription>{pu.product.name} · {pu.unit}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 mt-2">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Stock actual:</span>
-            <span className="font-semibold">{fmtStock(currentStock)} {pu.unit}</span>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Ajuste (+/-)</Label>
-            <Input type="number" value={adjustment} onChange={(e) => setAdjustment(e.target.value)} placeholder="Ej: 10 o -3" />
-          </div>
-          <p className="text-xs text-muted-foreground">Nuevo stock: <strong>{fmtStock(newStock)}</strong> {pu.unit}</p>
-          <div className="space-y-1.5">
-            <Label>Motivo</Label>
-            <Select value={reason} onValueChange={(v) => setReason(v as Motivo)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="Merma">Merma — pérdida natural del producto</SelectItem>
-                <SelectItem value="Rinde">Rinde — se obtuvo más de lo esperado</SelectItem>
-                <SelectItem value="Otro">Otro — especificar</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          {reason === "Otro" && (
-            <div className="space-y-1.5">
-              <Label>Detalle</Label>
-              <Input value={otherText} onChange={(e) => setOtherText(e.target.value)} placeholder="Describir el motivo..." />
+
+          {/* ── Cantidad ── */}
+          <div className="space-y-3 pb-3 border-b border-border">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Stock actual:</span>
+              <span className="font-semibold">{fmtStock(currentStock)} {pu.unit}</span>
             </div>
-          )}
+            <div className="space-y-1.5">
+              <Label>Ajuste de cantidad (+/-)</Label>
+              <Input type="number" value={adjustment} onChange={(e) => setAdjustment(e.target.value)} placeholder="Ej: 10 o -3" />
+            </div>
+            {hasValidAdj && (
+              <p className="text-xs text-muted-foreground">Nuevo stock: <strong>{fmtStock(newStock)}</strong> {pu.unit}</p>
+            )}
+            {hasValidAdj && (
+              <>
+                <div className="space-y-1.5">
+                  <Label>Motivo</Label>
+                  <Select value={reason} onValueChange={(v) => setReason(v as Motivo)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Merma">Merma — pérdida natural del producto</SelectItem>
+                      <SelectItem value="Rinde">Rinde — se obtuvo más de lo esperado</SelectItem>
+                      <SelectItem value="Corrección">Corrección — ajuste de conteo, sin impacto en informes</SelectItem>
+                      <SelectItem value="Otro">Otro — especificar</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {reason === "Otro" && (
+                  <div className="space-y-1.5">
+                    <Label>Detalle</Label>
+                    <Input value={otherText} onChange={(e) => setOtherText(e.target.value)} placeholder="Describir el motivo..." />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* ── Costo ── */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label>Costo promedio</Label>
+              <span className="text-xs text-muted-foreground">
+                {currentCost > 0 ? `Actual: $${fmt(currentCost)}` : <span className="text-yellow-600 font-medium">Sin costo cargado</span>}
+              </span>
+            </div>
+            <Input
+              type="number"
+              value={newCost}
+              onChange={(e) => setNewCost(e.target.value)}
+              placeholder={currentCost > 0 ? `$${fmt(currentCost)}` : "Ingresar costo..."}
+              min={0}
+            />
+          </div>
+
         </div>
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={handleClose}>Cancelar</Button>
-          <Button
-            onClick={() => adjustMutation.mutate({ adjustment: adj, notes: finalNotes || undefined })}
-            disabled={!adjustment || isNaN(adj) || adjustMutation.isPending || (reason === "Otro" && !otherText.trim())}
-          >
-            {adjustMutation.isPending ? "Ajustando..." : "Confirmar ajuste"}
+          <Button onClick={handleConfirm} disabled={isDisabled}>
+            {adjustMutation.isPending ? "Guardando..." : "Confirmar"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -251,7 +295,7 @@ function AdjustmentHistory() {
       if (date < dateFrom || date > dateTo) return false;
       if (motiveFilter === "all") return true;
       const note = m.notes ?? "";
-      if (motiveFilter === "Otro") return note !== "Merma" && note !== "Rinde";
+      if (motiveFilter === "Otro") return note !== "Merma" && note !== "Rinde" && note !== "Corrección";
       return note === motiveFilter;
     });
   }, [movements, dateFrom, dateTo, motiveFilter]);
@@ -422,6 +466,7 @@ function AdjustmentHistory() {
                             const pesos = pesoImpact(m);
                             const isMerma = m.notes === "Merma";
                             const isRinde = m.notes === "Rinde";
+                            const isCorreccion = m.notes === "Corrección";
                             return (
                               <tr key={m.id} className="border-b border-border last:border-0 hover:bg-muted/20">
                                 <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">{formatDate(m.createdAt)}</td>
@@ -437,6 +482,8 @@ function AdjustmentHistory() {
                                     <Badge variant="outline" className="text-[10px] text-red-600 border-red-400/40">Merma</Badge>
                                   ) : isRinde ? (
                                     <Badge variant="outline" className="text-[10px] text-green-600 border-green-400/40">Rinde</Badge>
+                                  ) : isCorreccion ? (
+                                    <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-400/40">Corrección</Badge>
                                   ) : (
                                     <span className="text-muted-foreground">{m.notes || "—"}</span>
                                   )}
