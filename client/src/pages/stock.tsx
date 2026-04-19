@@ -643,7 +643,7 @@ export default function StockPage() {
                 {step === "input" ? (
                   <div className="space-y-3">
                     <p className="text-xs text-muted-foreground">
-                      Ingresá uno o varios productos por línea. Formato: <code className="bg-muted px-1 rounded">10 KG tomate</code> o <code className="bg-muted px-1 rounded">2 CAJON naranja</code>
+                      Ingresá uno o varios productos por línea. Formato: <code className="bg-muted px-1 rounded">10 KG tomate</code> o <code className="bg-muted px-1 rounded">2 CAJON naranja</code>. Los cajones/bolsas se convierten automáticamente a la unidad base del producto.
                     </p>
                     <Textarea
                       value={rawText}

@@ -1796,25 +1796,71 @@ export const storage = {
   },
 
   async addStockAdjustments(items: { productId: number; unit: string; qty: number }[]): Promise<void> {
+    const PACKAGE_UNITS = new Set(['CAJON', 'BOLSA', 'BANDEJA']);
+
     for (const item of items) {
       const canonicalUnit = item.unit.trim().toUpperCase();
-      const [existing] = await db.select().from(productUnits)
-        .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
-        .limit(1);
-      if (existing) {
-        const newStock = parseFloat(existing.stockQty as string) + item.qty;
-        await db.update(productUnits)
-          .set({ stockQty: newStock.toFixed(4), isActive: true })
-          .where(eq(productUnits.id, existing.id));
+
+      if (PACKAGE_UNITS.has(canonicalUnit)) {
+        // Package unit (CAJON/BOLSA/BANDEJA): convert to base unit row
+        const [baseUnitPu] = await db.select().from(productUnits)
+          .where(and(
+            eq(productUnits.productId, item.productId),
+            drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+          ))
+          .limit(1);
+
+        if (baseUnitPu) {
+          // Add qty × weight_per_unit to the base unit row
+          const wpu = parseFloat(baseUnitPu.weightPerUnit as string ?? '0');
+          const addQty = wpu > 0 ? item.qty * wpu : item.qty;
+          const newStock = parseFloat(baseUnitPu.stockQty as string) + addQty;
+          await db.update(productUnits)
+            .set({ stockQty: newStock.toFixed(4), isActive: true })
+            .where(eq(productUnits.id, baseUnitPu.id));
+        } else {
+          // No base unit row: create a KG row and add qty directly
+          const [existingKg] = await db.select().from(productUnits)
+            .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, 'KG')))
+            .limit(1);
+          if (existingKg) {
+            const newStock = parseFloat(existingKg.stockQty as string) + item.qty;
+            await db.update(productUnits)
+              .set({ stockQty: newStock.toFixed(4), isActive: true, baseUnit: 'KG' })
+              .where(eq(productUnits.id, existingKg.id));
+          } else {
+            await db.insert(productUnits).values({
+              productId: item.productId,
+              unit: 'KG',
+              avgCost: '0',
+              stockQty: item.qty.toFixed(4),
+              isActive: true,
+              baseUnit: 'KG',
+            });
+          }
+        }
       } else {
-        await db.insert(productUnits).values({
-          productId: item.productId,
-          unit: canonicalUnit,
-          avgCost: "0",
-          stockQty: item.qty.toFixed(4),
-          isActive: true,
-        });
+        // Base unit (KG/UNIDAD/ATADO/MAPLE/etc.): upsert and set baseUnit
+        const [existing] = await db.select().from(productUnits)
+          .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+          .limit(1);
+        if (existing) {
+          const newStock = parseFloat(existing.stockQty as string) + item.qty;
+          await db.update(productUnits)
+            .set({ stockQty: newStock.toFixed(4), isActive: true, baseUnit: canonicalUnit })
+            .where(eq(productUnits.id, existing.id));
+        } else {
+          await db.insert(productUnits).values({
+            productId: item.productId,
+            unit: canonicalUnit,
+            avgCost: '0',
+            stockQty: item.qty.toFixed(4),
+            isActive: true,
+            baseUnit: canonicalUnit,
+          });
+        }
       }
+
       const allPu = await db.select().from(productUnits).where(eq(productUnits.productId, item.productId));
       const totalStock = allPu.reduce((s, p) => s + parseFloat(p.stockQty as string), 0);
       await db.update(products).set({ currentStock: totalStock.toFixed(4) }).where(eq(products.id, item.productId));

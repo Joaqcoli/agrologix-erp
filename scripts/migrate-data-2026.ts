@@ -12,6 +12,7 @@ import { createRequire } from "module";
 const XLSX: typeof import("xlsx") = createRequire(import.meta.url)("xlsx");
 import * as fs from "fs";
 import * as path from "path";
+import * as readline from "readline";
 import { Pool } from "pg";
 
 // ─── Cargar .env ──────────────────────────────────────────────────────────────
@@ -147,6 +148,113 @@ const BLACKPOT_NEW_CHILDREN = new Set([
 let blackPotChildren: { id: number; name: string }[] = [];
 let blackPotParentId: number | null = null;
 
+// ─── Todos los clientes activos de DB (para fuzzy matching) ───────────────────
+let allDbCustomers: { id: number; name: string }[] = [];
+
+async function loadAllDbCustomers(): Promise<void> {
+  const res = await pool.query("SELECT id, name FROM customers WHERE active = true ORDER BY id");
+  allDbCustomers = res.rows;
+  console.log(`  ✓ ${allDbCustomers.length} clientes activos cargados para fuzzy matching\n`);
+}
+
+// ─── Fuzzy matching ───────────────────────────────────────────────────────────
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
+    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)),
+  );
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+function strSimilarity(a: string, b: string): number {
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen === 0) return 1;
+  return 1 - levenshtein(a, b) / maxLen;
+}
+
+function tokenSimilarity(a: string, b: string): number {
+  const tokA = new Set(a.split(/\s+/).filter(Boolean));
+  const tokB = new Set(b.split(/\s+/).filter(Boolean));
+  const intersection = [...tokA].filter((t) => tokB.has(t)).length;
+  const union = new Set([...tokA, ...tokB]).size;
+  return union === 0 ? 1 : intersection / union;
+}
+
+function bestSimilarity(a: string, b: string): number {
+  return Math.max(strSimilarity(a, b), tokenSimilarity(a, b));
+}
+
+/** Devuelve { id, name, score } del mejor candidato en la DB, o null si no hay ninguno */
+function findBestFuzzyMatch(
+  name: string,
+): { id: number; name: string; score: number } | null {
+  const upper = name.toUpperCase().trim();
+  let best: { id: number; name: string; score: number } | null = null;
+  for (const c of allDbCustomers) {
+    const score = bestSimilarity(upper, c.name.toUpperCase().trim());
+    if (!best || score > best.score) best = { id: c.id, name: c.name, score };
+  }
+  return best;
+}
+
+// ─── Readline (interactive prompts) ──────────────────────────────────────────
+
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+function ask(question: string): Promise<string> {
+  return new Promise((resolve) => rl.question(question, resolve));
+}
+
+/**
+ * Prompt interactivo cuando hay un candidato fuzzy con 50-79% de similitud.
+ * Retorna: { id, name } del cliente a usar (nuevo o existente), o null para crear nuevo.
+ */
+async function askFuzzyMatch(
+  excelName: string,
+  candidate: { id: number; name: string; score: number },
+): Promise<{ id: number; name: string } | null> {
+  const pct = Math.round(candidate.score * 100);
+  console.log(`\n  ⚠  Cliente no reconocido: "${excelName}"`);
+  console.log(`     Candidato más parecido: "${candidate.name}" (${pct}% similitud)`);
+  console.log(`     Opciones:`);
+  console.log(`       1. Usar "${candidate.name}"`);
+  console.log(`       2. Crear nuevo cliente "${excelName}"`);
+  console.log(`       3. Escribir el nombre correcto manualmente`);
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const ans = (await ask("     → Elegí 1, 2 o 3: ")).trim();
+    if (ans === "1") {
+      console.log(`     ✓ Usando "${candidate.name}" (id=${candidate.id})`);
+      return { id: candidate.id, name: candidate.name };
+    } else if (ans === "2") {
+      console.log(`     ✓ Se creará nuevo cliente "${excelName}"`);
+      return null;
+    } else if (ans === "3") {
+      const manual = (await ask("     → Escribí el nombre exacto (tal como está en DB): ")).trim();
+      // Buscar en DB
+      const found = allDbCustomers.find(
+        (c) => c.name.toUpperCase().trim() === manual.toUpperCase().trim(),
+      );
+      if (found) {
+        console.log(`     ✓ Usando "${found.name}" (id=${found.id})`);
+        return { id: found.id, name: found.name };
+      }
+      console.log(`     ✗ No se encontró "${manual}" en DB. Intentá de nuevo.`);
+    } else {
+      console.log(`     ✗ Opción inválida. Ingresá 1, 2 o 3.`);
+    }
+  }
+}
+
 async function initBlackPotChildren(): Promise<void> {
   const parentRes = await pool.query(
     "SELECT id FROM customers WHERE UPPER(trim(name)) = 'BLACK POT' LIMIT 1",
@@ -243,7 +351,8 @@ const errors:   string[] = [];
 // ─── Caché de clientes y productos ───────────────────────────────────────────
 const customerCache    = new Map<string, number>();   // lower(name) → id
 const productCache     = new Map<string, number>();   // lower(name) → id
-const customerFolioMap = new Map<number, number>();   // customerId → max VA folio num
+const customerFolioMap = new Map<number, number>();   // customerId → max VA folio num (legacy, no usado)
+let globalFolioCounter = 0;  // contador global VA (único globalmente)
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -340,12 +449,31 @@ function parseSheet(sheet: XLSX.WorkSheet, sheetDate: string): ParsedBlock[] {
       isBareInt(colD) ? colD :
       isBareInt(colE) ? colE :
       isBareInt(colC) ? colC : "";
+
+    // col A debe no ser numérica (descarta filas de ítems donde qty queda en col A)
+    const colAIsNumeric = !isNaN(parseFloat(colA.replace(",", ".")));
+
     const isClientHeader =
       colA !== "" &&
       colA.toUpperCase() !== "CANTIDAD" &&
+      !colAIsNumeric &&
       rtoCol !== "";
 
-    if (!isClientHeader) {
+    // Caso especial: cliente sin número de remito (ej. MUNCHIS).
+    // Detectamos por lookahead: col A no numérica Y fila CANTIDAD sigue en ≤5 filas.
+    const isClientHeaderNoRto =
+      !isClientHeader &&
+      colA !== "" &&
+      colA.toUpperCase() !== "CANTIDAD" &&
+      !colAIsNumeric &&
+      (() => {
+        for (let t = r + 1; t <= Math.min(r + 5, maxRow); t++) {
+          if (/cantidad/i.test(cellStr(sheet, 0, t))) return true;
+        }
+        return false;
+      })();
+
+    if (!isClientHeader && !isClientHeaderNoRto) {
       r++;
       continue;
     }
@@ -549,20 +677,16 @@ function parseCCSheet(
 
 async function initFolioCounters(): Promise<void> {
   const res = await pool.query(
-    `SELECT customer_id, MAX(CAST(REPLACE(folio,'VA-','') AS INTEGER)) AS max_folio
-     FROM orders WHERE folio ~ '^VA-\\d+$'
-     GROUP BY customer_id`,
+    `SELECT MAX(CAST(REPLACE(folio,'VA-','') AS INTEGER)) AS max_folio
+     FROM orders WHERE folio ~ '^VA-\\d+$'`,
   );
-  for (const row of res.rows) {
-    customerFolioMap.set(Number(row.customer_id), Number(row.max_folio));
-  }
-  console.log(`  Folio counters VA por cliente: ${customerFolioMap.size} cliente(s) con historial\n`);
+  globalFolioCounter = Number(res.rows[0]?.max_folio ?? 0);
+  console.log(`  Folio counter global: máximo actual VA-${String(globalFolioCounter).padStart(6, "0")}\n`);
 }
 
-function nextFolioForCustomer(customerId: number): string {
-  const next = (customerFolioMap.get(customerId) ?? 0) + 1;
-  customerFolioMap.set(customerId, next);
-  return `VA-${String(next).padStart(6, "0")}`;
+function nextFolioForCustomer(_customerId: number): string {
+  globalFolioCounter++;
+  return `VA-${String(globalFolioCounter).padStart(6, "0")}`;
 }
 
 /**
@@ -601,6 +725,33 @@ async function findOrCreateCustomer(
     console.log(`  [bp]  "${name}" → "${bpMatch.name}" (sede de BLACK POT, id=${bpMatch.id})`);
     customerCache.set(key, bpMatch.id);
     return bpMatch.id;
+  }
+
+  // ── Fuzzy matching contra todos los clientes activos ──────────────────────
+  if (allDbCustomers.length > 0) {
+    const fuzzy = findBestFuzzyMatch(name);
+    if (fuzzy) {
+      const pct = Math.round(fuzzy.score * 100);
+      if (pct >= 80) {
+        // Auto-usar
+        console.log(`  [fuzzy-auto] "${name}" → "${fuzzy.name}" (id=${fuzzy.id}, ${pct}%)`);
+        customerCache.set(key, fuzzy.id);
+        return fuzzy.id;
+      } else if (pct >= 50) {
+        // Interactivo (o dry-run warning)
+        if (DRY_RUN) {
+          warnings.push(`[fuzzy-interactivo] "${name}" → candidato "${fuzzy.name}" (${pct}%) — se pedirá confirmación en modo real`);
+        } else {
+          const chosen = await askFuzzyMatch(name, fuzzy);
+          if (chosen) {
+            customerCache.set(key, chosen.id);
+            return chosen.id;
+          }
+          // chosen=null → caer a crear nuevo
+        }
+      }
+      // <50% → caer a crear nuevo
+    }
   }
 
   if (!allowCreate) {
@@ -852,8 +1003,7 @@ async function importBlock(block: ParsedBlock): Promise<void> {
   } catch (e: any) {
     await client.query("ROLLBACK");
     // devolver folio si se incrementó
-    const curMax = customerFolioMap.get(customerId!) ?? 1;
-    customerFolioMap.set(customerId!, Math.max(0, curMax - 1));
+    globalFolioCounter = Math.max(0, globalFolioCounter - 1);
     throw e;
   } finally {
     client.release();
@@ -892,6 +1042,9 @@ async function main() {
 
   // Cargar sedes de BLACK POT para resolución de colegios
   await initBlackPotChildren();
+
+  // Cargar todos los clientes para fuzzy matching
+  await loadAllDbCustomers();
 
   // Inicializar folio counters solo en modo real
   if (!DRY_RUN) {
@@ -1005,6 +1158,7 @@ async function main() {
       errors.forEach((e) => console.log("  ✗  " + e));
     }
     console.log("═".repeat(55) + "\n");
+    rl.close();
     await pool.end();
     return;
   }
@@ -1277,6 +1431,7 @@ async function main() {
   }
 
   console.log("═".repeat(55) + "\n");
+  rl.close();
   await pool.end();
 }
 
