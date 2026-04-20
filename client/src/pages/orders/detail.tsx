@@ -99,10 +99,12 @@ function ProductCombobox({
   value,
   onSelect,
   allProducts,
+  currentName,
 }: {
   value: number | null;
   onSelect: (id: number | null, name: string) => void;
   allProducts: Product[];
+  currentName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -120,7 +122,7 @@ function ProductCombobox({
           aria-expanded={open}
           className="h-7 text-xs justify-between px-2 min-w-[140px] max-w-[200px]"
         >
-          <span className="truncate">{selected?.name ?? "Sin producto"}</span>
+          <span className="truncate">{selected?.name ?? currentName ?? "Sin producto"}</span>
           <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
@@ -272,6 +274,7 @@ function ItemRow({
               value={draft.productId}
               onSelect={(id, name) => onProductSelect(id)}
               allProducts={allProducts}
+              currentName={calc.item.product?.name}
             />
           ) : (
             <span
@@ -849,9 +852,13 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const handleApprove = () => {
     if (!order) return;
-    const needsQuestion = order.items.filter(
-      (item) => parseFloat(item.costPerUnit as string ?? "0") === 0 && !item.bolsaType && !item.isBonification
-    );
+    const needsQuestion = order.items.filter((item) => {
+      const override = item.overrideCostPerUnit;
+      const effectiveCost = parseFloat(
+        (override != null && override !== "" ? override : (item.costPerUnit as string)) ?? "0"
+      );
+      return effectiveCost === 0 && !item.bolsaType && !item.isBonification;
+    });
     if (needsQuestion.length === 0) {
       approveMutation.mutate();
       return;
@@ -902,14 +909,19 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const handleProductSelect = async (itemId: number, productId: number | null) => {
     handleFieldChange(itemId, "productId", productId);
     if (productId && order) {
+      const currentUnit = drafts[itemId]?.unit ?? order.items.find((i) => i.id === itemId)?.unit ?? "KG";
       try {
-        const currentUnit = drafts[itemId]?.unit ?? order.items.find((i) => i.id === itemId)?.unit ?? "KG";
-        const res = await fetch(`/api/products/${productId}/last-price?customerId=${order.customerId}&unit=${encodeURIComponent(currentUnit)}`, { credentials: "include" });
-        if (res.ok) {
-          const data = await res.json();
-          if (data?.price != null) {
-            handleFieldChange(itemId, "price", String(Math.round(parseFloat(data.price))));
-          }
+        const [priceRes, costRes] = await Promise.all([
+          fetch(`/api/products/${productId}/last-price?customerId=${order.customerId}&unit=${encodeURIComponent(currentUnit)}`, { credentials: "include" }),
+          fetch(`/api/products/${productId}/cost-for-unit?unit=${encodeURIComponent(currentUnit)}`, { credentials: "include" }),
+        ]);
+        if (priceRes.ok) {
+          const data = await priceRes.json();
+          if (data?.price != null) handleFieldChange(itemId, "price", String(Math.round(parseFloat(data.price))));
+        }
+        if (costRes.ok) {
+          const data = await costRes.json();
+          if (data?.cost !== undefined) handleFieldChange(itemId, "cost", String(Math.round(parseFloat(data.cost))));
         }
       } catch { /* noop */ }
     }
@@ -940,7 +952,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
         if (!res.ok) throw new Error("No se pudo obtener el remito");
         const remito = await res.json();
         remitoItems = remito.order.items;
-        remitoFolio = remito.folio;
+        remitoFolio = (order as any).remitoNum != null ? String((order as any).remitoNum) : remito.folio;
         remitoDate = remito.issuedAt;
       } else {
         remitoItems = order.items.map((item) => ({
@@ -1443,7 +1455,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
       </AlertDialog>
 
       {/* Zero-cost dialog — per item, sequential */}
-      <AlertDialog open={!!(zeroCostState && zeroCostState.queue.length > 0)} onOpenChange={(o) => !o && setZeroCostState(null)}>
+      <AlertDialog open={!!(zeroCostState && zeroCostState.queue.length > 0)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Costo $0 — {zeroCostState?.queue[0]?.productName}</AlertDialogTitle>
