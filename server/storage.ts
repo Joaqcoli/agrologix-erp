@@ -3,7 +3,7 @@ import {
   users, customers, products, purchases, purchaseItems,
   stockMovements, productCostHistory, orders, orderItems,
   priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks,
-  suppliers, supplierPayments,
+  suppliers, supplierPayments, clientGroups, clientGroupMembers,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
@@ -485,7 +485,8 @@ export const storage = {
 
   async getLastPriceByUnit(productId: number, customerId: number, unit: string): Promise<string | null> {
     const canonical = unit.trim().toUpperCase();
-    const result = await db.execute(drizzleSql`
+    // 1. Exact customer match
+    const exact = await db.execute(drizzleSql`
       SELECT oi.price_per_unit
       FROM order_items oi
       JOIN orders o ON o.id = oi.order_id
@@ -497,9 +498,40 @@ export const storage = {
       ORDER BY o.order_date DESC, o.id DESC
       LIMIT 1
     `);
-    const rows = result.rows as any[];
-    if (rows.length === 0) return null;
-    return String(rows[0].price_per_unit);
+    const exactRows = exact.rows as any[];
+    if (exactRows.length > 0) return String(exactRows[0].price_per_unit);
+    // 2. Fallback: group peers
+    const peerIds = await this._getGroupPeerIds(customerId);
+    if (peerIds.length === 0) return null;
+    const peerResult = await db.execute(drizzleSql`
+      SELECT oi.price_per_unit
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      WHERE oi.product_id = ${productId}
+        AND o.customer_id = ANY(ARRAY[${drizzleSql.join(peerIds.map((pid) => drizzleSql`${pid}`), drizzleSql`, `)}]::int[])
+        AND upper(oi.unit::text) = ${canonical}
+        AND o.status = 'approved'
+        AND oi.price_per_unit::numeric > 0
+      ORDER BY o.order_date DESC, o.id DESC
+      LIMIT 1
+    `);
+    const peerRows = peerResult.rows as any[];
+    if (peerRows.length === 0) return null;
+    return String(peerRows[0].price_per_unit);
+  },
+
+  async _getGroupPeerIds(customerId: number): Promise<number[]> {
+    const memberships = await db
+      .select({ groupId: clientGroupMembers.groupId })
+      .from(clientGroupMembers)
+      .where(eq(clientGroupMembers.customerId, customerId));
+    if (memberships.length === 0) return [];
+    const groupIds = memberships.map((m) => m.groupId);
+    const peers = await db
+      .select({ customerId: clientGroupMembers.customerId })
+      .from(clientGroupMembers)
+      .where(and(inArray(clientGroupMembers.groupId, groupIds), ne(clientGroupMembers.customerId, customerId)));
+    return [...new Set(peers.map((p) => p.customerId))];
   },
 
   async _recalcProductSummary(pid: number, tx: any = db): Promise<void> {
@@ -1445,6 +1477,8 @@ export const storage = {
       throw new Error(`${unpricedItems.length} producto(s) sin precio. Completá los precios antes de aprobar.`);
     }
 
+    const groupPeerIds = await this._getGroupPeerIds(order.customerId);
+
     return db.transaction(async (tx) => {
       // Stock OUT — atomic per-item deduction with floor-at-zero safety
       for (const item of order.items) {
@@ -1547,6 +1581,17 @@ export const storage = {
           pricePerUnit: item.pricePerUnit as string,
           orderId: id,
         });
+        // Replicate price to group peers
+        if (groupPeerIds.length > 0) {
+          await tx.insert(priceHistory).values(
+            groupPeerIds.map((peerId) => ({
+              customerId: peerId,
+              productId: item.productId as number,
+              pricePerUnit: item.pricePerUnit as string,
+              orderId: id,
+            }))
+          );
+        }
       }
 
       // Generate remito

@@ -317,3 +317,19 @@ export const insertWithholdingSchema = createInsertSchema(withholdings).omit({ i
 });
 export type InsertPayment = z.infer<typeof insertPaymentSchema>;
 export type InsertWithholding = z.infer<typeof insertWithholdingSchema>;
+
+// ─── Grupos de clientes con precios compartidos ───────────────────────────────
+export const clientGroups = pgTable("client_groups", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull().unique(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const clientGroupMembers = pgTable("client_group_members", {
+  id: serial("id").primaryKey(),
+  groupId: integer("group_id").notNull().references(() => clientGroups.id, { onDelete: "cascade" }),
+  customerId: integer("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+});
+
+export type ClientGroup = typeof clientGroups.$inferSelect;
+export type ClientGroupMember = typeof clientGroupMembers.$inferSelect;

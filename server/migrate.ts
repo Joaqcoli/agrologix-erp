@@ -405,5 +405,51 @@ export async function runMigrations() {
   // ─── orders: número de remito del papel (del Excel de días) ───────────────
   await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS remito_num integer`);
 
+  // ─── Grupos de clientes con precios compartidos ───────────────────────────
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS client_groups (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMP NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS client_group_members (
+      id SERIAL PRIMARY KEY,
+      group_id INTEGER NOT NULL REFERENCES client_groups(id) ON DELETE CASCADE,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      UNIQUE(group_id, customer_id)
+    )
+  `);
+  await db.execute(sql`
+    INSERT INTO client_groups (name)
+    VALUES ('BLACK POT'), ('LUSQTOFF'), ('QUINQUELA-MARQUESA'), ('COMO SIEMPRE-MESTIZO')
+    ON CONFLICT (name) DO NOTHING
+  `);
+  await db.execute(sql`
+    INSERT INTO client_group_members (group_id, customer_id)
+    SELECT g.id, c.id FROM client_groups g CROSS JOIN customers c
+    WHERE g.name = 'BLACK POT' AND c.name ILIKE '%COLEGIO%' AND c.active = true
+    ON CONFLICT (group_id, customer_id) DO NOTHING
+  `);
+  await db.execute(sql`
+    INSERT INTO client_group_members (group_id, customer_id)
+    SELECT g.id, c.id FROM client_groups g CROSS JOIN customers c
+    WHERE g.name = 'LUSQTOFF' AND c.name ILIKE '%LUSQTOFF%'
+    ON CONFLICT (group_id, customer_id) DO NOTHING
+  `);
+  await db.execute(sql`
+    INSERT INTO client_group_members (group_id, customer_id)
+    SELECT g.id, c.id FROM client_groups g CROSS JOIN customers c
+    WHERE g.name = 'QUINQUELA-MARQUESA' AND c.name IN ('QUINQUELA', 'LA MARQUESA')
+    ON CONFLICT (group_id, customer_id) DO NOTHING
+  `);
+  await db.execute(sql`
+    INSERT INTO client_group_members (group_id, customer_id)
+    SELECT g.id, c.id FROM client_groups g CROSS JOIN customers c
+    WHERE g.name = 'COMO SIEMPRE-MESTIZO' AND c.name IN ('COMO SIEMPRE LAGUNA', 'MESTIZO')
+    ON CONFLICT (group_id, customer_id) DO NOTHING
+  `);
+
   console.log("Migrations complete.");
 }
