@@ -185,6 +185,9 @@ export default function IntakePage() {
   // Unit overrides for mismatched lines (parsedIdx → canonical unit)
   const [unitOverrides, setUnitOverrides] = useState<Record<number, string>>({});
 
+  // Last-price prefills: parsedIdx → price string
+  const [pricePrefills, setPricePrefills] = useState<Record<number, string>>({});
+
   // Merge dialog state
   const [mergeDialog, setMergeDialog] = useState<{ existingId: number; folio: string } | null>(null);
   const [pendingMode, setPendingMode] = useState<"new" | "merge" | "replace">("new");
@@ -241,7 +244,22 @@ export default function IntakePage() {
       if (last) initialUnitOverrides[idx] = last;
     });
     setUnitOverrides(initialUnitOverrides);
+    setPricePrefills({});
     setStep("preview");
+
+    // Background-fetch last price per product+unit for this customer
+    result.forEach((line, idx) => {
+      if (!line.productId || line.status === "no_qty") return;
+      const effectiveUnit = initialUnitOverrides[idx] ?? line.unit ?? "KG";
+      fetch(`/api/products/${line.productId}/last-price?customerId=${customerId}&unit=${encodeURIComponent(effectiveUnit)}`, { credentials: "include" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.price != null) {
+            setPricePrefills((prev) => ({ ...prev, [idx]: String(Math.round(parseFloat(data.price))) }));
+          }
+        })
+        .catch(() => {});
+    });
   };
 
   // Lines that will actually be sent (no_qty excluded unless user provided a manual qty)
@@ -288,6 +306,7 @@ export default function IntakePage() {
           productId: line.resolvedProductId ?? null,
           quantity: String(line.quantity ?? 1),
           unit: line.unit, // already has unitOverride applied
+          pricePerUnit: pricePrefills[line.parsedIdx] ?? null,
           rawProductName: line.rawProductName,
           parseStatus: line.resolvedProductId ? "ok" : line.status,
         }));

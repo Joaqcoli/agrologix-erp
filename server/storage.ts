@@ -483,6 +483,25 @@ export const storage = {
     return "0";
   },
 
+  async getLastPriceByUnit(productId: number, customerId: number, unit: string): Promise<string | null> {
+    const canonical = unit.trim().toUpperCase();
+    const result = await db.execute(drizzleSql`
+      SELECT oi.price_per_unit
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      WHERE oi.product_id = ${productId}
+        AND o.customer_id = ${customerId}
+        AND upper(oi.unit::text) = ${canonical}
+        AND o.status = 'approved'
+        AND oi.price_per_unit::numeric > 0
+      ORDER BY o.order_date DESC, o.id DESC
+      LIMIT 1
+    `);
+    const rows = result.rows as any[];
+    if (rows.length === 0) return null;
+    return String(rows[0].price_per_unit);
+  },
+
   async _recalcProductSummary(pid: number, tx: any = db): Promise<void> {
     // Solo agregar entradas de la unidad base del producto para evitar mezclar unidades (KG + CAJON)
     const [product] = await tx.select({ unit: products.unit }).from(products).where(eq(products.id, pid)).limit(1);
@@ -894,15 +913,19 @@ export const storage = {
         if (item.productId) {
           costPerUnit = await this._getCostForUnit(item.productId, item.unit ?? "KG");
         }
+        const pricePerUnit = (item as any).pricePerUnit != null ? String((item as any).pricePerUnit) : null as any;
+        const subtotal = pricePerUnit && item.quantity
+          ? (parseFloat(pricePerUnit) * parseFloat(String(item.quantity))).toFixed(4)
+          : "0";
         return {
           orderId: order.id,
           productId: item.productId ?? null,
           quantity: item.quantity,
           unit: (item.unit as any) ?? "KG",
-          pricePerUnit: null as any,
+          pricePerUnit,
           costPerUnit,
           margin: null as any,
-          subtotal: "0",
+          subtotal,
           rawProductName: item.rawProductName ?? null,
           parseStatus: item.parseStatus ?? "ok",
         };
@@ -920,6 +943,7 @@ export const storage = {
     productId: number | null;
     quantity: string;
     unit: string;
+    pricePerUnit?: string | null;
     rawProductName?: string;
     parseStatus?: string;
   }[]): Promise<void> {
@@ -929,15 +953,19 @@ export const storage = {
         if (item.productId) {
           costPerUnit = await this._getCostForUnit(item.productId, item.unit ?? "KG");
         }
+        const pricePerUnit = item.pricePerUnit != null ? String(item.pricePerUnit) : null as any;
+        const subtotal = pricePerUnit && item.quantity
+          ? (parseFloat(pricePerUnit) * parseFloat(String(item.quantity))).toFixed(4)
+          : "0";
         return {
           orderId,
           productId: item.productId ?? null,
           quantity: item.quantity,
           unit: (item.unit as any) ?? "KG",
-          pricePerUnit: null as any,
+          pricePerUnit,
           costPerUnit,
           margin: null as any,
-          subtotal: "0",
+          subtotal,
           rawProductName: item.rawProductName ?? null,
           parseStatus: item.parseStatus ?? "ok",
         };

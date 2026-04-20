@@ -252,6 +252,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // GET /api/products/:id/last-price?customerId=X&unit=Y — last approved sale price for this product+customer+unit
+  app.get("/api/products/:id/last-price", requireAuth, async (req, res) => {
+    try {
+      const customerId = Number(req.query.customerId);
+      const unit = String(req.query.unit ?? "KG");
+      if (!customerId) return res.status(400).json({ error: "customerId required" });
+      const price = await storage.getLastPriceByUnit(Number(req.params.id), customerId, unit);
+      return res.json({ price });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // PUT /api/products/:id/units — replace unit set (idempotent diff)
   app.put("/api/products/:id/units", requireAuth, async (req, res) => {
     try {
@@ -423,6 +434,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           productId: z.number().nullable(),
           quantity: z.string(),
           unit: z.string(),
+          pricePerUnit: z.string().nullable().optional(),
           rawProductName: z.string().optional(),
           parseStatus: z.string().optional(),
         })).min(1),

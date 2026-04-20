@@ -508,17 +508,19 @@ function AddItemRow({
     onError: (e: any) => toast({ title: "Error al agregar", description: e.message, variant: "destructive" }),
   });
 
+  const fetchLastPrice = async (id: number, currentUnit: string) => {
+    try {
+      const res = await fetch(`/api/products/${id}/last-price?customerId=${customerId}&unit=${encodeURIComponent(currentUnit)}`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.price != null) setPrice(String(Math.round(parseFloat(data.price))));
+      }
+    } catch { /* noop */ }
+  };
+
   const handleProductSelect = async (id: number | null, _name: string) => {
     setProductId(id);
-    if (id) {
-      try {
-        const res = await fetch(`/api/price-history/${customerId}/${id}`, { credentials: "include" });
-        if (res.ok) {
-          const history = await res.json();
-          if (history?.pricePerUnit && !price) setPrice(String(Math.round(parseFloat(history.pricePerUnit))));
-        }
-      } catch { /* noop */ }
-    }
+    if (id) await fetchLastPrice(id, unit);
   };
 
   const handleSave = async () => {
@@ -547,7 +549,7 @@ function AddItemRow({
         <Input type="number" value={qty} onChange={(e) => setQty(e.target.value)} onKeyDown={onKeyDown} step="1" min="0" className="h-7 w-16 text-xs px-1.5 py-0" placeholder="Cant." autoFocus />
       </td>
       <td className="py-1.5 px-2">
-        <Select value={unit} onValueChange={setUnit}>
+        <Select value={unit} onValueChange={(u) => { setUnit(u); if (productId) fetchLastPrice(productId, u); }}>
           <SelectTrigger className="h-7 w-24 text-xs"><SelectValue /></SelectTrigger>
           <SelectContent>
             {ALL_CANONICAL_UNITS.map((u) => (
@@ -762,7 +764,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
       [itemId]: { ...prev[itemId]!, [field]: value as string },
     }));
 
-    // MEJORA 2: auto-fetch cost when unit changes
+    // MEJORA 2: auto-fetch cost+price when unit changes
     if (field === "unit" && value && typeof value === "string") {
       const productId = drafts[itemId]?.productId ?? order?.items.find((i) => i.id === itemId)?.productId ?? null;
       if (productId) {
@@ -778,6 +780,20 @@ export default function OrderDetailPage({ id }: { id: number }) {
             }
           })
           .catch(() => {});
+        if (order) {
+          fetch(`/api/products/${productId}/last-price?customerId=${order.customerId}&unit=${encodeURIComponent(value)}`, { credentials: "include" })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+              if (data?.price != null) {
+                setDrafts((prev) =>
+                  prev[itemId]
+                    ? { ...prev, [itemId]: { ...prev[itemId]!, price: String(Math.round(parseFloat(data.price))) } }
+                    : prev
+                );
+              }
+            })
+            .catch(() => {});
+        }
       }
     }
   };
@@ -914,11 +930,12 @@ export default function OrderDetailPage({ id }: { id: number }) {
     handleFieldChange(itemId, "productId", productId);
     if (productId && order) {
       try {
-        const res = await fetch(`/api/price-history/${order.customerId}/${productId}`, { credentials: "include" });
+        const currentUnit = drafts[itemId]?.unit ?? order.items.find((i) => i.id === itemId)?.unit ?? "KG";
+        const res = await fetch(`/api/products/${productId}/last-price?customerId=${order.customerId}&unit=${encodeURIComponent(currentUnit)}`, { credentials: "include" });
         if (res.ok) {
-          const history = await res.json();
-          if (history?.pricePerUnit) {
-            handleFieldChange(itemId, "price", String(Math.round(parseFloat(history.pricePerUnit))));
+          const data = await res.json();
+          if (data?.price != null) {
+            handleFieldChange(itemId, "price", String(Math.round(parseFloat(data.price))));
           }
         }
       } catch { /* noop */ }
