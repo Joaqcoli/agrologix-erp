@@ -1075,7 +1075,9 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const getItemName = (item: FullOrderItem) =>
     item.product?.name ?? (item as any).rawProductName ?? "Producto sin nombre";
 
-  const calcs: CalcItem[] = order.items.map((item) => {
+  const calcs: CalcItem[] = [...order.items].sort((a, b) =>
+    getItemName(a).localeCompare(getItemName(b), "es", { sensitivity: "base" })
+  ).map((item) => {
     const qty = parseFloat(item.quantity as string);
     const isBonif = !!(item as any).isBonification;
     // Bonification items have price $0 intentionally — treated as "has price" for approval purposes
