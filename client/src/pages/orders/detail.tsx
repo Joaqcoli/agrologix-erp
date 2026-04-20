@@ -616,8 +616,8 @@ export default function OrderDetailPage({ id }: { id: number }) {
   // ── Edit state ────────────────────────────────────────────────────────────
   const [drafts, setDrafts] = useState<Record<number, ItemDraft>>({});
   const [editingId, setEditingId] = useState<number | null>(null);
-  type ZeroCostItem = { itemId: number; productName: string; patch: { itemId: number; data: Record<string, any> } };
-  type ZeroCostState = { queue: ZeroCostItem[]; resolved: { itemId: number; data: Record<string, any> }[]; others: { itemId: number; data: Record<string, any> }[] } | null;
+  type ZeroCostItem = { itemId: number; productName: string };
+  type ZeroCostState = { queue: ZeroCostItem[]; sinStockIds: number[] } | null;
   const [zeroCostState, setZeroCostState] = useState<ZeroCostState>(null);
   // Bonification (price=0) dialog queue
   type BonifItem = { itemId: number; productName: string; patch: { itemId: number; data: Record<string, any> } };
@@ -844,42 +844,35 @@ export default function OrderDetailPage({ id }: { id: number }) {
       return;
     }
 
-    // If any patch has $0 cost and no bolsaType, ask per-line about stock
-    const zeroCostItems = patches.filter((p) => {
-      const cost = p.data.overrideCostPerUnit;
-      const calc = calcs.find((c) => c.id === p.itemId);
-      return (cost === "0" || cost === 0) && !calc?.bolsaType;
-    });
-    const otherPatches = patches.filter((p) => {
-      const cost = p.data.overrideCostPerUnit;
-      const calc = calcs.find((c) => c.id === p.itemId);
-      return !((cost === "0" || cost === 0) && !calc?.bolsaType);
-    });
+    saveAllMutation.mutate(patches);
+  };
 
-    if (zeroCostItems.length > 0) {
-      const queue = zeroCostItems.map((patch) => {
-        const calc = calcs.find((c) => c.id === patch.itemId);
-        return { itemId: patch.itemId, productName: calc?.name ?? "Producto", patch };
-      });
-      setZeroCostState({ queue, resolved: [], others: otherPatches });
+  const handleApprove = () => {
+    if (!order) return;
+    const needsQuestion = order.items.filter(
+      (item) => parseFloat(item.costPerUnit as string ?? "0") === 0 && !item.bolsaType && !item.isBonification
+    );
+    if (needsQuestion.length === 0) {
+      approveMutation.mutate();
       return;
     }
-
-    saveAllMutation.mutate(patches);
+    setZeroCostState({
+      queue: needsQuestion.map((item) => ({ itemId: item.id, productName: item.product?.name ?? "Producto" })),
+      sinStockIds: [],
+    });
   };
 
   const handleZeroCostAnswer = (affectStock: boolean) => {
     if (!zeroCostState || zeroCostState.queue.length === 0) return;
     const [current, ...remaining] = zeroCostState.queue;
-    const resolvedPatch = !affectStock
-      ? { ...current.patch, data: { ...current.patch.data, bolsaType: "sin_stock" } }
-      : current.patch;
-    const newResolved = [...zeroCostState.resolved, resolvedPatch];
+    const newSinStockIds = affectStock ? zeroCostState.sinStockIds : [...zeroCostState.sinStockIds, current.itemId];
     if (remaining.length === 0) {
       setZeroCostState(null);
-      saveAllMutation.mutate([...newResolved, ...zeroCostState.others]);
+      Promise.all(
+        newSinStockIds.map((itemId) => apiRequest("PATCH", `/api/orders/${id}/items/${itemId}`, { bolsaType: "sin_stock" }))
+      ).then(() => approveMutation.mutate()).catch(() => approveMutation.mutate());
     } else {
-      setZeroCostState({ ...zeroCostState, queue: remaining, resolved: newResolved });
+      setZeroCostState({ queue: remaining, sinStockIds: newSinStockIds });
     }
   };
 
@@ -891,27 +884,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
     if (remaining.length === 0) {
       setBonifState(null);
       const allPatches = [...newResolved, ...bonifState.others];
-      // Now check for zero-cost items before saving
-      const zeroCostItems = allPatches.filter((p) => {
-        const cost = p.data.overrideCostPerUnit;
-        const calc = (order?.items ?? []).find((i) => i.id === p.itemId);
-        return (cost === "0" || cost === 0) && !(calc as any)?.bolsaType;
-      });
-      const otherPatches = allPatches.filter((p) => {
-        const cost = p.data.overrideCostPerUnit;
-        const calc = (order?.items ?? []).find((i) => i.id === p.itemId);
-        return !((cost === "0" || cost === 0) && !(calc as any)?.bolsaType);
-      });
-      if (zeroCostItems.length > 0) {
-        const queue = zeroCostItems.map((patch) => ({
-          itemId: patch.itemId,
-          productName: (order?.items ?? []).find((i) => i.id === patch.itemId)?.product?.name ?? "Producto",
-          patch,
-        }));
-        setZeroCostState({ queue, resolved: [], others: otherPatches });
-      } else {
-        saveAllMutation.mutate(allPatches);
-      }
+      saveAllMutation.mutate(allPatches);
     } else {
       setBonifState({ ...bonifState, queue: remaining, resolved: newResolved });
     }
@@ -1245,7 +1218,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
             {isDraft && (
               <Button
                 size="sm"
-                onClick={() => approveMutation.mutate()}
+                onClick={handleApprove}
                 disabled={approveMutation.isPending || !canApprove}
                 data-testid="button-approve-order"
               >
