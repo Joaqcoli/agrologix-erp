@@ -787,13 +787,12 @@ export default function OrderDetailPage({ id }: { id: number }) {
           fetch(`/api/products/${productId}/last-price?customerId=${order.customerId}&unit=${encodeURIComponent(value)}`, { credentials: "include" })
             .then((r) => (r.ok ? r.json() : null))
             .then((data) => {
-              if (data?.price != null) {
-                setDrafts((prev) =>
-                  prev[itemId]
-                    ? { ...prev, [itemId]: { ...prev[itemId]!, price: String(Math.round(parseFloat(data.price))) } }
-                    : prev
-                );
-              }
+              // Always update price on unit change: set to last price for new unit, or clear if none found
+              setDrafts((prev) =>
+                prev[itemId]
+                  ? { ...prev, [itemId]: { ...prev[itemId]!, price: data?.price != null ? String(Math.round(parseFloat(data.price))) : "" } }
+                  : prev
+              );
             })
             .catch(() => {});
         }

@@ -574,6 +574,20 @@ export default function IntakePage() {
                                       if (resolvedProductId) {
                                         apiRequest("POST", `/api/products/${resolvedProductId}/units`, { unit: v }).catch(() => {});
                                         try { localStorage.setItem(`lastUnit_${resolvedProductId}`, v); } catch { /* quota exceeded */ }
+                                        // Re-fetch last price for the new unit
+                                        if (customerId) {
+                                          fetch(`/api/products/${resolvedProductId}/last-price?customerId=${customerId}&unit=${encodeURIComponent(v)}`, { credentials: "include" })
+                                            .then((r) => (r.ok ? r.json() : null))
+                                            .then((data) => {
+                                              setPricePrefills((prev) => {
+                                                const next = { ...prev };
+                                                if (data?.price != null) next[idx] = String(Math.round(parseFloat(data.price)));
+                                                else delete next[idx];
+                                                return next;
+                                              });
+                                            })
+                                            .catch(() => {});
+                                        }
                                       }
                                     }}
                                   >

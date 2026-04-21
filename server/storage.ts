@@ -1479,6 +1479,14 @@ export const storage = {
 
     const groupPeerIds = await this._getGroupPeerIds(order.customerId);
 
+    // Build price map from approved order items (productId → pricePerUnit)
+    const priceMap = new Map<number, string>();
+    for (const item of order.items) {
+      if (item.productId && item.pricePerUnit && parseFloat(item.pricePerUnit as string) > 0) {
+        priceMap.set(item.productId, item.pricePerUnit as string);
+      }
+    }
+
     return db.transaction(async (tx) => {
       // Stock OUT — atomic per-item deduction with floor-at-zero safety
       for (const item of order.items) {
@@ -1591,6 +1599,24 @@ export const storage = {
               orderId: id,
             }))
           );
+        }
+      }
+
+      // Sync prices to all open (draft) orders from group peers
+      if (groupPeerIds.length > 0 && priceMap.size > 0) {
+        const peerIdsSql = drizzleSql.join(groupPeerIds.map((pid) => drizzleSql`${pid}`), drizzleSql`, `);
+        for (const [productId, price] of priceMap) {
+          await tx.execute(drizzleSql`
+            UPDATE order_items oi
+            SET
+              price_per_unit = ${price},
+              subtotal = (oi.quantity::numeric * ${price}::numeric)
+            FROM orders o
+            WHERE oi.order_id = o.id
+              AND oi.product_id = ${productId}
+              AND o.customer_id = ANY(ARRAY[${peerIdsSql}]::int[])
+              AND o.status = 'draft'
+          `);
         }
       }
 

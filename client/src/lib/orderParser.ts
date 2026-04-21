@@ -27,6 +27,9 @@ export type ParsedLine = {
 const VALID_UNITS = ["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"] as const;
 type ValidUnit = typeof VALID_UNITS[number];
 
+// Prepositions/articles that carry no product identity and must be ignored
+const STOP_WORDS = new Set(["de", "del", "la", "el", "lo", "los", "las", "un", "una", "y", "con", "a"]);
+
 // Map of keyword aliases → canonical unit
 const UNIT_MAP: Record<string, ValidUnit> = {
   cajon: "CAJON", cajones: "CAJON", caja: "CAJON", cajas: "CAJON",
@@ -186,16 +189,17 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
 
   const remainingTokens = tokens.filter((_, i) => !usedIndices.has(i));
 
-  // Pass 2: find unit from remaining tokens
+  // Pass 2: find unit from remaining tokens; skip stop words (prepositions/articles)
   const productTokens: string[] = [];
   for (const token of remainingTokens) {
     const normToken = normalize(token);
     if (UNIT_MAP[normToken]) {
       unit = UNIT_MAP[normToken];
       unitFromText = true; // unidad explícita en el texto
-    } else {
+    } else if (!STOP_WORDS.has(normToken)) {
       productTokens.push(token);
     }
+    // else: stop word ("de", "del", etc.) — silently ignored
   }
 
   const rawProductName = productTokens.join(" ").trim();
