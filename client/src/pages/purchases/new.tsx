@@ -117,6 +117,7 @@ export default function NewPurchasePage() {
   const [items, setItems] = useState<PurchaseItem[]>([{
     productId: 0, productSearch: "", quantity: "", unit: "KG", weightPerPackage: "", baseUnit: "KG", costPerUnit: "", emptyCost: "",
   }]);
+  const [globalEmptyCost, setGlobalEmptyCost] = useState("0");
   const [newSupplierOpen, setNewSupplierOpen] = useState(false);
 
   const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
@@ -208,12 +209,13 @@ export default function NewPurchasePage() {
 
   const itemSubtotal = (item: PurchaseItem) => (parseFloat(item.quantity) || 0) * (parseFloat(item.costPerUnit) || 0);
   const grandTotal = items.reduce((sum, item) => sum + itemSubtotal(item), 0);
-  const grandEmptyCost = items.reduce((sum, item) => {
+  const perItemEmptyCost = items.reduce((sum, item) => {
     if (!isPackageUnit(item.unit)) return sum;
     const ec = parseFloat(item.emptyCost) || 0;
     const qty = parseFloat(item.quantity) || 0;
     return sum + ec * qty;
   }, 0);
+  const grandEmptyCost = perItemEmptyCost + (parseFloat(globalEmptyCost) || 0);
 
   const getProjectedAvgCost = (item: PurchaseItem) => {
     const p = activeProducts.find((x) => x.id === item.productId);
@@ -245,6 +247,7 @@ export default function NewPurchasePage() {
       purchaseDate,
       paymentMethod,
       notes: notes || undefined,
+      totalEmptyCostExtra: parseFloat(globalEmptyCost) > 0 ? globalEmptyCost : undefined,
       items: validItems.map((i) => {
         if (isPackageUnit(i.unit)) {
           const totalBaseQty = getTotalBaseUnits(i);
@@ -609,6 +612,20 @@ export default function NewPurchasePage() {
               })}
 
               <Separator />
+
+              <div className="flex items-center justify-between gap-3">
+                <Label className="text-sm text-muted-foreground whitespace-nowrap">Vacíos adicionales ($)</Label>
+                <div className="relative w-40">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
+                  <Input
+                    type="number" min="0" step="1" placeholder="0"
+                    value={globalEmptyCost}
+                    onChange={(e) => setGlobalEmptyCost(e.target.value)}
+                    className="pl-7"
+                  />
+                </div>
+              </div>
+
               {grandEmptyCost > 0 ? (
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between text-sm">

@@ -50,6 +50,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
   const [supplierName, setSupplierName] = useState("");
   const [purchaseDate, setPurchaseDate] = useState(todayLocal);
   const [notes, setNotes] = useState("");
+  const [globalEmptyCost, setGlobalEmptyCost] = useState("0");
   const [items, setItems] = useState<PurchaseItem[]>([{ productId: 0, quantity: "", unit: "KG", costPerUnit: "", weightPerPackage: "", baseUnit: "KG" }]);
   const [initialized, setInitialized] = useState(false);
 
@@ -64,6 +65,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
       setSupplierName(purchase.supplierName ?? "");
       setPurchaseDate(purchase.purchaseDate ? String(purchase.purchaseDate).slice(0, 10) : todayLocal());
       setNotes(purchase.notes ?? "");
+      setGlobalEmptyCost(purchase.totalEmptyCost ? String(Math.round(parseFloat(purchase.totalEmptyCost))) : "0");
       if (purchase.items?.length) {
         setItems(purchase.items.map((item: any) => {
           const isPackage = item.purchaseUnit && item.purchaseUnit !== item.unit;
@@ -133,6 +135,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
   };
 
   const grandTotal = items.reduce((sum, item) => sum + itemTotal(item), 0);
+  const emptyCostAmount = parseFloat(globalEmptyCost) || 0;
 
   const getProductAvgCost = (productId: number) => {
     const p = activeProducts.find((x) => x.id === productId);
@@ -164,6 +167,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
       supplierName,
       purchaseDate,
       notes: notes || undefined,
+      totalEmptyCost: globalEmptyCost,
       items: validItems.map((i) => {
         const wpp = parseFloat(i.weightPerPackage) || 0;
         const isPackage = isPackageUnit(i.unit) && wpp > 0;
@@ -418,12 +422,44 @@ export default function EditPurchasePage({ id }: { id: number }) {
 
               <Separator />
 
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Total de la compra</span>
-                <span className="text-xl font-bold text-foreground">
-                  ${grandTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                </span>
+              <div className="flex items-center justify-between gap-3">
+                <Label className="text-sm text-muted-foreground whitespace-nowrap">Total vacíos ($)</Label>
+                <div className="relative w-40">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
+                  <Input
+                    type="number" min="0" step="1" placeholder="0"
+                    value={globalEmptyCost}
+                    onChange={(e) => setGlobalEmptyCost(e.target.value)}
+                    className="pl-7"
+                  />
+                </div>
               </div>
+
+              {emptyCostAmount > 0 ? (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Subtotal productos</span>
+                    <span>${grandTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-amber-600 dark:text-amber-400">Total vacíos</span>
+                    <span className="text-amber-600 dark:text-amber-400">${emptyCostAmount.toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground font-semibold">Total compra</span>
+                    <span className="text-xl font-bold text-foreground">
+                      ${(grandTotal + emptyCostAmount).toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Total de la compra</span>
+                  <span className="text-xl font-bold text-foreground">
+                    ${grandTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              )}
             </CardContent>
           </Card>
 

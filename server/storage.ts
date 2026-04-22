@@ -199,6 +199,7 @@ export const storage = {
     purchaseDate: Date;
     notes?: string;
     createdBy: number;
+    totalEmptyCostExtra?: string;
     items: {
       productId: number;
       quantity: string;
@@ -226,6 +227,8 @@ export const storage = {
       totalEmptyCost += emptyCost * emptyQty;
       return { ...item, subtotal: subtotal.toFixed(2) };
     });
+    // Add any global empty cost not tied to a specific item (e.g., for KG/ATADO purchases)
+    totalEmptyCost += parseFloat(data.totalEmptyCostExtra ?? "0") || 0;
 
     const purchaseDateStr = data.purchaseDate.toISOString().slice(0, 10);
 
@@ -591,6 +594,7 @@ export const storage = {
     supplierName: string;
     purchaseDate: Date;
     notes?: string;
+    totalEmptyCost?: string;
     items: { productId: number; quantity: string; unit: "KG" | "UNIDAD" | "CAJON" | "BOLSA" | "ATADO" | "MAPLE" | "BANDEJA"; costPerUnit: string; costPerPurchaseUnit?: string; purchaseQty?: string; purchaseUnit?: string; weightPerPackage?: string }[];
   }): Promise<Purchase> {
     return db.transaction(async (tx) => {
@@ -641,6 +645,7 @@ export const storage = {
 
       // ── PHASE 2: Aplicar nuevos items ─────────────────────────────────────────
       let total = 0;
+      const emptyCostAmount = parseFloat(data.totalEmptyCost ?? "0") || 0;
       const itemsWithSubtotal = data.items.map((item) => {
         const subtotal = item.costPerPurchaseUnit && item.purchaseQty
           ? Math.round(Number(item.purchaseQty) * Number(item.costPerPurchaseUnit) * 100) / 100
@@ -689,7 +694,8 @@ export const storage = {
         supplierName: data.supplierName,
         purchaseDate: data.purchaseDate,
         notes: data.notes,
-        total: total.toFixed(2),
+        totalEmptyCost: emptyCostAmount.toFixed(2),
+        total: (total + emptyCostAmount).toFixed(2),
       }).where(eq(purchases.id, id)).returning();
 
       // ── Reemplazar purchase_items ─────────────────────────────────────────────

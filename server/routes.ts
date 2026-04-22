@@ -359,6 +359,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         supplierName: z.string().min(1),
         purchaseDate: z.string(),
         notes: z.string().optional(),
+        totalEmptyCost: z.string().optional(),
         items: z.array(z.object({
           productId: z.number().int().positive(),
           quantity: z.string(),
@@ -374,6 +375,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const purchase = await storage.updatePurchase(Number(req.params.id), {
         ...data,
         purchaseDate: new Date(data.purchaseDate),
+        totalEmptyCost: data.totalEmptyCost,
       });
       return res.json(purchase);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
@@ -397,6 +399,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         purchaseDate: new Date(data.purchaseDate as unknown as string),
         notes: data.notes ?? undefined,
         createdBy: req.session.userId!,
+        totalEmptyCostExtra: (data as any).totalEmptyCostExtra ?? undefined,
         items: data.items as any,
       });
       return res.status(201).json(purchase);
