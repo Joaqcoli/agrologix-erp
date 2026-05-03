@@ -190,6 +190,7 @@ export const priceHistory = pgTable("price_history", {
   customerId: integer("customer_id").notNull().references(() => customers.id),
   productId: integer("product_id").notNull().references(() => products.id),
   pricePerUnit: numeric("price_per_unit", { precision: 12, scale: 4 }).notNull(),
+  unit: text("unit"),
   orderId: integer("order_id").references(() => orders.id),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });

@@ -1485,11 +1485,11 @@ export const storage = {
 
     const groupPeerIds = await this._getGroupPeerIds(order.customerId);
 
-    // Build price map from approved order items (productId → pricePerUnit)
-    const priceMap = new Map<number, string>();
+    // Build price map from approved order items ("productId:UNIT" → pricePerUnit)
+    const priceMap = new Map<string, string>();
     for (const item of order.items) {
-      if (item.productId && item.pricePerUnit && parseFloat(item.pricePerUnit as string) > 0) {
-        priceMap.set(item.productId, item.pricePerUnit as string);
+      if (item.productId && item.unit && item.pricePerUnit && parseFloat(item.pricePerUnit as string) > 0) {
+        priceMap.set(`${item.productId}:${(item.unit as string).toUpperCase()}`, item.pricePerUnit as string);
       }
     }
 
@@ -1593,6 +1593,7 @@ export const storage = {
           customerId: order.customerId,
           productId: item.productId,
           pricePerUnit: item.pricePerUnit as string,
+          unit: item.unit as string,
           orderId: id,
         });
         // Replicate price to group peers
@@ -1602,6 +1603,7 @@ export const storage = {
               customerId: peerId,
               productId: item.productId as number,
               pricePerUnit: item.pricePerUnit as string,
+              unit: item.unit as string,
               orderId: id,
             }))
           );
@@ -1611,7 +1613,9 @@ export const storage = {
       // Sync prices to all open (draft) orders from group peers
       if (groupPeerIds.length > 0 && priceMap.size > 0) {
         const peerIdsSql = drizzleSql.join(groupPeerIds.map((pid) => drizzleSql`${pid}`), drizzleSql`, `);
-        for (const [productId, price] of priceMap) {
+        for (const [key, price] of priceMap) {
+          const [productIdStr, unit] = key.split(":");
+          const productId = parseInt(productIdStr);
           await tx.execute(drizzleSql`
             UPDATE order_items oi
             SET
@@ -1620,6 +1624,7 @@ export const storage = {
             FROM orders o
             WHERE oi.order_id = o.id
               AND oi.product_id = ${productId}
+              AND UPPER(oi.unit::text) = ${unit}
               AND o.customer_id = ANY(ARRAY[${peerIdsSql}]::int[])
               AND o.status = 'draft'
           `);

@@ -30,6 +30,15 @@ type ValidUnit = typeof VALID_UNITS[number];
 // Prepositions/articles that carry no product identity and must be ignored
 const STOP_WORDS = new Set(["de", "del", "la", "el", "lo", "los", "las", "un", "una", "y", "con", "a"]);
 
+// Product name synonyms — normalized alias → canonical name used for matching
+const PRODUCT_SYNONYMS: Record<string, string> = {
+  "papa blanca": "papa lavada",
+  "calabaza": "zapallo anco",
+  "anco": "zapallo anco",
+  "repollo morado": "repollo colorado",
+  "zapallitos verdes": "zapallito redondo",
+};
+
 // Map of keyword aliases → canonical unit
 const UNIT_MAP: Record<string, ValidUnit> = {
   cajon: "CAJON", cajones: "CAJON", caja: "CAJON", cajas: "CAJON",
@@ -37,7 +46,7 @@ const UNIT_MAP: Record<string, ValidUnit> = {
   kg: "KG", k: "KG", kilo: "KG", kilos: "KG", kilogramo: "KG", kilogramos: "KG",
   pz: "UNIDAD", pieza: "UNIDAD", piezas: "UNIDAD",
   unidad: "UNIDAD", unidades: "UNIDAD", und: "UNIDAD", un: "UNIDAD",
-  atado: "ATADO", at: "ATADO",
+  atado: "ATADO", atados: "ATADO", at: "ATADO",
   maple: "MAPLE", maples: "MAPLE",
   bandeja: "BANDEJA", bandejas: "BANDEJA",
 };
@@ -69,16 +78,19 @@ function matchProduct(
   rawName: string,
   products: SimpleProduct[]
 ): { id: number; name: string; sku?: string | null }[] {
+  // Resolve synonyms before matching
   const normRaw = normalize(rawName);
-  const rawWords = words(rawName);
+  const resolvedName = PRODUCT_SYNONYMS[normRaw] ?? rawName;
+  const rawWords = words(resolvedName);
 
+  const normResolved = normalize(resolvedName);
   const matches: { id: number; name: string; sku?: string | null; score: number }[] = [];
 
   for (const p of products) {
     const normName = normalize(p.name);
     const pWords = words(p.name);
 
-    if (normName === normRaw) {
+    if (normName === normResolved) {
       // Exact match — best possible score
       return [{ id: p.id, name: p.name, sku: p.sku }];
     }

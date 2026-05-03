@@ -451,5 +451,8 @@ export async function runMigrations() {
     ON CONFLICT (group_id, customer_id) DO NOTHING
   `);
 
+  // ─── price_history: track unit per price record ──────────────────────────────
+  await db.execute(sql`ALTER TABLE price_history ADD COLUMN IF NOT EXISTS unit TEXT`);
+
   console.log("Migrations complete.");
 }
