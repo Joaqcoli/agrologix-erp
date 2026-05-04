@@ -654,35 +654,68 @@ export const storage = {
         return { ...item, subtotal: subtotal.toFixed(2) };
       });
 
+      // Mapa de datos calculados por productId para uso posterior en SYNC
+      const itemDataMap = new Map<number, { avgCost: number; weightPerUnit: number; weightPerPackage: number; canonicalUnit: string }>();
+
       // Procesar en orden de productId (locks ya adquiridos arriba)
       const sortedNewItems = [...data.items].sort((a, b) => a.productId - b.productId);
       for (const item of sortedNewItems) {
         const newQty = Number(item.quantity);
         const newCost = Number(item.costPerUnit);
         const canonicalUnit = dbEnumToCanonical(item.unit);
+        const purchaseQtyNum = item.purchaseQty ? parseFloat(item.purchaseQty) : 0;
+        const weightPerPackage = item.weightPerPackage ? parseFloat(item.weightPerPackage) : 0;
+        const isPackagePurchase = !!(item.purchaseUnit && weightPerPackage > 0 && purchaseQtyNum > 0);
+
         const [existingPU] = await tx.select().from(productUnits)
           .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
           .for('update')
           .limit(1);
+
+        let newPuAvgCost: number;
+        let newWeightPerUnit: number;
+
         if (existingPU) {
           const puStock = Number(existingPU.stockQty);
           const puCost = Number(existingPU.avgCost);
           // Costo promedio ponderado = ((stock * costo_actual) + (qty * costo_compra)) / stock_total
-          const newPuAvgCost = (puStock + newQty) === 0
+          newPuAvgCost = (puStock + newQty) === 0
             ? newCost
             : (puStock * puCost + newQty * newCost) / (puStock + newQty);
-          await tx.update(productUnits).set({
+
+          // BUG 3 FIX: recalcular weightPerUnit como promedio ponderado (igual que createPurchase)
+          if (isPackagePurchase) {
+            const oldWPU = parseFloat(existingPU.weightPerUnit as string ?? "0");
+            if (oldWPU > 0 && puStock > 0) {
+              const oldPackages = puStock / oldWPU;
+              newWeightPerUnit = (oldPackages * oldWPU + purchaseQtyNum * weightPerPackage) / (oldPackages + purchaseQtyNum);
+            } else {
+              newWeightPerUnit = weightPerPackage;
+            }
+          } else {
+            newWeightPerUnit = parseFloat(existingPU.weightPerUnit as string ?? "0");
+          }
+
+          const puUpdate: Record<string, any> = {
             stockQty: (puStock + newQty).toFixed(4),
             avgCost: newPuAvgCost.toFixed(4),
-          }).where(eq(productUnits.id, existingPU.id));
+          };
+          if (isPackagePurchase) puUpdate.weightPerUnit = newWeightPerUnit.toFixed(4);
+          await tx.update(productUnits).set(puUpdate).where(eq(productUnits.id, existingPU.id));
         } else {
-          await tx.insert(productUnits).values({
+          newPuAvgCost = newCost;
+          newWeightPerUnit = weightPerPackage;
+          const insertData: Record<string, any> = {
             productId: item.productId,
             unit: canonicalUnit,
             avgCost: newCost.toFixed(4),
             stockQty: newQty.toFixed(4),
-          });
+          };
+          if (weightPerPackage > 0) insertData.weightPerUnit = weightPerPackage.toFixed(4);
+          await tx.insert(productUnits).values(insertData);
         }
+
+        itemDataMap.set(item.productId, { avgCost: newPuAvgCost, weightPerUnit: newWeightPerUnit, weightPerPackage, canonicalUnit });
       }
       const newProductIds = Array.from(new Set(data.items.map((i) => i.productId)));
       for (const pid of newProductIds) {
@@ -697,6 +730,13 @@ export const storage = {
         totalEmptyCost: emptyCostAmount.toFixed(2),
         total: (total + emptyCostAmount).toFixed(2),
       }).where(eq(purchases.id, id)).returning();
+
+      // ── BUG 4 FIX: AP Sync — actualizar supplier_payment vinculado si existe ──
+      // Para compras pagadas con efectivo/transferencia hay un supplier_payment
+      // auto-creado con purchaseId. Si el total cambió, actualizar su monto.
+      await tx.update(supplierPayments)
+        .set({ amount: (total + emptyCostAmount).toFixed(2) })
+        .where(eq(supplierPayments.purchaseId, id));
 
       // ── Reemplazar purchase_items ─────────────────────────────────────────────
       await tx.delete(purchaseItems).where(eq(purchaseItems.purchaseId, id));
@@ -744,16 +784,18 @@ export const storage = {
       }
 
       // ── SYNC: propagar costo actualizado a order_items del mismo día ──────────
-      // Impacto inmediato en márgenes de pedidos activos (draft/approved)
+      // BUG 1 FIX: solo borradores (no tocar pedidos ya aprobados)
+      // BUG 2 FIX: convertir costo para unidades de envase (igual que createPurchase)
       for (const item of data.items) {
-        const canonicalUnit = dbEnumToCanonical(item.unit);
-        const newCost = Number(item.costPerUnit);
+        const itemData = itemDataMap.get(item.productId);
+        if (!itemData) continue;
+        const { avgCost: newPuAvgCost, weightPerUnit: newWeightPerUnit, weightPerPackage, canonicalUnit } = itemData;
 
         const sameDayOrders = await tx
           .select({ id: orders.id })
           .from(orders)
           .where(and(
-            drizzleSql`${orders.status} IN ('draft', 'approved')`,
+            drizzleSql`${orders.status} = 'draft'`,
             drizzleSql`${orders.orderDate}::date = ${purchaseDateStr}::date`,
           ));
         if (sameDayOrders.length === 0) continue;
@@ -769,13 +811,27 @@ export const storage = {
 
         const affectedOrderIds = new Set<number>();
         for (const oi of candidateItems) {
-          if (dbEnumToCanonical(oi.unit as string) !== canonicalUnit) continue;
+          const oiCanonical = dbEnumToCanonical(oi.unit as string);
+
+          let costForUnit: number;
+          if (oiCanonical === canonicalUnit) {
+            // Pedido en unidad base → costo directo
+            costForUnit = newPuAvgCost;
+          } else if (['CAJON', 'BOLSA', 'BANDEJA'].includes(oiCanonical)) {
+            // Pedido en unidad de envase → derivar costo de unidad base × weight_per_unit
+            const wpu = newWeightPerUnit > 0 ? newWeightPerUnit : weightPerPackage;
+            if (wpu <= 0) continue;
+            costForUnit = newPuAvgCost * wpu;
+          } else {
+            continue; // Unidad diferente, no aplica
+          }
+
           const qty = Number(oi.quantity);
           const price = oi.pricePerUnit ? Number(oi.pricePerUnit) : null;
           const newSubtotal = price != null && price > 0 ? qty * price : 0;
-          const newMargin = price && price > 0 ? (price - newCost) / price : null;
+          const newMargin = price && price > 0 ? (price - costForUnit) / price : null;
           const updateData: Record<string, any> = {
-            costPerUnit: item.costPerUnit,
+            costPerUnit: costForUnit.toFixed(4),
             subtotal: newSubtotal.toFixed(2),
           };
           if (newMargin !== null) updateData.margin = newMargin.toFixed(4);
@@ -783,7 +839,7 @@ export const storage = {
           affectedOrderIds.add(oi.orderId);
         }
 
-        // Recalcular total de cada pedido afectado
+        // Recalcular total de cada pedido borrador afectado
         for (const orderId of Array.from(affectedOrderIds)) {
           const allOrderItems = await tx.select().from(orderItems)
             .where(eq(orderItems.orderId, orderId));
