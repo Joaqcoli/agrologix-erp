@@ -113,11 +113,13 @@ const CLIENT_ALIASES: Record<string, string> = {
   // ── Catering (Excel dice solo "CATERING") ────────────────────────────────
   "CATERING":           "S&T CATERING",
   // ── Carlota: dos variantes en Excel → un solo cliente nuevo ──────────────
-  "CARLOTA VIANDAS":    "CARLOTA CARAF VIANDAS",
+  "CARLOTA VIANDAS":       "CARLOTA CARAF",
+  "CARLOTA CARAF VIANDAS": "CARLOTA CARAF",
   // ── Fabric: dos variantes en Excel → mismo local en DB ───────────────────
   "FABRIC - MORENO":    "FABRIC SUSHI - GORRITI",
   "FABRIC SUSHI":       "FABRIC SUSHI - GORRITI",
   // ── Café Martínez: variantes de dirección en Excel → nombre canónico DB ──
+  "CAFE MARTINEZ":                  "CAFE MARTINEZ - CAAMAÑO",
   "CAFE MARTINEZ - MORENO CENTRO":  "CAFE MARTINEZ - MORENO",
   "CAFE MARTINEZ - MORENO GORRITI": "CAFE MARTINEZ - CAAMAÑO",
   // ── Colegios BLACK POT: Excel lleva dirección, DB solo el nombre corto ────
@@ -1177,15 +1179,15 @@ async function main() {
 
   // En modo CC_ONLY: limpiar DB antes de reimportar
   if (CC_ONLY && !DRY_RUN) {
-    console.log("🗑  Limpiando datos enero-marzo 2026...");
+    console.log("🗑  Limpiando datos enero-abril 2026...");
     const del = await pool.query(
-      "DELETE FROM payments WHERE date >= '2026-01-01' AND date < '2026-04-01'",
+      "DELETE FROM payments WHERE date >= '2026-01-01' AND date < '2026-05-01'",
     );
     console.log(`   Pagos eliminados: ${del.rowCount}`);
     // Eliminar pedidos históricos de ene-mar (order_items primero por FK)
     const histIds = await pool.query(
       `SELECT id FROM orders WHERE folio LIKE 'PV-HIST-%'
-       AND order_date >= '2026-01-01' AND order_date < '2026-04-01'`,
+       AND order_date >= '2026-01-01' AND order_date < '2026-05-01'`,
     );
     if (histIds.rows.length > 0) {
       const ids = histIds.rows.map((r: any) => r.id);
@@ -1197,8 +1199,8 @@ async function main() {
     console.log(`   opening_balance reseteado en ${rst.rowCount} clientes\n`);
   }
 
-  // Ordenar por mes; en CC_ONLY procesar solo ENERO-MARZO (no ABRIL)
-  const CC_MONTHS_ONLY = ["ENERO", "FEBRERO", "MARZO"];
+  // Ordenar por mes; en CC_ONLY procesar ENERO-ABRIL
+  const CC_MONTHS_ONLY = ["ENERO", "FEBRERO", "MARZO", "ABRIL"];
   const ccSorted = [...ccSheets]
     .filter((n) => !CC_ONLY || CC_MONTHS_ONLY.some((m) => n.toUpperCase().includes(m)))
     .sort((a, b) => {
