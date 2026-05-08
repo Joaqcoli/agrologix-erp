@@ -1254,7 +1254,21 @@ export const storage = {
 
       // Save price history when price is explicitly set and a product is linked
       if (patch.pricePerUnit && newProductId) {
-        await tx.insert(priceHistory).values({ customerId, productId: newProductId, pricePerUnit: patch.pricePerUnit, orderId });
+        const unitForHistory = newUnit.toUpperCase();
+        await tx.insert(priceHistory).values({ customerId, productId: newProductId, pricePerUnit: patch.pricePerUnit, unit: unitForHistory, orderId });
+        // Propagate to group peers
+        const groupPeerIds = await this._getGroupPeerIds(customerId);
+        if (groupPeerIds.length > 0) {
+          await tx.insert(priceHistory).values(
+            groupPeerIds.map((peerId) => ({
+              customerId: peerId,
+              productId: newProductId as number,
+              pricePerUnit: patch.pricePerUnit as string,
+              unit: unitForHistory,
+              orderId,
+            }))
+          );
+        }
       }
 
       // STEP 3: Apply new stock deduction for approved orders
