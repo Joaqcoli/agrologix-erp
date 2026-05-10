@@ -39,6 +39,35 @@ const PRODUCT_SYNONYMS: Record<string, string> = {
   "zapallitos verdes": "zapallito redondo",
 };
 
+// Word-level synonym pairs (bidirectional): matching either word counts as matching the other
+const WORD_SYNONYM_PAIRS: [string, string][] = [
+  ["morado", "colorado"],
+  ["morada", "colorada"],
+];
+
+// Generate all forms of a word: itself, singular candidates, and synonyms of any form
+function wordForms(w: string): Set<string> {
+  const forms = new Set([w]);
+  // Singular candidates for Spanish plurals
+  if (w.endsWith("es") && w.length > 4) forms.add(w.slice(0, -2)); // limones→limon, melones→melon
+  if (w.endsWith("s") && w.length > 3) forms.add(w.slice(0, -1));  // tomates→tomate, redondos→redondo
+  // Expand synonyms for every form found so far
+  for (const [x, y] of WORD_SYNONYM_PAIRS) {
+    if (forms.has(x)) forms.add(y);
+    if (forms.has(y)) forms.add(x);
+  }
+  return forms;
+}
+
+// Two words "match" if any of their forms intersect (handles plurals + synonyms)
+function wordsMatch(a: string, b: string): boolean {
+  const formsA = wordForms(a);
+  for (const fa of formsA) {
+    if (wordForms(b).has(fa)) return true;
+  }
+  return false;
+}
+
 // Map of keyword aliases → canonical unit
 const UNIT_MAP: Record<string, ValidUnit> = {
   cajon: "CAJON", cajones: "CAJON", caja: "CAJON", cajas: "CAJON",
@@ -67,9 +96,9 @@ function words(s: string): string[] {
   return normalize(s).split(" ").filter(Boolean);
 }
 
-// Check if all words of `needle` appear in `haystack`
+// Check if all words of `needle` appear in `haystack` (with plural/synonym matching)
 function containsAllWords(haystack: string[], needle: string[]): boolean {
-  return needle.every((w) => haystack.includes(w));
+  return needle.every((nw) => haystack.some((hw) => wordsMatch(nw, hw)));
 }
 
 type SimpleProduct = { id: number; name: string; sku?: string | null; unit: string };
@@ -101,9 +130,9 @@ function matchProduct(
     if (containsAllWords(pWords, rawWords)) score += 3;
     // All product words appear in raw query
     else if (containsAllWords(rawWords, pWords)) score += 2;
-    // Any word overlap
+    // Any word overlap (with plural/synonym matching)
     else {
-      const overlap = rawWords.filter((w) => pWords.includes(w));
+      const overlap = rawWords.filter((w) => pWords.some((pw) => wordsMatch(w, pw)));
       if (overlap.length > 0) score += overlap.length;
     }
 
