@@ -2109,6 +2109,81 @@ export const storage = {
     }
   },
 
+  // Reemplaza el stock de cada item al valor exacto indicado.
+  // mode="merma_rinde": registra movimientos (Merma si baja, Rinde si sube)
+  // mode="correction": solo actualiza el valor sin registrar movimientos
+  async setStockAdjustments(
+    items: { productId: number; unit: string; qty: number }[],
+    mode: "merma_rinde" | "correction",
+  ): Promise<void> {
+    const PACKAGE_UNITS = new Set(['CAJON', 'BOLSA', 'BANDEJA']);
+
+    for (const item of items) {
+      const canonicalUnit = item.unit.trim().toUpperCase();
+
+      // Resolve target base-unit quantity (same package conversion as addStockAdjustments)
+      let targetQty = item.qty;
+      let puId: number | null = null;
+      let currentQty = 0;
+      let avgCostStr = "0";
+
+      if (PACKAGE_UNITS.has(canonicalUnit)) {
+        const [baseUnitPu] = await db.select().from(productUnits)
+          .where(and(eq(productUnits.productId, item.productId), drizzleSql`${productUnits.baseUnit} IS NOT NULL`))
+          .limit(1);
+        if (baseUnitPu) {
+          const wpu = parseFloat(baseUnitPu.weightPerUnit as string ?? '0');
+          targetQty = wpu > 0 ? item.qty * wpu : item.qty;
+          puId = baseUnitPu.id;
+          currentQty = parseFloat(baseUnitPu.stockQty as string);
+          avgCostStr = baseUnitPu.avgCost as string;
+        }
+      } else {
+        const [existing] = await db.select().from(productUnits)
+          .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+          .limit(1);
+        if (existing) {
+          puId = existing.id;
+          currentQty = parseFloat(existing.stockQty as string);
+          avgCostStr = existing.avgCost as string;
+        } else {
+          // Create new row at target qty
+          await db.insert(productUnits).values({
+            productId: item.productId, unit: canonicalUnit,
+            avgCost: '0', stockQty: targetQty.toFixed(4), isActive: true, baseUnit: canonicalUnit,
+          });
+          await db.update(products).set({ currentStock: targetQty.toFixed(4) }).where(eq(products.id, item.productId));
+          continue;
+        }
+      }
+
+      if (puId === null) continue;
+
+      const diff = targetQty - currentQty;
+
+      if (mode === "merma_rinde" && Math.abs(diff) > 0.0001) {
+        await db.insert(stockMovements).values({
+          productId: item.productId,
+          movementType: diff < 0 ? "out" : "in",
+          quantity: Math.abs(diff).toFixed(4),
+          unitCost: avgCostStr,
+          referenceType: "adjustment",
+          referenceId: puId,
+          notes: diff < 0 ? "Merma" : "Rinde",
+        });
+      }
+      // mode="correction": sin movimiento
+
+      await db.update(productUnits)
+        .set({ stockQty: targetQty.toFixed(4), isActive: true })
+        .where(eq(productUnits.id, puId));
+
+      const allPu = await db.select().from(productUnits).where(eq(productUnits.productId, item.productId));
+      const totalStock = allPu.reduce((s, p) => s + parseFloat(p.stockQty as string), 0);
+      await db.update(products).set({ currentStock: totalStock.toFixed(4) }).where(eq(products.id, item.productId));
+    }
+  },
+
   async bulkImportProducts(lines: { name: string; unit: string }[]): Promise<{ created: number; unitsAdded: number }> {
     let created = 0;
     let unitsAdded = 0;

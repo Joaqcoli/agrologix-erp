@@ -323,6 +323,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
+  app.post("/api/stock/set", requireAuth, async (req, res) => {
+    try {
+      const { items, mode } = z.object({
+        items: z.array(z.object({
+          productId: z.number().int().positive(),
+          unit: z.string().min(1),
+          qty: z.number().min(0),
+        })).min(1),
+        mode: z.enum(["merma_rinde", "correction"]),
+      }).parse(req.body);
+      await storage.setStockAdjustments(items, mode);
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   app.post("/api/stock/reset", requireAuth, async (req, res) => {
     try {
       const { asMerma } = z.object({ asMerma: z.boolean() }).parse(req.body);

@@ -577,18 +577,28 @@ export default function StockPage() {
 
   const { data: productsData } = useQuery<Product[]>({ queryKey: ["/api/products"] });
 
-  const submitMutation = useMutation({
+  // null = cerrado | "step1" = ¿es stock total? | "step2" = merma/rinde vs corrección
+  const [intentDialog, setIntentDialog] = useState<null | "step1" | "step2">(null);
+
+  const onStockSuccess = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/stock-movements"] });
+    toast({ title: "Stock actualizado", description: `${staged.filter((s) => s.status === "ok").length} producto(s) actualizados` });
+    setStep("input"); setRawText(""); setStaged([]); setLoadOpen(false); setIntentDialog(null);
+  };
+
+  const addMutation = useMutation({
     mutationFn: (items: { productId: number; unit: string; qty: number }[]) =>
       apiRequest("POST", "/api/stock/adjust", { items }).then((r) => r.json()),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      toast({ title: "Stock actualizado", description: `${staged.filter((s) => s.status === "ok").length} producto(s) actualizados` });
-      setStep("input");
-      setRawText("");
-      setStaged([]);
-      setLoadOpen(false);
-    },
+    onSuccess: onStockSuccess,
+    onError: (e: any) => toast({ title: "Error al cargar stock", description: e.message, variant: "destructive" }),
+  });
+
+  const setMutation = useMutation({
+    mutationFn: ({ items, mode }: { items: { productId: number; unit: string; qty: number }[]; mode: "merma_rinde" | "correction" }) =>
+      apiRequest("POST", "/api/stock/set", { items, mode }).then((r) => r.json()),
+    onSuccess: onStockSuccess,
     onError: (e: any) => toast({ title: "Error al cargar stock", description: e.message, variant: "destructive" }),
   });
 
@@ -645,8 +655,14 @@ export default function StockPage() {
       toast({ title: "Sin ítems válidos", description: "Corrige los errores antes de confirmar.", variant: "destructive" });
       return;
     }
-    submitMutation.mutate(validItems);
+    setIntentDialog("step1");
   };
+
+  const validItems = staged
+    .filter((s) => s.status === "ok" && s.productId && s.qty && s.qty > 0)
+    .map((s) => ({ productId: s.productId!, unit: s.unit!, qty: s.qty! }));
+
+  const isMutating = addMutation.isPending || setMutation.isPending;
 
   const okCount = staged.filter((s) => s.status === "ok").length;
   const errCount = staged.filter((s) => s.status !== "ok").length;
@@ -774,10 +790,10 @@ export default function StockPage() {
                       <Button variant="outline" onClick={() => setStep("input")}>Volver</Button>
                       <Button
                         onClick={handleConfirm}
-                        disabled={okCount === 0 || submitMutation.isPending}
+                        disabled={okCount === 0 || isMutating}
                         data-testid="button-confirm-stock"
                       >
-                        {submitMutation.isPending ? "Cargando..." : `Confirmar ${okCount} producto${okCount !== 1 ? "s" : ""}`}
+                        {isMutating ? "Cargando..." : `Confirmar ${okCount} producto${okCount !== 1 ? "s" : ""}`}
                       </Button>
                     </div>
                   </div>
@@ -913,6 +929,80 @@ export default function StockPage() {
 
       <AdjustStockDialog pu={adjustTarget} onClose={() => setAdjustTarget(null)} />
       <ResetStockDialog open={resetOpen} onClose={() => setResetOpen(false)} />
+
+      {/* ── Intent Dialog — step 1: ¿es stock total o suma? ── */}
+      <Dialog open={intentDialog === "step1"} onOpenChange={(o) => { if (!o) setIntentDialog(null); }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>¿Cómo querés cargar el stock?</DialogTitle>
+            <DialogDescription>
+              Estás por cargar <strong>{okCount}</strong> producto{okCount !== 1 ? "s" : ""}. ¿Es el stock total actualizado o querés sumar al actual?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-1 gap-3 mt-2">
+            <button
+              onClick={() => { setIntentDialog(null); addMutation.mutate(validItems); }}
+              className="rounded-lg border-2 border-border p-3 text-left transition-colors hover:border-primary/50 hover:bg-muted/40 focus:outline-none"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <Plus className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-semibold">No, agregar al actual</span>
+              </div>
+              <p className="text-xs text-muted-foreground">Suma la cantidad ingresada al stock que ya figura en el sistema</p>
+            </button>
+            <button
+              onClick={() => setIntentDialog("step2")}
+              className="rounded-lg border-2 border-border p-3 text-left transition-colors hover:border-primary/50 hover:bg-muted/40 focus:outline-none"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <Warehouse className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-semibold">Sí, reemplazar stock actual</span>
+              </div>
+              <p className="text-xs text-muted-foreground">El stock ingresado reemplaza al existente (ideal para inventario físico)</p>
+            </button>
+          </div>
+          <DialogFooter className="mt-2">
+            <Button variant="outline" onClick={() => setIntentDialog(null)}>Cancelar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Intent Dialog — step 2: ¿merma/rinde o corrección? ── */}
+      <Dialog open={intentDialog === "step2"} onOpenChange={(o) => { if (!o) setIntentDialog(null); }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>¿Qué hacer con la diferencia?</DialogTitle>
+            <DialogDescription>
+              El sistema calculará la diferencia entre el stock actual y el nuevo y te dará opciones para registrarla.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-1 gap-3 mt-2">
+            <button
+              onClick={() => { setIntentDialog(null); setMutation.mutate({ items: validItems, mode: "merma_rinde" }); }}
+              className="rounded-lg border-2 border-border p-3 text-left transition-colors hover:border-primary/50 hover:bg-muted/40 focus:outline-none"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <TrendingDown className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-semibold">Calcular Merma / Rinde</span>
+              </div>
+              <p className="text-xs text-muted-foreground">Menos que antes → se registra como <strong>Merma</strong>. Más que antes → se registra como <strong>Rinde</strong>.</p>
+            </button>
+            <button
+              onClick={() => { setIntentDialog(null); setMutation.mutate({ items: validItems, mode: "correction" }); }}
+              className="rounded-lg border-2 border-border p-3 text-left transition-colors hover:border-primary/50 hover:bg-muted/40 focus:outline-none"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-semibold">Solo corrección (sin impacto)</span>
+              </div>
+              <p className="text-xs text-muted-foreground">Reemplaza el stock sin registrar ningún movimiento. Ideal para correcciones de conteo.</p>
+            </button>
+          </div>
+          <DialogFooter className="mt-2">
+            <Button variant="outline" onClick={() => setIntentDialog("step1")}>Volver</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Layout>
   );
 }
