@@ -2235,6 +2235,14 @@ export const storage = {
     await db.delete(payments).where(eq(payments.id, id));
   },
 
+  async updatePayment(id: number, data: { date: string; amount: string; method: string; notes?: string | null }): Promise<Payment> {
+    const [updated] = await db.update(payments)
+      .set({ date: data.date, amount: data.amount, method: data.method as any, notes: data.notes ?? null })
+      .where(eq(payments.id, id))
+      .returning();
+    return updated;
+  },
+
   async deleteWithholding(id: number): Promise<void> {
     await db.delete(withholdings).where(eq(withholdings.id, id));
   },
@@ -2277,19 +2285,110 @@ export const storage = {
       .onConflictDoNothing();
   },
 
-  async getPendingOrdersForCustomer(customerId: number): Promise<{ id: number; folio: string; remitoNum: number | null; total: string; orderDate: string }[]> {
-    const result = await db
-      .select({ id: orders.id, folio: orders.folio, remitoNum: orders.remitoNum, total: orders.total, orderDate: orders.orderDate })
-      .from(orders)
-      .where(and(eq(orders.customerId, customerId), eq(orders.status, "approved")))
-      .orderBy(desc(orders.orderDate))
-      .limit(60);
-    return result.map((r) => ({
-      id: r.id,
-      folio: r.folio,
-      total: r.total != null ? String(r.total) : "0",
-      orderDate: r.orderDate instanceof Date ? r.orderDate.toISOString() : String(r.orderDate),
-    }));
+  async getPendingOrdersForCustomer(customerId: number): Promise<{ id: number; folio: string; remitoNum: number | null; total: string; paidAmount: string; orderDate: string }[]> {
+    // Incluir sucursales si este cliente es un padre
+    const childRows = await db.execute(drizzleSql`
+      SELECT id FROM customers WHERE parent_customer_id = ${customerId} AND active = true
+    `);
+    const childIds = (childRows.rows as any[]).map((r) => Number(r.id));
+    const allIds = [customerId, ...childIds];
+    const idArr = allIds.join(",");
+
+    // Running-balance approach: misma fórmula que el CC
+    // saldo = opening_balance + facturacion_con_iva - cobranza - retenciones
+    // → credits_for_orders = SUM(all_payments) - SUM(opening_balance)
+    const [creditsRow, openingRow] = await Promise.all([
+      db.execute(drizzleSql.raw(`
+        SELECT COALESCE(SUM(amount::numeric), 0) AS total_credits
+        FROM payments WHERE customer_id = ANY(ARRAY[${idArr}]::int[])
+      `)),
+      db.execute(drizzleSql.raw(`
+        SELECT COALESCE(SUM(opening_balance::numeric), 0) AS total_opening
+        FROM customers WHERE id = ANY(ARRAY[${idArr}]::int[])
+      `)),
+    ]);
+
+    // Redondear a pesos enteros para evitar discrepancias de redondeo
+    const totalCredits = Math.round(parseFloat((creditsRow.rows[0] as any).total_credits ?? "0"));
+    const totalOpening = Math.round(parseFloat((openingRow.rows[0] as any).total_opening ?? "0"));
+    let creditsForOrders = totalCredits - totalOpening;
+
+    // Pedidos aprobados con billing IVA-ajustado (misma fórmula que getCCCustomerDetail)
+    // También incluye raw_product_name como fallback cuando no hay product_id
+    const ordersRows = await db.execute(drizzleSql.raw(`
+      SELECT
+        o.id,
+        o.folio,
+        o.remito_num,
+        o.order_date,
+        CASE WHEN c.has_iva THEN
+          COALESCE(ROUND(SUM(CASE
+            WHEN oi.price_per_unit::numeric = 0 THEN 0
+            WHEN (COALESCE(p.name, oi.raw_product_name, '') ILIKE '%huevo%'
+                  OR COALESCE(p.name, oi.raw_product_name, '') ILIKE '%maple%'
+                  OR COALESCE(p.category, '') ILIKE '%huevo%')
+            THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
+            ELSE oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+          END)), 0)
+        ELSE
+          COALESCE(ROUND(SUM(CASE
+            WHEN oi.price_per_unit::numeric = 0 THEN 0
+            ELSE oi.quantity::numeric * oi.price_per_unit::numeric
+          END)), 0)
+        END AS billing_total
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      JOIN order_items oi ON oi.order_id = o.id
+      LEFT JOIN products p ON p.id = oi.product_id
+      WHERE o.customer_id = ANY(ARRAY[${idArr}]::int[])
+        AND o.status = 'approved'
+      GROUP BY o.id, o.folio, o.remito_num, o.order_date, c.has_iva
+      ORDER BY o.order_date ASC, o.id ASC
+      LIMIT 500
+    `));
+
+    const result: { id: number; folio: string; remitoNum: number | null; total: string; paidAmount: string; orderDate: string }[] = [];
+
+    for (const r of ordersRows.rows as any[]) {
+      const orderTotal = Math.round(parseFloat(r.billing_total ?? "0"));
+      // +1 de tolerancia por diferencias de redondeo entre fórmula JS y SQL
+      if (creditsForOrders >= orderTotal - 1) {
+        creditsForOrders -= orderTotal; // totalmente cubierto, skip
+      } else {
+        const covered = Math.max(0, creditsForOrders);
+        creditsForOrders = 0;
+        result.push({
+          id: Number(r.id),
+          folio: String(r.folio),
+          remitoNum: r.remito_num != null ? Number(r.remito_num) : null,
+          total: orderTotal.toFixed(2),
+          paidAmount: covered.toFixed(2),
+          orderDate: r.order_date instanceof Date ? r.order_date.toISOString() : String(r.order_date),
+        });
+      }
+    }
+
+    return result;
+  },
+
+  // Auto-aplicar pago a pedidos pendientes del más viejo al más nuevo
+  async autoApplyPaymentToOrders(paymentId: number, customerId: number, paymentAmount: number): Promise<void> {
+    const pending = await this.getPendingOrdersForCustomer(customerId);
+    if (pending.length === 0) return;
+
+    let remaining = paymentAmount;
+    const toLink: number[] = [];
+
+    for (const order of pending) {
+      if (remaining <= 0) break;
+      const orderRemaining = parseFloat(order.total) - parseFloat(order.paidAmount);
+      toLink.push(order.id);
+      remaining -= orderRemaining;
+    }
+
+    if (toLink.length > 0) {
+      await this.linkPaymentToOrders(paymentId, toLink);
+    }
   },
 
   async updateOrderInvoiceNumber(id: number, invoiceNumber: string | null): Promise<void> {
@@ -2585,7 +2684,7 @@ export const storage = {
 
     // Multi-ID raw SQL queries (allIds are validated integers from DB)
     const idArr = allIds.join(",");
-    const [paymentsIn, paymentsBef, withholdingsIn, withholdingsBef, ordersInPeriod, paidAmountsRows] = await Promise.all([
+    const [paymentsIn, paymentsBef, withholdingsIn, withholdingsBef, ordersInPeriod] = await Promise.all([
       db.execute(drizzleSql.raw(`
         SELECT p.*, (
           SELECT STRING_AGG(o2.folio, ', ' ORDER BY o2.folio)
@@ -2628,17 +2727,6 @@ export const storage = {
           AND o.order_date < '${endDate}'::date
         ORDER BY o.order_date DESC
       `)),
-      db.execute(drizzleSql.raw(`
-        SELECT pol.order_id AS "orderId", SUM(p.amount)::text AS "paidTotal"
-        FROM payment_order_links pol
-        JOIN payments p ON p.id = pol.payment_id
-        JOIN orders o ON o.id = pol.order_id
-        WHERE o.customer_id = ANY(ARRAY[${idArr}]::int[])
-          AND o.status = 'approved'
-          AND o.order_date >= '${startDate}'::date
-          AND o.order_date < '${endDate}'::date
-        GROUP BY pol.order_id
-      `)),
     ]);
 
     // Opening balance: sum across all IDs
@@ -2654,21 +2742,22 @@ export const storage = {
     const retenciones = Math.round((withholdingsIn.rows as any[]).reduce((s, w) => s + parseFloat(w.amount ?? "0"), 0));
     const saldo = saldoMesAnterior + facturacion - cobranza - retenciones;
 
-    // Compute billing per order
+    // Compute billing per order (IVA-adjusted)
     const orderBillingMap = new Map<number, number>();
     for (const item of myItemsInPeriod) {
       const cust = allCustomersMap.get(item.customerId);
       orderBillingMap.set(item.orderId, (orderBillingMap.get(item.orderId) ?? 0) + itemBilling(item, cust?.hasIva ?? c.hasIva));
     }
 
-    const paidByOrder = new Map<number, number>();
-    for (const row of paidAmountsRows.rows as any[]) {
-      paidByOrder.set(Number(row.orderId), parseFloat(row.paidTotal ?? "0"));
-    }
+    // isPaid via running balance (consistente con getPendingOrdersForCustomer)
+    const pendingOrders = await this.getPendingOrdersForCustomer(customerId);
+    const pendingOrderIds = new Set(pendingOrders.map((o) => o.id));
+    const pendingCreditByOrder = new Map(pendingOrders.map((o) => [o.id, parseFloat(o.paidAmount ?? "0")]));
 
     const ordersWithBilling = (ordersInPeriod.rows as any[]).map((o) => {
       const billingTotal = Math.round(orderBillingMap.get(o.id) ?? parseFloat(o.total ?? "0"));
-      const paidAmount = Math.round(paidByOrder.get(o.id) ?? 0);
+      const isPaid = !pendingOrderIds.has(o.id);
+      const paidAmount = isPaid ? billingTotal : Math.round(pendingCreditByOrder.get(o.id) ?? 0);
       return {
         id: o.id,
         folio: o.folio,
@@ -2678,7 +2767,7 @@ export const storage = {
         invoiceNumber: o.invoiceNumber ?? null,
         customerId: o.customerId ?? null,
         paidAmount,
-        isPaid: paidAmount >= billingTotal,
+        isPaid,
       };
     });
 

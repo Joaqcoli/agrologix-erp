@@ -818,10 +818,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const payment = await storage.createPayment(data, req.session.userId!);
       if (orderIds.length > 0) {
         await storage.linkPaymentToOrders(payment.id, orderIds);
+      } else {
+        // Auto-aplicar: vincular al pedido más viejo primero hasta cubrir el monto
+        await storage.autoApplyPaymentToOrders(payment.id, data.customerId, parseFloat(String(data.amount)));
       }
       return res.json(payment);
     } catch (e: any) {
       return res.status(400).json({ error: e.message });
+    }
+  });
+
+  // PATCH /api/payments/:id
+  app.patch("/api/payments/:id", requireAuth, async (req, res) => {
+    try {
+      const { date, amount, method, notes } = req.body;
+      if (!date || !amount || !method) return res.status(400).json({ error: "date, amount and method required" });
+      const updated = await storage.updatePayment(Number(req.params.id), { date, amount: String(amount), method, notes: notes ?? null });
+      return res.json(updated);
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
     }
   });
 

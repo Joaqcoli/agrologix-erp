@@ -13,8 +13,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2, Building2 } from "lucide-react";
-import { useState, useRef, useMemo } from "react";
+import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2, Building2, Pencil, Clock } from "lucide-react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import type { Payment, Withholding } from "@shared/schema";
 import { PAYMENT_METHODS } from "@shared/schema";
 import { jsPDF } from "jspdf";
@@ -251,7 +251,7 @@ type CCDetail = {
   subsidiaries?: SubsidiaryRow[];
 };
 
-type PendingOrder = { id: number; folio: string; remitoNum: number | null; total: string; orderDate: string };
+type PendingOrder = { id: number; folio: string; remitoNum: number | null; total: string; paidAmount: string; orderDate: string };
 
 function formatRemito(order: { remitoNum?: number | null; folio?: string | null }): string {
   if (order.remitoNum != null) return `VA-${String(order.remitoNum).padStart(6, "0")}`;
@@ -497,10 +497,13 @@ function PaymentModal({
     );
   };
 
-  // Sum of selected order totals (for amount hint)
+  // Saldo pendiente por pedido = total - ya pagado
+  const orderRemaining = (o: PendingOrder) => parseFloat(o.total) - parseFloat(o.paidAmount ?? "0");
+
+  // Sum of remaining balances for selected orders (for amount hint)
   const selectedTotal = pendingOrders
     .filter((o) => selectedOrderIds.includes(o.id))
-    .reduce((s, o) => s + parseFloat(o.total), 0);
+    .reduce((s, o) => s + orderRemaining(o), 0);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -516,6 +519,7 @@ function PaymentModal({
       queryClient.invalidateQueries({ queryKey: ["/api/ar/cc"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ar/cc/customer", customerId] });
       queryClient.invalidateQueries({ queryKey: ["/api/ar/cc/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ar/pending-orders", customerId] });
       toast({ title: "Pago registrado" });
       setAmount(""); setNotes(""); setMethod("EFECTIVO"); setSelectedOrderIds([]);
       onClose();
@@ -576,22 +580,26 @@ function PaymentModal({
           {/* Multi-select order checkboxes */}
           <div>
             <div className="flex items-center justify-between mb-1">
-              <Label className="text-xs">Asociar a pedidos (opcional)</Label>
-              {selectedOrderIds.length > 0 && (
+              <Label className="text-xs">Asociar a pedidos</Label>
+              {selectedOrderIds.length > 0 ? (
                 <span className="text-[10px] text-muted-foreground">
                   {selectedOrderIds.length} seleccionado{selectedOrderIds.length > 1 ? "s" : ""}
                 </span>
-              )}
+              ) : pendingOrders.length > 0 ? (
+                <span className="text-[10px] text-muted-foreground italic">se aplica automático del más viejo</span>
+              ) : null}
             </div>
             {pendingOrders.length === 0 ? (
               <p className="text-xs text-muted-foreground py-2 text-center border rounded-md">
-                Sin pedidos aprobados
+                Sin pedidos pendientes
               </p>
             ) : (
               <ScrollArea className="h-40 rounded-md border bg-muted/20 p-2">
                 <div className="space-y-1.5">
                   {pendingOrders.map((o) => {
                     const checked = selectedOrderIds.includes(o.id);
+                    const remaining = orderRemaining(o);
+                    const isPartial = parseFloat(o.paidAmount ?? "0") > 0;
                     return (
                       <label
                         key={o.id}
@@ -606,8 +614,11 @@ function PaymentModal({
                           className="shrink-0"
                         />
                         <span className="text-xs font-mono font-medium">{formatRemito(o)}</span>
+                        {isPartial && (
+                          <span className="text-[10px] text-amber-600 dark:text-amber-400">parcial</span>
+                        )}
                         <span className="text-xs text-muted-foreground ml-auto">
-                          ${Math.round(parseFloat(o.total)).toLocaleString("es-AR")}
+                          ${Math.round(remaining).toLocaleString("es-AR")}
                         </span>
                       </label>
                     );
@@ -737,6 +748,94 @@ function WithholdingModal({
   );
 }
 
+// ── Edit Payment modal ─────────────────────────────────────────────────────────
+function EditPaymentModal({
+  payment,
+  customerId,
+  open,
+  onClose,
+}: {
+  payment: PaymentRow | null;
+  customerId: number;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const [date, setDate] = useState(payment?.date ?? today());
+  const [amount, setAmount] = useState(payment ? String(Math.round(parseFloat(payment.amount as string))) : "");
+  const [method, setMethod] = useState(payment?.method ?? "EFECTIVO");
+  const [notes, setNotes] = useState(payment?.notes ?? "");
+
+  // Sync form when payment changes
+  useEffect(() => {
+    if (payment) {
+      setDate(payment.date ?? today());
+      setAmount(String(Math.round(parseFloat(payment.amount as string))));
+      setMethod(payment.method ?? "EFECTIVO");
+      setNotes(payment.notes ?? "");
+    }
+  }, [payment?.id]);
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      apiRequest("PATCH", `/api/payments/${payment!.id}`, { date, amount, method, notes: notes || null }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ar/cc/customer", customerId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ar/cc/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ar/pending-orders", customerId] });
+      toast({ title: "Pago actualizado" });
+      onClose();
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Editar Pago</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <Label className="text-xs">Fecha</Label>
+            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="mt-1" />
+          </div>
+          <div>
+            <Label className="text-xs">Monto</Label>
+            <div className="flex items-center gap-1 mt-1">
+              <span className="text-sm text-muted-foreground">$</span>
+              <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" className="flex-1" />
+            </div>
+          </div>
+          <div>
+            <Label className="text-xs">Método</Label>
+            <Select value={method} onValueChange={setMethod}>
+              <SelectTrigger className="mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PAYMENT_METHODS.map((m) => (
+                  <SelectItem key={m} value={m}>{m.replace(/_/g, " ")}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-xs">Notas (opcional)</Label>
+            <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Referencia, nro. cheque, etc." className="mt-1" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending || !amount || parseFloat(amount) <= 0}>
+            {mutation.isPending ? "Guardando..." : "Guardar"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Inline invoice number cell ─────────────────────────────────────────────────
 function InvoiceCell({ order, customerId }: { order: OrderRow; customerId: number }) {
   const { toast } = useToast();
@@ -811,6 +910,7 @@ export default function CCCustomerDetailPage({
   const years = Array.from({ length: 4 }, (_, i) => today2.getFullYear() - i);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showWithholdingModal, setShowWithholdingModal] = useState(false);
+  const [editingPayment, setEditingPayment] = useState<PaymentRow | null>(null);
   const [selectedSubsidiary, setSelectedSubsidiary] = useState<CCDetail["subsidiaries"] extends (infer T)[] ? T : never | null>(null);
 
   // ── MEJORA 3: Date range filter state ─────────────────────────────────────────
@@ -858,6 +958,7 @@ export default function CCCustomerDetailPage({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ar/cc/customer", customerId] });
       queryClient.invalidateQueries({ queryKey: ["/api/ar/cc/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ar/pending-orders", customerId] });
       toast({ title: "Pago eliminado" });
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -1162,7 +1263,58 @@ export default function CCCustomerDetailPage({
           </CardContent>
         </Card>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {/* Pending orders from previous periods */}
+        {(() => {
+          const prevPending = pendingOrders.filter((o) => o.orderDate.slice(0, 10) < queryDateFrom);
+          if (prevPending.length === 0) return null;
+          const prevTotal = prevPending.reduce((s, o) => s + parseFloat(o.total) - parseFloat(o.paidAmount ?? "0"), 0);
+          const fmtD = (d: string) => new Date(d.replace(/\s.+$/, "T00:00:00")).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
+          return (
+            <Card className="border-amber-200 dark:border-amber-800">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2 text-amber-700 dark:text-amber-400">
+                  <Clock className="h-4 w-4" />
+                  Pendientes de períodos anteriores ({prevPending.length})
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/30">
+                      <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Folio</th>
+                      <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Fecha</th>
+                      <th className="text-right py-1.5 px-3 font-semibold text-muted-foreground">Total</th>
+                      <th className="text-right py-1.5 px-3 font-semibold text-muted-foreground">Pendiente</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {prevPending.map((o) => {
+                      const remaining = parseFloat(o.total) - parseFloat(o.paidAmount ?? "0");
+                      return (
+                        <tr
+                          key={o.id}
+                          className="border-b border-border last:border-0 hover:bg-muted/20 cursor-pointer"
+                          onClick={() => setLocation(`/orders/${o.id}`)}
+                        >
+                          <td className="py-1.5 px-3 font-mono font-medium text-primary">{formatRemito(o)}</td>
+                          <td className="py-1.5 px-3 text-muted-foreground">{fmtD(o.orderDate)}</td>
+                          <td className="py-1.5 px-3 text-right">${fmtInt(parseFloat(o.total))}</td>
+                          <td className="py-1.5 px-3 text-right font-semibold text-destructive">${fmtInt(remaining)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <div className="flex items-center justify-between px-3 py-2 border-t border-border bg-amber-50/50 dark:bg-amber-950/20 text-xs">
+                  <span className="text-muted-foreground font-medium">{prevPending.length} pedido{prevPending.length > 1 ? "s" : ""} de períodos anteriores</span>
+                  <span className="font-bold text-destructive">${fmtInt(prevTotal)}</span>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })()}
+
+        <div className="flex flex-col gap-4">
           {/* Payments */}
           <Card>
             <CardHeader className="pb-2">
@@ -1202,14 +1354,23 @@ export default function CCCustomerDetailPage({
                         </td>
                         <td className="py-1.5 px-3 text-right font-semibold text-green-600">${fmtInt(parseFloat(p.amount as string))}</td>
                         <td className="py-1.5 px-3">
-                          <button
-                            onClick={() => deletePaymentMutation.mutate(p.id)}
-                            disabled={deletePaymentMutation.isPending}
-                            className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                            data-testid={`button-delete-payment-${p.id}`}
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
+                          <div className="flex items-center gap-0.5">
+                            <button
+                              onClick={() => setEditingPayment(p as PaymentRow)}
+                              className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                              data-testid={`button-edit-payment-${p.id}`}
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                            <button
+                              onClick={() => deletePaymentMutation.mutate(p.id)}
+                              disabled={deletePaymentMutation.isPending}
+                              className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                              data-testid={`button-delete-payment-${p.id}`}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1326,6 +1487,12 @@ export default function CCCustomerDetailPage({
         customerId={customerId}
         open={showWithholdingModal}
         onClose={() => setShowWithholdingModal(false)}
+      />
+      <EditPaymentModal
+        payment={editingPayment}
+        customerId={customerId}
+        open={editingPayment !== null}
+        onClose={() => setEditingPayment(null)}
       />
     </Layout>
   );
