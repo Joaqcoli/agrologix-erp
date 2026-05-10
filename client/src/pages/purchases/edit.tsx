@@ -334,13 +334,14 @@ export default function EditPurchasePage({ id }: { id: number }) {
                         <div className="space-y-1.5">
                           <Label className="flex items-center gap-1">
                             <PackagePlus className="h-3 w-3 text-muted-foreground" />
-                            Cant. base por {labelFor(item.unit)}
+                            ¿Cuántos {item.baseUnit} por {labelFor(item.unit)}?<span className="text-destructive ml-0.5">*</span>
                           </Label>
                           <Input
                             type="number" min="0.0001" step="0.0001"
-                            placeholder="ej. 18"
+                            placeholder={`ej. 18 ${item.baseUnit}`}
                             value={item.weightPerPackage}
                             onChange={(e) => updateItem(idx, "weightPerPackage", e.target.value)}
+                            className={!item.weightPerPackage ? "border-destructive/60 focus-visible:ring-destructive/40" : ""}
                           />
                         </div>
                         {wpp > 0 && parseFloat(item.quantity) > 0 && (

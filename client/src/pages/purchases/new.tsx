@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { Plus, Trash2, ArrowLeft, PackagePlus, Calculator, Info } from "lucide-react";
-import type { Product, Supplier } from "@shared/schema";
+import type { Product, ProductUnit, Supplier } from "@shared/schema";
 
 // Todas las unidades disponibles para compra
 const PURCHASE_UNIT_OPTIONS = [
@@ -123,6 +123,16 @@ export default function NewPurchasePage() {
   const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
   const { data: suppliers } = useQuery<Supplier[]>({ queryKey: ["/api/suppliers"] });
   const { data: folioData } = useQuery<{ folio: string }>({ queryKey: ["/api/purchases/next-folio"] });
+  const { data: stockData } = useQuery<(ProductUnit & { product: Product })[]>({ queryKey: ["/api/products/stock"] });
+
+  // Returns the known weight-per-package for a product from its existing product_units row
+  const getKnownWPU = (productId: number): string => {
+    if (!stockData || !productId) return "";
+    const row = stockData.find((pu) => pu.productId === productId && pu.baseUnit != null);
+    if (!row) return "";
+    const wpu = parseFloat(row.weightPerUnit as string ?? "0");
+    return wpu > 0 ? String(wpu) : "";
+  };
 
   useEffect(() => { if (folioData?.folio) setFolio(folioData.folio); }, [folioData]);
 
@@ -165,7 +175,7 @@ export default function NewPurchasePage() {
           updated[i].weightPerPackage = "12";
         } else if (isPackageUnit(defaultUnit)) {
           updated[i].baseUnit = "KG";
-          updated[i].weightPerPackage = "";
+          updated[i].weightPerPackage = getKnownWPU(Number(value));
         } else {
           updated[i].baseUnit = defaultUnit;
           updated[i].weightPerPackage = "";
@@ -182,7 +192,7 @@ export default function NewPurchasePage() {
           updated[i].weightPerPackage = "12";
         } else {
           updated[i].baseUnit = "KG";
-          updated[i].weightPerPackage = "";
+          updated[i].weightPerPackage = getKnownWPU(productId);
         }
       } else {
         updated[i].baseUnit = unit;
@@ -236,6 +246,13 @@ export default function NewPurchasePage() {
       toast({ title: "Sin productos válidos", description: "Agrega al menos un producto con cantidad y costo.", variant: "destructive" });
       return;
     }
+    // Block if any package item is missing weightPerPackage
+    const missingWPU = validItems.filter((i) => isPackageUnit(i.unit) && !(i.unit === "CAJON" && isEggsProduct(i.productId)) && !(parseFloat(i.weightPerPackage) > 0));
+    if (missingWPU.length > 0) {
+      const names = missingWPU.map((i) => activeProducts.find((p) => p.id === i.productId)?.name ?? "producto").join(", ");
+      toast({ title: "Falta cantidad base por envase", description: `Completá cuántos KG/unidades trae cada ${missingWPU[0].unit.toLowerCase()} de: ${names}`, variant: "destructive" });
+      return;
+    }
     const effectiveSupplierName = supplierId
       ? (activeSuppliers.find((s) => s.id === supplierId)?.name ?? supplierName)
       : supplierName;
@@ -276,7 +293,8 @@ export default function NewPurchasePage() {
   };
 
   const selectedSupplier = supplierId ? activeSuppliers.find((s) => s.id === supplierId) : null;
-  const canSubmit = !createMutation.isPending && (supplierId != null || supplierName.trim().length > 0);
+  const hasWPUError = items.some((i) => i.productId && isPackageUnit(i.unit) && !(i.unit === "CAJON" && isEggsProduct(i.productId)) && !(parseFloat(i.weightPerPackage) > 0));
+  const canSubmit = !createMutation.isPending && (supplierId != null || supplierName.trim().length > 0) && !hasWPUError;
 
   return (
     <Layout title="Nueva Compra">
@@ -484,16 +502,16 @@ export default function NewPurchasePage() {
                         <div className="space-y-1.5">
                           <Label className="flex items-center gap-1">
                             <PackagePlus className="h-3 w-3 text-muted-foreground" />
-                            Cant. base por {labelFor(item.unit)}
+                            ¿Cuántos {item.baseUnit} por {labelFor(item.unit)}?{!eggsLocked && <span className="text-destructive ml-0.5">*</span>}
                           </Label>
                           <div className="flex gap-2">
                             <Input
                               type="number" min="0.0001" step="0.0001"
-                              placeholder={eggsLocked ? "12" : "ej. 18"}
+                              placeholder={eggsLocked ? "12" : `ej. 18 ${item.baseUnit}`}
                               value={item.weightPerPackage}
                               onChange={(e) => !eggsLocked && updateItem(idx, "weightPerPackage", e.target.value)}
                               readOnly={eggsLocked}
-                              className={eggsLocked ? "bg-muted/40" : ""}
+                              className={eggsLocked ? "bg-muted/40" : (!item.weightPerPackage ? "border-destructive/60 focus-visible:ring-destructive/40" : "")}
                               data-testid={`input-weight-per-package-${idx}`}
                             />
                             {eggsLocked ? (
