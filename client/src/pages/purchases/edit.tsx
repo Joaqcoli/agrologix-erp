@@ -112,13 +112,29 @@ export default function EditPurchasePage({ id }: { id: number }) {
     if (field === "productId") {
       const product = (products ?? []).find((p) => p.id === Number(value));
       if (product) {
-        updated[i].unit = product.unit as string;
-        updated[i].baseUnit = product.unit as string;
+        const defaultUnit = product.unit as string;
+        updated[i].unit = defaultUnit;
+        if (defaultUnit === "CAJON" && product.category?.toLowerCase() === "huevos") {
+          updated[i].baseUnit = "MAPLE";
+          updated[i].weightPerPackage = "12";
+        } else if (isPackageUnit(defaultUnit)) {
+          updated[i].baseUnit = "KG";
+          updated[i].weightPerPackage = "";
+        } else {
+          updated[i].baseUnit = defaultUnit;
+          updated[i].weightPerPackage = "";
+        }
       }
     }
     if (field === "unit") {
       const unit = String(value);
-      if (!isPackageUnit(unit)) {
+      if (isPackageUnit(unit)) {
+        if (unit === "CAJON" && isEggsProduct(updated[i].productId)) {
+          updated[i].baseUnit = "MAPLE";
+          updated[i].weightPerPackage = "12";
+        }
+        // else: keep existing baseUnit/weightPerPackage (pre-filled from loaded purchase)
+      } else {
         updated[i].weightPerPackage = "";
         updated[i].baseUnit = unit;
       }
@@ -127,6 +143,11 @@ export default function EditPurchasePage({ id }: { id: number }) {
   };
 
   const activeProducts = (products ?? []).filter((p) => p.active);
+
+  const isEggsProduct = (productId: number) => {
+    const p = activeProducts.find((x) => x.id === productId);
+    return p?.category?.toLowerCase() === "huevos";
+  };
 
   const itemTotal = (item: PurchaseItem) => {
     const q = parseFloat(item.quantity) || 0;
@@ -270,6 +291,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
                 const currentAvg = item.productId ? getProductAvgCost(item.productId) : null;
                 const projectedAvg = item.productId && item.quantity && item.costPerUnit ? getProjectedAvgCost(item) : null;
                 const packageMode = isPackageUnit(item.unit);
+                const eggsLocked = packageMode && item.unit === "CAJON" && isEggsProduct(item.productId);
                 const wpp = parseFloat(item.weightPerPackage) || 0;
 
                 return (
@@ -334,15 +356,23 @@ export default function EditPurchasePage({ id }: { id: number }) {
                         <div className="space-y-1.5">
                           <Label className="flex items-center gap-1">
                             <PackagePlus className="h-3 w-3 text-muted-foreground" />
-                            ¿Cuántos {item.baseUnit} por {labelFor(item.unit)}?<span className="text-destructive ml-0.5">*</span>
+                            ¿Cuántos {item.baseUnit} por {labelFor(item.unit)}?{!eggsLocked && <span className="text-destructive ml-0.5">*</span>}
                           </Label>
-                          <Input
-                            type="number" min="0.0001" step="0.0001"
-                            placeholder={`ej. 18 ${item.baseUnit}`}
-                            value={item.weightPerPackage}
-                            onChange={(e) => updateItem(idx, "weightPerPackage", e.target.value)}
-                            className={!item.weightPerPackage ? "border-destructive/60 focus-visible:ring-destructive/40" : ""}
-                          />
+                          <div className="flex gap-2">
+                            <Input
+                              type="number" min="0.0001" step="0.0001"
+                              placeholder={eggsLocked ? "12" : `ej. 18 ${item.baseUnit}`}
+                              value={item.weightPerPackage}
+                              onChange={(e) => !eggsLocked && updateItem(idx, "weightPerPackage", e.target.value)}
+                              readOnly={eggsLocked}
+                              className={eggsLocked ? "bg-muted/40" : (!item.weightPerPackage ? "border-destructive/60 focus-visible:ring-destructive/40" : "")}
+                            />
+                            {eggsLocked && (
+                              <div className="flex h-9 items-center rounded-md border border-border bg-muted/40 px-3 whitespace-nowrap">
+                                <span className="text-sm font-medium">MAPLE</span>
+                              </div>
+                            )}
+                          </div>
                         </div>
                         {wpp > 0 && parseFloat(item.quantity) > 0 && (
                           <div className="space-y-1.5">

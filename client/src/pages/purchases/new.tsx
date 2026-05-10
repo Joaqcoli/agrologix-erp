@@ -154,7 +154,7 @@ export default function NewPurchasePage() {
 
   const isEggsProduct = (productId: number) => {
     const p = activeProducts.find((x) => x.id === productId);
-    return p?.category === "Huevos";
+    return p?.category?.toLowerCase() === "huevos";
   };
 
   const addItem = () => setItems([{ productId: 0, productSearch: "", quantity: "", unit: "KG", weightPerPackage: "", baseUnit: "KG", costPerUnit: "", emptyCost: "" }, ...items]);
@@ -416,7 +416,7 @@ export default function NewPurchasePage() {
                 const currentAvg = item.productId ? parseFloat((activeProducts.find((x) => x.id === item.productId)?.averageCost as string) ?? "0") : null;
                 const projectedAvg = item.productId && item.quantity && item.costPerUnit ? getProjectedAvgCost(item) : null;
                 const packageMode = isPackageUnit(item.unit);
-                const eggsLocked = packageMode && item.unit === "caja" && isEggsProduct(item.productId);
+                const eggsLocked = packageMode && item.unit === "CAJON" && isEggsProduct(item.productId);
                 const totalBaseUnits = getTotalBaseUnits(item);
                 const costPerBase = getCostPerBaseUnit(item);
                 const baseUnitLabel = labelFor(item.baseUnit);

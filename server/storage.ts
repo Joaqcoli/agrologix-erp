@@ -465,7 +465,9 @@ export const storage = {
       .limit(1);
     if (exactPu && parseFloat(exactPu.stockQty as string) > 0) return exactPu.avgCost as string;
 
-    // 2) Si es unidad de envase, derivar de fila base × weight_per_unit — solo si base tiene stock
+    // 2) Si es unidad de envase, derivar de fila base × weight_per_package — solo si base tiene stock
+    // Usa el weight_per_package del purchase_item más reciente del mismo tipo de envase
+    // para distinguir correctamente CAJON (ej. 18 KG) de BANDEJA (ej. 0.5 KG) del mismo producto
     if (['CAJON', 'BOLSA', 'BANDEJA'].includes(canonical)) {
       const [baseRow] = await tx.select().from(productUnits)
         .where(and(
@@ -474,7 +476,18 @@ export const storage = {
         ))
         .limit(1);
       if (baseRow && parseFloat(baseRow.stockQty as string) > 0) {
-        const wpu = parseFloat(baseRow.weightPerUnit as string ?? "0");
+        // Buscar el peso por envase específico para este tipo (CAJON vs BANDEJA vs BOLSA)
+        const [recentPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
+          .from(purchaseItems)
+          .where(and(
+            eq(purchaseItems.productId, productId),
+            eq(purchaseItems.purchaseUnit, canonical as any),
+          ))
+          .orderBy(desc(purchaseItems.id))
+          .limit(1);
+        const wpu = recentPi?.weightPerPackage
+          ? parseFloat(recentPi.weightPerPackage as string)
+          : parseFloat(baseRow.weightPerUnit as string ?? "0");
         if (wpu > 0) return (parseFloat(baseRow.avgCost as string) * wpu).toFixed(4);
       }
     }
@@ -699,6 +712,7 @@ export const storage = {
           const puUpdate: Record<string, any> = {
             stockQty: (puStock + newQty).toFixed(4),
             avgCost: newPuAvgCost.toFixed(4),
+            baseUnit: canonicalUnit,
           };
           if (isPackagePurchase) puUpdate.weightPerUnit = newWeightPerUnit.toFixed(4);
           await tx.update(productUnits).set(puUpdate).where(eq(productUnits.id, existingPU.id));
@@ -710,6 +724,7 @@ export const storage = {
             unit: canonicalUnit,
             avgCost: newCost.toFixed(4),
             stockQty: newQty.toFixed(4),
+            baseUnit: canonicalUnit,
           };
           if (weightPerPackage > 0) insertData.weightPerUnit = weightPerPackage.toFixed(4);
           await tx.insert(productUnits).values(insertData);
@@ -1596,7 +1611,19 @@ export const storage = {
         if (baseUnitPu) {
           // Modelo nuevo: puede haber conversión de envase → unidad base
           if (oiCanonical !== baseUnitPu.unit && ['CAJON', 'BOLSA', 'BANDEJA'].includes(oiCanonical)) {
-            const wpu = parseFloat(baseUnitPu.weightPerUnit as string ?? "0");
+            // Buscar el peso por envase específico para este tipo (CAJON vs BANDEJA vs BOLSA)
+            // para evitar usar el promedio confuso de todos los tipos de envase
+            const [recentPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
+              .from(purchaseItems)
+              .where(and(
+                eq(purchaseItems.productId, item.productId as number),
+                eq(purchaseItems.purchaseUnit, oiCanonical as any),
+              ))
+              .orderBy(desc(purchaseItems.id))
+              .limit(1);
+            const wpu = recentPi?.weightPerPackage
+              ? parseFloat(recentPi.weightPerPackage as string)
+              : parseFloat(baseUnitPu.weightPerUnit as string ?? "0");
             deductQty = qty * (wpu > 0 ? wpu : 1);
           }
         } else {
@@ -1612,16 +1639,32 @@ export const storage = {
         const isOverflow = rawNewStock < 0;
         const finalStock = isOverflow ? 0 : rawNewStock;
 
+        // Re-fetch costo actual al momento de aprobación (supera el costo desactualizado guardado al crear el pedido)
+        const freshCostStr = await this._getCostForUnit(item.productId, oiCanonical, tx);
+        const freshCost = parseFloat(freshCostStr);
+        const effectiveCostStr = isOverflow
+          ? "0"
+          : (freshCost > 0 ? freshCostStr : item.costPerUnit as string);
+
         const movementNotes = isOverflow
           ? `Stock agotado, excedente marcado con costo 0 por rinde (Pedido ${order.folio})`
           : `Pedido ${order.folio}`;
+
+        // Actualizar costPerUnit en order_items con el costo fresco
+        const price = parseFloat(item.pricePerUnit as string ?? "0");
+        const newMargin = price > 0 && parseFloat(effectiveCostStr) > 0
+          ? ((price - parseFloat(effectiveCostStr)) / price).toFixed(4)
+          : null;
+        const itemUpdate: Record<string, any> = { costPerUnit: effectiveCostStr };
+        if (newMargin !== null) itemUpdate.margin = newMargin;
+        await tx.update(orderItems).set(itemUpdate).where(eq(orderItems.id, item.id));
 
         // Stock OUT movement (audit trail)
         await tx.insert(stockMovements).values({
           productId: item.productId,
           movementType: "out",
           quantity: item.quantity as string,
-          unitCost: item.costPerUnit as string,
+          unitCost: effectiveCostStr,
           referenceId: id,
           referenceType: "order",
           notes: movementNotes,
@@ -1646,15 +1689,10 @@ export const storage = {
           })
           .where(eq(products.id, item.productId));
 
-        // On overflow: mark this order item with cost $0 (stock agotado)
-        if (isOverflow) {
-          const price = parseFloat(item.pricePerUnit as string ?? "0");
-          const margin = price > 0 ? price / price : null; // margin = 100% when cost = 0
+        // On overflow: ensure order item shows cost $0 (already set above via itemUpdate)
+        if (isOverflow && newMargin === null) {
           await tx.update(orderItems)
-            .set({
-              costPerUnit: "0",
-              ...(margin !== null && { margin: "1.0000" }),
-            })
+            .set({ margin: "1.0000" })
             .where(eq(orderItems.id, item.id));
         }
 
