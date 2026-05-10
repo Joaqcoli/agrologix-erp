@@ -983,21 +983,44 @@ export default function CCCustomerDetailPage({
     if (!data) return;
     const fmtD = (d: string) =>
       new Date(d.replace(/\s.+$/, "T00:00:00")).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
+
+    // Pedidos pendientes de períodos anteriores (de pendingOrders que no están en el período actual)
+    const inPeriodIds = new Set((data.orders ?? []).map((o) => o.id));
+    const prevPendingRows = pendingOrders
+      .filter((o) => !inPeriodIds.has(o.id))
+      .map((o) => ({
+        fecha: fmtD(o.orderDate),
+        remito: formatRemito(o),
+        factura: "—",
+        monto: Math.round(parseFloat(o.total) - parseFloat(o.paidAmount ?? "0")),
+        orderDate: o.orderDate,
+      }));
+
+    // Pedidos pendientes del período actual
+    const currPendingRows = (data.orders ?? [])
+      .filter((o) => !o.isPaid)
+      .map((o) => ({
+        fecha: fmtD(o.orderDate),
+        remito: formatRemito(o),
+        factura: o.invoiceNumber ?? "—",
+        monto: Math.round(o.total - (o.paidAmount ?? 0)),
+        orderDate: o.orderDate,
+      }));
+
+    // Combinar y ordenar de más viejo a más nuevo
+    const allPendingRows = [...prevPendingRows, ...currPendingRows]
+      .sort((a, b) => a.orderDate.localeCompare(b.orderDate))
+      .map(({ orderDate: _d, ...rest }) => rest); // quitar campo auxiliar
+
+    const todayLabel = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
     const doc = await generateCCPDF({
       clientLabel: `Cliente: ${data.customer.name}`,
-      saldoAnterior: data.saldoMesAnterior,
-      orderRows: (data.orders ?? [])
-        .filter((o) => !o.isPaid)
-        .map((o) => ({
-          fecha: fmtD(o.orderDate),
-          remito: formatRemito(o),
-          factura: o.invoiceNumber ?? "—",
-          monto: o.total,
-        })),
+      saldoAnterior: 0,
+      orderRows: allPendingRows,
       total: Math.max(0, data.saldo),
-      periodLabel,
+      periodLabel: `Saldo al ${todayLabel}`,
     });
-    doc.save(`CC-${data.customer.name.replace(/\s+/g, "_")}-${periodLabel.replace(/[\s/]/g, "_")}.pdf`);
+    doc.save(`CC-${data.customer.name.replace(/\s+/g, "_")}-${todayLabel.replace(/\//g, "-")}.pdf`);
   };
 
   const backUrl = `/cuentas-corrientes?month=${month}&year=${year}`;
