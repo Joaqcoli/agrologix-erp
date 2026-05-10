@@ -2159,6 +2159,21 @@ export const storage = {
 
       if (puId === null) continue;
 
+      // If current avgCost is 0, try to resolve from last purchase (costPerUnit is already in base unit)
+      let resolvedCost = avgCostStr;
+      if (parseFloat(avgCostStr) <= 0) {
+        const [lastPurchaseItem] = await db
+          .select({ costPerUnit: purchaseItems.costPerUnit })
+          .from(purchaseItems)
+          .innerJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
+          .where(eq(purchaseItems.productId, item.productId))
+          .orderBy(desc(purchases.purchaseDate))
+          .limit(1);
+        if (lastPurchaseItem && parseFloat(lastPurchaseItem.costPerUnit as string) > 0) {
+          resolvedCost = lastPurchaseItem.costPerUnit as string;
+        }
+      }
+
       const diff = targetQty - currentQty;
 
       if (mode === "merma_rinde" && Math.abs(diff) > 0.0001) {
@@ -2166,7 +2181,7 @@ export const storage = {
           productId: item.productId,
           movementType: diff < 0 ? "out" : "in",
           quantity: Math.abs(diff).toFixed(4),
-          unitCost: avgCostStr,
+          unitCost: resolvedCost,
           referenceType: "adjustment",
           referenceId: puId,
           notes: diff < 0 ? "Merma" : "Rinde",
@@ -2174,8 +2189,13 @@ export const storage = {
       }
       // mode="correction": sin movimiento
 
+      const updateSet: Record<string, any> = { stockQty: targetQty.toFixed(4), isActive: true };
+      // Only write avgCost when we resolved a better value (i.e. existing was 0 and we found one)
+      if (parseFloat(avgCostStr) <= 0 && parseFloat(resolvedCost) > 0) {
+        updateSet.avgCost = resolvedCost;
+      }
       await db.update(productUnits)
-        .set({ stockQty: targetQty.toFixed(4), isActive: true })
+        .set(updateSet)
         .where(eq(productUnits.id, puId));
 
       const allPu = await db.select().from(productUnits).where(eq(productUnits.productId, item.productId));
