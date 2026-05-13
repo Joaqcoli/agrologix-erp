@@ -2037,6 +2037,24 @@ export const storage = {
     return { affected: allPu.length };
   },
 
+  // ── Helper: peso por envase para CAJON/BOLSA/BANDEJA ─────────────────────────
+  // Busca el weightPerPackage de la última compra con ese purchaseUnit para el producto.
+  // Si no encuentra (o es 0), cae al fallback (weightPerUnit del row base).
+  async _resolveWpu(productId: number, packageUnit: string, fallbackWpu: number): Promise<number> {
+    const [lastPi] = await db
+      .select({ weightPerPackage: purchaseItems.weightPerPackage })
+      .from(purchaseItems)
+      .innerJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
+      .where(and(
+        eq(purchaseItems.productId, productId),
+        drizzleSql`${purchaseItems.purchaseUnit}::text = ${packageUnit}`,
+      ))
+      .orderBy(desc(purchases.purchaseDate))
+      .limit(1);
+    const wpu = parseFloat(lastPi?.weightPerPackage as string ?? '0');
+    return wpu > 0 ? wpu : fallbackWpu;
+  },
+
   async addStockAdjustments(items: { productId: number; unit: string; qty: number }[]): Promise<void> {
     const PACKAGE_UNITS = new Set(['CAJON', 'BOLSA', 'BANDEJA']);
 
@@ -2053,8 +2071,9 @@ export const storage = {
           .limit(1);
 
         if (baseUnitPu) {
-          // Add qty × weight_per_unit to the base unit row
-          const wpu = parseFloat(baseUnitPu.weightPerUnit as string ?? '0');
+          // Use weightPerPackage from the last purchase (most precise), fallback to stored average
+          const fallback = parseFloat(baseUnitPu.weightPerUnit as string ?? '0');
+          const wpu = await this._resolveWpu(item.productId, canonicalUnit, fallback);
           const addQty = wpu > 0 ? item.qty * wpu : item.qty;
           const newStock = parseFloat(baseUnitPu.stockQty as string) + addQty;
           await db.update(productUnits)
@@ -2118,89 +2137,137 @@ export const storage = {
   ): Promise<void> {
     const PACKAGE_UNITS = new Set(['CAJON', 'BOLSA', 'BANDEJA']);
 
+    // ── Step 1: resolve each input item to its base-unit product_units row ──────
+    type Resolved = { productId: number; puId: number; targetQty: number; currentQty: number; currentAvgCost: string };
+    const resolved: Resolved[] = [];
+    const listedPuIds = new Set<number>();
+
     for (const item of items) {
       const canonicalUnit = item.unit.trim().toUpperCase();
-
-      // Resolve target base-unit quantity (same package conversion as addStockAdjustments)
       let targetQty = item.qty;
-      let puId: number | null = null;
-      let currentQty = 0;
-      let avgCostStr = "0";
+      let pu: typeof productUnits.$inferSelect | undefined;
 
       if (PACKAGE_UNITS.has(canonicalUnit)) {
-        const [baseUnitPu] = await db.select().from(productUnits)
+        // CAJON/BOLSA/BANDEJA → find base unit row and convert qty
+        const [baseRow] = await db.select().from(productUnits)
           .where(and(eq(productUnits.productId, item.productId), drizzleSql`${productUnits.baseUnit} IS NOT NULL`))
           .limit(1);
-        if (baseUnitPu) {
-          const wpu = parseFloat(baseUnitPu.weightPerUnit as string ?? '0');
+        if (baseRow) {
+          const fallback = parseFloat(baseRow.weightPerUnit as string ?? '0');
+          const wpu = await this._resolveWpu(item.productId, canonicalUnit, fallback);
           targetQty = wpu > 0 ? item.qty * wpu : item.qty;
-          puId = baseUnitPu.id;
-          currentQty = parseFloat(baseUnitPu.stockQty as string);
-          avgCostStr = baseUnitPu.avgCost as string;
+          pu = baseRow;
         }
       } else {
+        // Base unit (KG/UNIDAD/ATADO/MAPLE/etc.)
         const [existing] = await db.select().from(productUnits)
           .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
           .limit(1);
         if (existing) {
-          puId = existing.id;
-          currentQty = parseFloat(existing.stockQty as string);
-          avgCostStr = existing.avgCost as string;
+          pu = existing;
         } else {
-          // Create new row at target qty
-          await db.insert(productUnits).values({
+          // No row yet — look up cost from last purchase before creating
+          let initCost = '0';
+          const [lastPi] = await db
+            .select({ costPerUnit: purchaseItems.costPerUnit })
+            .from(purchaseItems)
+            .innerJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
+            .where(eq(purchaseItems.productId, item.productId))
+            .orderBy(desc(purchases.purchaseDate))
+            .limit(1);
+          if (lastPi && parseFloat(lastPi.costPerUnit as string) > 0) {
+            initCost = lastPi.costPerUnit as string;
+          }
+          const [created] = await db.insert(productUnits).values({
             productId: item.productId, unit: canonicalUnit,
-            avgCost: '0', stockQty: targetQty.toFixed(4), isActive: true, baseUnit: canonicalUnit,
-          });
-          await db.update(products).set({ currentStock: targetQty.toFixed(4) }).where(eq(products.id, item.productId));
+            avgCost: initCost, stockQty: targetQty.toFixed(4), isActive: true, baseUnit: canonicalUnit,
+          }).returning();
+          listedPuIds.add(created.id);
+          resolved.push({ productId: item.productId, puId: created.id, targetQty, currentQty: 0, currentAvgCost: initCost });
           continue;
         }
       }
 
-      if (puId === null) continue;
+      if (!pu) continue;
+      listedPuIds.add(pu.id);
+      resolved.push({
+        productId: item.productId,
+        puId: pu.id,
+        targetQty,
+        currentQty: parseFloat(pu.stockQty as string),
+        currentAvgCost: pu.avgCost as string,
+      });
+    }
 
-      // If current avgCost is 0, try to resolve from last purchase (costPerUnit is already in base unit)
-      let resolvedCost = avgCostStr;
-      if (parseFloat(avgCostStr) <= 0) {
-        const [lastPurchaseItem] = await db
+    // ── Step 2: resolve cost for each listed item ────────────────────────────────
+    // Priority: existing avgCost (if > 0), else last purchase costPerUnit (already in base unit)
+    const affectedProductIds = new Set<number>();
+
+    for (const r of resolved) {
+      let resolvedCost = r.currentAvgCost;
+      if (parseFloat(resolvedCost) <= 0) {
+        const [lastPi] = await db
           .select({ costPerUnit: purchaseItems.costPerUnit })
           .from(purchaseItems)
           .innerJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
-          .where(eq(purchaseItems.productId, item.productId))
+          .where(eq(purchaseItems.productId, r.productId))
           .orderBy(desc(purchases.purchaseDate))
           .limit(1);
-        if (lastPurchaseItem && parseFloat(lastPurchaseItem.costPerUnit as string) > 0) {
-          resolvedCost = lastPurchaseItem.costPerUnit as string;
+        if (lastPi && parseFloat(lastPi.costPerUnit as string) > 0) {
+          resolvedCost = lastPi.costPerUnit as string;
         }
       }
 
-      const diff = targetQty - currentQty;
-
+      const diff = r.targetQty - r.currentQty;
       if (mode === "merma_rinde" && Math.abs(diff) > 0.0001) {
         await db.insert(stockMovements).values({
-          productId: item.productId,
+          productId: r.productId,
           movementType: diff < 0 ? "out" : "in",
           quantity: Math.abs(diff).toFixed(4),
           unitCost: resolvedCost,
           referenceType: "adjustment",
-          referenceId: puId,
+          referenceId: r.puId,
           notes: diff < 0 ? "Merma" : "Rinde",
         });
       }
-      // mode="correction": sin movimiento
 
-      const updateSet: Record<string, any> = { stockQty: targetQty.toFixed(4), isActive: true };
-      // Only write avgCost when we resolved a better value (i.e. existing was 0 and we found one)
-      if (parseFloat(avgCostStr) <= 0 && parseFloat(resolvedCost) > 0) {
-        updateSet.avgCost = resolvedCost;
+      const setFields: Partial<typeof productUnits.$inferInsert> = { stockQty: r.targetQty.toFixed(4), isActive: true };
+      if (parseFloat(r.currentAvgCost) <= 0 && parseFloat(resolvedCost) > 0) {
+        setFields.avgCost = resolvedCost;
       }
-      await db.update(productUnits)
-        .set(updateSet)
-        .where(eq(productUnits.id, puId));
+      await db.update(productUnits).set(setFields).where(eq(productUnits.id, r.puId));
+      affectedProductIds.add(r.productId);
+    }
 
-      const allPu = await db.select().from(productUnits).where(eq(productUnits.productId, item.productId));
+    // ── Step 3: zero out all other product_units rows that weren't listed ────────
+    // (This is a full inventory replacement — only what was listed exists now)
+    const allStockedPus = await db.select().from(productUnits)
+      .where(drizzleSql`${productUnits.stockQty}::numeric > 0.0001`);
+
+    for (const pu of allStockedPus) {
+      if (listedPuIds.has(pu.id)) continue; // already handled above
+
+      const currentQty = parseFloat(pu.stockQty as string);
+      if (mode === "merma_rinde" && currentQty > 0.0001) {
+        await db.insert(stockMovements).values({
+          productId: pu.productId,
+          movementType: "out",
+          quantity: currentQty.toFixed(4),
+          unitCost: pu.avgCost as string,
+          referenceType: "adjustment",
+          referenceId: pu.id,
+          notes: "Merma",
+        });
+      }
+      await db.update(productUnits).set({ stockQty: "0.0000", isActive: false }).where(eq(productUnits.id, pu.id));
+      affectedProductIds.add(pu.productId);
+    }
+
+    // ── Step 4: sync products.currentStock for every affected product ────────────
+    for (const productId of affectedProductIds) {
+      const allPu = await db.select().from(productUnits).where(eq(productUnits.productId, productId));
       const totalStock = allPu.reduce((s, p) => s + parseFloat(p.stockQty as string), 0);
-      await db.update(products).set({ currentStock: totalStock.toFixed(4) }).where(eq(products.id, item.productId));
+      await db.update(products).set({ currentStock: totalStock.toFixed(4) }).where(eq(products.id, productId));
     }
   },
 

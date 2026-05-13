@@ -647,6 +647,16 @@ export default function StockPage() {
     setStep("preview");
   };
 
+  const handleAssignProduct = (index: number, productId: string) => {
+    const product = (productsData ?? []).find((p) => String(p.id) === productId);
+    if (!product) return;
+    setStaged((prev) =>
+      prev.map((item, i) =>
+        i === index ? { ...item, productId: product.id, productName: product.name, status: "ok" as const } : item,
+      ),
+    );
+  };
+
   const handleConfirm = () => {
     const validItems = staged
       .filter((s) => s.status === "ok" && s.productId && s.qty && s.qty > 0)
@@ -761,8 +771,22 @@ export default function StockPage() {
                                 ) : <span className="text-muted-foreground">—</span>}
                               </td>
                               <td className="py-2 px-3 font-medium">
-                                {item.productName ?? (
-                                  <span className="text-destructive">No encontrado: "{item.rawProductName}"</span>
+                                {item.status === "no_product" ? (
+                                  <Select onValueChange={(v) => handleAssignProduct(i, v)}>
+                                    <SelectTrigger className="h-7 text-xs w-48 border-destructive/50 text-destructive">
+                                      <SelectValue placeholder={`"${item.rawProductName}"`} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {(productsData ?? [])
+                                        .filter((p) => p.active)
+                                        .sort((a, b) => a.name.localeCompare(b.name))
+                                        .map((p) => (
+                                          <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                  </Select>
+                                ) : (
+                                  item.productName
                                 )}
                               </td>
                               <td className="py-2 px-3 text-center">
