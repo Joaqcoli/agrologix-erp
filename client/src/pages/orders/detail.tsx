@@ -1480,64 +1480,70 @@ export default function OrderDetailPage({ id }: { id: number }) {
       </div>
 
       {/* Stock issue dialog — insufficient stock, per item, sequential */}
-      <AlertDialog open={!!(stockIssueState && stockIssueState.queue.length > 0)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {stockIssueState?.queue[0]?.status === "zero"
-                ? `Sin stock — ${stockIssueState.queue[0].productName}`
-                : `Stock insuficiente — ${stockIssueState?.queue[0]?.productName}`}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {stockIssueState?.queue[0]?.status === "zero"
-                ? `No hay stock disponible de ${stockIssueState.queue[0].productName}.`
-                : `Hay ${stockIssueState.queue[0].availableQtyDisplay.toFixed(2)} ${stockIssueState.queue[0].orderedUnit} disponibles, se piden ${stockIssueState.queue[0].orderedQty} ${stockIssueState.queue[0].orderedUnit}.`}
-              {stockIssueState && stockIssueState.queue.length > 1 && (
-                <span className="block mt-1 text-xs text-muted-foreground">
-                  ({stockIssueState.queue.length} líneas por revisar)
-                </span>
+      {(() => {
+        const si = stockIssueState?.queue?.[0] ?? null;
+        return (
+          <AlertDialog open={!!(si && stockIssueState!.queue.length > 0)}>
+            <AlertDialogContent>
+              {si && (
+                <>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>
+                      {si.status === "zero"
+                        ? `Sin stock — ${si.productName}`
+                        : `Stock insuficiente — ${si.productName}`}
+                    </AlertDialogTitle>
+                    <AlertDialogDescription>
+                      {si.status === "zero"
+                        ? `No hay stock disponible de ${si.productName}.`
+                        : `Hay ${si.availableQtyDisplay.toFixed(2)} ${si.orderedUnit} disponibles, se piden ${si.orderedQty} ${si.orderedUnit}.`}
+                      {stockIssueState && stockIssueState.queue.length > 1 && (
+                        <span className="block mt-1 text-xs text-muted-foreground">
+                          ({stockIssueState.queue.length} líneas por revisar)
+                        </span>
+                      )}
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel onClick={() => setStockIssueState(null)}>Cancelar</AlertDialogCancel>
+                    {si.status === "zero" ? (
+                      <>
+                        <AlertDialogAction
+                          className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                          onClick={() => handleStockIssueAnswer("zero")}
+                        >
+                          Costo $0 — Sin descontar stock
+                        </AlertDialogAction>
+                        <AlertDialogAction
+                          className="bg-amber-600 hover:bg-amber-700 text-white"
+                          onClick={() => handleStockIssueAnswer("rinde")}
+                        >
+                          Sumar al Rinde (${si.knownCostBase > 0 ? fmt(si.knownCostBase) : "?"}/u)
+                        </AlertDialogAction>
+                      </>
+                    ) : (
+                      <>
+                        <AlertDialogAction
+                          className="bg-blue-600 hover:bg-blue-700 text-white"
+                          onClick={() => handleStockIssueAnswer("prorate")}
+                        >
+                          Prorratear costo
+                        </AlertDialogAction>
+                        <AlertDialogAction
+                          className="bg-amber-600 hover:bg-amber-700 text-white"
+                          onClick={() => handleStockIssueAnswer("rinde")}
+                        >
+                          Sumar al Rinde (costo real)
+                        </AlertDialogAction>
+                      </>
+                    )}
+                  </AlertDialogFooter>
+                </>
               )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setStockIssueState(null)}>Cancelar</AlertDialogCancel>
-            {stockIssueState?.queue[0]?.status === "zero" ? (
-              <>
-                <AlertDialogAction
-                  className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                  onClick={() => handleStockIssueAnswer("zero")}
-                >
-                  Costo $0 — Sin descontar stock
-                </AlertDialogAction>
-                <AlertDialogAction
-                  className="bg-amber-600 hover:bg-amber-700 text-white"
-                  onClick={() => handleStockIssueAnswer("rinde")}
-                >
-                  Sumar al Rinde ($
-                  {stockIssueState.queue[0].knownCostBase > 0
-                    ? fmt(stockIssueState.queue[0].knownCostBase)
-                    : "?"}/u)
-                </AlertDialogAction>
-              </>
-            ) : (
-              <>
-                <AlertDialogAction
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
-                  onClick={() => handleStockIssueAnswer("prorate")}
-                >
-                  Prorratear costo
-                </AlertDialogAction>
-                <AlertDialogAction
-                  className="bg-amber-600 hover:bg-amber-700 text-white"
-                  onClick={() => handleStockIssueAnswer("rinde")}
-                >
-                  Sumar al Rinde (costo real)
-                </AlertDialogAction>
-              </>
-            )}
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+            </AlertDialogContent>
+          </AlertDialog>
+        );
+      })()}
 
       {/* Bonification dialog — price $0, per item, sequential */}
       <AlertDialog open={!!(bonifState && bonifState.queue.length > 0)} onOpenChange={(o) => !o && setBonifState(null)}>
