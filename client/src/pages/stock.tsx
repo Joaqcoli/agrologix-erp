@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Layout } from "@/components/layout";
@@ -13,12 +13,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
-import { Search, Package, Plus, CheckCircle2, AlertCircle, Warehouse, ChevronDown, ChevronUp, History, TrendingDown, TrendingUp, Trash2 } from "lucide-react";
+import { Search, Package, Plus, CheckCircle2, AlertCircle, Warehouse, ChevronDown, ChevronUp, History, TrendingDown, TrendingUp, Trash2, RefreshCw } from "lucide-react";
 import type { Product, ProductUnit } from "@shared/schema";
 import { PRODUCT_CATEGORIES } from "@shared/schema";
 import { parseQuantityAndUnit } from "@/lib/parseQuantityAndUnit";
 
 const fmt = (v: number) => Math.round(v).toLocaleString("es-MX");
+function formatDate(s: string) {
+  try { return new Date(s).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit", timeZone: "UTC" }); }
+  catch { return s.slice(0, 10); }
+}
 const fmtStock = (v: number) => v.toLocaleString("es-MX", { maximumFractionDigits: 2 });
 const fmtPesos = (v: number) => `${v >= 0 ? "+" : ""}$${fmt(Math.abs(v))}`;
 
@@ -39,6 +43,17 @@ type AdjustmentMovement = {
   avgCost: string | null;
   notes: string | null;
   createdAt: string;
+};
+
+type PurchaseHistoryEntry = {
+  purchaseDate: string;
+  supplierName: string;
+  purchaseQty: string | null;
+  purchaseUnit: string | null;
+  weightPerPackage: string | null;
+  quantity: string;
+  costPerUnit: string;
+  costPerPurchaseUnit: string | null;
 };
 
 const MOTIVOS = ["Merma", "Rinde", "Corrección", "Otro"] as const;
@@ -577,6 +592,16 @@ export default function StockPage() {
 
   const { data: productsData } = useQuery<Product[]>({ queryKey: ["/api/products"] });
 
+  const [expandedProductId, setExpandedProductId] = useState<number | null>(null);
+
+  const { data: purchaseHistory = [], isLoading: phLoading } = useQuery<PurchaseHistoryEntry[]>({
+    queryKey: ["/api/products", expandedProductId, "purchase-history"],
+    queryFn: () =>
+      fetch(`/api/products/${expandedProductId}/purchase-history`, { credentials: "include" }).then((r) => r.json()),
+    enabled: expandedProductId !== null,
+    staleTime: 60_000,
+  });
+
   // null = cerrado | "step1" = ¿es stock total? | "step2" = merma/rinde vs corrección
   const [intentDialog, setIntentDialog] = useState<null | "step1" | "step2">(null);
 
@@ -600,6 +625,16 @@ export default function StockPage() {
       apiRequest("POST", "/api/stock/set", { items, mode }).then((r) => r.json()),
     onSuccess: onStockSuccess,
     onError: (e: any) => toast({ title: "Error al cargar stock", description: e.message, variant: "destructive" }),
+  });
+
+  const recalcMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/stock/recalc-costs", {}).then((r) => r.json()),
+    onSuccess: (data: { updated: number }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      toast({ title: "Costos recalculados", description: `${data.updated} producto${data.updated !== 1 ? "s" : ""} actualizado${data.updated !== 1 ? "s" : ""} con promedio ponderado móvil correcto` });
+    },
+    onError: (e: any) => toast({ title: "Error al recalcular", description: e.message, variant: "destructive" }),
   });
 
   // Always hide zero-stock rows
@@ -688,14 +723,29 @@ export default function StockPage() {
             </h2>
             <p className="text-sm text-muted-foreground mt-0.5">Stock actual por producto y unidad</p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-destructive border-destructive/30 hover:bg-destructive/5 hover:text-destructive"
-            onClick={() => setResetOpen(true)}
-          >
-            <Trash2 className="mr-2 h-3.5 w-3.5" /> Limpiar Stock
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (confirm("¿Recalcular costos promedio de todo el stock usando promedio ponderado móvil? Esto puede tardar unos segundos.")) {
+                  recalcMutation.mutate();
+                }
+              }}
+              disabled={recalcMutation.isPending}
+            >
+              <RefreshCw className={`mr-2 h-3.5 w-3.5 ${recalcMutation.isPending ? "animate-spin" : ""}`} />
+              {recalcMutation.isPending ? "Recalculando..." : "Recalcular Costos"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-destructive border-destructive/30 hover:bg-destructive/5 hover:text-destructive"
+              onClick={() => setResetOpen(true)}
+            >
+              <Trash2 className="mr-2 h-3.5 w-3.5" /> Limpiar Stock
+            </Button>
+          </div>
         </div>
 
         {/* ── FREE-TEXT STOCK ENTRY (collapsible) ── */}
@@ -870,8 +920,8 @@ export default function StockPage() {
                   </thead>
                   <tbody>
                     {sortedCats.map((cat) => (
-                      <>
-                        <tr key={`cat-${cat}`} className="border-b border-border bg-muted/50">
+                      <Fragment key={cat}>
+                        <tr className="border-b border-border bg-muted/50">
                           <td colSpan={7} className="py-1.5 px-4 text-xs font-semibold text-muted-foreground uppercase tracking-widest">
                             {cat}
                           </td>
@@ -882,63 +932,131 @@ export default function StockPage() {
                           const valorStock = stock * cost;
                           const isNegative = stock < 0;
                           const noCost = stock > 0 && cost === 0;
+                          const wpu = parseFloat(pu.weightPerUnit as string ?? "0");
+                          const isExpanded = expandedProductId === pu.product.id;
                           return (
-                            <tr
-                              key={pu.id}
-                              className={`border-b border-border last:border-0 transition-colors ${isNegative ? "bg-destructive/5" : noCost ? "bg-yellow-50/30 dark:bg-yellow-900/10" : "hover:bg-muted/30"}`}
-                              data-testid={`row-stock-${pu.id}`}
-                            >
-                              <td className="py-2.5 px-4">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium text-foreground">{pu.product.name}</span>
-                                  {isNegative && <Badge variant="destructive" className="text-[9px] py-0 px-1">Negativo</Badge>}
-                                  {noCost && <Badge variant="outline" className="text-[9px] py-0 px-1 text-yellow-600 border-yellow-500/40">Sin costo</Badge>}
-                                </div>
-                              </td>
-                              <td className="py-2.5 px-4">
-                                <Badge variant="secondary" className="text-[10px]">{pu.unit}</Badge>
-                              </td>
-                              <td className={`py-2.5 px-4 text-right font-semibold whitespace-nowrap ${isNegative ? "text-destructive" : "text-foreground"}`}>
-                                {fmtStock(stock)}
-                                {(() => {
-                                  const wpu = parseFloat(pu.weightPerUnit as string ?? "0");
-                                  if (wpu > 0 && stock > 0) {
-                                    return (
-                                      <span className="ml-1 text-xs font-normal text-muted-foreground">
-                                        (~{(stock / wpu).toFixed(1)} cajones)
-                                      </span>
-                                    );
-                                  }
-                                  return null;
-                                })()}
-                              </td>
-                              <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">
-                                {cost > 0 ? `$${fmt(cost)}` : "—"}
-                              </td>
-                              <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">
-                                {(() => {
-                                  const wpu = parseFloat(pu.weightPerUnit as string ?? "0");
-                                  return wpu > 0 && cost > 0 ? `$${fmt(cost * wpu)}` : "—";
-                                })()}
-                              </td>
-                              <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">
-                                {cost > 0 ? `$${fmt(valorStock)}` : "—"}
-                              </td>
-                              <td className="py-2.5 px-4">
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-7 text-xs"
-                                  onClick={() => setAdjustTarget(pu)}
-                                  data-testid={`button-adjust-${pu.id}`}
-                                >
-                                  Ajustar
-                                </Button>
-                              </td>
-                            </tr>
+                            <Fragment key={pu.id}>
+                              <tr
+                                className={`border-b border-border transition-colors cursor-pointer ${isNegative ? "bg-destructive/5" : noCost ? "bg-yellow-50/30 dark:bg-yellow-900/10" : isExpanded ? "bg-muted/40" : "hover:bg-muted/30"}`}
+                                onClick={() => setExpandedProductId(isExpanded ? null : pu.product.id)}
+                                data-testid={`row-stock-${pu.id}`}
+                              >
+                                <td className="py-2.5 px-4">
+                                  <div className="flex items-center gap-2">
+                                    <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform duration-150 ${isExpanded ? "rotate-180" : ""}`} />
+                                    <span className="font-medium text-foreground">{pu.product.name}</span>
+                                    {isNegative && <Badge variant="destructive" className="text-[9px] py-0 px-1">Negativo</Badge>}
+                                    {noCost && <Badge variant="outline" className="text-[9px] py-0 px-1 text-yellow-600 border-yellow-500/40">Sin costo</Badge>}
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-4">
+                                  <Badge variant="secondary" className="text-[10px]">{pu.unit}</Badge>
+                                </td>
+                                <td className={`py-2.5 px-4 text-right font-semibold whitespace-nowrap ${isNegative ? "text-destructive" : "text-foreground"}`}>
+                                  {fmtStock(stock)}
+                                  {wpu > 0 && stock > 0 && (
+                                    <span className="ml-1 text-xs font-normal text-muted-foreground">
+                                      (~{(stock / wpu).toFixed(1)} cajones)
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">
+                                  {cost > 0 ? `$${fmt(cost)}` : "—"}
+                                </td>
+                                <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">
+                                  {wpu > 0 && cost > 0 ? `$${fmt(cost * wpu)}` : "—"}
+                                </td>
+                                <td className="py-2.5 px-4 text-right text-muted-foreground whitespace-nowrap">
+                                  {cost > 0 ? `$${fmt(valorStock)}` : "—"}
+                                </td>
+                                <td className="py-2.5 px-4">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-7 text-xs"
+                                    onClick={(e) => { e.stopPropagation(); setAdjustTarget(pu); }}
+                                    data-testid={`button-adjust-${pu.id}`}
+                                  >
+                                    Ajustar
+                                  </Button>
+                                </td>
+                              </tr>
+                              {isExpanded && (
+                                <tr className="border-b border-border">
+                                  <td colSpan={7} className="p-0">
+                                    <div className="px-8 py-4 bg-muted/10 border-t border-border/40">
+                                      {phLoading ? (
+                                        <Skeleton className="h-20 w-full" />
+                                      ) : purchaseHistory.length === 0 ? (
+                                        <p className="text-xs text-muted-foreground py-2">Sin compras registradas para este producto.</p>
+                                      ) : (
+                                        <div className="space-y-3">
+                                          <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">Últimas compras</p>
+                                          <div className="overflow-x-auto">
+                                            <table className="w-full text-xs">
+                                              <thead>
+                                                <tr className="border-b border-border">
+                                                  <th className="text-left pb-2 font-medium text-muted-foreground">Fecha</th>
+                                                  <th className="text-left pb-2 font-medium text-muted-foreground">Proveedor</th>
+                                                  <th className="text-right pb-2 font-medium text-muted-foreground">Cantidad</th>
+                                                  <th className="text-right pb-2 font-medium text-muted-foreground">KG/envase</th>
+                                                  <th className="text-right pb-2 font-medium text-muted-foreground">Precio/cajón</th>
+                                                  <th className="text-right pb-2 font-medium text-muted-foreground">Precio/KG</th>
+                                                </tr>
+                                              </thead>
+                                              <tbody>
+                                                {purchaseHistory.map((ph, i) => {
+                                                  const wpp = parseFloat(ph.weightPerPackage ?? "0");
+                                                  const cpp = parseFloat(ph.costPerPurchaseUnit ?? "0");
+                                                  const cpu = parseFloat(ph.costPerUnit);
+                                                  const pqty = ph.purchaseQty ? parseFloat(ph.purchaseQty) : null;
+                                                  const qty = parseFloat(ph.quantity);
+                                                  return (
+                                                    <tr key={i} className="border-b border-border/50 last:border-0">
+                                                      <td className="py-1.5 pr-4 text-muted-foreground whitespace-nowrap">{formatDate(ph.purchaseDate)}</td>
+                                                      <td className="py-1.5 pr-4 font-medium">{ph.supplierName}</td>
+                                                      <td className="py-1.5 pr-4 text-right whitespace-nowrap">
+                                                        {pqty != null && ph.purchaseUnit
+                                                          ? `${pqty} ${ph.purchaseUnit}`
+                                                          : `${fmtStock(qty)} ${pu.unit}`}
+                                                      </td>
+                                                      <td className="py-1.5 pr-4 text-right whitespace-nowrap text-muted-foreground">
+                                                        {wpp > 0 ? `${wpp} KG` : "—"}
+                                                      </td>
+                                                      <td className="py-1.5 pr-4 text-right whitespace-nowrap">
+                                                        {cpp > 0 ? `$${fmt(cpp)}` : "—"}
+                                                      </td>
+                                                      <td className="py-1.5 text-right whitespace-nowrap font-semibold">
+                                                        ${fmt(cpu)}
+                                                      </td>
+                                                    </tr>
+                                                  );
+                                                })}
+                                              </tbody>
+                                            </table>
+                                          </div>
+                                          <div className="flex flex-wrap gap-6 text-xs pt-2 border-t border-border/40">
+                                            {cost > 0 && (
+                                              <span className="text-muted-foreground">
+                                                Costo prom. {pu.unit}: <strong className="text-foreground">${fmt(cost)}</strong>
+                                              </span>
+                                            )}
+                                            {wpu > 0 && cost > 0 && (
+                                              <span className="text-muted-foreground">
+                                                Costo prom. cajón: <strong className="text-foreground">${fmt(cost * wpu)}</strong>
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
                           );
                         })}
-                      </>
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>

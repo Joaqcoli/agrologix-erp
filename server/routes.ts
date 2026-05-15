@@ -252,6 +252,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // GET /api/products/:id/purchase-history — last purchases for cost breakdown
+  app.get("/api/products/:id/purchase-history", requireAuth, async (req, res) => {
+    try {
+      const rows = await storage.getProductPurchaseHistory(Number(req.params.id));
+      return res.json(rows);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // GET /api/products/:id/last-price?customerId=X&unit=Y — last approved sale price for this product+customer+unit
   app.get("/api/products/:id/last-price", requireAuth, async (req, res) => {
     try {
@@ -336,6 +344,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await storage.setStockAdjustments(items, mode);
       return res.json({ ok: true });
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.post("/api/stock/recalc-costs", requireAuth, async (req, res) => {
+    try {
+      const result = await storage.recalcAllStockCosts();
+      return res.json(result);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   app.post("/api/stock/reset", requireAuth, async (req, res) => {

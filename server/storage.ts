@@ -378,12 +378,13 @@ export const storage = {
           purchaseId: purchase.id,
         });
 
-        // ── SYNC: Update costPerUnit in same-day draft/approved order_items ──────
+        // ── SYNC: Update costPerUnit in same-day DRAFT order_items only ──────────
+        // Pedidos aprobados NO se tocan — sus costos quedaron fijados al aprobar.
         const sameDayOrders = await tx
           .select({ id: orders.id })
           .from(orders)
           .where(and(
-            drizzleSql`${orders.status} IN ('draft', 'approved')`,
+            drizzleSql`${orders.status} = 'draft'`,
             drizzleSql`${orders.orderDate}::date = ${purchaseDateStr}::date`,
           ));
 
@@ -1988,7 +1989,7 @@ export const storage = {
         productId: pu.productId,
         movementType: adjustment >= 0 ? "in" : "out",
         quantity: Math.abs(adjustment).toFixed(4),
-        unitCost: newStock.toFixed(4),
+        unitCost: (avgCost !== undefined ? avgCost : parseFloat(pu.avgCost as string)).toFixed(4),
         referenceType: "adjustment",
         referenceId: pu.id,
         notes: notes ?? null,
@@ -2036,6 +2037,92 @@ export const storage = {
       await db.update(products).set({ currentStock: "0" }).where(eq(products.id, pu.productId));
     }
     return { affected: allPu.length };
+  },
+
+  // Recalcula avgCost de todos los product_units reproduciendo los movimientos de stock
+  // en orden cronológico. Solo aplica WMA en movimientos de compra (referenceType='purchase').
+  // Los ajustes de inventario suman/restan qty sin tocar avgCost.
+  async recalcAllStockCosts(): Promise<{ updated: number }> {
+    const allPu = await db
+      .select({ pu: productUnits, productName: products.name })
+      .from(productUnits)
+      .innerJoin(products, eq(productUnits.productId, products.id))
+      .where(drizzleSql`${productUnits.baseUnit} IS NOT NULL`);
+
+    let updated = 0;
+
+    for (const { pu, productName } of allPu) {
+      const movements = await db
+        .select()
+        .from(stockMovements)
+        .where(eq(stockMovements.productId, pu.productId))
+        .orderBy(asc(stockMovements.id));
+
+      let runningStock = 0;
+      let runningAvgCost = 0;
+      const isDebug = productName.toUpperCase().includes('LIMON') || productName.toUpperCase().includes('LIMÓN');
+
+      for (const mov of movements) {
+        const qty  = Number(mov.quantity);
+        const cost = Number(mov.unitCost ?? 0);
+
+        if (mov.movementType === 'in') {
+          if (mov.referenceType === 'purchase' && cost > 0) {
+            // Solo WMA para compras reales
+            const newStock = runningStock + qty;
+            if (newStock > 0) {
+              runningAvgCost = (runningStock * runningAvgCost + qty * cost) / newStock;
+            }
+            runningStock = newStock;
+          } else {
+            // Ajuste de inventario: sumar qty, no cambiar costo
+            runningStock += qty;
+          }
+        } else {
+          // Salida (venta, merma): solo baja el stock
+          runningStock = Math.max(0, runningStock - qty);
+        }
+
+        if (isDebug) {
+          console.log(`[recalc:${productName}] mov#${mov.id} ${mov.movementType}/${mov.referenceType} qty=${qty} cost=${cost} → stock=${runningStock.toFixed(4)} avgCost=${runningAvgCost.toFixed(4)}`);
+        }
+      }
+
+      if (isDebug) {
+        console.log(`[recalc:${productName}] FINAL: prevCost=${pu.avgCost} → newCost=${runningAvgCost.toFixed(4)} stock=${runningStock.toFixed(4)}`);
+      }
+
+      const prevCost = Number(pu.avgCost);
+      if (Math.abs(prevCost - runningAvgCost) > 0.005) {
+        await db.update(productUnits)
+          .set({ avgCost: runningAvgCost.toFixed(4) })
+          .where(eq(productUnits.id, pu.id));
+        await this._recalcProductSummary(pu.productId);
+        updated++;
+      }
+    }
+
+    return { updated };
+  },
+
+  async getProductPurchaseHistory(productId: number, limit = 10) {
+    const rows = await db
+      .select({
+        purchaseDate: purchases.purchaseDate,
+        supplierName: purchases.supplierName,
+        purchaseQty: purchaseItems.purchaseQty,
+        purchaseUnit: purchaseItems.purchaseUnit,
+        weightPerPackage: purchaseItems.weightPerPackage,
+        quantity: purchaseItems.quantity,
+        costPerUnit: purchaseItems.costPerUnit,
+        costPerPurchaseUnit: purchaseItems.costPerPurchaseUnit,
+      })
+      .from(purchaseItems)
+      .innerJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
+      .where(eq(purchaseItems.productId, productId))
+      .orderBy(desc(purchases.purchaseDate), desc(purchases.id))
+      .limit(limit);
+    return rows;
   },
 
   // ── Helper: peso por envase para CAJON/BOLSA/BANDEJA ─────────────────────────
