@@ -460,13 +460,13 @@ export const storage = {
   async _getCostForUnit(productId: number, unit: string, tx: any = db): Promise<string> {
     const canonical = dbEnumToCanonical(unit);
 
-    // 1) Coincidencia exacta — solo si hay stock
+    // 1) Coincidencia exacta en product_units — usa avgCost si > 0 (con o sin stock)
     const [exactPu] = await tx.select().from(productUnits)
       .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, canonical)))
       .limit(1);
-    if (exactPu && parseFloat(exactPu.stockQty as string) > 0) return exactPu.avgCost as string;
+    if (exactPu && parseFloat(exactPu.avgCost as string) > 0) return exactPu.avgCost as string;
 
-    // 2) Si es unidad de envase, derivar de fila base × weight_per_package — solo si base tiene stock
+    // 2) Si es unidad de envase, derivar de fila base × weight_per_package
     // Usa el weight_per_package del purchase_item más reciente del mismo tipo de envase
     // para distinguir correctamente CAJON (ej. 18 KG) de BANDEJA (ej. 0.5 KG) del mismo producto
     if (['CAJON', 'BOLSA', 'BANDEJA'].includes(canonical)) {
@@ -476,7 +476,7 @@ export const storage = {
           drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
         ))
         .limit(1);
-      if (baseRow && parseFloat(baseRow.stockQty as string) > 0) {
+      if (baseRow && parseFloat(baseRow.avgCost as string) > 0) {
         // Buscar el peso por envase específico para este tipo (CAJON vs BANDEJA vs BOLSA)
         const [recentPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
           .from(purchaseItems)
@@ -493,10 +493,18 @@ export const storage = {
       }
     }
 
-    // 3) Fallback: averageCost del producto — solo si hay currentStock
+    // 3) Fallback: averageCost del producto (independiente del stock)
     const [p] = await tx.select().from(products).where(eq(products.id, productId)).limit(1);
-    const currentStock = parseFloat(p?.currentStock as string ?? "0");
-    if (currentStock > 0) return p?.averageCost as string ?? "0";
+    if (p?.averageCost && parseFloat(p.averageCost as string) > 0) return p.averageCost as string;
+
+    // 4) Último recurso: costPerUnit de la última compra con ese producto
+    const [lastPi] = await tx.select({ costPerUnit: purchaseItems.costPerUnit })
+      .from(purchaseItems)
+      .where(eq(purchaseItems.productId, productId))
+      .orderBy(desc(purchaseItems.id))
+      .limit(1);
+    if (lastPi?.costPerUnit && parseFloat(lastPi.costPerUnit as string) > 0) return lastPi.costPerUnit as string;
+
     return "0";
   },
 
@@ -1559,7 +1567,7 @@ export const storage = {
     return order;
   },
 
-  async approveOrder(id: number, userId: number): Promise<Order> {
+  async approveOrder(id: number, userId: number, decisions?: Record<number, "zero" | "rinde" | "prorate">): Promise<Order> {
     const order = await this.getOrder(id);
     if (!order) throw new Error("Order not found");
     if (order.status !== "draft") throw new Error("Order is not in draft status");
@@ -1637,22 +1645,71 @@ export const storage = {
         }
 
         const currentStock = parseFloat(product.currentStock as string);
+        const availableQtyBase = puToUpdate ? parseFloat(puToUpdate.stockQty as string) : currentStock;
         const rawNewStock = currentStock - deductQty;
         const isOverflow = rawNewStock < 0;
         const finalStock = isOverflow ? 0 : rawNewStock;
 
-        // Re-fetch costo actual al momento de aprobación (supera el costo desactualizado guardado al crear el pedido)
+        // Re-fetch costo actual al momento de aprobación
         const freshCostStr = await this._getCostForUnit(item.productId, oiCanonical, tx);
         const freshCost = parseFloat(freshCostStr);
-        const effectiveCostStr = isOverflow
-          ? "0"
-          : (freshCost > 0 ? freshCostStr : item.costPerUnit as string);
+        const baseCostStr = freshCost > 0 ? freshCostStr : (item.costPerUnit as string ?? "0");
 
-        const movementNotes = isOverflow
-          ? `Stock agotado, excedente marcado con costo 0 por rinde (Pedido ${order.folio})`
+        // ── Decisión del usuario para stock insuficiente ────────────────────────
+        const decision = decisions?.[item.id];
+
+        if (decision === "zero") {
+          // Sin efecto en stock, costo $0
+          await tx.update(orderItems)
+            .set({ costPerUnit: "0", margin: "1.0000" })
+            .where(eq(orderItems.id, item.id));
+          // No hay stock movement ni deducción de stock
+          continue;
+        }
+
+        let effectiveCostStr: string;
+        let deductFromStock: number;
+        let outQty: string;
+
+        if (decision === "rinde") {
+          // Descontar solo lo disponible; el faltante se registra como Rinde
+          effectiveCostStr = baseCostStr;
+          deductFromStock = Math.max(0, availableQtyBase);
+          outQty = (deductFromStock).toFixed(4);
+
+          const excessQty = deductQty - deductFromStock;
+          if (excessQty > 0) {
+            // Movimiento de Rinde: representa la mercadería que "apareció" para cubrir el faltante
+            await tx.insert(stockMovements).values({
+              productId: item.productId,
+              movementType: "in",
+              quantity: excessQty.toFixed(4),
+              unitCost: baseCostStr,
+              referenceId: id,
+              referenceType: "order",
+              notes: `Rinde — Pedido ${order.folio}`,
+            });
+          }
+        } else if (decision === "prorate") {
+          // Prorratear el costo del stock disponible entre toda la cantidad pedida
+          const proratedCost = deductQty > 0 && freshCost > 0
+            ? (availableQtyBase * freshCost) / deductQty
+            : 0;
+          effectiveCostStr = proratedCost.toFixed(4);
+          deductFromStock = Math.max(0, availableQtyBase);
+          outQty = (deductFromStock).toFixed(4);
+        } else {
+          // Flujo normal (sin decisión = stock suficiente)
+          effectiveCostStr = baseCostStr;
+          deductFromStock = deductQty;
+          outQty = item.quantity as string;
+        }
+
+        const movementNotes = (decision === "rinde" || decision === "prorate")
+          ? `Stock insuficiente (${decision}) — Pedido ${order.folio}`
           : `Pedido ${order.folio}`;
 
-        // Actualizar costPerUnit en order_items con el costo fresco
+        // Actualizar costPerUnit en order_items
         const price = parseFloat(item.pricePerUnit as string ?? "0");
         const newMargin = price > 0 && parseFloat(effectiveCostStr) > 0
           ? ((price - parseFloat(effectiveCostStr)) / price).toFixed(4)
@@ -1661,42 +1718,31 @@ export const storage = {
         if (newMargin !== null) itemUpdate.margin = newMargin;
         await tx.update(orderItems).set(itemUpdate).where(eq(orderItems.id, item.id));
 
-        // Stock OUT movement (audit trail)
-        await tx.insert(stockMovements).values({
-          productId: item.productId,
-          movementType: "out",
-          quantity: item.quantity as string,
-          unitCost: effectiveCostStr,
-          referenceId: id,
-          referenceType: "order",
-          notes: movementNotes,
-        });
+        // Stock OUT movement
+        if (parseFloat(outQty) > 0) {
+          await tx.insert(stockMovements).values({
+            productId: item.productId,
+            movementType: "out",
+            quantity: outQty,
+            unitCost: effectiveCostStr,
+            referenceId: id,
+            referenceType: "order",
+            notes: movementNotes,
+          });
+        }
 
-        // Deduct from product_units — floor at 0
+        // Deduct from product_units — floor at 0; avgCost NUNCA se zeroa
         if (puToUpdate) {
-          const rawPuStock = parseFloat(puToUpdate.stockQty as string) - deductQty;
+          const rawPuStock = parseFloat(puToUpdate.stockQty as string) - deductFromStock;
           await tx.update(productUnits)
-            .set({
-              stockQty: Math.max(0, rawPuStock).toFixed(4),
-              ...(isOverflow && { avgCost: "0" }),
-            })
+            .set({ stockQty: Math.max(0, rawPuStock).toFixed(4) })
             .where(eq(productUnits.id, puToUpdate.id));
         }
 
-        // Update products.currentStock — floor at 0; reset averageCost on overflow
+        // Update products.currentStock — floor at 0; averageCost NUNCA se zeroa
         await tx.update(products)
-          .set({
-            currentStock: finalStock.toFixed(4),
-            ...(isOverflow && { averageCost: "0" }),
-          })
+          .set({ currentStock: Math.max(0, currentStock - deductFromStock).toFixed(4) })
           .where(eq(products.id, item.productId));
-
-        // On overflow: ensure order item shows cost $0 (already set above via itemUpdate)
-        if (isOverflow && newMargin === null) {
-          await tx.update(orderItems)
-            .set({ margin: "1.0000" })
-            .where(eq(orderItems.id, item.id));
-        }
 
         // Save final price to price_history
         await tx.insert(priceHistory).values({
@@ -2103,6 +2149,88 @@ export const storage = {
     }
 
     return { updated };
+  },
+
+  // ─── Stock check pre-aprobación ──────────────────────────────────────────────
+  // Retorna ítems del pedido con stock insuficiente y los datos necesarios para
+  // que el frontend muestre el dialog de decisión.
+  async checkOrderStock(orderId: number): Promise<{
+    itemId: number;
+    productId: number;
+    productName: string;
+    orderedQty: number;
+    orderedUnit: string;
+    orderedQtyBase: number;
+    availableQtyBase: number;
+    availableQtyDisplay: number;
+    wpu: number;
+    status: "zero" | "insufficient";
+    knownCostBase: number;
+  }[]> {
+    const order = await this.getOrder(orderId);
+    if (!order) throw new Error("Order not found");
+
+    const issues: Awaited<ReturnType<typeof this.checkOrderStock>> = [];
+
+    for (const item of order.items) {
+      if (!item.productId) continue;
+      if ((item as any).bolsaType) continue;
+
+      const qty = parseFloat(item.quantity as string);
+      const oiCanonical = dbEnumToCanonical(item.unit as string);
+
+      // Buscar fila base (modelo nuevo)
+      const [baseUnitPu] = await db.select().from(productUnits)
+        .where(and(eq(productUnits.productId, item.productId), drizzleSql`${productUnits.baseUnit} IS NOT NULL`))
+        .limit(1);
+
+      let deductQtyBase = qty;
+      let wpu = 0;
+      let stockQtyBase = 0;
+
+      if (baseUnitPu) {
+        stockQtyBase = parseFloat(baseUnitPu.stockQty as string);
+        if (oiCanonical !== baseUnitPu.unit && ['CAJON', 'BOLSA', 'BANDEJA'].includes(oiCanonical)) {
+          const [recentPi] = await db.select({ weightPerPackage: purchaseItems.weightPerPackage })
+            .from(purchaseItems)
+            .where(and(eq(purchaseItems.productId, item.productId as number), eq(purchaseItems.purchaseUnit, oiCanonical as any)))
+            .orderBy(desc(purchaseItems.id))
+            .limit(1);
+          wpu = recentPi?.weightPerPackage
+            ? parseFloat(recentPi.weightPerPackage as string)
+            : parseFloat(baseUnitPu.weightPerUnit as string ?? "0");
+          deductQtyBase = qty * (wpu > 0 ? wpu : 1);
+        }
+      } else {
+        // Modelo antiguo
+        const [oldPu] = await db.select().from(productUnits)
+          .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, oiCanonical)))
+          .limit(1);
+        stockQtyBase = oldPu ? parseFloat(oldPu.stockQty as string) : 0;
+      }
+
+      if (stockQtyBase >= deductQtyBase) continue; // stock suficiente
+
+      const knownCostStr = await this._getCostForUnit(item.productId, oiCanonical);
+      const knownCostBase = parseFloat(knownCostStr);
+      const availableQtyDisplay = wpu > 0 ? stockQtyBase / wpu : stockQtyBase;
+
+      issues.push({
+        itemId: item.id,
+        productId: item.productId,
+        productName: (item as any).product?.name ?? "Producto",
+        orderedQty: qty,
+        orderedUnit: oiCanonical,
+        orderedQtyBase: deductQtyBase,
+        availableQtyBase: stockQtyBase,
+        availableQtyDisplay,
+        wpu,
+        status: stockQtyBase <= 0 ? "zero" : "insufficient",
+        knownCostBase,
+      });
+    }
+
+    return issues;
   },
 
   async getProductPurchaseHistory(productId: number, limit = 10) {

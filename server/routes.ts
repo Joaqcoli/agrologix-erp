@@ -582,9 +582,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // GET /api/orders/:id/stock-check — pre-flight: qué ítems tienen stock insuficiente
+  app.get("/api/orders/:id/stock-check", requireAuth, async (req, res) => {
+    try {
+      const issues = await storage.checkOrderStock(Number(req.params.id));
+      return res.json(issues);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   app.post("/api/orders/:id/approve", requireAuth, async (req, res) => {
     try {
-      const order = await storage.approveOrder(Number(req.params.id), req.session.userId!);
+      const decisions = req.body?.decisions as Record<number, "zero" | "rinde" | "prorate"> | undefined;
+      const order = await storage.approveOrder(Number(req.params.id), req.session.userId!, decisions);
       return res.json(order);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });

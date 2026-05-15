@@ -80,6 +80,27 @@ type CalcItem = {
   isBonification: boolean;
 };
 
+type StockIssue = {
+  itemId: number;
+  productId: number;
+  productName: string;
+  orderedQty: number;
+  orderedUnit: string;
+  orderedQtyBase: number;
+  availableQtyBase: number;
+  availableQtyDisplay: number;
+  wpu: number;
+  status: "zero" | "insufficient";
+  knownCostBase: number;
+};
+
+type ApprovalDecision = "zero" | "rinde" | "prorate";
+
+type StockIssueState = {
+  queue: StockIssue[];
+  decisions: Record<number, ApprovalDecision>;
+} | null;
+
 function hasDraftChanges(draft: ItemDraft, calc: CalcItem): boolean {
   const origQty = fmt(calc.qty, 4).replace(/\.?0+$/, "");
   const origUnit = dbEnumToCanonical(calc.unit);
@@ -626,6 +647,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   type BonifItem = { itemId: number; productName: string; patch: { itemId: number; data: Record<string, any> } };
   type BonifState = { queue: BonifItem[]; resolved: { itemId: number; data: Record<string, any> }[]; others: { itemId: number; data: Record<string, any> }[] } | null;
   const [bonifState, setBonifState] = useState<BonifState>(null);
+  const [stockIssueState, setStockIssueState] = useState<StockIssueState>(null);
   // Remito num inline edit
   const [editingRemitoNum, setEditingRemitoNum] = useState(false);
   const [remitoNumInput, setRemitoNumInput] = useState("");
@@ -725,7 +747,8 @@ export default function OrderDetailPage({ id }: { id: number }) {
   });
 
   const approveMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/orders/${id}/approve`),
+    mutationFn: (body: { decisions?: Record<number, ApprovalDecision> }) =>
+      apiRequest("POST", `/api/orders/${id}/approve`, body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
@@ -734,6 +757,21 @@ export default function OrderDetailPage({ id }: { id: number }) {
     },
     onError: (e: any) => toast({ title: "Error al aprobar", description: e.message, variant: "destructive" }),
   });
+
+  const doApproveWithStockCheck = async () => {
+    try {
+      const res = await fetch(`/api/orders/${id}/stock-check`, { credentials: "include" });
+      if (!res.ok) throw new Error();
+      const issues: StockIssue[] = await res.json();
+      if (issues.length === 0) {
+        approveMutation.mutate({});
+        return;
+      }
+      setStockIssueState({ queue: issues, decisions: {} });
+    } catch {
+      approveMutation.mutate({});
+    }
+  };
 
   // ── Queries ───────────────────────────────────────────────────────────────
   const { data: order, isLoading } = useQuery<FullOrder>({
@@ -859,7 +897,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
       return effectiveCost === 0 && !item.bolsaType && !item.isBonification;
     });
     if (needsQuestion.length === 0) {
-      approveMutation.mutate();
+      void doApproveWithStockCheck();
       return;
     }
     setZeroCostState({
@@ -876,9 +914,21 @@ export default function OrderDetailPage({ id }: { id: number }) {
       setZeroCostState(null);
       Promise.all(
         newSinStockIds.map((itemId) => apiRequest("PATCH", `/api/orders/${id}/items/${itemId}`, { bolsaType: "sin_stock" }))
-      ).then(() => approveMutation.mutate()).catch(() => approveMutation.mutate());
+      ).then(() => void doApproveWithStockCheck()).catch(() => void doApproveWithStockCheck());
     } else {
       setZeroCostState({ queue: remaining, sinStockIds: newSinStockIds });
+    }
+  };
+
+  const handleStockIssueAnswer = (decision: ApprovalDecision) => {
+    if (!stockIssueState || stockIssueState.queue.length === 0) return;
+    const [current, ...remaining] = stockIssueState.queue;
+    const newDecisions = { ...stockIssueState.decisions, [current.itemId]: decision };
+    if (remaining.length === 0) {
+      setStockIssueState(null);
+      approveMutation.mutate({ decisions: newDecisions });
+    } else {
+      setStockIssueState({ queue: remaining, decisions: newDecisions });
     }
   };
 
@@ -1428,6 +1478,66 @@ export default function OrderDetailPage({ id }: { id: number }) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Stock issue dialog — insufficient stock, per item, sequential */}
+      <AlertDialog open={!!(stockIssueState && stockIssueState.queue.length > 0)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {stockIssueState?.queue[0]?.status === "zero"
+                ? `Sin stock — ${stockIssueState.queue[0].productName}`
+                : `Stock insuficiente — ${stockIssueState?.queue[0]?.productName}`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {stockIssueState?.queue[0]?.status === "zero"
+                ? `No hay stock disponible de ${stockIssueState.queue[0].productName}.`
+                : `Hay ${stockIssueState.queue[0].availableQtyDisplay.toFixed(2)} ${stockIssueState.queue[0].orderedUnit} disponibles, se piden ${stockIssueState.queue[0].orderedQty} ${stockIssueState.queue[0].orderedUnit}.`}
+              {stockIssueState && stockIssueState.queue.length > 1 && (
+                <span className="block mt-1 text-xs text-muted-foreground">
+                  ({stockIssueState.queue.length} líneas por revisar)
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setStockIssueState(null)}>Cancelar</AlertDialogCancel>
+            {stockIssueState?.queue[0]?.status === "zero" ? (
+              <>
+                <AlertDialogAction
+                  className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                  onClick={() => handleStockIssueAnswer("zero")}
+                >
+                  Costo $0 — Sin descontar stock
+                </AlertDialogAction>
+                <AlertDialogAction
+                  className="bg-amber-600 hover:bg-amber-700 text-white"
+                  onClick={() => handleStockIssueAnswer("rinde")}
+                >
+                  Sumar al Rinde ($
+                  {stockIssueState.queue[0].knownCostBase > 0
+                    ? fmt(stockIssueState.queue[0].knownCostBase)
+                    : "?"}/u)
+                </AlertDialogAction>
+              </>
+            ) : (
+              <>
+                <AlertDialogAction
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  onClick={() => handleStockIssueAnswer("prorate")}
+                >
+                  Prorratear costo
+                </AlertDialogAction>
+                <AlertDialogAction
+                  className="bg-amber-600 hover:bg-amber-700 text-white"
+                  onClick={() => handleStockIssueAnswer("rinde")}
+                >
+                  Sumar al Rinde (costo real)
+                </AlertDialogAction>
+              </>
+            )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Bonification dialog — price $0, per item, sequential */}
       <AlertDialog open={!!(bonifState && bonifState.queue.length > 0)} onOpenChange={(o) => !o && setBonifState(null)}>
