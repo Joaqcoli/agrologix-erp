@@ -501,39 +501,26 @@ export const storage = {
 
   async getLastPriceByUnit(productId: number, customerId: number, unit: string): Promise<string | null> {
     const canonical = unit.trim().toUpperCase();
-    // 1. Exact customer match
-    const exact = await db.execute(drizzleSql`
-      SELECT oi.price_per_unit
-      FROM order_items oi
-      JOIN orders o ON o.id = oi.order_id
-      WHERE oi.product_id = ${productId}
-        AND o.customer_id = ${customerId}
-        AND upper(oi.unit::text) = ${canonical}
-        AND o.status = 'approved'
-        AND oi.price_per_unit::numeric > 0
-      ORDER BY o.order_date DESC, o.id DESC
-      LIMIT 1
-    `);
-    const exactRows = exact.rows as any[];
-    if (exactRows.length > 0) return String(exactRows[0].price_per_unit);
-    // 2. Fallback: group peers
+    // Busca en todos los miembros del grupo (cliente + peers) juntos, más reciente primero.
+    // Así el precio más nuevo de CUALQUIER miembro del grupo siempre gana.
     const peerIds = await this._getGroupPeerIds(customerId);
-    if (peerIds.length === 0) return null;
-    const peerResult = await db.execute(drizzleSql`
+    const allIds = [customerId, ...peerIds];
+    const allIdsSql = drizzleSql.join(allIds.map((id) => drizzleSql`${id}`), drizzleSql`, `);
+    const result = await db.execute(drizzleSql`
       SELECT oi.price_per_unit
       FROM order_items oi
       JOIN orders o ON o.id = oi.order_id
       WHERE oi.product_id = ${productId}
-        AND o.customer_id = ANY(ARRAY[${drizzleSql.join(peerIds.map((pid) => drizzleSql`${pid}`), drizzleSql`, `)}]::int[])
+        AND o.customer_id = ANY(ARRAY[${allIdsSql}]::int[])
         AND upper(oi.unit::text) = ${canonical}
         AND o.status = 'approved'
         AND oi.price_per_unit::numeric > 0
       ORDER BY o.order_date DESC, o.id DESC
       LIMIT 1
     `);
-    const peerRows = peerResult.rows as any[];
-    if (peerRows.length === 0) return null;
-    return String(peerRows[0].price_per_unit);
+    const rows = result.rows as any[];
+    if (rows.length > 0) return String(rows[0].price_per_unit);
+    return null;
   },
 
   async _getGroupPeerIds(customerId: number): Promise<number[]> {
@@ -1271,7 +1258,7 @@ export const storage = {
       if (patch.pricePerUnit && newProductId) {
         const unitForHistory = newUnit.toUpperCase();
         await tx.insert(priceHistory).values({ customerId, productId: newProductId, pricePerUnit: patch.pricePerUnit, unit: unitForHistory, orderId });
-        // Propagate to group peers
+        // Propagate to group peers: write price_history + update their draft order_items
         const groupPeerIds = await this._getGroupPeerIds(customerId);
         if (groupPeerIds.length > 0) {
           await tx.insert(priceHistory).values(
@@ -1283,6 +1270,20 @@ export const storage = {
               orderId,
             }))
           );
+          // Sync price in peers' draft orders (same as approveOrder does)
+          const peerIdsSql = drizzleSql.join(groupPeerIds.map((pid) => drizzleSql`${pid}`), drizzleSql`, `);
+          await tx.execute(drizzleSql`
+            UPDATE order_items oi
+            SET
+              price_per_unit = ${patch.pricePerUnit},
+              subtotal = (oi.quantity::numeric * ${patch.pricePerUnit}::numeric)
+            FROM orders o
+            WHERE oi.order_id = o.id
+              AND oi.product_id = ${newProductId}
+              AND UPPER(oi.unit::text) = ${unitForHistory}
+              AND o.customer_id = ANY(ARRAY[${peerIdsSql}]::int[])
+              AND o.status = 'draft'
+          `);
         }
       }
 
