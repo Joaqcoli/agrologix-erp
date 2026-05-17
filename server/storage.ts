@@ -377,68 +377,8 @@ export const storage = {
           previousCost,
           purchaseId: purchase.id,
         });
-
-        // ── SYNC: Update costPerUnit in same-day DRAFT order_items only ──────────
-        // Pedidos aprobados NO se tocan — sus costos quedaron fijados al aprobar.
-        const sameDayOrders = await tx
-          .select({ id: orders.id })
-          .from(orders)
-          .where(and(
-            drizzleSql`${orders.status} = 'draft'`,
-            drizzleSql`${orders.orderDate}::date = ${purchaseDateStr}::date`,
-          ));
-
-        if (sameDayOrders.length > 0) {
-          const sameDayOrderIds = sameDayOrders.map((o) => o.id);
-
-          const candidateItems = await tx
-            .select()
-            .from(orderItems)
-            .where(and(
-              inArray(orderItems.orderId, sameDayOrderIds),
-              eq(orderItems.productId, item.productId),
-            ));
-
-          const affectedOrderIds = new Set<number>();
-
-          for (const oi of candidateItems) {
-            const oiCanonical = dbEnumToCanonical(oi.unit as string);
-
-            let costForUnit: number;
-            if (oiCanonical === baseUnitCanonical) {
-              // Pedido en unidad base → costo directo
-              costForUnit = newPuAvgCost;
-            } else if (['CAJON', 'BOLSA', 'BANDEJA'].includes(oiCanonical)) {
-              // Pedido en unidad de envase → derivar costo de unidad base × weight_per_unit
-              const wpu = newWeightPerUnit > 0 ? newWeightPerUnit : weightPerPackage;
-              if (wpu <= 0) continue;
-              costForUnit = newPuAvgCost * wpu;
-            } else {
-              continue; // Unidad diferente, no aplica
-            }
-
-            const qty = Number(oi.quantity);
-            const price = oi.pricePerUnit ? Number(oi.pricePerUnit) : null;
-            const newSubtotal = price != null && price > 0 ? qty * price : 0;
-            const newMargin = price && price > 0 ? (price - costForUnit) / price : null;
-
-            const updateData: Record<string, any> = {
-              costPerUnit: costForUnit.toFixed(4),
-              subtotal: newSubtotal.toFixed(2),
-            };
-            if (newMargin !== null) updateData.margin = newMargin.toFixed(4);
-
-            await tx.update(orderItems).set(updateData).where(eq(orderItems.id, oi.id));
-            affectedOrderIds.add(oi.orderId);
-          }
-
-          // Recalculate totals for affected orders
-          for (const orderId of Array.from(affectedOrderIds)) {
-            const allOrderItems = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
-            const orderTotal = allOrderItems.reduce((s, i) => s + Number(i.subtotal), 0);
-            await tx.update(orders).set({ total: orderTotal.toFixed(2) }).where(eq(orders.id, orderId));
-          }
-        }
+        // Nota: los costos en pedidos borrador del mismo día se actualizan al aprobar
+        // via _getCostForUnit, no hace falta SYNC aquí (era fuente de transacciones lentas).
       }
 
       return purchase;
@@ -663,9 +603,6 @@ export const storage = {
         return { ...item, subtotal: subtotal.toFixed(2) };
       });
 
-      // Mapa de datos calculados por productId para uso posterior en SYNC
-      const itemDataMap = new Map<number, { avgCost: number; weightPerUnit: number; weightPerPackage: number; canonicalUnit: string }>();
-
       // Procesar en orden de productId (locks ya adquiridos arriba)
       const sortedNewItems = [...data.items].sort((a, b) => a.productId - b.productId);
       for (const item of sortedNewItems) {
@@ -726,7 +663,6 @@ export const storage = {
           await tx.insert(productUnits).values(insertData);
         }
 
-        itemDataMap.set(item.productId, { avgCost: newPuAvgCost, weightPerUnit: newWeightPerUnit, weightPerPackage, canonicalUnit });
       }
       const newProductIds = Array.from(new Set(data.items.map((i) => i.productId)));
       for (const pid of newProductIds) {
@@ -794,71 +730,8 @@ export const storage = {
         });
       }
 
-      // ── SYNC: propagar costo actualizado a order_items del mismo día ──────────
-      // BUG 1 FIX: solo borradores (no tocar pedidos ya aprobados)
-      // BUG 2 FIX: convertir costo para unidades de envase (igual que createPurchase)
-      for (const item of data.items) {
-        const itemData = itemDataMap.get(item.productId);
-        if (!itemData) continue;
-        const { avgCost: newPuAvgCost, weightPerUnit: newWeightPerUnit, weightPerPackage, canonicalUnit } = itemData;
-
-        const sameDayOrders = await tx
-          .select({ id: orders.id })
-          .from(orders)
-          .where(and(
-            drizzleSql`${orders.status} = 'draft'`,
-            drizzleSql`${orders.orderDate}::date = ${purchaseDateStr}::date`,
-          ));
-        if (sameDayOrders.length === 0) continue;
-
-        const sameDayOrderIds = sameDayOrders.map((o) => o.id);
-        const candidateItems = await tx
-          .select()
-          .from(orderItems)
-          .where(and(
-            inArray(orderItems.orderId, sameDayOrderIds),
-            eq(orderItems.productId, item.productId),
-          ));
-
-        const affectedOrderIds = new Set<number>();
-        for (const oi of candidateItems) {
-          const oiCanonical = dbEnumToCanonical(oi.unit as string);
-
-          let costForUnit: number;
-          if (oiCanonical === canonicalUnit) {
-            // Pedido en unidad base → costo directo
-            costForUnit = newPuAvgCost;
-          } else if (['CAJON', 'BOLSA', 'BANDEJA'].includes(oiCanonical)) {
-            // Pedido en unidad de envase → derivar costo de unidad base × weight_per_unit
-            const wpu = newWeightPerUnit > 0 ? newWeightPerUnit : weightPerPackage;
-            if (wpu <= 0) continue;
-            costForUnit = newPuAvgCost * wpu;
-          } else {
-            continue; // Unidad diferente, no aplica
-          }
-
-          const qty = Number(oi.quantity);
-          const price = oi.pricePerUnit ? Number(oi.pricePerUnit) : null;
-          const newSubtotal = price != null && price > 0 ? qty * price : 0;
-          const newMargin = price && price > 0 ? (price - costForUnit) / price : null;
-          const updateData: Record<string, any> = {
-            costPerUnit: costForUnit.toFixed(4),
-            subtotal: newSubtotal.toFixed(2),
-          };
-          if (newMargin !== null) updateData.margin = newMargin.toFixed(4);
-          await tx.update(orderItems).set(updateData).where(eq(orderItems.id, oi.id));
-          affectedOrderIds.add(oi.orderId);
-        }
-
-        // Recalcular total de cada pedido borrador afectado
-        for (const orderId of Array.from(affectedOrderIds)) {
-          const allOrderItems = await tx.select().from(orderItems)
-            .where(eq(orderItems.orderId, orderId));
-          const orderTotal = allOrderItems.reduce((s, i) => s + Number(i.subtotal), 0);
-          await tx.update(orders).set({ total: orderTotal.toFixed(2) })
-            .where(eq(orders.id, orderId));
-        }
-      }
+      // Nota: costos en pedidos borrador del mismo día se actualizan al aprobar
+      // via _getCostForUnit (el SYNC era fuente de transacciones lentas).
 
       return updated;
     });
