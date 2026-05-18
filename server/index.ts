@@ -129,4 +129,9 @@ app.use((req, res, next) => {
   httpServer.listen({ port, host: "0.0.0.0" }, () => {
     log(`serving on port ${port}`);
   });
+
+  // Keep the DB connection alive so Render free tier doesn't drop it
+  setInterval(async () => {
+    try { await pool.query("SELECT 1"); } catch (_) {}
+  }, 4 * 60 * 1000);
 })();
