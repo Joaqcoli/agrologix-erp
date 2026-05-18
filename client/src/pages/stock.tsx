@@ -559,12 +559,15 @@ function matchProduct(rawName: string, products: Product[]): Product | null {
     const normName = normalize(p.name);
     const pWords = normName.split(" ").filter(Boolean);
     let score = 0;
-    if (normName === normRaw) score = 100;
-    else if (normName.includes(normRaw) || normRaw.includes(normName)) score = 80;
-    else {
-      const hits = rawWords.filter((w) => pWords.includes(w)).length;
-      if (hits === rawWords.length) score = 60 + hits;
-      else if (hits > 0) score = 10 + hits;
+    if (normName === normRaw) {
+      score = 1000;
+    } else {
+      const matched = rawWords.filter((w) => pWords.includes(w)).length;
+      if (matched === 0) continue;
+      // coverage of product words (0-1) + coverage of input words (0-1), scaled to 0-100
+      // Prefers products with more matching words relative to their length.
+      // "Cebolla Verdeo" (2/2 + 2/3 = 83) beats "Cebolla" (1/1 + 1/3 = 67) for input "cebolla de verdeo"
+      score = (matched / pWords.length) * 50 + (matched / rawWords.length) * 50;
     }
     if (score > 0 && (!best || score > best.score)) best = { product: p, score };
   }
@@ -821,9 +824,14 @@ export default function StockPage() {
                                 ) : <span className="text-muted-foreground">—</span>}
                               </td>
                               <td className="py-2 px-3 font-medium">
-                                {item.status === "no_product" ? (
-                                  <Select onValueChange={(v) => handleAssignProduct(i, v)}>
-                                    <SelectTrigger className="h-7 text-xs w-48 border-destructive/50 text-destructive">
+                                {item.status === "no_qty" ? (
+                                  <span className="text-muted-foreground">—</span>
+                                ) : (
+                                  <Select
+                                    value={item.productId ? String(item.productId) : undefined}
+                                    onValueChange={(v) => handleAssignProduct(i, v)}
+                                  >
+                                    <SelectTrigger className={`h-7 text-xs w-48 ${item.status === "no_product" ? "border-destructive/50 text-destructive" : ""}`}>
                                       <SelectValue placeholder={`"${item.rawProductName}"`} />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -835,8 +843,6 @@ export default function StockPage() {
                                         ))}
                                     </SelectContent>
                                   </Select>
-                                ) : (
-                                  item.productName
                                 )}
                               </td>
                               <td className="py-2 px-3 text-center">
