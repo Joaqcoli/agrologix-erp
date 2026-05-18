@@ -1848,16 +1848,67 @@ export const storage = {
     const productNameMap = new Map(allProducts.map((p) => [p.id, p.name]));
     const productCategoryMap = new Map(allProducts.map((p) => [p.id, p.category ?? ""]));
 
-    // Load stock from product_units
+    // Load stock from product_units (incluir weightPerUnit para conversión de envases)
     const allPU = productIds.length > 0
-      ? await db.select({ productId: productUnits.productId, unit: productUnits.unit, stockQty: productUnits.stockQty })
+      ? await db.select({
+            productId: productUnits.productId,
+            unit: productUnits.unit,
+            stockQty: productUnits.stockQty,
+            weightPerUnit: productUnits.weightPerUnit,
+          })
           .from(productUnits)
           .where(drizzleSql`${productUnits.productId} = ANY(ARRAY[${drizzleSql.join(productIds.map(id => drizzleSql`${id}`), drizzleSql`, `)}]::int[])`)
       : [];
+
+    // stockMap: unidad exacta (para base units)
     const stockMap = new Map<string, number>();
+    // baseStockMap: stock en unidad base por producto (KG/UNIDAD/MAPLE/ATADO)
+    const baseStockMap = new Map<number, number>();
+    // wpuMap: key "pid-UNIT" (desde purchase_items) o "pid" (desde product_units, fallback)
+    const wpuMap = new Map<string, number>();
+
     for (const pu of allPU) {
-      stockMap.set(`${pu.productId}-${pu.unit}`, parseFloat(pu.stockQty as string));
+      const canonUnit = dbEnumToCanonical(pu.unit as string);
+      const stockVal = parseFloat(pu.stockQty as string ?? "0");
+      stockMap.set(`${pu.productId}-${canonUnit}`, stockVal);
+      if (!["CAJON", "BOLSA", "BANDEJA"].includes(canonUnit)) {
+        baseStockMap.set(pu.productId, stockVal);
+        const wpu = parseFloat(pu.weightPerUnit as string ?? "0");
+        if (wpu > 0) wpuMap.set(`${pu.productId}`, wpu);
+      }
     }
+
+    // Para productos pedidos en envase, buscar wpu exacto por tipo en purchase_items
+    const packagePids = [...new Set(
+      resolvedItems
+        .filter((i) => ["CAJON", "BOLSA", "BANDEJA"].includes(dbEnumToCanonical(i.unit as string)))
+        .map((i) => i.productId as number),
+    )];
+    if (packagePids.length > 0) {
+      const wpuRows = await db.execute(drizzleSql.raw(`
+        SELECT DISTINCT ON (product_id, purchase_unit::text)
+          product_id, purchase_unit::text AS pu, weight_per_package::numeric AS wpu
+        FROM purchase_items
+        WHERE product_id = ANY(ARRAY[${packagePids.join(",")}]::int[])
+          AND purchase_unit IS NOT NULL
+          AND weight_per_package IS NOT NULL
+          AND weight_per_package::numeric > 0
+        ORDER BY product_id, purchase_unit::text, id DESC
+      `));
+      for (const row of wpuRows.rows as any[]) {
+        wpuMap.set(`${row.product_id}-${row.pu}`, parseFloat(row.wpu));
+      }
+    }
+
+    // Retorna stock en la misma unidad que el pedido (convirtiendo envases vía wpu)
+    const stockForUnit = (pid: number, canonUnit: string): number => {
+      if (["CAJON", "BOLSA", "BANDEJA"].includes(canonUnit)) {
+        const base = baseStockMap.get(pid) ?? 0;
+        const wpu = wpuMap.get(`${pid}-${canonUnit}`) ?? wpuMap.get(`${pid}`) ?? 0;
+        return wpu > 0 ? base / wpu : 0;
+      }
+      return stockMap.get(`${pid}-${canonUnit}`) ?? 0;
+    };
 
     // Consolidate by productId + unit
     type Row = { productId: number; productName: string; category: string; unit: string; totalQty: number; stockQty: number; diffQty: number; customerSet: Set<number>; customerNames: string[] };
@@ -1868,7 +1919,8 @@ export const storage = {
       const qty = item.quantity ? parseFloat(item.quantity as string) : 0;
       const cid = orderCustomerMap.get(item.orderId);
       if (!rowMap.has(key)) {
-        const stock = stockMap.get(`${pid}-${dbEnumToCanonical(item.unit as string)}`) ?? 0;
+        const canonUnit = dbEnumToCanonical(item.unit as string);
+        const stock = stockForUnit(pid, canonUnit);
         rowMap.set(key, {
           productId: pid,
           productName: productNameMap.get(pid) ?? "?",
