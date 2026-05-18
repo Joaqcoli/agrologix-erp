@@ -587,7 +587,7 @@ export default function StockPage() {
 
   const { data: stockData, isLoading: stockLoading, isFetching: stockFetching } = useQuery<ProductUnitWithProduct[]>({
     queryKey: ["/api/products/stock"],
-    queryFn: () => fetch("/api/products/stock?onlyInStock=false", { credentials: "include" }).then((r) => r.json()),
+    queryFn: () => fetch("/api/products/stock?onlyInStock=false", { credentials: "include", cache: "no-store" }).then((r) => r.json()),
   });
 
   const { data: productsData } = useQuery<Product[]>({ queryKey: ["/api/products"] });
