@@ -2681,80 +2681,131 @@ export const storage = {
     const allIds = [customerId, ...childIds];
     const idArr = allIds.join(",");
 
-    // Running-balance approach: misma fórmula que el CC
-    // saldo = opening_balance + facturacion_con_iva - cobranza - retenciones
-    // → credits_for_orders = SUM(all_payments) - SUM(opening_balance)
-    const [creditsRow, openingRow] = await Promise.all([
-      db.execute(drizzleSql.raw(`
-        SELECT COALESCE(SUM(amount::numeric), 0) AS total_credits
-        FROM payments WHERE customer_id = ANY(ARRAY[${idArr}]::int[])
-      `)),
+    // Nuevo algoritmo: respeta vínculos explícitos (payment_order_links).
+    // Los pagos con link explícito se aplican a sus remitos vinculados.
+    // Los pagos sin link se aplican FIFO (más viejo primero) sobre los restantes.
+    // El saldo inicial (opening_balance) reduce el pool FIFO.
+    const [openingRow, paymentsLinksRows, ordersRows] = await Promise.all([
       db.execute(drizzleSql.raw(`
         SELECT COALESCE(SUM(opening_balance::numeric), 0) AS total_opening
         FROM customers WHERE id = ANY(ARRAY[${idArr}]::int[])
       `)),
+      // Cada pago con los IDs de remitos a los que está vinculado (en orden de fecha)
+      db.execute(drizzleSql.raw(`
+        SELECT
+          p.id,
+          p.amount::numeric AS amount,
+          STRING_AGG(CAST(pol.order_id AS text), ',' ORDER BY o.order_date, o.id)
+            FILTER (WHERE pol.order_id IS NOT NULL) AS linked_ids
+        FROM payments p
+        LEFT JOIN payment_order_links pol ON pol.payment_id = p.id
+        LEFT JOIN orders o ON o.id = pol.order_id
+        WHERE p.customer_id = ANY(ARRAY[${idArr}]::int[])
+        GROUP BY p.id, p.amount, p.date
+        ORDER BY p.date, p.id
+      `)),
+      db.execute(drizzleSql.raw(`
+        SELECT
+          o.id,
+          o.folio,
+          o.remito_num,
+          o.order_date,
+          o.invoice_number,
+          CASE WHEN c.has_iva THEN
+            COALESCE(ROUND(SUM(CASE
+              WHEN oi.price_per_unit::numeric = 0 THEN 0
+              WHEN (COALESCE(p.name, oi.raw_product_name, '') ILIKE '%huevo%'
+                    OR COALESCE(p.name, oi.raw_product_name, '') ILIKE '%maple%'
+                    OR COALESCE(p.category, '') ILIKE '%huevo%')
+              THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
+              ELSE oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+            END)), 0)
+          ELSE
+            COALESCE(ROUND(SUM(CASE
+              WHEN oi.price_per_unit::numeric = 0 THEN 0
+              ELSE oi.quantity::numeric * oi.price_per_unit::numeric
+            END)), 0)
+          END AS billing_total
+        FROM orders o
+        JOIN customers c ON c.id = o.customer_id
+        JOIN order_items oi ON oi.order_id = o.id
+        LEFT JOIN products p ON p.id = oi.product_id
+        WHERE o.customer_id = ANY(ARRAY[${idArr}]::int[])
+          AND o.status = 'approved'
+        GROUP BY o.id, o.folio, o.remito_num, o.order_date, o.invoice_number, c.has_iva
+        ORDER BY o.order_date ASC, o.id ASC
+        LIMIT 500
+      `)),
     ]);
 
-    // Redondear a pesos enteros para evitar discrepancias de redondeo
-    const totalCredits = Math.round(parseFloat((creditsRow.rows[0] as any).total_credits ?? "0"));
     const totalOpening = Math.round(parseFloat((openingRow.rows[0] as any).total_opening ?? "0"));
-    let creditsForOrders = totalCredits - totalOpening;
 
-    // Pedidos aprobados con billing IVA-ajustado (misma fórmula que getCCCustomerDetail)
-    // También incluye raw_product_name como fallback cuando no hay product_id
-    const ordersRows = await db.execute(drizzleSql.raw(`
-      SELECT
-        o.id,
-        o.folio,
-        o.remito_num,
-        o.order_date,
-        o.invoice_number,
-        CASE WHEN c.has_iva THEN
-          COALESCE(ROUND(SUM(CASE
-            WHEN oi.price_per_unit::numeric = 0 THEN 0
-            WHEN (COALESCE(p.name, oi.raw_product_name, '') ILIKE '%huevo%'
-                  OR COALESCE(p.name, oi.raw_product_name, '') ILIKE '%maple%'
-                  OR COALESCE(p.category, '') ILIKE '%huevo%')
-            THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
-            ELSE oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
-          END)), 0)
-        ELSE
-          COALESCE(ROUND(SUM(CASE
-            WHEN oi.price_per_unit::numeric = 0 THEN 0
-            ELSE oi.quantity::numeric * oi.price_per_unit::numeric
-          END)), 0)
-        END AS billing_total
-      FROM orders o
-      JOIN customers c ON c.id = o.customer_id
-      JOIN order_items oi ON oi.order_id = o.id
-      LEFT JOIN products p ON p.id = oi.product_id
-      WHERE o.customer_id = ANY(ARRAY[${idArr}]::int[])
-        AND o.status = 'approved'
-      GROUP BY o.id, o.folio, o.remito_num, o.order_date, c.has_iva
-      ORDER BY o.order_date ASC, o.id ASC
-      LIMIT 500
-    `));
-
-    const result: { id: number; folio: string; remitoNum: number | null; total: string; paidAmount: string; orderDate: string; invoiceNumber: string | null }[] = [];
-
+    // Mapa: orderId → total de facturación
+    const orderTotalMap = new Map<number, number>();
     for (const r of ordersRows.rows as any[]) {
-      const orderTotal = Math.round(parseFloat(r.billing_total ?? "0"));
-      // +1 de tolerancia por diferencias de redondeo entre fórmula JS y SQL
-      if (creditsForOrders >= orderTotal - 1) {
-        creditsForOrders -= orderTotal; // totalmente cubierto, skip
+      orderTotalMap.set(Number(r.id), Math.round(parseFloat(r.billing_total ?? "0")));
+    }
+
+    // Crédito acumulado por remito (de pagos con link explícito)
+    const creditByOrder = new Map<number, number>();
+    // Pool para pagos sin vínculo (se aplican FIFO); arranca negativo por el saldo inicial
+    let unlinkedPool = -totalOpening;
+
+    for (const p of paymentsLinksRows.rows as any[]) {
+      const amount = Math.round(parseFloat(p.amount ?? "0"));
+      const linkedIdsStr: string | null = p.linked_ids;
+
+      if (linkedIdsStr) {
+        // Pago con vínculos explícitos: distribuir a esos remitos (en orden de fecha)
+        const linkedIds = linkedIdsStr.split(",").map(Number).filter((n) => !isNaN(n) && n > 0);
+        let remaining = amount;
+        for (const orderId of linkedIds) {
+          if (remaining <= 0) break;
+          const orderTotal = orderTotalMap.get(orderId) ?? 0;
+          const alreadyCovered = creditByOrder.get(orderId) ?? 0;
+          const toApply = Math.min(remaining, Math.max(0, orderTotal - alreadyCovered));
+          if (toApply > 0) {
+            creditByOrder.set(orderId, alreadyCovered + toApply);
+            remaining -= toApply;
+          }
+        }
+        // Sobrante del pago va al pool FIFO
+        unlinkedPool += remaining;
       } else {
-        const covered = Math.max(0, creditsForOrders);
-        creditsForOrders = 0;
-        result.push({
-          id: Number(r.id),
-          folio: String(r.folio),
-          remitoNum: r.remito_num != null ? Number(r.remito_num) : null,
-          total: orderTotal.toFixed(2),
-          paidAmount: covered.toFixed(2),
-          orderDate: r.order_date instanceof Date ? r.order_date.toISOString() : String(r.order_date),
-          invoiceNumber: r.invoice_number ?? null,
-        });
+        // Pago sin vínculo: va al pool FIFO
+        unlinkedPool += amount;
       }
+    }
+
+    // Aplicar pool FIFO a remitos con crédito insuficiente (más viejo primero)
+    for (const r of ordersRows.rows as any[]) {
+      if (unlinkedPool <= 0) break;
+      const orderId = Number(r.id);
+      const orderTotal = orderTotalMap.get(orderId) ?? 0;
+      const alreadyCovered = creditByOrder.get(orderId) ?? 0;
+      const toApply = Math.min(unlinkedPool, Math.max(0, orderTotal - alreadyCovered));
+      if (toApply > 0) {
+        creditByOrder.set(orderId, alreadyCovered + toApply);
+        unlinkedPool -= toApply;
+      }
+    }
+
+    // Construir resultado: remitos donde el crédito no alcanza el total (+1 tolerancia de redondeo)
+    const result: { id: number; folio: string; remitoNum: number | null; total: string; paidAmount: string; orderDate: string; invoiceNumber: string | null }[] = [];
+    for (const r of ordersRows.rows as any[]) {
+      const orderId = Number(r.id);
+      const orderTotal = orderTotalMap.get(orderId) ?? 0;
+      const covered = Math.round(creditByOrder.get(orderId) ?? 0);
+      if (covered >= orderTotal - 1) continue; // totalmente cubierto
+      result.push({
+        id: orderId,
+        folio: String(r.folio),
+        remitoNum: r.remito_num != null ? Number(r.remito_num) : null,
+        total: orderTotal.toFixed(2),
+        paidAmount: Math.max(0, covered).toFixed(2),
+        orderDate: r.order_date instanceof Date ? r.order_date.toISOString() : String(r.order_date),
+        invoiceNumber: r.invoice_number ?? null,
+      });
     }
 
     return result;
