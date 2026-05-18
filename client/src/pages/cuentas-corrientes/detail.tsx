@@ -617,35 +617,43 @@ function PaymentModal({
                 Sin pedidos pendientes
               </p>
             ) : (
-              <ScrollArea className="h-40 rounded-md border bg-muted/20 p-2">
-                <div className="space-y-1.5">
-                  {pendingOrders.map((o) => {
-                    const checked = selectedOrderIds.includes(o.id);
-                    const remaining = orderRemaining(o);
-                    const isPartial = parseFloat(o.paidAmount ?? "0") > 0;
-                    return (
-                      <label
-                        key={o.id}
-                        className={`flex items-center gap-2.5 px-2 py-1.5 rounded cursor-pointer transition-colors ${
-                          checked ? "bg-primary/10 text-primary" : "hover:bg-muted/50"
-                        }`}
-                        data-testid={`check-order-${o.id}`}
-                      >
-                        <Checkbox
-                          checked={checked}
-                          onCheckedChange={() => toggleOrder(o.id)}
-                          className="shrink-0"
-                        />
-                        <span className="text-xs font-mono font-medium">{formatRemito(o)}</span>
-                        {isPartial && (
-                          <span className="text-[10px] text-amber-600 dark:text-amber-400">parcial</span>
-                        )}
-                        <span className="text-xs text-muted-foreground ml-auto">
-                          ${Math.round(remaining).toLocaleString("es-AR")}
-                        </span>
-                      </label>
-                    );
-                  })}
+              <ScrollArea className="h-48 rounded-md border bg-muted/20 p-2">
+                <div className="space-y-1">
+                  {[...pendingOrders]
+                    .sort((a, b) => a.orderDate < b.orderDate ? -1 : a.orderDate > b.orderDate ? 1 : a.id - b.id)
+                    .map((o) => {
+                      const checked = selectedOrderIds.includes(o.id);
+                      const remaining = orderRemaining(o);
+                      const isPartial = parseFloat(o.paidAmount ?? "0") > 0;
+                      const fmtD = (d: string) =>
+                        new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
+                      return (
+                        <label
+                          key={o.id}
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors ${
+                            checked ? "bg-primary/10 text-primary" : "hover:bg-muted/50"
+                          }`}
+                          data-testid={`check-order-${o.id}`}
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={() => toggleOrder(o.id)}
+                            className="shrink-0"
+                          />
+                          <span className="text-[10px] text-muted-foreground shrink-0 w-10">{fmtD(o.orderDate)}</span>
+                          <span className="text-xs font-mono font-medium shrink-0">{formatRemito(o)}</span>
+                          {o.invoiceNumber && (
+                            <span className="text-[10px] text-muted-foreground shrink-0">{o.invoiceNumber}</span>
+                          )}
+                          {isPartial && (
+                            <span className="text-[10px] text-amber-600 dark:text-amber-400 shrink-0">parcial</span>
+                          )}
+                          <span className="text-xs text-muted-foreground ml-auto shrink-0">
+                            ${Math.round(remaining).toLocaleString("es-AR")}
+                          </span>
+                        </label>
+                      );
+                    })}
                 </div>
               </ScrollArea>
             )}
