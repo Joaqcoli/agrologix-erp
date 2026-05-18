@@ -1979,11 +1979,18 @@ export const storage = {
     await db.update(productUnits).set({ isActive: false }).where(eq(productUnits.id, id));
   },
 
-  async adjustProductUnitStock(id: number, adjustment: number, notes?: string, avgCost?: number): Promise<ProductUnit> {
+  async adjustProductUnitStock(id: number, adjustment: number, notes?: string, avgCost?: number, weightPerUnit?: number): Promise<ProductUnit> {
     const [pu] = await db.select().from(productUnits).where(eq(productUnits.id, id)).limit(1);
     if (!pu) throw new Error("ProductUnit not found");
 
     let updated = pu;
+
+    // Actualizar weightPerUnit si se especificó (independiente del adjustment)
+    if (weightPerUnit !== undefined && weightPerUnit >= 0) {
+      await db.update(productUnits)
+        .set({ weightPerUnit: weightPerUnit.toFixed(4) })
+        .where(eq(productUnits.id, id));
+    }
 
     if (adjustment !== 0) {
       const newStock = parseFloat(pu.stockQty as string) + adjustment;
@@ -2284,8 +2291,13 @@ export const storage = {
           const wpu = await this._resolveWpu(item.productId, canonicalUnit, fallback);
           const addQty = wpu > 0 ? item.qty * wpu : item.qty;
           const newStock = parseFloat(baseUnitPu.stockQty as string) + addQty;
+          const updateSet: Record<string, any> = { stockQty: newStock.toFixed(4), isActive: true };
+          // Persistir wpu si el row no lo tenía (para que futuras ventas en CAJON resuelvan el costo)
+          if (wpu > 0 && parseFloat(baseUnitPu.weightPerUnit as string ?? '0') === 0) {
+            updateSet.weightPerUnit = wpu.toFixed(4);
+          }
           await db.update(productUnits)
-            .set({ stockQty: newStock.toFixed(4), isActive: true })
+            .set(updateSet)
             .where(eq(productUnits.id, baseUnitPu.id));
         } else {
           // No base unit row: create a KG row and add qty directly

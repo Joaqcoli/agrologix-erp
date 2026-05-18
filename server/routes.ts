@@ -299,12 +299,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.patch("/api/product-units/:id/adjust", requireAuth, async (req, res) => {
     try {
-      const { adjustment, notes, avgCost } = z.object({
+      const { adjustment, notes, avgCost, weightPerUnit } = z.object({
         adjustment: z.number().default(0),
         notes: z.string().optional(),
         avgCost: z.number().nonnegative().optional(),
+        weightPerUnit: z.number().nonnegative().optional(),
       }).parse(req.body);
-      const pu = await storage.adjustProductUnitStock(Number(req.params.id), adjustment, notes, avgCost);
+      const pu = await storage.adjustProductUnitStock(Number(req.params.id), adjustment, notes, avgCost, weightPerUnit);
       return res.json(pu);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });

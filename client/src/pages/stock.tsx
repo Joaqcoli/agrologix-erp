@@ -83,11 +83,12 @@ function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null;
   const [reason, setReason] = useState<Motivo>("Merma");
   const [otherText, setOtherText] = useState("");
   const [newCost, setNewCost] = useState("");
+  const [newWpu, setNewWpu] = useState("");
 
   const finalNotes = reason === "Otro" ? otherText.trim() : reason;
 
   const adjustMutation = useMutation({
-    mutationFn: async (data: { adjustment: number; notes?: string; avgCost?: number }) => {
+    mutationFn: async (data: { adjustment: number; notes?: string; avgCost?: number; weightPerUnit?: number }) => {
       const res = await apiRequest("PATCH", `/api/product-units/${pu!.id}/adjust`, data);
       return res.json();
     },
@@ -106,6 +107,7 @@ function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null;
     setReason("Merma");
     setOtherText("");
     setNewCost("");
+    setNewWpu("");
     onClose();
   };
 
@@ -113,20 +115,23 @@ function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null;
   const adj = parseFloat(adjustment);
   const currentStock = parseFloat(pu.stockQty as string);
   const currentCost = parseFloat(pu.avgCost as string);
+  const currentWpu = parseFloat(pu.weightPerUnit as string ?? "0");
   const newStock = isNaN(adj) ? currentStock : currentStock + adj;
   const hasValidAdj = !!adjustment && !isNaN(adj);
   const hasValidCost = !!newCost && !isNaN(parseFloat(newCost)) && parseFloat(newCost) >= 0;
+  const hasValidWpu = !!newWpu && !isNaN(parseFloat(newWpu)) && parseFloat(newWpu) > 0;
   const isDisabled =
-    (!hasValidAdj && !hasValidCost) ||
+    (!hasValidAdj && !hasValidCost && !hasValidWpu) ||
     adjustMutation.isPending ||
     (hasValidAdj && reason === "Otro" && !otherText.trim());
 
   const handleConfirm = () => {
-    const payload: { adjustment: number; notes?: string; avgCost?: number } = {
+    const payload: { adjustment: number; notes?: string; avgCost?: number; weightPerUnit?: number } = {
       adjustment: hasValidAdj ? adj : 0,
     };
     if (hasValidAdj) payload.notes = finalNotes || undefined;
     if (hasValidCost) payload.avgCost = parseFloat(newCost);
+    if (hasValidWpu) payload.weightPerUnit = parseFloat(newWpu);
     adjustMutation.mutate(payload);
   };
 
@@ -193,6 +198,28 @@ function AdjustStockDialog({ pu, onClose }: { pu: ProductUnitWithProduct | null;
               placeholder={currentCost > 0 ? `$${fmt(currentCost)}` : "Ingresar costo..."}
               min={0}
             />
+          </div>
+
+          {/* ── Unidades por envase ── */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label>Unidades por envase (opcional)</Label>
+              <span className="text-xs text-muted-foreground">
+                {currentWpu > 0
+                  ? `Actual: ${fmtStock(currentWpu)} ${pu.unit}/cajón`
+                  : <span className="text-yellow-600 font-medium">Sin configurar</span>}
+              </span>
+            </div>
+            <Input
+              type="number"
+              value={newWpu}
+              onChange={(e) => setNewWpu(e.target.value)}
+              placeholder={currentWpu > 0 ? `${fmtStock(currentWpu)}` : "Ej: 30 (para cajón de 30 unidades)"}
+              min={0}
+            />
+            <p className="text-xs text-muted-foreground">
+              Cuántas {pu.unit} hay en un cajón/bolsa. Permite calcular el costo al vender por envase.
+            </p>
           </div>
 
         </div>
