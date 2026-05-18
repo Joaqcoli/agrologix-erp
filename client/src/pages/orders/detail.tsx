@@ -648,6 +648,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   type BonifState = { queue: BonifItem[]; resolved: { itemId: number; data: Record<string, any> }[]; others: { itemId: number; data: Record<string, any> }[] } | null;
   const [bonifState, setBonifState] = useState<BonifState>(null);
   const [stockIssueState, setStockIssueState] = useState<StockIssueState>(null);
+  const [isApproving, setIsApproving] = useState(false);
   // Remito num inline edit
   const [editingRemitoNum, setEditingRemitoNum] = useState(false);
   const [remitoNumInput, setRemitoNumInput] = useState("");
@@ -759,6 +760,8 @@ export default function OrderDetailPage({ id }: { id: number }) {
   });
 
   const doApproveWithStockCheck = async () => {
+    if (isApproving || approveMutation.isPending) return; // prevenir doble-click
+    setIsApproving(true);
     try {
       const res = await fetch(`/api/orders/${id}/stock-check`, { credentials: "include" });
       if (!res.ok) throw new Error();
@@ -770,6 +773,8 @@ export default function OrderDetailPage({ id }: { id: number }) {
       setStockIssueState({ queue: issues, decisions: {} });
     } catch {
       approveMutation.mutate({});
+    } finally {
+      setIsApproving(false);
     }
   };
 
@@ -1283,7 +1288,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
               <Button
                 size="sm"
                 onClick={handleApprove}
-                disabled={approveMutation.isPending || !canApprove}
+                disabled={approveMutation.isPending || isApproving || !canApprove}
                 data-testid="button-approve-order"
               >
                 <CheckCircle2 className="mr-2 h-4 w-4" />
