@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
-import { Search, Package, Plus, CheckCircle2, AlertCircle, Warehouse, ChevronDown, ChevronUp, History, TrendingDown, TrendingUp, Trash2, RefreshCw } from "lucide-react";
+import { Search, Package, Plus, CheckCircle2, AlertCircle, Warehouse, ChevronDown, ChevronUp, History, TrendingDown, TrendingUp, Trash2, RefreshCw, AlertTriangle } from "lucide-react";
 import type { Product, ProductUnit } from "@shared/schema";
 import { PRODUCT_CATEGORIES } from "@shared/schema";
 import { parseQuantityAndUnit } from "@/lib/parseQuantityAndUnit";
@@ -605,8 +605,9 @@ export default function StockPage() {
     staleTime: 60_000,
   });
 
-  // null = cerrado | "step1" = ¿es stock total? | "step2" = merma/rinde vs corrección
-  const [intentDialog, setIntentDialog] = useState<null | "step1" | "step2">(null);
+  // null = cerrado | "step1" = ¿es stock total? | "step2b" = advertencia productos a zerear | "step2" = merma/rinde vs corrección
+  const [intentDialog, setIntentDialog] = useState<null | "step1" | "step2b" | "step2">(null);
+  const [productsToZero, setProductsToZero] = useState<ProductUnitWithProduct[]>([]);
 
   const onStockSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
@@ -1099,7 +1100,13 @@ export default function StockPage() {
               <p className="text-xs text-muted-foreground">Suma la cantidad ingresada al stock que ya figura en el sistema</p>
             </button>
             <button
-              onClick={() => setIntentDialog("step2")}
+              onClick={() => {
+                const allStocked = (Array.isArray(stockData) ? stockData as ProductUnitWithProduct[] : [])
+                  .filter(pu => parseFloat(pu.stockQty as string) > 0);
+                const toZero = allStocked.filter(pu => !validItems.some(vi => vi.productId === pu.product.id));
+                setProductsToZero(toZero);
+                setIntentDialog(toZero.length > 0 ? "step2b" : "step2");
+              }}
               className="rounded-lg border-2 border-border p-3 text-left transition-colors hover:border-primary/50 hover:bg-muted/40 focus:outline-none"
             >
               <div className="flex items-center gap-2 mb-1">
@@ -1111,6 +1118,50 @@ export default function StockPage() {
           </div>
           <DialogFooter className="mt-2">
             <Button variant="outline" onClick={() => setIntentDialog(null)}>Cancelar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Intent Dialog — step 2b: advertencia de productos que quedarán en 0 ── */}
+      <Dialog open={intentDialog === "step2b"} onOpenChange={(o) => { if (!o) setIntentDialog(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-yellow-500" />
+              Productos que quedarán en 0
+            </DialogTitle>
+            <DialogDescription>
+              Los siguientes <strong>{productsToZero.length}</strong> productos tienen stock y <strong>no están en tu conteo</strong>. Al reemplazar quedarán en 0. Verificá que no falte ninguno antes de continuar.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-52 overflow-y-auto border border-border rounded-md">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border bg-muted/40">
+                  <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Producto</th>
+                  <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Stock actual</th>
+                </tr>
+              </thead>
+              <tbody>
+                {productsToZero.map(pu => (
+                  <tr key={pu.id} className="border-b border-border last:border-0">
+                    <td className="py-1.5 px-3 font-medium">{pu.product.name}</td>
+                    <td className="py-1.5 px-3 text-right text-muted-foreground whitespace-nowrap">
+                      {fmtStock(parseFloat(pu.stockQty as string))} {pu.unit}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <DialogFooter className="flex gap-2 mt-2">
+            <Button variant="outline" onClick={() => setIntentDialog("step1")}>Volver al conteo</Button>
+            <Button
+              variant="destructive"
+              onClick={() => setIntentDialog("step2")}
+            >
+              Llevar {productsToZero.length} producto{productsToZero.length !== 1 ? "s" : ""} a 0 y continuar
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
