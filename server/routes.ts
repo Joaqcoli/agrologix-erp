@@ -517,6 +517,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       const patch = schema.parse(req.body);
 
+      // Bolsa FV solo permitida para clientes con bolsa_fv = true
+      if (patch.bolsaType && ['bolsa', 'bolsa_propia'].includes(patch.bolsaType)) {
+        if (!(order.customer as any).bolsaFv) {
+          return res.status(403).json({ error: "Este cliente no tiene habilitada la opción Bolsa FV" });
+        }
+      }
+
       const result = await storage.updateOrderItem(orderId, itemId, patch, order.customerId);
       return res.json(result);
     } catch (e: any) {

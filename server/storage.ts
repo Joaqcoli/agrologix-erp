@@ -869,10 +869,12 @@ export const storage = {
         const product = item.productId
           ? ((await db.select().from(products).where(eq(products.id, item.productId)).limit(1))[0] ?? null)
           : null;
-        // Para pedidos borrador: recalcular costo según stock actual.
-        // Evita mostrar costos históricos de productos sin stock.
+        // Bolsa FV: siempre costo $0.
+        // Pedido borrador: recalcular costo según stock actual (evita costos históricos stale).
         let costPerUnit = item.costPerUnit;
-        if (o.status === 'draft' && item.productId && !(item as any).bolsaType) {
+        if ((item as any).bolsaType && (item as any).bolsaType !== 'sin_stock') {
+          costPerUnit = "0";
+        } else if (o.status === 'draft' && item.productId) {
           costPerUnit = await this._getCostForUnit(item.productId, item.unit as string);
         }
         return { ...item, costPerUnit, product: (product ?? null) as unknown as Product };
@@ -1371,6 +1373,8 @@ export const storage = {
     const conditions = [
       eq(orders.status, "approved"),
       drizzleSql`${orderItems}.bolsa_type IS NOT NULL`,
+      drizzleSql`${orderItems}.bolsa_type != 'sin_stock'`,
+      drizzleSql`${customers}.bolsa_fv = true`,
       drizzleSql`${orders.orderDate}::date >= ${from}::date`,
       drizzleSql`${orders.orderDate}::date < ${to}::date`,
     ];
