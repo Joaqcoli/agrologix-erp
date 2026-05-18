@@ -1171,7 +1171,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   });
 
   const unpricedCount = calcs.filter((c) => !c.hasPrice && !c.isBonification).length;
-  const hasAnyLowMargin = calcs.some((c) => c.isLowMargin);
+  const hasAnyLowMargin = Array.isArray(calcs) && calcs.some((c) => c.isLowMargin);
   const grandTotal = calcs.reduce((s, c) => s + c.subtotal, 0);
   const grandTotalConIva = calcs.reduce((s, c) => s + c.totalConIva, 0);
   const grandTotalCompra = calcs.reduce((s, c) => s + c.totalCompra, 0);
@@ -1180,7 +1180,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const grandPct = grandBase > 0 ? grandDiff / grandBase : 0;
   const canApprove = isDraft && unpricedCount === 0 && (!hasAnyLowMargin || lowMarginOk);
   const isSaving = saveAllMutation.isPending || bolsaMutation.isPending;
-  const hasPendingDrafts = calcs.some((c) => {
+  const hasPendingDrafts = Array.isArray(calcs) && calcs.some((c) => {
     const d = drafts[c.id];
     return d && hasDraftChanges(d, c);
   });

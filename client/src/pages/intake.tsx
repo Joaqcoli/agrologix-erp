@@ -367,7 +367,7 @@ export default function IntakePage() {
   // Unit validation: check if resolved product has the requested unit in product_units
   // We iterate `parsed` (same index as render) so the Set stores parsed indices
   const unitMismatchIndices = useMemo<Set<number>>(() => {
-    if (!stockData || stockData.length === 0) return new Set();
+    if (!Array.isArray(stockData) || stockData.length === 0) return new Set();
     const bad = new Set<number>();
     parsed.forEach((line, idx) => {
       if (line.status === "no_qty" || !line.unit) return;

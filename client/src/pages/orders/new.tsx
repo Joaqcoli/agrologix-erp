@@ -101,7 +101,7 @@ export default function NewOrderPage() {
     return calcMargin(price, cost);
   };
 
-  const hasLowMargin = items.some((item) => {
+  const hasLowMargin = Array.isArray(items) && items.some((item) => {
     const m = itemMargin(item);
     return m !== null && m < LOW_MARGIN_THRESHOLD;
   });
@@ -114,7 +114,7 @@ export default function NewOrderPage() {
 
   const grandTotal = items.reduce((sum, item) => sum + itemTotal(item), 0);
 
-  const canSubmit = customerId > 0 && items.some((i) => i.productId && i.quantity && i.pricePerUnit)
+  const canSubmit = customerId > 0 && Array.isArray(items) && items.some((i) => i.productId && i.quantity && i.pricePerUnit)
     && (!hasLowMargin || lowMarginConfirmed);
 
   const createMutation = useMutation({
