@@ -1837,28 +1837,25 @@ export const storage = {
 
   async getAllProductUnitsStock(filters?: { category?: string; search?: string; onlyInStock?: boolean }): Promise<(ProductUnit & { product: Product })[]> {
     const onlyInStock = filters?.onlyInStock !== false; // default true
-    const puConditions: any[] = [eq(productUnits.isActive, true)];
+    const puConditions: any[] = [eq(productUnits.isActive, true), eq(products.active, true)];
     if (onlyInStock) puConditions.push(drizzleSql`${productUnits.stockQty} > 0`);
 
-    const all = await db.select().from(productUnits)
+    // Single JOIN query instead of N+1 parallel queries
+    const rows = await db.select({ pu: productUnits, product: products })
+      .from(productUnits)
+      .innerJoin(products, eq(productUnits.productId, products.id))
       .where(and(...puConditions));
 
-    const result = await Promise.all(
-      all.map(async (pu) => {
-        const [product] = await db.select().from(products).where(eq(products.id, pu.productId)).limit(1);
-        return { ...pu, product };
-      })
-    );
-
-    // Excluir filas de unidades de envase (CAJON/BOLSA/BANDEJA) — solo mostrar unidades base
     const PACKAGE_UNITS = new Set(['CAJON', 'BOLSA', 'BANDEJA']);
-    return result.filter((r) => {
-      if (!r.product?.active) return false;
-      if (PACKAGE_UNITS.has(r.unit)) return false;
-      if (filters?.category && r.product.category !== filters.category) return false;
-      if (filters?.search && !r.product.name.toUpperCase().includes(filters.search.toUpperCase())) return false;
-      return true;
-    }).sort((a, b) => a.product.name.localeCompare(b.product.name));
+    return rows
+      .filter((r) => {
+        if (PACKAGE_UNITS.has(r.pu.unit)) return false;
+        if (filters?.category && r.product.category !== filters.category) return false;
+        if (filters?.search && !r.product.name.toUpperCase().includes(filters.search.toUpperCase())) return false;
+        return true;
+      })
+      .map((r) => ({ ...r.pu, product: r.product }))
+      .sort((a, b) => a.product.name.localeCompare(b.product.name));
   },
 
   async upsertProductUnit(productId: number, unit: string): Promise<ProductUnit> {
