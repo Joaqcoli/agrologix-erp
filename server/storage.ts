@@ -405,9 +405,7 @@ export const storage = {
       ));
     for (const item of draftItems) {
       const freshCost = await this._getCostForUnit(item.productId, item.unit as string);
-      if (parseFloat(freshCost) > 0) {
-        await db.update(orderItems).set({ costPerUnit: freshCost }).where(eq(orderItems.id, item.id));
-      }
+      await db.update(orderItems).set({ costPerUnit: freshCost }).where(eq(orderItems.id, item.id));
     }
   },
 
@@ -868,9 +866,16 @@ export const storage = {
     const items = await db.select().from(orderItems).where(eq(orderItems.orderId, id));
     const itemsWithProducts = await Promise.all(
       items.map(async (item) => {
-        if (!item.productId) return { ...item, product: null as unknown as Product };
-        const [product] = await db.select().from(products).where(eq(products.id, item.productId)).limit(1);
-        return { ...item, product: (product ?? null) as unknown as Product };
+        const product = item.productId
+          ? ((await db.select().from(products).where(eq(products.id, item.productId)).limit(1))[0] ?? null)
+          : null;
+        // Para pedidos borrador: recalcular costo según stock actual.
+        // Evita mostrar costos históricos de productos sin stock.
+        let costPerUnit = item.costPerUnit;
+        if (o.status === 'draft' && item.productId && !(item as any).bolsaType) {
+          costPerUnit = await this._getCostForUnit(item.productId, item.unit as string);
+        }
+        return { ...item, costPerUnit, product: (product ?? null) as unknown as Product };
       })
     );
     return { ...o, customer, items: itemsWithProducts };
