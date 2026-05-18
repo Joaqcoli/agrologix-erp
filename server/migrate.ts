@@ -454,5 +454,14 @@ export async function runMigrations() {
   // ─── price_history: track unit per price record ──────────────────────────────
   await db.execute(sql`ALTER TABLE price_history ADD COLUMN IF NOT EXISTS unit TEXT`);
 
+  // ─── Reactivar product_units con stock > 0 que fueron desactivados ────────────
+  // Bug: createPurchase/updatePurchase no seteaba isActive=true al actualizar filas.
+  // Si una fila fue desactivada desde la vista de stock y luego se cargó una compra,
+  // el stock se actualizaba pero la fila seguía oculta. Este UPDATE lo corrige.
+  await db.execute(sql`
+    UPDATE product_units SET is_active = true
+    WHERE is_active = false AND stock_qty > 0
+  `);
+
   console.log("Migrations complete.");
 }

@@ -331,6 +331,7 @@ export const storage = {
             stockQty: (puStock + newQty).toFixed(4),
             avgCost: newPuAvgCost.toFixed(4),
             baseUnit: baseUnitCanonical,
+            isActive: true, // reactivar si fue desactivado desde la vista de stock
           };
           if (isPackagePurchase) puUpdate.weightPerUnit = newWeightPerUnit.toFixed(4);
 
@@ -344,6 +345,7 @@ export const storage = {
             avgCost: newCost.toFixed(4),
             stockQty: newQty.toFixed(4),
             baseUnit: baseUnitCanonical,
+            isActive: true,
             ...(weightPerPackage > 0 ? { weightPerUnit: weightPerPackage.toFixed(4) } : {}),
           });
         }
@@ -673,6 +675,7 @@ export const storage = {
             stockQty: (puStock + newQty).toFixed(4),
             avgCost: newPuAvgCost.toFixed(4),
             baseUnit: canonicalUnit,
+            isActive: true, // reactivar si fue desactivado desde la vista de stock
           };
           if (isPackagePurchase) puUpdate.weightPerUnit = newWeightPerUnit.toFixed(4);
           await tx.update(productUnits).set(puUpdate).where(eq(productUnits.id, existingPU.id));
@@ -685,6 +688,7 @@ export const storage = {
             avgCost: newCost.toFixed(4),
             stockQty: newQty.toFixed(4),
             baseUnit: canonicalUnit,
+            isActive: true,
           };
           if (weightPerPackage > 0) insertData.weightPerUnit = weightPerPackage.toFixed(4);
           await tx.insert(productUnits).values(insertData);
