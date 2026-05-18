@@ -42,12 +42,6 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
-// Prevent browsers and proxies from caching API responses
-app.use("/api", (_req, res, next) => {
-  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-  next();
-});
-
 app.set("trust proxy", 1);
 
 const PgStore = connectPgSimple(session);
@@ -129,9 +123,4 @@ app.use((req, res, next) => {
   httpServer.listen({ port, host: "0.0.0.0" }, () => {
     log(`serving on port ${port}`);
   });
-
-  // Keep the DB connection alive so Render free tier doesn't drop it
-  setInterval(async () => {
-    try { await pool.query("SELECT 1"); } catch (_) {}
-  }, 4 * 60 * 1000);
 })();

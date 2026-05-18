@@ -9,17 +9,6 @@ import { z } from "zod";
 import { canonicalizeUnit } from "@shared/units";
 import { getHistoricalMonthStats } from "./historical-stats";
 
-// Retry helper for transient DB connection errors (e.g. Render cold-start)
-async function withRetry<T>(fn: () => Promise<T>, retries = 1, delayMs = 2000): Promise<T> {
-  try {
-    return await fn();
-  } catch (e) {
-    if (retries <= 0) throw e;
-    await new Promise((r) => setTimeout(r, delayMs));
-    return withRetry(fn, retries - 1, delayMs);
-  }
-}
-
 // IVA helpers
 const IVA_HUEVO = 0.21;
 const IVA_DEFAULT = 0.105;
@@ -185,12 +174,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/products/stock", requireAuth, async (req, res) => {
     try {
       const { category, search, onlyInStock } = req.query as { category?: string; search?: string; onlyInStock?: string };
-      const data = await withRetry(() => storage.getAllProductUnitsStock({
+      return res.json(await storage.getAllProductUnitsStock({
         category: category || undefined,
         search: search || undefined,
         onlyInStock: onlyInStock !== "false",
       }));
-      return res.json(data);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
