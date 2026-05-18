@@ -2246,6 +2246,20 @@ export const storage = {
           const wpu = await this._resolveWpu(item.productId, canonicalUnit, fallback);
           targetQty = wpu > 0 ? item.qty * wpu : item.qty;
           pu = baseRow;
+        } else {
+          // Fallback: old-model product (baseUnit = null) — find any non-package unit row
+          const [anyRow] = await db.select().from(productUnits)
+            .where(and(
+              eq(productUnits.productId, item.productId),
+              drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
+            ))
+            .limit(1);
+          if (anyRow) {
+            const fallback = parseFloat(anyRow.weightPerUnit as string ?? '0');
+            const wpu = await this._resolveWpu(item.productId, canonicalUnit, fallback);
+            targetQty = wpu > 0 ? item.qty * wpu : item.qty;
+            pu = anyRow;
+          }
         }
       } else {
         // Base unit (KG/UNIDAD/ATADO/MAPLE/etc.)
