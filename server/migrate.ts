@@ -302,6 +302,9 @@ export async function runMigrations() {
     )
   `);
 
+  // ─── CC v4: amount applied per payment-order link ───────────────────────────
+  await db.execute(sql`ALTER TABLE payment_order_links ADD COLUMN IF NOT EXISTS amount_applied numeric`);
+
   // ─── Proveedores (AP module) ─────────────────────────────────────────────────
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS suppliers (

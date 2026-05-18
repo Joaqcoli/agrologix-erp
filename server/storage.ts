@@ -2665,10 +2665,14 @@ export const storage = {
     return rows.rows as (Payment & { orderFolio: string | null })[];
   },
 
-  async linkPaymentToOrders(paymentId: number, orderIds: number[]): Promise<void> {
+  async linkPaymentToOrders(paymentId: number, orderIds: number[], amounts?: Map<number, number>): Promise<void> {
     if (orderIds.length === 0) return;
     await db.insert(paymentOrderLinks)
-      .values(orderIds.map((oid) => ({ paymentId, orderId: oid })))
+      .values(orderIds.map((oid) => ({
+        paymentId,
+        orderId: oid,
+        amountApplied: amounts?.has(oid) ? amounts.get(oid)!.toFixed(2) : null,
+      })))
       .onConflictDoNothing();
   },
 
@@ -2691,12 +2695,15 @@ export const storage = {
         FROM customers WHERE id = ANY(ARRAY[${idArr}]::int[])
       `)),
       // Cada pago con los IDs de remitos a los que está vinculado (en orden de fecha)
+      // y el amount_applied exacto por link (cuando está disponible)
       db.execute(drizzleSql.raw(`
         SELECT
           p.id,
           p.amount::numeric AS amount,
           STRING_AGG(CAST(pol.order_id AS text), ',' ORDER BY o.order_date, o.id)
-            FILTER (WHERE pol.order_id IS NOT NULL) AS linked_ids
+            FILTER (WHERE pol.order_id IS NOT NULL) AS linked_ids,
+          STRING_AGG(COALESCE(pol.amount_applied::text, 'N'), ',' ORDER BY o.order_date, o.id)
+            FILTER (WHERE pol.order_id IS NOT NULL) AS amounts_applied
         FROM payments p
         LEFT JOIN payment_order_links pol ON pol.payment_id = p.id
         LEFT JOIN orders o ON o.id = pol.order_id
@@ -2754,23 +2761,41 @@ export const storage = {
     for (const p of paymentsLinksRows.rows as any[]) {
       const amount = Math.round(parseFloat(p.amount ?? "0"));
       const linkedIdsStr: string | null = p.linked_ids;
+      const amountsAppliedStr: string | null = p.amounts_applied;
 
       if (linkedIdsStr) {
-        // Pago con vínculos explícitos: distribuir a esos remitos (en orden de fecha)
         const linkedIds = linkedIdsStr.split(",").map(Number).filter((n) => !isNaN(n) && n > 0);
-        let remaining = amount;
-        for (const orderId of linkedIds) {
-          if (remaining <= 0) break;
-          const orderTotal = orderTotalMap.get(orderId) ?? 0;
-          const alreadyCovered = creditByOrder.get(orderId) ?? 0;
-          const toApply = Math.min(remaining, Math.max(0, orderTotal - alreadyCovered));
-          if (toApply > 0) {
-            creditByOrder.set(orderId, alreadyCovered + toApply);
-            remaining -= toApply;
+        const rawAmounts = amountsAppliedStr ? amountsAppliedStr.split(",") : [];
+        const allKnown = rawAmounts.length === linkedIds.length && rawAmounts.every((s) => s !== "N");
+
+        if (allKnown) {
+          // Pago con montos exactos por remito: usar valores almacenados
+          let totalApplied = 0;
+          for (let i = 0; i < linkedIds.length; i++) {
+            const orderId = linkedIds[i];
+            const exactAmount = Math.round(parseFloat(rawAmounts[i]));
+            if (!isNaN(exactAmount) && exactAmount > 0) {
+              creditByOrder.set(orderId, (creditByOrder.get(orderId) ?? 0) + exactAmount);
+              totalApplied += exactAmount;
+            }
           }
+          // Sobrante (si pago excedió los remitos vinculados) va al pool FIFO
+          unlinkedPool += Math.max(0, amount - totalApplied);
+        } else {
+          // Fallback (datos históricos sin amount_applied): distribuir secuencialmente
+          let remaining = amount;
+          for (const orderId of linkedIds) {
+            if (remaining <= 0) break;
+            const orderTotal = orderTotalMap.get(orderId) ?? 0;
+            const alreadyCovered = creditByOrder.get(orderId) ?? 0;
+            const toApply = Math.min(remaining, Math.max(0, orderTotal - alreadyCovered));
+            if (toApply > 0) {
+              creditByOrder.set(orderId, alreadyCovered + toApply);
+              remaining -= toApply;
+            }
+          }
+          unlinkedPool += remaining;
         }
-        // Sobrante del pago va al pool FIFO
-        unlinkedPool += remaining;
       } else {
         // Pago sin vínculo: va al pool FIFO
         unlinkedPool += amount;
@@ -2811,23 +2836,34 @@ export const storage = {
     return result;
   },
 
-  // Auto-aplicar pago a pedidos pendientes del más viejo al más nuevo
-  async autoApplyPaymentToOrders(paymentId: number, customerId: number, paymentAmount: number): Promise<void> {
-    const pending = await this.getPendingOrdersForCustomer(customerId);
+  // Auto-aplicar pago a pedidos pendientes del más viejo al más nuevo.
+  // Acepta snapshot previo para calcular montos exactos sin interferencia del nuevo pago.
+  async autoApplyPaymentToOrders(
+    paymentId: number,
+    customerId: number,
+    paymentAmount: number,
+    pendingSnapshot?: { id: number; total: string; paidAmount: string }[],
+  ): Promise<void> {
+    const pending = pendingSnapshot ?? await this.getPendingOrdersForCustomer(customerId);
     if (pending.length === 0) return;
 
     let remaining = paymentAmount;
     const toLink: number[] = [];
+    const amounts = new Map<number, number>();
 
     for (const order of pending) {
       if (remaining <= 0) break;
-      const orderRemaining = parseFloat(order.total) - parseFloat(order.paidAmount);
-      toLink.push(order.id);
-      remaining -= orderRemaining;
+      const orderRemaining = Math.max(0, parseFloat(order.total) - parseFloat(order.paidAmount));
+      const toApply = Math.min(remaining, orderRemaining);
+      if (toApply > 0) {
+        toLink.push(order.id);
+        amounts.set(order.id, toApply);
+        remaining -= toApply;
+      }
     }
 
     if (toLink.length > 0) {
-      await this.linkPaymentToOrders(paymentId, toLink);
+      await this.linkPaymentToOrders(paymentId, toLink, amounts);
     }
   },
 

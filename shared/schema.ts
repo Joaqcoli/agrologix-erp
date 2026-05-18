@@ -224,6 +224,7 @@ export const paymentOrderLinks = pgTable("payment_order_links", {
   id: serial("id").primaryKey(),
   paymentId: integer("payment_id").notNull().references(() => payments.id, { onDelete: "cascade" }),
   orderId: integer("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+  amountApplied: numeric("amount_applied"),
 });
 
 export const withholdings = pgTable("withholdings", {

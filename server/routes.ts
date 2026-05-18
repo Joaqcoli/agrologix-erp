@@ -862,12 +862,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const orderIds: number[] = Array.isArray(req.body.orderIds)
         ? (req.body.orderIds as unknown[]).map(Number).filter((n) => !isNaN(n))
         : [];
+
+      // Tomar snapshot del estado pendiente ANTES de crear el pago para calcular
+      // montos exactos por remito sin interferencia del nuevo pago en el pool FIFO.
+      const pendingSnapshot = await storage.getPendingOrdersForCustomer(data.customerId);
+
       const payment = await storage.createPayment(data, req.session.userId!);
+
       if (orderIds.length > 0) {
-        await storage.linkPaymentToOrders(payment.id, orderIds);
+        // Calcular cuánto de este pago se aplica a cada remito seleccionado
+        const pendingMap = new Map(
+          pendingSnapshot.map((o) => [o.id, Math.max(0, parseFloat(o.total) - parseFloat(o.paidAmount))]),
+        );
+        const pendingOrderMap = new Map(pendingSnapshot.map((o) => [o.id, o]));
+
+        // Ordenar seleccionados por fecha (más viejo primero)
+        const sortedIds = [...orderIds].sort((a, b) => {
+          const pA = pendingOrderMap.get(a);
+          const pB = pendingOrderMap.get(b);
+          if (!pA && !pB) return a - b;
+          if (!pA) return 1;
+          if (!pB) return -1;
+          if (pA.orderDate < pB.orderDate) return -1;
+          if (pA.orderDate > pB.orderDate) return 1;
+          return a - b;
+        });
+
+        let remaining = parseFloat(String(data.amount));
+        const amounts = new Map<number, number>();
+        for (const orderId of sortedIds) {
+          if (remaining <= 0) break;
+          const orderRem = pendingMap.get(orderId) ?? 0;
+          const toApply = Math.min(remaining, orderRem);
+          if (toApply > 0) {
+            amounts.set(orderId, toApply);
+            remaining -= toApply;
+          }
+        }
+
+        await storage.linkPaymentToOrders(payment.id, orderIds, amounts);
       } else {
         // Auto-aplicar: vincular al pedido más viejo primero hasta cubrir el monto
-        await storage.autoApplyPaymentToOrders(payment.id, data.customerId, parseFloat(String(data.amount)));
+        await storage.autoApplyPaymentToOrders(payment.id, data.customerId, parseFloat(String(data.amount)), pendingSnapshot);
       }
       return res.json(payment);
     } catch (e: any) {
