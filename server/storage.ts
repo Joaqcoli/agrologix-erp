@@ -421,10 +421,8 @@ export const storage = {
   },
 
   // ── Helper: obtener costo por unidad para un producto dado ──────────────────
-  // Siempre retorna el costo conocido (avgCost) independientemente del stock.
-  // El stock insuficiente se maneja en checkOrderStock + dialog de decisión.
-  // ignoreStock=true: activa los fallbacks adicionales (products.averageCost, último purchase)
-  // cuando avgCost=0 — útil para "rinde" de productos nunca comprados.
+  // ignoreStock=false (default): retorna "0" si no hay stock — el costo solo existe si hay mercadería
+  // ignoreStock=true: retorna el último costo conocido sin importar el stock (para rinde / display de dialog)
   async _getCostForUnit(productId: number, unit: string, tx: any = db, ignoreStock = false): Promise<string> {
     const canonical = dbEnumToCanonical(unit);
     const isPackageUnit = ['CAJON', 'BOLSA', 'BANDEJA'].includes(canonical);
@@ -436,7 +434,8 @@ export const storage = {
         .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, canonical)))
         .limit(1);
       if (exactPu && parseFloat(exactPu.avgCost as string) > 0) {
-        return exactPu.avgCost as string; // siempre retornar costo conocido
+        if (ignoreStock || parseFloat(exactPu.stockQty as string) > 0) return exactPu.avgCost as string;
+        return "0"; // hay costo histórico pero sin stock
       }
     }
 
@@ -451,18 +450,21 @@ export const storage = {
         ))
         .limit(1);
       if (baseRow && parseFloat(baseRow.avgCost as string) > 0) {
-        const [recentPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
-          .from(purchaseItems)
-          .where(and(
-            eq(purchaseItems.productId, productId),
-            eq(purchaseItems.purchaseUnit, canonical as any),
-          ))
-          .orderBy(desc(purchaseItems.id))
-          .limit(1);
-        const wpu = recentPi?.weightPerPackage
-          ? parseFloat(recentPi.weightPerPackage as string)
-          : parseFloat(baseRow.weightPerUnit as string ?? "0");
-        if (wpu > 0) return (parseFloat(baseRow.avgCost as string) * wpu).toFixed(4);
+        if (ignoreStock || parseFloat(baseRow.stockQty as string) > 0) {
+          const [recentPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
+            .from(purchaseItems)
+            .where(and(
+              eq(purchaseItems.productId, productId),
+              eq(purchaseItems.purchaseUnit, canonical as any),
+            ))
+            .orderBy(desc(purchaseItems.id))
+            .limit(1);
+          const wpu = recentPi?.weightPerPackage
+            ? parseFloat(recentPi.weightPerPackage as string)
+            : parseFloat(baseRow.weightPerUnit as string ?? "0");
+          if (wpu > 0) return (parseFloat(baseRow.avgCost as string) * wpu).toFixed(4);
+        }
+        return "0"; // base tiene costo pero sin stock
       }
     }
 
