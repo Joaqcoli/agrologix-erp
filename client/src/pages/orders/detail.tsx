@@ -1171,6 +1171,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   });
 
   const unpricedCount = calcs.filter((c) => !c.hasPrice && !c.isBonification).length;
+  const zeroCostItems = calcs.filter((c) => !c.isBonification && !c.bolsaType && c.item.productId != null && c.costPerUnit === 0);
   const hasAnyLowMargin = Array.isArray(calcs) && calcs.some((c) => c.isLowMargin);
   const grandTotal = calcs.reduce((s, c) => s + c.subtotal, 0);
   const grandTotalConIva = calcs.reduce((s, c) => s + c.totalConIva, 0);
@@ -1293,6 +1294,16 @@ export default function OrderDetailPage({ id }: { id: number }) {
         </div>
 
         {/* Alerts */}
+        {isDraft && zeroCostItems.length > 0 && (
+          <Alert className="border-amber-400/60 bg-amber-50 dark:bg-amber-950/20">
+            <AlertTriangle className="h-4 w-4 text-amber-600" />
+            <AlertDescription className="text-sm text-amber-800 dark:text-amber-300">
+              <strong>{zeroCostItems.map((c) => c.name).join(", ")}</strong>
+              {" "}no tiene{zeroCostItems.length > 1 ? "n" : ""} stock — costo $0.{" "}
+              El costo se actualizará automáticamente al cargar la compra.
+            </AlertDescription>
+          </Alert>
+        )}
         {isDraft && unpricedCount > 0 && (
           <Alert>
             <AlertTriangle className="h-4 w-4 text-yellow-600" />

@@ -377,12 +377,38 @@ export const storage = {
           previousCost,
           purchaseId: purchase.id,
         });
-        // Nota: los costos en pedidos borrador del mismo día se actualizan al aprobar
-        // via _getCostForUnit, no hace falta SYNC aquí (era fuente de transacciones lentas).
       }
 
       return purchase;
     });
+
+    // Después de confirmar la transacción: actualizar costPerUnit en pedidos borrador
+    // para los productos comprados (fuera de la tx para no enlentecerla).
+    const purchasedProductIds = data.items.map((i) => i.productId);
+    await this._syncDraftOrderItemCosts(purchasedProductIds).catch((err) => {
+      console.error("SYNC draft order costs failed (non-fatal):", err);
+    });
+
+    return purchase;
+  },
+
+  // Actualiza costPerUnit en order_items de pedidos borrador para los productos dados.
+  async _syncDraftOrderItemCosts(productIds: number[]): Promise<void> {
+    if (!productIds.length) return;
+    const draftItems = await db
+      .select({ id: orderItems.id, productId: orderItems.productId, unit: orderItems.unit })
+      .from(orderItems)
+      .innerJoin(orders, eq(orderItems.orderId, orders.id))
+      .where(and(
+        drizzleSql`${orders.status} = 'draft'`,
+        inArray(orderItems.productId, productIds),
+      ));
+    for (const item of draftItems) {
+      const freshCost = await this._getCostForUnit(item.productId, item.unit as string);
+      if (parseFloat(freshCost) > 0) {
+        await db.update(orderItems).set({ costPerUnit: freshCost }).where(eq(orderItems.id, item.id));
+      }
+    }
   },
 
   async generatePurchaseFolio(): Promise<string> {
@@ -395,20 +421,21 @@ export const storage = {
   },
 
   // ── Helper: obtener costo por unidad para un producto dado ──────────────────
-  // Prioridad: 1) fila exacta en product_units  2) derivado de unidad base × weight_per_unit  3) products.averageCost
-  // En todos los casos: solo retorna costo si hay stock > 0, sino retorna "0"
-  async _getCostForUnit(productId: number, unit: string, tx: any = db): Promise<string> {
+  // ignoreStock=false (default): retorna "0" si no hay stock — el costo solo existe si hay mercadería
+  // ignoreStock=true: retorna el último costo conocido sin importar el stock (para rinde / display de dialog)
+  async _getCostForUnit(productId: number, unit: string, tx: any = db, ignoreStock = false): Promise<string> {
     const canonical = dbEnumToCanonical(unit);
 
-    // 1) Coincidencia exacta en product_units — usa avgCost si > 0 (con o sin stock)
+    // 1) Coincidencia exacta en product_units
     const [exactPu] = await tx.select().from(productUnits)
       .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, canonical)))
       .limit(1);
-    if (exactPu && parseFloat(exactPu.avgCost as string) > 0) return exactPu.avgCost as string;
+    if (exactPu && parseFloat(exactPu.avgCost as string) > 0) {
+      if (ignoreStock || parseFloat(exactPu.stockQty as string) > 0) return exactPu.avgCost as string;
+      return "0"; // hay costo histórico pero sin stock
+    }
 
-    // 2) Si es unidad de envase, derivar de fila base × weight_per_package
-    // Usa el weight_per_package del purchase_item más reciente del mismo tipo de envase
-    // para distinguir correctamente CAJON (ej. 18 KG) de BANDEJA (ej. 0.5 KG) del mismo producto
+    // 2) Unidad de envase: derivar de fila base × weight_per_package
     if (['CAJON', 'BOLSA', 'BANDEJA'].includes(canonical)) {
       const [baseRow] = await tx.select().from(productUnits)
         .where(and(
@@ -417,33 +444,35 @@ export const storage = {
         ))
         .limit(1);
       if (baseRow && parseFloat(baseRow.avgCost as string) > 0) {
-        // Buscar el peso por envase específico para este tipo (CAJON vs BANDEJA vs BOLSA)
-        const [recentPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
-          .from(purchaseItems)
-          .where(and(
-            eq(purchaseItems.productId, productId),
-            eq(purchaseItems.purchaseUnit, canonical as any),
-          ))
-          .orderBy(desc(purchaseItems.id))
-          .limit(1);
-        const wpu = recentPi?.weightPerPackage
-          ? parseFloat(recentPi.weightPerPackage as string)
-          : parseFloat(baseRow.weightPerUnit as string ?? "0");
-        if (wpu > 0) return (parseFloat(baseRow.avgCost as string) * wpu).toFixed(4);
+        if (ignoreStock || parseFloat(baseRow.stockQty as string) > 0) {
+          const [recentPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
+            .from(purchaseItems)
+            .where(and(
+              eq(purchaseItems.productId, productId),
+              eq(purchaseItems.purchaseUnit, canonical as any),
+            ))
+            .orderBy(desc(purchaseItems.id))
+            .limit(1);
+          const wpu = recentPi?.weightPerPackage
+            ? parseFloat(recentPi.weightPerPackage as string)
+            : parseFloat(baseRow.weightPerUnit as string ?? "0");
+          if (wpu > 0) return (parseFloat(baseRow.avgCost as string) * wpu).toFixed(4);
+        }
+        return "0"; // base tiene costo pero sin stock
       }
     }
 
-    // 3) Fallback: averageCost del producto (independiente del stock)
-    const [p] = await tx.select().from(products).where(eq(products.id, productId)).limit(1);
-    if (p?.averageCost && parseFloat(p.averageCost as string) > 0) return p.averageCost as string;
-
-    // 4) Último recurso: costPerUnit de la última compra con ese producto
-    const [lastPi] = await tx.select({ costPerUnit: purchaseItems.costPerUnit })
-      .from(purchaseItems)
-      .where(eq(purchaseItems.productId, productId))
-      .orderBy(desc(purchaseItems.id))
-      .limit(1);
-    if (lastPi?.costPerUnit && parseFloat(lastPi.costPerUnit as string) > 0) return lastPi.costPerUnit as string;
+    // 3 & 4: solo cuando ignoreStock=true (ej. rinde de producto nunca comprado)
+    if (ignoreStock) {
+      const [p] = await tx.select().from(products).where(eq(products.id, productId)).limit(1);
+      if (p?.averageCost && parseFloat(p.averageCost as string) > 0) return p.averageCost as string;
+      const [lastPi] = await tx.select({ costPerUnit: purchaseItems.costPerUnit })
+        .from(purchaseItems)
+        .where(eq(purchaseItems.productId, productId))
+        .orderBy(desc(purchaseItems.id))
+        .limit(1);
+      if (lastPi?.costPerUnit && parseFloat(lastPi.costPerUnit as string) > 0) return lastPi.costPerUnit as string;
+    }
 
     return "0";
   },
@@ -1523,10 +1552,10 @@ export const storage = {
         const isOverflow = rawNewStock < 0;
         const finalStock = isOverflow ? 0 : rawNewStock;
 
-        // Re-fetch costo actual al momento de aprobación
+        // Re-fetch costo actual al momento de aprobación ($0 si no hay stock)
         const freshCostStr = await this._getCostForUnit(item.productId, oiCanonical, tx);
         const freshCost = parseFloat(freshCostStr);
-        const baseCostStr = freshCost > 0 ? freshCostStr : (item.costPerUnit as string ?? "0");
+        const baseCostStr = freshCostStr; // no fallback a item.costPerUnit histórico
 
         // ── Decisión del usuario para stock insuficiente ────────────────────────
         const decision = decisions?.[item.id];
@@ -1545,8 +1574,8 @@ export const storage = {
         let outQty: string;
 
         if (decision === "rinde") {
-          // Descontar solo lo disponible; el faltante se registra como Rinde
-          effectiveCostStr = baseCostStr;
+          // Para rinde: usar costo histórico aunque no haya stock (la mercadería "apareció")
+          effectiveCostStr = await this._getCostForUnit(item.productId, oiCanonical, tx, true);
           deductFromStock = Math.max(0, availableQtyBase);
           outQty = (deductFromStock).toFixed(4);
 
@@ -1557,7 +1586,7 @@ export const storage = {
               productId: item.productId,
               movementType: "in",
               quantity: excessQty.toFixed(4),
-              unitCost: baseCostStr,
+              unitCost: effectiveCostStr,
               referenceId: id,
               referenceType: "order",
               notes: `Rinde — Pedido ${order.folio}`,
@@ -2081,7 +2110,7 @@ export const storage = {
 
       if (stockQtyBase >= deductQtyBase) continue; // stock suficiente
 
-      const knownCostStr = await this._getCostForUnit(item.productId, oiCanonical);
+      const knownCostStr = await this._getCostForUnit(item.productId, oiCanonical, db, true);
       const knownCostBase = parseFloat(knownCostStr);
       const availableQtyDisplay = wpu > 0 ? stockQtyBase / wpu : stockQtyBase;
 
