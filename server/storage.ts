@@ -459,9 +459,21 @@ export const storage = {
             ))
             .orderBy(desc(purchaseItems.id))
             .limit(1);
-          const wpu = recentPi?.weightPerPackage
+          let wpu = recentPi?.weightPerPackage
             ? parseFloat(recentPi.weightPerPackage as string)
             : parseFloat(baseRow.weightPerUnit as string ?? "0");
+          // Fallback para datos viejos sin purchaseUnit: cualquier compra con weightPerPackage > 0
+          if (wpu === 0) {
+            const [anyPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
+              .from(purchaseItems)
+              .where(and(
+                eq(purchaseItems.productId, productId),
+                drizzleSql`${purchaseItems.weightPerPackage}::numeric > 0`,
+              ))
+              .orderBy(desc(purchaseItems.id))
+              .limit(1);
+            wpu = parseFloat(anyPi?.weightPerPackage as string ?? "0");
+          }
           if (wpu > 0) return (parseFloat(baseRow.avgCost as string) * wpu).toFixed(4);
         }
         return "0"; // base tiene costo pero sin stock
@@ -1561,9 +1573,20 @@ export const storage = {
               ))
               .orderBy(desc(purchaseItems.id))
               .limit(1);
-            const wpu = recentPi?.weightPerPackage
+            let wpu = recentPi?.weightPerPackage
               ? parseFloat(recentPi.weightPerPackage as string)
               : parseFloat(baseUnitPu.weightPerUnit as string ?? "0");
+            if (wpu === 0) {
+              const [anyPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
+                .from(purchaseItems)
+                .where(and(
+                  eq(purchaseItems.productId, item.productId as number),
+                  drizzleSql`${purchaseItems.weightPerPackage}::numeric > 0`,
+                ))
+                .orderBy(desc(purchaseItems.id))
+                .limit(1);
+              wpu = parseFloat(anyPi?.weightPerPackage as string ?? "0");
+            }
             deductQty = qty * (wpu > 0 ? wpu : 1);
           }
         } else {
@@ -2130,6 +2153,17 @@ export const storage = {
           wpu = recentPi?.weightPerPackage
             ? parseFloat(recentPi.weightPerPackage as string)
             : parseFloat(baseUnitPu.weightPerUnit as string ?? "0");
+          if (wpu === 0) {
+            const [anyPi] = await db.select({ weightPerPackage: purchaseItems.weightPerPackage })
+              .from(purchaseItems)
+              .where(and(
+                eq(purchaseItems.productId, item.productId as number),
+                drizzleSql`${purchaseItems.weightPerPackage}::numeric > 0`,
+              ))
+              .orderBy(desc(purchaseItems.id))
+              .limit(1);
+            wpu = parseFloat(anyPi?.weightPerPackage as string ?? "0");
+          }
           deductQtyBase = qty * (wpu > 0 ? wpu : 1);
         }
       } else {
@@ -2199,7 +2233,19 @@ export const storage = {
       .orderBy(desc(purchases.purchaseDate))
       .limit(1);
     const wpu = parseFloat(lastPi?.weightPerPackage as string ?? '0');
-    return wpu > 0 ? wpu : fallbackWpu;
+    if (wpu > 0) return wpu;
+    if (fallbackWpu > 0) return fallbackWpu;
+    // Fallback para datos viejos sin purchaseUnit: buscar cualquier compra con weightPerPackage > 0
+    const [anyPi] = await db
+      .select({ weightPerPackage: purchaseItems.weightPerPackage })
+      .from(purchaseItems)
+      .where(and(
+        eq(purchaseItems.productId, productId),
+        drizzleSql`${purchaseItems.weightPerPackage}::numeric > 0`,
+      ))
+      .orderBy(desc(purchaseItems.id))
+      .limit(1);
+    return parseFloat(anyPi?.weightPerPackage as string ?? '0');
   },
 
   async addStockAdjustments(items: { productId: number; unit: string; qty: number }[]): Promise<void> {

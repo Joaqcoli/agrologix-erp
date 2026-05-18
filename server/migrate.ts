@@ -471,5 +471,35 @@ export async function runMigrations() {
     WHERE unit IN ('CAJON','BOLSA','BANDEJA') AND base_unit IS NOT NULL
   `);
 
+  // Fix: para productos Huevos, la fila MAPLE siempre tiene weight_per_unit = 12 (1 CAJON = 12 MAPLES).
+  // Si weight_per_unit era 0 o null (ej. stock cargado via pase de stock en lugar de compra),
+  // el costo por CAJON resultaba $0 porque no podía resolver el wpu. Este UPDATE lo corrige.
+  await db.execute(sql`
+    UPDATE product_units pu
+    SET weight_per_unit = 12
+    FROM products p
+    WHERE pu.product_id = p.id
+      AND p.category = 'Huevos'
+      AND pu.unit = 'MAPLE'
+      AND (pu.weight_per_unit IS NULL OR pu.weight_per_unit = 0)
+  `);
+
+  // Backfill: propagar weight_per_unit a filas MAPLE de cualquier producto
+  // que tenga purchase_items con weightPerPackage > 0 pero sin weight_per_unit seteado.
+  // Cubre todos los casos (no solo Huevos) donde el wpu fue registrado en compras pero no en product_units.
+  await db.execute(sql`
+    UPDATE product_units pu
+    SET weight_per_unit = sub.wpu
+    FROM (
+      SELECT DISTINCT ON (pi.product_id) pi.product_id, pi.weight_per_package::numeric AS wpu
+      FROM purchase_items pi
+      WHERE pi.weight_per_package::numeric > 0
+      ORDER BY pi.product_id, pi.id DESC
+    ) sub
+    WHERE pu.product_id = sub.product_id
+      AND pu.unit NOT IN ('CAJON','BOLSA','BANDEJA')
+      AND (pu.weight_per_unit IS NULL OR pu.weight_per_unit = 0)
+  `);
+
   console.log("Migrations complete.");
 }
