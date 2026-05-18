@@ -1040,7 +1040,7 @@ export default function CCCustomerDetailPage({
   });
 
   const fmtDate = (d: string) => {
-    const dt = new Date(d.replace(/\s.+$/, ""));
+    const dt = new Date(d.slice(0, 10) + "T00:00:00");
     return dt.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
   };
 
