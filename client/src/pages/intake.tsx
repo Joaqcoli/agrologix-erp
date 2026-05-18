@@ -560,12 +560,20 @@ export default function IntakePage() {
                             ) : null
                           ) : (
                             <div className="flex flex-wrap items-center gap-3 mt-1.5">
-                              {line.quantity !== null && (
-                                <span className="text-xs font-semibold text-foreground">
-                                  {line.quantity} {unitOverrides[idx] ?? line.unit ?? "—"}
-                                </span>
-                              )}
-                              {line.status !== "no_qty" && (
+                              <Input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={qtyOverrides[idx] !== undefined ? qtyOverrides[idx] : (line.quantity !== null ? String(line.quantity) : "")}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  if (v !== "") setQtyOverrides({ ...qtyOverrides, [idx]: v });
+                                  else { const q = { ...qtyOverrides }; delete q[idx]; setQtyOverrides(q); }
+                                }}
+                                placeholder="Cant."
+                                className="h-6 w-20 text-xs"
+                              />
+                              {(
                                 <div className="w-full mt-1">
                                   <Select
                                     value={unitOverrides[idx] ?? line.unit ?? ""}
@@ -603,28 +611,20 @@ export default function IntakePage() {
                                 </div>
                               )}
 
-                              {/* Product display / picker */}
-                              {(effectiveStatus === "ok" || resolvedProductId || customNames[idx]) ? (
-                                <span className="text-xs text-foreground font-medium">
-                                  {customNames[idx] ?? resolvedProduct?.name ?? line.productName ?? line.rawProductName}
-                                </span>
-                              ) : null}
-
-                              {(line.status === "ambiguous" || line.status === "no_product") && (
-                                <FuzzyProductPicker
-                                  products={activeProducts}
-                                  initialQuery={line.rawProductName}
-                                  selectedId={resolvedProductId || null}
-                                  onSelect={(pid) => {
-                                    setOverrides({ ...overrides, [idx]: pid });
-                                    const n = { ...customNames }; delete n[idx]; setCustomNames(n);
-                                  }}
-                                  onCustom={(name) => {
-                                    setCustomNames({ ...customNames, [idx]: name });
-                                    const o = { ...overrides }; delete o[idx]; setOverrides(o);
-                                  }}
-                                />
-                              )}
+                              {/* Product — always editable */}
+                              <FuzzyProductPicker
+                                products={activeProducts}
+                                initialQuery={customNames[idx] ?? resolvedProduct?.name ?? line.rawProductName ?? ""}
+                                selectedId={resolvedProductId || null}
+                                onSelect={(pid) => {
+                                  setOverrides({ ...overrides, [idx]: pid });
+                                  const n = { ...customNames }; delete n[idx]; setCustomNames(n);
+                                }}
+                                onCustom={(name) => {
+                                  setCustomNames({ ...customNames, [idx]: name });
+                                  const o = { ...overrides }; delete o[idx]; setOverrides(o);
+                                }}
+                              />
                             </div>
                           )}
                         </div>
