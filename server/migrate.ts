@@ -463,5 +463,13 @@ export async function runMigrations() {
     WHERE is_active = false AND stock_qty > 0
   `);
 
+  // Bug: updatePurchase (y rutas antiguas) podían setear base_unit en rows de unidades de envase
+  // (CAJON/BOLSA/BANDEJA), haciendo que approveOrder los eligiera como fila base en lugar del row KG real.
+  // Este UPDATE limpia esos rows incorrectos. Solo afecta rows de envase que nunca deberían tener base_unit.
+  await db.execute(sql`
+    UPDATE product_units SET base_unit = NULL
+    WHERE unit IN ('CAJON','BOLSA','BANDEJA') AND base_unit IS NOT NULL
+  `);
+
   console.log("Migrations complete.");
 }

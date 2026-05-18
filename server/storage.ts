@@ -425,22 +425,28 @@ export const storage = {
   // ignoreStock=true: retorna el último costo conocido sin importar el stock (para rinde / display de dialog)
   async _getCostForUnit(productId: number, unit: string, tx: any = db, ignoreStock = false): Promise<string> {
     const canonical = dbEnumToCanonical(unit);
+    const isPackageUnit = ['CAJON', 'BOLSA', 'BANDEJA'].includes(canonical);
 
-    // 1) Coincidencia exacta en product_units
-    const [exactPu] = await tx.select().from(productUnits)
-      .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, canonical)))
-      .limit(1);
-    if (exactPu && parseFloat(exactPu.avgCost as string) > 0) {
-      if (ignoreStock || parseFloat(exactPu.stockQty as string) > 0) return exactPu.avgCost as string;
-      return "0"; // hay costo histórico pero sin stock
+    // 1) Coincidencia exacta — SOLO para unidades base (no CAJON/BOLSA/BANDEJA)
+    // Las unidades de envase siempre derivan del row base para evitar rows CAJON del modelo antiguo
+    if (!isPackageUnit) {
+      const [exactPu] = await tx.select().from(productUnits)
+        .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, canonical)))
+        .limit(1);
+      if (exactPu && parseFloat(exactPu.avgCost as string) > 0) {
+        if (ignoreStock || parseFloat(exactPu.stockQty as string) > 0) return exactPu.avgCost as string;
+        return "0"; // hay costo histórico pero sin stock
+      }
     }
 
     // 2) Unidad de envase: derivar de fila base × weight_per_package
-    if (['CAJON', 'BOLSA', 'BANDEJA'].includes(canonical)) {
+    // CRÍTICO: solo buscar filas base que NO sean unidades de envase (excluye rows CAJON mal marcados)
+    if (isPackageUnit) {
       const [baseRow] = await tx.select().from(productUnits)
         .where(and(
           eq(productUnits.productId, productId),
           drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+          drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
         ))
         .limit(1);
       if (baseRow && parseFloat(baseRow.avgCost as string) > 0) {
@@ -671,10 +677,11 @@ export const storage = {
             newWeightPerUnit = parseFloat(existingPU.weightPerUnit as string ?? "0");
           }
 
+          const isPackageCanonical = ['CAJON', 'BOLSA', 'BANDEJA'].includes(canonicalUnit);
           const puUpdate: Record<string, any> = {
             stockQty: (puStock + newQty).toFixed(4),
             avgCost: newPuAvgCost.toFixed(4),
-            baseUnit: canonicalUnit,
+            ...(!isPackageCanonical ? { baseUnit: canonicalUnit } : {}),
             isActive: true, // reactivar si fue desactivado desde la vista de stock
           };
           if (isPackagePurchase) puUpdate.weightPerUnit = newWeightPerUnit.toFixed(4);
@@ -682,12 +689,13 @@ export const storage = {
         } else {
           newPuAvgCost = newCost;
           newWeightPerUnit = weightPerPackage;
+          const isPackageCanonical = ['CAJON', 'BOLSA', 'BANDEJA'].includes(canonicalUnit);
           const insertData: Record<string, any> = {
             productId: item.productId,
             unit: canonicalUnit,
             avgCost: newCost.toFixed(4),
             stockQty: newQty.toFixed(4),
-            baseUnit: canonicalUnit,
+            ...(!isPackageCanonical ? { baseUnit: canonicalUnit } : {}),
             isActive: true,
           };
           if (weightPerPackage > 0) insertData.weightPerUnit = weightPerPackage.toFixed(4);
@@ -1021,10 +1029,12 @@ export const storage = {
           const qty = Number(item.quantity);
 
           // Buscar fila de unidad base (modelo nuevo primero, fallback modelo antiguo)
+          // Excluir CAJON/BOLSA/BANDEJA para evitar rows del modelo antiguo mal marcados
           const [baseUnitPu] = await tx.select().from(productUnits)
             .where(and(
               eq(productUnits.productId, item.productId),
               drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+              drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
             ))
             .limit(1);
 
@@ -1295,7 +1305,11 @@ export const storage = {
       if (isApproved && data.productId && !data.bolsaType) {
         const newCanonical = dbEnumToCanonical(data.unit);
         const [baseUnitPu] = await tx.select().from(productUnits)
-          .where(and(eq(productUnits.productId, data.productId), drizzleSql`${productUnits.baseUnit} IS NOT NULL`))
+          .where(and(
+            eq(productUnits.productId, data.productId),
+            drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+            drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
+          ))
           .limit(1);
         let deductQty = qty;
         let puToUpdate: typeof baseUnitPu | null = baseUnitPu ?? null;
@@ -1521,11 +1535,12 @@ export const storage = {
         if (!product) continue;
 
         // ── Buscar fila de unidad base (modelo nuevo) ──────────────────────────
-        // Preferir fila con base_unit IS NOT NULL (creada por nuevo modelo)
+        // Excluir CAJON/BOLSA/BANDEJA para evitar rows del modelo antiguo mal marcados
         const [baseUnitPu] = await tx.select().from(productUnits)
           .where(and(
             eq(productUnits.productId, item.productId),
             drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+            drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
           ))
           .limit(1);
 
@@ -2091,9 +2106,13 @@ export const storage = {
       const qty = parseFloat(item.quantity as string);
       const oiCanonical = dbEnumToCanonical(item.unit as string);
 
-      // Buscar fila base (modelo nuevo)
+      // Buscar fila base (modelo nuevo) — excluir CAJON/BOLSA/BANDEJA mal marcados
       const [baseUnitPu] = await db.select().from(productUnits)
-        .where(and(eq(productUnits.productId, item.productId), drizzleSql`${productUnits.baseUnit} IS NOT NULL`))
+        .where(and(
+          eq(productUnits.productId, item.productId),
+          drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+          drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
+        ))
         .limit(1);
 
       let deductQtyBase = qty;
