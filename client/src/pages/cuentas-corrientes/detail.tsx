@@ -251,7 +251,7 @@ type CCDetail = {
   subsidiaries?: SubsidiaryRow[];
 };
 
-type PendingOrder = { id: number; folio: string; remitoNum: number | null; total: string; paidAmount: string; orderDate: string };
+type PendingOrder = { id: number; folio: string; remitoNum: number | null; total: string; paidAmount: string; orderDate: string; invoiceNumber?: string | null };
 
 function formatRemito(order: { remitoNum?: number | null; folio?: string | null }): string {
   if (order.remitoNum != null) return `VA-${String(order.remitoNum).padStart(6, "0")}`;
@@ -288,8 +288,9 @@ async function generateCCPDF(opts: {
   orderRows: { fecha: string; remito: string; factura: string; monto: number }[];
   total: number;
   periodLabel: string;
+  hideFactura?: boolean;
 }): Promise<jsPDF> {
-  const { clientLabel, saldoAnterior, orderRows, total, periodLabel } = opts;
+  const { clientLabel, saldoAnterior, orderRows, total, periodLabel, hideFactura = false } = opts;
 
   // ── Colors ─────────────────────────────────────────────────────────────────
   const OLIVE:     [number, number, number] = [61,  95,  47];   // table header + separator
@@ -310,10 +311,11 @@ async function generateCCPDF(opts: {
   const todayFmt = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
 
   // ── Column positions ────────────────────────────────────────────────────────
-  // FECHA 20% | N° REMITO 27% | N° FACTURA 27% | MONTO 26%
-  const fechaW   = tblW * 0.20;   // 36mm
-  const remitoW  = tblW * 0.27;   // 48.6mm
-  const facturaW = tblW * 0.27;   // 48.6mm
+  // With factura:    FECHA 20% | N° REMITO 27% | N° FACTURA 27% | MONTO 26%
+  // Without factura: FECHA 20% | N° REMITO 54%                  | MONTO 26%
+  const fechaW   = tblW * 0.20;
+  const remitoW  = hideFactura ? tblW * 0.54 : tblW * 0.27;
+  const facturaW = hideFactura ? 0 : tblW * 0.27;
   const fechaX   = mx;
   const remitoX  = fechaX + fechaW;
   const facturaX = remitoX + remitoW;
@@ -407,7 +409,7 @@ async function generateCCPDF(opts: {
     doc.setFont("helvetica", "bold"); doc.setFontSize(9);
     doc.text("FECHA",      fechaX + fechaW / 2,     y + 9, { align: "center" });
     doc.text("N° REMITO",  remitoX + remitoW / 2,   y + 9, { align: "center" });
-    doc.text("N° FACTURA", facturaX + facturaW / 2, y + 9, { align: "center" });
+    if (!hideFactura) doc.text("N° FACTURA", facturaX + facturaW / 2, y + 9, { align: "center" });
     doc.text("MONTO",      montoX - 5,              y + 9, { align: "right" });
     y += TH;
   };
@@ -444,9 +446,11 @@ async function generateCCPDF(opts: {
     doc.setFont("helvetica", row.bold ? "bold" : "normal");
     doc.text(row.remito, remitoX + 4, y + 9);
 
-    // N° FACTURA — left padded, normal weight
-    doc.setFont("helvetica", "normal");
-    doc.text(row.factura, facturaX + 4, y + 9);
+    // N° FACTURA — left padded, normal weight (skip if hideFactura)
+    if (!hideFactura) {
+      doc.setFont("helvetica", "normal");
+      doc.text(row.factura, facturaX + 4, y + 9);
+    }
 
     // MONTO — right padded, bold
     doc.setFont("helvetica", "bold");
@@ -462,7 +466,8 @@ async function generateCCPDF(opts: {
   doc.line(mx, totalLineY, pageW - mx, totalLineY);
   doc.setTextColor(...BLACK);
   doc.setFont("helvetica", "bold"); doc.setFontSize(11);
-  doc.text("TOTAL:", facturaX + facturaW - 2, totalLineY + 11, { align: "right" });
+  const totalLabelX = hideFactura ? remitoX + remitoW - 2 : facturaX + facturaW - 2;
+  doc.text("TOTAL:", totalLabelX, totalLineY + 11, { align: "right" });
   doc.text(fmtM(Math.max(0, total)), montoX - 5, totalLineY + 11, { align: "right" });
 
   // ── Footer on last page ─────────────────────────────────────────────────────
@@ -490,6 +495,8 @@ function PaymentModal({
   const [method, setMethod] = useState<string>("EFECTIVO");
   const [notes, setNotes] = useState("");
   const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([]);
+  const [retentionAmount, setRetentionAmount] = useState("");
+  const [retentionType, setRetentionType] = useState("IIBB");
 
   const toggleOrder = (id: number) => {
     setSelectedOrderIds((prev) =>
@@ -505,16 +512,31 @@ function PaymentModal({
     .filter((o) => selectedOrderIds.includes(o.id))
     .reduce((s, o) => s + orderRemaining(o), 0);
 
+  const retAmt = parseFloat(retentionAmount || "0");
+  const combinedAmount = parseFloat(amount || "0") + (isNaN(retAmt) ? 0 : retAmt);
+  const coversSelected = selectedTotal > 0 && combinedAmount >= selectedTotal - 0.5;
+
   const mutation = useMutation({
-    mutationFn: () =>
-      apiRequest("POST", "/api/payments", {
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/payments", {
         customerId,
         date,
         amount,
         method,
         notes: notes || null,
         orderIds: selectedOrderIds,
-      }),
+      });
+      if (!isNaN(retAmt) && retAmt > 0) {
+        await apiRequest("POST", "/api/payments", {
+          customerId,
+          date,
+          amount: retentionAmount,
+          method: "RETENCION",
+          notes: retentionType,
+          orderIds: selectedOrderIds,
+        });
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ar/cc"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ar/cc/customer", customerId] });
@@ -522,6 +544,7 @@ function PaymentModal({
       queryClient.invalidateQueries({ queryKey: ["/api/ar/pending-orders", customerId] });
       toast({ title: "Pago registrado" });
       setAmount(""); setNotes(""); setMethod("EFECTIVO"); setSelectedOrderIds([]);
+      setRetentionAmount(""); setRetentionType("IIBB");
       onClose();
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -570,7 +593,7 @@ function PaymentModal({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {PAYMENT_METHODS.map((m) => (
+                {PAYMENT_METHODS.filter((m) => m !== "RETENCION").map((m) => (
                   <SelectItem key={m} value={m}>{m.replace(/_/g, " ")}</SelectItem>
                 ))}
               </SelectContent>
@@ -637,6 +660,48 @@ function PaymentModal({
               className="mt-1"
               data-testid="input-payment-notes"
             />
+          </div>
+
+          {/* ── Retención ── */}
+          <div className="rounded-md border border-blue-200 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-3 space-y-2">
+            <p className="text-xs font-semibold text-blue-700 dark:text-blue-400">Retención (opcional)</p>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs">Monto retención</Label>
+                <div className="flex items-center gap-1 mt-1">
+                  <span className="text-sm text-muted-foreground">$</span>
+                  <Input
+                    type="number"
+                    value={retentionAmount}
+                    onChange={(e) => setRetentionAmount(e.target.value)}
+                    placeholder="0"
+                    className="flex-1"
+                    data-testid="input-retention-amount"
+                  />
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs">Tipo</Label>
+                <Select value={retentionType} onValueChange={setRetentionType}>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {["IIBB", "GANANCIAS", "IVA", "SIRTAC", "OTRO"].map((t) => (
+                      <SelectItem key={t} value={t}>{t}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {!isNaN(retAmt) && retAmt > 0 && (
+              <p className="text-[10px] text-muted-foreground">
+                Pago <strong>${fmtInt(parseFloat(amount || "0"))}</strong> + Ret. <strong>${fmtInt(retAmt)}</strong> = <strong>${fmtInt(combinedAmount)}</strong>
+                {coversSelected && selectedTotal > 0 && (
+                  <span className="ml-1.5 text-green-600 font-medium">✓ Cubre el total seleccionado</span>
+                )}
+              </p>
+            )}
           </div>
         </div>
         <DialogFooter>
@@ -991,7 +1056,7 @@ export default function CCCustomerDetailPage({
       .map((o) => ({
         fecha: fmtD(o.orderDate),
         remito: formatRemito(o),
-        factura: "—",
+        factura: o.invoiceNumber ?? "—",   // cambio 2: usar invoiceNumber real
         monto: Math.round(parseFloat(o.total) - parseFloat(o.paidAmount ?? "0")),
         orderDate: o.orderDate,
       }));
@@ -1012,6 +1077,9 @@ export default function CCCustomerDetailPage({
       .sort((a, b) => a.orderDate.localeCompare(b.orderDate))
       .map(({ orderDate: _d, ...rest }) => rest); // quitar campo auxiliar
 
+    // cambio 3: ocultar columna N° FACTURA si ningún remito tiene factura asociada
+    const hasInvoices = allPendingRows.some((r) => r.factura && r.factura !== "—");
+
     const todayLabel = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
     const doc = await generateCCPDF({
       clientLabel: `Cliente: ${data.customer.name}`,
@@ -1019,6 +1087,7 @@ export default function CCCustomerDetailPage({
       orderRows: allPendingRows,
       total: Math.max(0, data.saldo),
       periodLabel: `Saldo al ${todayLabel}`,
+      hideFactura: !hasInvoices,
     });
     doc.save(`CC-${data.customer.name.replace(/\s+/g, "_")}-${todayLabel.replace(/\//g, "-")}.pdf`);
   };
@@ -1306,6 +1375,7 @@ export default function CCCustomerDetailPage({
                     <tr className="border-b border-border bg-muted/30">
                       <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Folio</th>
                       <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Fecha</th>
+                      <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Nro. Factura</th>
                       <th className="text-right py-1.5 px-3 font-semibold text-muted-foreground">Total</th>
                       <th className="text-right py-1.5 px-3 font-semibold text-muted-foreground">Pendiente</th>
                     </tr>
@@ -1321,6 +1391,7 @@ export default function CCCustomerDetailPage({
                         >
                           <td className="py-1.5 px-3 font-mono font-medium text-primary">{formatRemito(o)}</td>
                           <td className="py-1.5 px-3 text-muted-foreground">{fmtD(o.orderDate)}</td>
+                          <td className="py-1.5 px-3 text-muted-foreground">{o.invoiceNumber || <span className="italic text-border text-[10px]">—</span>}</td>
                           <td className="py-1.5 px-3 text-right">${fmtInt(parseFloat(o.total))}</td>
                           <td className="py-1.5 px-3 text-right font-semibold text-destructive">${fmtInt(remaining)}</td>
                         </tr>
@@ -1431,7 +1502,7 @@ export default function CCCustomerDetailPage({
                       <tr key={w.id} className="border-b border-border last:border-0" data-testid={`row-withholding-${w.id}`}>
                         <td className="py-1.5 px-3 text-muted-foreground">{w.date}</td>
                         <td className="py-1.5 px-3">
-                          <Badge variant="outline" className="text-[9px] py-0 text-blue-600 border-blue-200">{w.type}</Badge>
+                          <Badge variant="outline" className="text-[9px] py-0 text-blue-600 border-blue-200">{(w as any).notes || (w as any).type || "RET."}</Badge>
                         </td>
                         <td className="py-1.5 px-3 text-right font-semibold text-blue-600">${fmtInt(parseFloat(w.amount as string))}</td>
                         <td className="py-1.5 px-3">

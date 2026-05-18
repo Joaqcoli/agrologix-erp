@@ -205,7 +205,7 @@ export const remitos = pgTable("remitos", {
 
 // ─── Cuentas Corrientes ───────────────────────────────────────────────────────
 
-export const PAYMENT_METHODS = ["EFECTIVO", "TRANSFERENCIA", "CHEQUE", "CUENTA_CORRIENTE", "OTRO"] as const;
+export const PAYMENT_METHODS = ["EFECTIVO", "TRANSFERENCIA", "CHEQUE", "CUENTA_CORRIENTE", "OTRO", "RETENCION"] as const;
 export type PaymentMethod = typeof PAYMENT_METHODS[number];
 
 export const payments = pgTable("payments", {
