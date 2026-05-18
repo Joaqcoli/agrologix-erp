@@ -442,9 +442,9 @@ async function generateCCPDF(opts: {
     doc.setFont("helvetica", row.bold ? "bold" : "normal");
     doc.text(row.fecha, fechaX + fechaW / 2, y + 9, { align: "center" });
 
-    // N° REMITO — left padded
+    // N° REMITO — centrado en la columna
     doc.setFont("helvetica", row.bold ? "bold" : "normal");
-    doc.text(row.remito, remitoX + 4, y + 9);
+    doc.text(row.remito, remitoX + remitoW / 2, y + 9, { align: "center" });
 
     // N° FACTURA — left padded, normal weight (skip if hideFactura)
     if (!hideFactura) {
