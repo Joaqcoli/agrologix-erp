@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +13,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Package, Download, ClipboardList, Users, AlertTriangle, Layers, ChevronDown,
+  Package, Download, ClipboardList, Users, AlertTriangle, Layers, ChevronDown, HelpCircle,
 } from "lucide-react";
 
 type LoadListRow = {
@@ -26,6 +26,7 @@ type LoadListRow = {
   diffQty: number;
   customersCount: number;
   customerNames: string[];
+  allProductStock: Array<{ unit: string; qty: number }>;
 };
 
 const CATEGORY_ORDER = [
@@ -53,6 +54,8 @@ type LoadListData = {
   pending: PendingRow[];
 };
 
+type RowResolution = "ok" | "pending";
+
 function fmtQty(qty: number, unit: string) {
   const u = unit.toUpperCase();
   if (u === "KG") {
@@ -69,14 +72,30 @@ function fmtDiff(diff: number, unit: string) {
   return Math.round(diff).toString();
 }
 
+// Un faltante es "duda" si hay stock en OTRA unidad del mismo producto
+function isDudaRow(row: LoadListRow): boolean {
+  if (row.diffQty >= 0) return false;
+  return row.allProductStock.some((s) => s.unit !== row.unit);
+}
+
 export default function LoadListPage() {
   const d0 = new Date();
   const today = `${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,"0")}-${String(d0.getDate()).padStart(2,"0")}`;
   const [date, setDate] = useState(today);
   const [includeStock, setIncludeStock] = useState(false);
+  const [showOnlyShortages, setShowOnlyShortages] = useState(false);
   const [search, setSearch] = useState("");
   const [unitFilter, setUnitFilter] = useState("all");
   const [detailRow, setDetailRow] = useState<LoadListRow | null>(null);
+  const [dudaRow, setDudaRow] = useState<LoadListRow | null>(null);
+
+  // Resoluciones del usuario para filas "duda": key = "productId-unit"
+  const [resolvedRows, setResolvedRows] = useState<Map<string, RowResolution>>(new Map());
+
+  // Limpiar resoluciones cuando cambia la fecha o los datos
+  useEffect(() => {
+    setResolvedRows(new Map());
+  }, [date]);
 
   const { data, isLoading } = useQuery<LoadListData>({
     queryKey: ["/api/load-list", date],
@@ -91,6 +110,17 @@ export default function LoadListPage() {
     enabled: !!date,
   });
 
+  const rowKey = (row: LoadListRow) => `${row.productId}-${row.unit}`;
+
+  const getRowStatus = (row: LoadListRow): "ok" | "shortage" | "duda-unresolved" | "duda-ok" | "duda-pending" => {
+    if (row.diffQty >= 0) return "ok";
+    if (!isDudaRow(row)) return "shortage";
+    const res = resolvedRows.get(rowKey(row));
+    if (res === "ok") return "duda-ok";
+    if (res === "pending") return "duda-pending";
+    return "duda-unresolved";
+  };
+
   const allUnits = useMemo(() => {
     if (!data?.rows) return [];
     return Array.from(new Set(data.rows.map((r) => r.unit))).sort();
@@ -99,11 +129,16 @@ export default function LoadListPage() {
   const filteredRows = useMemo(() => {
     if (!data?.rows) return [];
     return data.rows.filter((r) => {
-      const matchesSearch = r.productName.toLowerCase().includes(search.toLowerCase());
-      const matchesUnit = unitFilter === "all" || r.unit === unitFilter;
-      return matchesSearch && matchesUnit;
+      if (!r.productName.toLowerCase().includes(search.toLowerCase())) return false;
+      if (unitFilter !== "all" && r.unit !== unitFilter) return false;
+      if (showOnlyShortages) {
+        const status = getRowStatus(r);
+        return status === "shortage" || status === "duda-unresolved" || status === "duda-pending";
+      }
+      return true;
     });
-  }, [data, search, unitFilter]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, search, unitFilter, showOnlyShortages, resolvedRows]);
 
   const handleExport = () => {
     window.open(
@@ -115,6 +150,15 @@ export default function LoadListPage() {
   const formattedDate = date
     ? new Date(date + "T12:00:00").toLocaleDateString("es-AR", { day: "2-digit", month: "long", year: "numeric" })
     : "";
+
+  const resolveRow = (row: LoadListRow, resolution: RowResolution) => {
+    setResolvedRows((prev) => {
+      const next = new Map(prev);
+      next.set(rowKey(row), resolution);
+      return next;
+    });
+    setDudaRow(null);
+  };
 
   return (
     <Layout title="Lista de Carga">
@@ -154,6 +198,17 @@ export default function LoadListPage() {
             />
             <Label htmlFor="toggle-stock" className="cursor-pointer text-sm">
               Incluir Stock
+            </Label>
+          </div>
+          <div className="flex items-center gap-2 pb-0.5">
+            <Switch
+              id="toggle-shortages"
+              checked={showOnlyShortages}
+              onCheckedChange={setShowOnlyShortages}
+              data-testid="toggle-show-only-shortages"
+            />
+            <Label htmlFor="toggle-shortages" className="cursor-pointer text-sm">
+              Solo faltantes
             </Label>
           </div>
         </div>
@@ -282,6 +337,13 @@ export default function LoadListPage() {
               </p>
             </CardContent>
           </Card>
+        ) : filteredRows.length === 0 ? (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-10 gap-2">
+              <p className="text-sm font-medium text-foreground">Sin faltantes</p>
+              <p className="text-sm text-muted-foreground">Todos los productos tienen stock suficiente.</p>
+            </CardContent>
+          </Card>
         ) : (
           <Card>
             <CardHeader className="pb-3">
@@ -311,7 +373,6 @@ export default function LoadListPage() {
                   </thead>
                   <tbody>
                     {(() => {
-                      // Group filtered rows by category preserving backend sort order
                       const grouped: Record<string, LoadListRow[]> = {};
                       for (const row of filteredRows) {
                         const cat = row.category || "Sin categoría";
@@ -332,16 +393,37 @@ export default function LoadListPage() {
                           </tr>
                           {grouped[cat].map((row) => {
                             globalIdx++;
-                            const isShortage = row.diffQty < 0;
+                            const status = getRowStatus(row);
+                            const isShortage = status === "shortage" || status === "duda-pending";
+                            const isDuda = status === "duda-unresolved";
+                            const isDudaOk = status === "duda-ok";
+
+                            const rowBg = isDuda
+                              ? "bg-yellow-50 dark:bg-yellow-950/20 hover:bg-yellow-100 dark:hover:bg-yellow-950/30"
+                              : isDudaOk
+                              ? ""
+                              : includeStock && isShortage
+                              ? "bg-red-50 dark:bg-red-950/20"
+                              : "";
+
                             return (
                               <tr
                                 key={`${row.productId}-${row.unit}`}
-                                className={`border-b border-border last:border-0 hover:bg-muted/20 transition-colors cursor-pointer ${includeStock && isShortage ? "bg-red-50 dark:bg-red-950/20" : ""}`}
-                                onClick={() => setDetailRow(row)}
+                                className={`border-b border-border last:border-0 transition-colors cursor-pointer ${rowBg} ${!isDuda && !isDudaOk && !isShortage ? "hover:bg-muted/20" : ""}`}
+                                onClick={() => {
+                                  if (isDuda || isDudaOk || status === "duda-pending") {
+                                    setDudaRow(row);
+                                  } else {
+                                    setDetailRow(row);
+                                  }
+                                }}
                                 data-testid={`load-row-${row.productId}-${row.unit}`}
                               >
                                 <td className="py-3 px-4 text-muted-foreground text-xs">{globalIdx}</td>
-                                <td className="py-3 px-3 font-medium text-foreground">{row.productName}</td>
+                                <td className="py-3 px-3 font-medium text-foreground flex items-center gap-1.5">
+                                  {isDuda && <HelpCircle className="h-3.5 w-3.5 text-yellow-500 shrink-0" />}
+                                  {row.productName}
+                                </td>
                                 <td className="py-3 px-3">
                                   <Badge variant="outline" className="text-[10px] font-mono">{row.unit}</Badge>
                                 </td>
@@ -355,7 +437,13 @@ export default function LoadListPage() {
                                 )}
                                 {includeStock && (
                                   <td className="py-3 px-3 text-right font-bold">
-                                    {isShortage ? (
+                                    {isDudaOk ? (
+                                      <span className="text-green-600 dark:text-green-400 text-xs font-medium">OK</span>
+                                    ) : isDuda ? (
+                                      <span className="text-yellow-600 dark:text-yellow-400 text-xs font-semibold flex items-center justify-end gap-1">
+                                        <HelpCircle className="h-3 w-3" /> DUDA
+                                      </span>
+                                    ) : isShortage ? (
                                       <span className="text-destructive">
                                         {fmtDiff(Math.abs(row.diffQty), row.unit)} <span className="text-[10px] font-normal">A COMPRAR</span>
                                       </span>
@@ -367,7 +455,14 @@ export default function LoadListPage() {
                                 <td className="py-3 px-4 text-center">
                                   <button
                                     className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                                    onClick={(e) => { e.stopPropagation(); setDetailRow(row); }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (isDuda || isDudaOk || status === "duda-pending") {
+                                        setDudaRow(row);
+                                      } else {
+                                        setDetailRow(row);
+                                      }
+                                    }}
                                     data-testid={`button-detail-${row.productId}-${row.unit}`}
                                   >
                                     <Users className="h-3.5 w-3.5" />
@@ -389,7 +484,7 @@ export default function LoadListPage() {
         )}
       </div>
 
-      {/* Detail dialog */}
+      {/* Detail dialog (filas normales) */}
       <Dialog open={!!detailRow} onOpenChange={(open) => !open && setDetailRow(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
@@ -423,6 +518,80 @@ export default function LoadListPage() {
                   {detailRow.customerNames.map((name, i) => (
                     <li key={i} className="flex items-center gap-2 text-sm text-foreground">
                       <span className="h-1.5 w-1.5 rounded-full bg-primary flex-shrink-0" />
+                      {name}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Duda dialog */}
+      <Dialog open={!!dudaRow} onOpenChange={(open) => !open && setDudaRow(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base flex items-center gap-2">
+              <HelpCircle className="h-4 w-4 text-yellow-500" />
+              Stock en otra unidad — {dudaRow?.productName}
+            </DialogTitle>
+          </DialogHeader>
+          {dudaRow && (
+            <div className="space-y-4 text-sm">
+              <p className="text-muted-foreground">
+                Se piden <strong>{fmtQty(dudaRow.totalQty, dudaRow.unit)} {dudaRow.unit}</strong>, pero el stock
+                disponible en esa unidad es <strong>{fmtQty(dudaRow.stockQty, dudaRow.unit)}</strong>.
+              </p>
+
+              {/* Stock disponible del producto en otras unidades */}
+              <div className="rounded-md border bg-muted/30 p-3 space-y-1.5">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                  Stock disponible de este producto
+                </p>
+                {dudaRow.allProductStock.length === 0 ? (
+                  <p className="text-xs text-muted-foreground italic">Sin stock registrado</p>
+                ) : (
+                  dudaRow.allProductStock.map((s) => (
+                    <div key={s.unit} className="flex items-center justify-between">
+                      <span className="text-xs">
+                        <Badge variant="outline" className="text-[10px] font-mono mr-1.5">{s.unit}</Badge>
+                      </span>
+                      <span className="font-semibold">{s.qty % 1 === 0 ? s.qty.toFixed(0) : s.qty.toFixed(2)}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                ¿Cómo querés manejar este producto?
+              </p>
+
+              <div className="grid grid-cols-1 gap-2">
+                <Button
+                  className="w-full bg-green-600 hover:bg-green-700 text-white"
+                  onClick={() => resolveRow(dudaRow, "ok")}
+                >
+                  Completamos con stock existente
+                </Button>
+                <Button
+                  variant="outline"
+                  className="w-full border-destructive text-destructive hover:bg-destructive/10"
+                  onClick={() => resolveRow(dudaRow, "pending")}
+                >
+                  Marcar como pendiente de compra
+                </Button>
+              </div>
+
+              {/* Clientes */}
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                  Clientes que lo piden
+                </p>
+                <ul className="space-y-0.5">
+                  {dudaRow.customerNames.map((name, i) => (
+                    <li key={i} className="flex items-center gap-2 text-sm">
+                      <span className="h-1.5 w-1.5 rounded-full bg-yellow-500 flex-shrink-0" />
                       {name}
                     </li>
                   ))}

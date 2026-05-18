@@ -1793,7 +1793,7 @@ export const storage = {
   // ─── Load List ─────────────────────────────────────────────────────────────
   async getLoadListByDate(date: string, includeDrafts: boolean): Promise<{
     summary: { date: string; ordersCount: number; customersCount: number; rowsCount: number; shortagesCount: number };
-    rows: Array<{ productId: number; productName: string; unit: string; totalQty: number; stockQty: number; diffQty: number; customersCount: number; customerNames: string[] }>;
+    rows: Array<{ productId: number; productName: string; unit: string; totalQty: number; stockQty: number; diffQty: number; customersCount: number; customerNames: string[]; allProductStock: Array<{ unit: string; qty: number }> }>;
     pending: Array<{ orderId: number; orderFolio: string; customerName: string; rawText: string; qty: number | null; unit: string | null }>;
   }> {
     const statusFilter = includeDrafts
@@ -1910,8 +1910,19 @@ export const storage = {
       return stockMap.get(`${pid}-${canonUnit}`) ?? 0;
     };
 
+    // Stock de todas las unidades por producto (para detectar "duda" en el frontend)
+    const productAllStock = new Map<number, Array<{ unit: string; qty: number }>>();
+    for (const pu of allPU) {
+      const qty = parseFloat(pu.stockQty as string ?? "0");
+      if (qty > 0) {
+        const canonUnit = dbEnumToCanonical(pu.unit as string);
+        if (!productAllStock.has(pu.productId)) productAllStock.set(pu.productId, []);
+        productAllStock.get(pu.productId)!.push({ unit: canonUnit, qty });
+      }
+    }
+
     // Consolidate by productId + unit
-    type Row = { productId: number; productName: string; category: string; unit: string; totalQty: number; stockQty: number; diffQty: number; customerSet: Set<number>; customerNames: string[] };
+    type Row = { productId: number; productName: string; category: string; unit: string; totalQty: number; stockQty: number; diffQty: number; customerSet: Set<number>; customerNames: string[]; allProductStock: Array<{ unit: string; qty: number }> };
     const rowMap = new Map<string, Row>();
     for (const item of resolvedItems) {
       const pid = item.productId as number;
@@ -1931,6 +1942,7 @@ export const storage = {
           diffQty: stock - qty,
           customerSet: new Set(cid !== undefined ? [cid] : []),
           customerNames: [],
+          allProductStock: productAllStock.get(pid) ?? [],
         });
       } else {
         const row = rowMap.get(key)!;
@@ -1955,6 +1967,7 @@ export const storage = {
       diffQty: r.diffQty,
       customersCount: r.customerSet.size,
       customerNames: Array.from(r.customerSet).map((id) => customerMap.get(id) ?? "?"),
+      allProductStock: r.allProductStock,
     }));
 
     rows.sort((a, b) => {
