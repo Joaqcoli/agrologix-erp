@@ -1040,14 +1040,14 @@ export const storage = {
           const oiCanonical = dbEnumToCanonical(item.unit as string);
           const qty = Number(item.quantity);
 
-          // Buscar fila de unidad base (modelo nuevo primero, fallback modelo antiguo)
-          // Excluir CAJON/BOLSA/BANDEJA para evitar rows del modelo antiguo mal marcados
+          // Buscar fila de unidad base (modelo nuevo) — preferir la que coincide con la unidad del item
           const [baseUnitPu] = await tx.select().from(productUnits)
             .where(and(
               eq(productUnits.productId, item.productId),
               drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
               drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
             ))
+            .orderBy(drizzleSql`CASE WHEN ${productUnits.unit} = ${oiCanonical} THEN 0 ELSE 1 END`)
             .limit(1);
 
           let restoreQty = qty;
@@ -1129,7 +1129,12 @@ export const storage = {
         const oldQty = Number(item.quantity);
 
         const [oldBaseUnitPu] = await tx.select().from(productUnits)
-          .where(and(eq(productUnits.productId, item.productId), drizzleSql`${productUnits.baseUnit} IS NOT NULL`))
+          .where(and(
+            eq(productUnits.productId, item.productId),
+            drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+            drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
+          ))
+          .orderBy(drizzleSql`CASE WHEN ${productUnits.unit} = ${oldCanonical} THEN 0 ELSE 1 END`)
           .limit(1);
 
         let restoreQty = oldQty;
@@ -1322,6 +1327,7 @@ export const storage = {
             drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
             drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
           ))
+          .orderBy(drizzleSql`CASE WHEN ${productUnits.unit} = ${newCanonical} THEN 0 ELSE 1 END`)
           .limit(1);
         let deductQty = qty;
         let puToUpdate: typeof baseUnitPu | null = baseUnitPu ?? null;
@@ -1364,7 +1370,12 @@ export const storage = {
         const oldCanonical = dbEnumToCanonical(item.unit as string);
         const oldQty = Number(item.quantity);
         const [oldBaseUnitPu] = await tx.select().from(productUnits)
-          .where(and(eq(productUnits.productId, item.productId), drizzleSql`${productUnits.baseUnit} IS NOT NULL`))
+          .where(and(
+            eq(productUnits.productId, item.productId),
+            drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+            drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
+          ))
+          .orderBy(drizzleSql`CASE WHEN ${productUnits.unit} = ${oldCanonical} THEN 0 ELSE 1 END`)
           .limit(1);
         let restoreQty = oldQty;
         let puToRestore: typeof oldBaseUnitPu | null = oldBaseUnitPu ?? null;
@@ -1547,13 +1558,16 @@ export const storage = {
         if (!product) continue;
 
         // ── Buscar fila de unidad base (modelo nuevo) ──────────────────────────
-        // Excluir CAJON/BOLSA/BANDEJA para evitar rows del modelo antiguo mal marcados
+        // Preferir la fila cuya unit coincide con la unidad del item (ej. KG si el pedido es KG).
+        // Fallback: cualquier fila base no-envase (para CAJON → necesita conversión wpu).
+        // Esto evita que productos con múltiples filas base (KG + UNIDAD) elijan la incorrecta.
         const [baseUnitPu] = await tx.select().from(productUnits)
           .where(and(
             eq(productUnits.productId, item.productId),
             drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
             drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
           ))
+          .orderBy(drizzleSql`CASE WHEN ${productUnits.unit} = ${oiCanonical} THEN 0 ELSE 1 END`)
           .limit(1);
 
         // Determinar cantidad a descontar en unidad base
@@ -2129,13 +2143,14 @@ export const storage = {
       const qty = parseFloat(item.quantity as string);
       const oiCanonical = dbEnumToCanonical(item.unit as string);
 
-      // Buscar fila base (modelo nuevo) — excluir CAJON/BOLSA/BANDEJA mal marcados
+      // Buscar fila base (modelo nuevo) — preferir la que coincide con la unidad del item
       const [baseUnitPu] = await db.select().from(productUnits)
         .where(and(
           eq(productUnits.productId, item.productId),
           drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
           drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
         ))
+        .orderBy(drizzleSql`CASE WHEN ${productUnits.unit} = ${oiCanonical} THEN 0 ELSE 1 END`)
         .limit(1);
 
       let deductQtyBase = qty;
