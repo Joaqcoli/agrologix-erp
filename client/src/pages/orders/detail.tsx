@@ -307,7 +307,7 @@ function ItemRow({
           )}
           {!calc.item.product && !isEditing && <Badge variant="outline" className="text-[9px] py-0">Sin producto</Badge>}
           {calc.isLowMargin && <Badge variant="destructive" className="text-[9px] py-0 px-1">Margen bajo</Badge>}
-          {calc.bolsaType && (
+          {(calc.bolsaType === "bolsa" || calc.bolsaType === "bolsa_propia") && (
             <Badge variant="outline" className="text-[9px] py-0 px-1 text-green-600 border-green-300">
               {calc.bolsaType === "bolsa_propia" ? "Bolsa propia" : "Bolsa"}
             </Badge>
@@ -759,20 +759,22 @@ export default function OrderDetailPage({ id }: { id: number }) {
     onError: (e: any) => toast({ title: "Error al aprobar", description: e.message, variant: "destructive" }),
   });
 
-  const doApproveWithStockCheck = async () => {
+  const doApproveWithStockCheck = async (initialDecisions: Record<number, ApprovalDecision> = {}) => {
     if (isApproving || approveMutation.isPending) return; // prevenir doble-click
     setIsApproving(true);
     try {
       const res = await fetch(`/api/orders/${id}/stock-check`, { credentials: "include" });
       if (!res.ok) throw new Error();
       const issues: StockIssue[] = await res.json();
-      if (issues.length === 0) {
-        approveMutation.mutate({});
+      // Filtrar ítems que ya tienen decisión (ej. vinieron del zero-cost dialog)
+      const remaining = issues.filter((issue) => !initialDecisions[issue.itemId]);
+      if (remaining.length === 0) {
+        approveMutation.mutate({ decisions: Object.keys(initialDecisions).length ? initialDecisions : undefined });
         return;
       }
-      setStockIssueState({ queue: issues, decisions: {} });
+      setStockIssueState({ queue: remaining, decisions: initialDecisions });
     } catch {
-      approveMutation.mutate({});
+      approveMutation.mutate({ decisions: Object.keys(initialDecisions).length ? initialDecisions : undefined });
     } finally {
       setIsApproving(false);
     }
@@ -917,9 +919,11 @@ export default function OrderDetailPage({ id }: { id: number }) {
     const newSinStockIds = affectStock ? zeroCostState.sinStockIds : [...zeroCostState.sinStockIds, current.itemId];
     if (remaining.length === 0) {
       setZeroCostState(null);
-      Promise.all(
-        newSinStockIds.map((itemId) => apiRequest("PATCH", `/api/orders/${id}/items/${itemId}`, { bolsaType: "sin_stock" }))
-      ).then(() => void doApproveWithStockCheck()).catch(() => void doApproveWithStockCheck());
+      // "No descontar stock" → pasar como decision "zero" en lugar de bolsaType: "sin_stock"
+      const zeroDecisions = Object.fromEntries(
+        newSinStockIds.map((itemId) => [itemId, "zero" as ApprovalDecision])
+      );
+      void doApproveWithStockCheck(zeroDecisions);
     } else {
       setZeroCostState({ queue: remaining, sinStockIds: newSinStockIds });
     }

@@ -1594,7 +1594,7 @@ export const storage = {
       for (const item of order.items) {
         if (!item.productId) continue;
         // Bolsa FV items: no stock deduction, cost stays 0
-        if ((item as any).bolsaType) continue;
+        if (['bolsa', 'bolsa_propia'].includes((item as any).bolsaType)) continue;
 
         const qty = parseFloat(item.quantity as string);
         const oiCanonical = dbEnumToCanonical(item.unit as string);
@@ -2264,7 +2264,7 @@ export const storage = {
 
     for (const item of order.items) {
       if (!item.productId) continue;
-      if ((item as any).bolsaType) continue;
+      if (['bolsa', 'bolsa_propia'].includes((item as any).bolsaType)) continue;
 
       const qty = parseFloat(item.quantity as string);
       const oiCanonical = dbEnumToCanonical(item.unit as string);
