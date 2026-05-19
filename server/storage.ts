@@ -2240,14 +2240,18 @@ export const storage = {
       const qty = parseFloat(item.quantity as string);
       const oiCanonical = dbEnumToCanonical(item.unit as string);
 
-      // Buscar fila base (modelo nuevo) — preferir la que coincide con la unidad del item
+      // Buscar fila base (modelo nuevo) — preferir la que coincide con la unidad del item,
+      // luego la que tiene más stock real (evita que KG/MAPLE con stock=0 oculte UNIDAD con stock)
       const [baseUnitPu] = await db.select().from(productUnits)
         .where(and(
           eq(productUnits.productId, item.productId),
           drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
           drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
         ))
-        .orderBy(drizzleSql`CASE WHEN ${productUnits.unit} = ${oiCanonical} THEN 0 ELSE 1 END`)
+        .orderBy(
+          drizzleSql`CASE WHEN ${productUnits.unit} = ${oiCanonical} THEN 0 ELSE 1 END`,
+          drizzleSql`${productUnits.stockQty}::numeric DESC`,
+        )
         .limit(1);
 
       let deductQtyBase = qty;
@@ -2276,6 +2280,8 @@ export const storage = {
               .limit(1);
             wpu = parseFloat(anyPi?.weightPerPackage as string ?? "0");
           }
+          // Huevos: 1 CAJON = 12 MAPLES siempre (constante universal)
+          if (wpu === 0 && baseUnitPu.unit === "MAPLE") wpu = 12;
           deductQtyBase = qty * (wpu > 0 ? wpu : 1);
         }
       } else {
