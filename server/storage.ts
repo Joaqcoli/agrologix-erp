@@ -449,6 +449,7 @@ export const storage = {
 
     // 2) Unidad de envase: derivar de fila base × weight_per_package
     // CRÍTICO: solo buscar filas base que NO sean unidades de envase (excluye rows CAJON mal marcados)
+    // Ordenar por stockQty DESC para preferir filas con stock real sobre filas históricas vacías
     if (isPackageUnit) {
       const [baseRow] = await tx.select().from(productUnits)
         .where(and(
@@ -456,6 +457,7 @@ export const storage = {
           drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
           drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
         ))
+        .orderBy(drizzleSql`${productUnits.stockQty}::numeric DESC, ${productUnits.avgCost}::numeric DESC`)
         .limit(1);
       if (baseRow && parseFloat(baseRow.avgCost as string) > 0) {
         if (ignoreStock || parseFloat(baseRow.stockQty as string) > 0) {
@@ -1585,7 +1587,10 @@ export const storage = {
             drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
             drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
           ))
-          .orderBy(drizzleSql`CASE WHEN ${productUnits.unit} = ${oiCanonical} THEN 0 ELSE 1 END`)
+          .orderBy(
+            drizzleSql`CASE WHEN ${productUnits.unit} = ${oiCanonical} THEN 0 ELSE 1 END`,
+            drizzleSql`${productUnits.stockQty}::numeric DESC`,
+          )
           .limit(1);
 
         // Determinar cantidad a descontar en unidad base
@@ -1619,6 +1624,8 @@ export const storage = {
                 .limit(1);
               wpu = parseFloat(anyPi?.weightPerPackage as string ?? "0");
             }
+            // Huevos: 1 CAJON = 12 MAPLES siempre (constante universal)
+            if (wpu === 0 && baseUnitPu.unit === "MAPLE") wpu = 12;
             deductQty = qty * (wpu > 0 ? wpu : 1);
           }
         } else {
