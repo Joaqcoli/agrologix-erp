@@ -494,10 +494,10 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
   const KG_X    = ML + PROD_W + PRICE_W;
 
   // Row heights
-  const CAT_H  = 8;   // category title row
-  const SUBH_H = 7;   // column sub-header row
-  const ROW_H  = 6;   // product row
-  const CAT_GAP = 5;  // gap between category blocks
+  const CAT_H   = 8;   // category title row
+  const COL_H   = 7;   // column header row
+  const ROW_H   = 6;   // product row
+  const CAT_GAP = 8;   // gap between categories on same page
 
   // Footer
   const FT_GRAY_H  = 12;
@@ -509,13 +509,12 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
   const TABLE_Y1 = 76;  // page 1 (below logo)
   const TABLE_YN = 12;  // pages 2+
 
-  // Colors
-  const C_CAT:    [number, number, number] = [68,  68,  68 ];  // dark gray — category row bg
-  const C_SUBH:   [number, number, number] = [145, 145, 145];  // medium gray — sub-header bg
+  // Colors — single dark charcoal for BOTH header rows
+  const C_HDR:    [number, number, number] = [45,  45,  45 ];
   const C_WHITE:  [number, number, number] = [255, 255, 255];
   const C_TEXT:   [number, number, number] = [40,  40,  40 ];
-  const C_BORDER: [number, number, number] = [170, 170, 170];  // outer block border
-  const C_ROWSEP: [number, number, number] = [210, 210, 210];  // row bottom divider
+  const C_BORDER: [number, number, number] = [170, 170, 170];
+  const C_ROWSEP: [number, number, number] = [210, 210, 210];
 
   // Argentine price format: $ 15.000 / — for zero
   const fmtPrice = (v: string) => {
@@ -524,7 +523,15 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
     return `$ ${n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")}`;
   };
 
-  // Footer — same as remito
+  // Filter: skip products where BOTH prices are 0 or empty
+  const filterItems = (list: PriceListPdfItem[]) =>
+    list.filter((i) => {
+      const c = Math.round(parseFloat(i.pricePerCajon) || 0);
+      const k = Math.round(parseFloat(i.pricePerKg) || 0);
+      return c !== 0 || k !== 0;
+    });
+
+  // Footer
   const drawFooter = () => {
     doc.setFillColor(224, 224, 224);
     doc.rect(0, FT_Y, PW, FT_GRAY_H, "F");
@@ -542,20 +549,21 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
     doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(34, 34, 34);
-    doc.text("11-7123-2459",                       c1, FT_Y + 10);
-    doc.text("vegetalesargentinos.srl@gmail.com",  c2, FT_Y + 10);
-    doc.text("www.vegetalesargentinos.com",         c3, FT_Y + 10);
+    doc.text("11-7123-2459",                      c1, FT_Y + 10);
+    doc.text("vegetalesargentinos.srl@gmail.com", c2, FT_Y + 10);
+    doc.text("www.vegetalesargentinos.com",        c3, FT_Y + 10);
 
     doc.setFontSize(7.5);
     doc.setTextColor(...C_WHITE);
-    doc.text("CUIT : 30-71855184-2", PW - MR, FT_Y + FT_GRAY_H + 3,   { align: "right" });
-    doc.text("VTINOS SRL",           PW - MR, FT_Y + FT_GRAY_H + 6.5, { align: "right" });
+    doc.text("CUIT: 30-71855184-2",      PW - MR, FT_Y + FT_GRAY_H + 3,   { align: "right" });
+    doc.text("VEGETALES ARGENTINOS SRL", PW - MR, FT_Y + FT_GRAY_H + 6.5, { align: "right" });
   };
 
-  // Draw category title row + column sub-header row, returns new y
+  // Draw category title row + column header row (both same charcoal color).
+  // Returns new y after both rows.
   const drawCatHeaders = (y: number, catName: string): number => {
-    // Category title: dark gray, white bold centered
-    doc.setFillColor(...C_CAT);
+    // Category title: full-width, centered, no column separators
+    doc.setFillColor(...C_HDR);
     doc.rect(ML, y, CW, CAT_H, "F");
     doc.setTextColor(...C_WHITE);
     doc.setFont("helvetica", "bold");
@@ -563,32 +571,33 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
     doc.text(catName.toUpperCase(), ML + CW / 2, y + CAT_H / 2 + 2.5, { align: "center" });
     y += CAT_H;
 
-    // Sub-header: medium gray, white bold-italic, 3 columns
-    doc.setFillColor(...C_SUBH);
-    doc.rect(ML, y, CW, SUBH_H, "F");
+    // Column header: same charcoal, white bold, 3 columns
+    doc.setFillColor(...C_HDR);
+    doc.rect(ML, y, CW, COL_H, "F");
     doc.setTextColor(...C_WHITE);
-    doc.setFont("helvetica", "bolditalic");
+    doc.setFont("helvetica", "bold");
     doc.setFontSize(8);
-    const ty = y + SUBH_H / 2 + 2.5;
-    doc.text("Producto",       PROD_X  + 3,            ty);
-    doc.text("Precio x Cajón", CAJON_X + PRICE_W - 3,  ty, { align: "right" });
-    doc.text("Precio x Kg/U",  KG_X    + PRICE_W - 3,  ty, { align: "right" });
-    y += SUBH_H;
+    const ty = y + COL_H / 2 + 2.5;
+    doc.text("Producto",       PROD_X  + 3,           ty);
+    doc.text("Precio x Cajón", CAJON_X + PRICE_W - 3, ty, { align: "right" });
+    doc.text("Precio x Kg/U",  KG_X    + PRICE_W - 3, ty, { align: "right" });
+    y += COL_H;
 
     return y;
   };
 
-  // Draw outer border + vertical column separators for a finished block segment
-  const drawBlockFrame = (startY: number, endY: number) => {
+  // Draw outer border + vertical column separators.
+  // catTitleEndY = where the category title row ends, so separators start below it.
+  const drawBlockFrame = (startY: number, catTitleEndY: number, endY: number) => {
     doc.setDrawColor(...C_BORDER);
     doc.setLineWidth(0.25);
     doc.rect(ML, startY, CW, endY - startY, "S");
     doc.setLineWidth(0.15);
-    doc.line(CAJON_X, startY, CAJON_X, endY);
-    doc.line(KG_X,    startY, KG_X,    endY);
+    doc.line(CAJON_X, catTitleEndY, CAJON_X, endY);
+    doc.line(KG_X,    catTitleEndY, KG_X,    endY);
   };
 
-  // Group items by category in display order
+  // Group items by category
   const CAT_ORDER = ["Verdura", "Fruta", "Hortaliza Liviana", "Hortaliza Pesada", "Hongos/Hierbas", "Huevos"];
   const grouped = new Map<string, PriceListPdfItem[]>();
   for (const c of CAT_ORDER) grouped.set(c, []);
@@ -596,7 +605,55 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
     if (!grouped.has(item.category)) grouped.set(item.category, []);
     grouped.get(item.category)!.push(item);
   }
-  for (const [k, v] of grouped) { if (v.length === 0) grouped.delete(k); }
+
+  // Fixed page groups
+  const PAGE_GROUPS: string[][] = [
+    ["Verdura"],
+    ["Fruta"],
+    ["Hortaliza Liviana", "Hortaliza Pesada"],
+    ["Hongos/Hierbas", "Huevos"],
+  ];
+
+  // Render one category block at y, handling overflow within the category
+  const renderCategory = (cat: string, y: number): number => {
+    const catItems = filterItems(grouped.get(cat) ?? []);
+    if (catItems.length === 0) return y;
+
+    let blockStartY = y;
+    y = drawCatHeaders(y, cat);
+    let catTitleEndY = blockStartY + CAT_H;
+
+    for (const item of catItems) {
+      if (y + ROW_H > MAX_Y) {
+        drawBlockFrame(blockStartY, catTitleEndY, y);
+        doc.addPage();
+        drawFooter();
+        y = TABLE_YN;
+        blockStartY = y;
+        y = drawCatHeaders(y, cat);
+        catTitleEndY = blockStartY + CAT_H;
+      }
+
+      doc.setFillColor(...C_WHITE);
+      doc.rect(ML, y, CW, ROW_H, "F");
+      doc.setDrawColor(...C_ROWSEP);
+      doc.setLineWidth(0.1);
+      doc.line(ML, y + ROW_H, ML + CW, y + ROW_H);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(...C_TEXT);
+      const ry = y + ROW_H - 2;
+      doc.text(doc.splitTextToSize(item.productName, PROD_W - 5)[0], PROD_X + 3, ry);
+      doc.text(fmtPrice(item.pricePerCajon), CAJON_X + PRICE_W - 3, ry, { align: "right" });
+      doc.text(fmtPrice(item.pricePerKg),    KG_X    + PRICE_W - 3, ry, { align: "right" });
+
+      y += ROW_H;
+    }
+
+    drawBlockFrame(blockStartY, catTitleEndY, y);
+    return y;
+  };
 
   // ── Page 1: Logo (left) + LISTA DE PRECIOS (right) ────────────────────────
   if (logoDataUrl) {
@@ -621,52 +678,24 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
 
   drawFooter();
 
-  // ── Render categories ──────────────────────────────────────────────────────
-  let y = TABLE_Y1;
+  // ── Render page groups ─────────────────────────────────────────────────────
+  let isFirstPage = true;
+  for (const pageGroup of PAGE_GROUPS) {
+    const hasItems = pageGroup.some((cat) => filterItems(grouped.get(cat) ?? []).length > 0);
+    if (!hasItems) continue;
 
-  for (const [cat, catItems] of grouped) {
-    // Need room for at least header rows + 1 data row
-    if (y + CAT_H + SUBH_H + ROW_H > MAX_Y) {
+    if (!isFirstPage) {
       doc.addPage();
       drawFooter();
-      y = TABLE_YN;
     }
 
-    let blockStartY = y;
-    y = drawCatHeaders(y, cat);
+    let y = isFirstPage ? TABLE_Y1 : TABLE_YN;
+    isFirstPage = false;
 
-    for (const item of catItems) {
-      if (y + ROW_H > MAX_Y) {
-        // Close block on this page, continue on next
-        drawBlockFrame(blockStartY, y);
-        doc.addPage();
-        drawFooter();
-        y = TABLE_YN;
-        blockStartY = y;
-        y = drawCatHeaders(y, cat);
-      }
-
-      // Product row — white bg, light bottom separator
-      doc.setFillColor(...C_WHITE);
-      doc.rect(ML, y, CW, ROW_H, "F");
-      doc.setDrawColor(...C_ROWSEP);
-      doc.setLineWidth(0.1);
-      doc.line(ML, y + ROW_H, ML + CW, y + ROW_H);
-
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(8);
-      doc.setTextColor(...C_TEXT);
-      const ry = y + ROW_H - 2;
-      doc.text(doc.splitTextToSize(item.productName, PROD_W - 5)[0], PROD_X + 3, ry);
-      doc.text(fmtPrice(item.pricePerCajon), CAJON_X + PRICE_W - 3, ry, { align: "right" });
-      doc.text(fmtPrice(item.pricePerKg),    KG_X    + PRICE_W - 3, ry, { align: "right" });
-
-      y += ROW_H;
+    for (let gi = 0; gi < pageGroup.length; gi++) {
+      if (gi > 0) y += CAT_GAP;
+      y = renderCategory(pageGroup[gi], y);
     }
-
-    // Close block border + column lines
-    drawBlockFrame(blockStartY, y);
-    y += CAT_GAP;
   }
 
   doc.save(`ListaPrecios-${dateLabel.replace(/\//g, "-")}.pdf`);
