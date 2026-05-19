@@ -544,24 +544,46 @@ export default function LoadListPage() {
                 disponible en esa unidad es <strong>{fmtQty(dudaRow.stockQty, dudaRow.unit)}</strong>.
               </p>
 
-              {/* Stock disponible del producto en otras unidades */}
-              <div className="rounded-md border bg-muted/30 p-3 space-y-1.5">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-                  Stock disponible de este producto
-                </p>
-                {dudaRow.allProductStock.length === 0 ? (
-                  <p className="text-xs text-muted-foreground italic">Sin stock registrado</p>
-                ) : (
-                  dudaRow.allProductStock.map((s) => (
-                    <div key={s.unit} className="flex items-center justify-between">
-                      <span className="text-xs">
-                        <Badge variant="outline" className="text-[10px] font-mono mr-1.5">{s.unit}</Badge>
-                      </span>
-                      <span className="font-semibold">{s.qty % 1 === 0 ? s.qty.toFixed(0) : s.qty.toFixed(2)}</span>
-                    </div>
-                  ))
-                )}
-              </div>
+              {/* Stock sobrante del producto (stock - pedidos ya asignados en la misma unidad) */}
+              {(() => {
+                // Para cada unidad con stock, calcular cuánto queda libre
+                // después de restar los pedidos del día en esa misma unidad
+                const netStock = dudaRow.allProductStock
+                  .map((s) => {
+                    const sameUnitRow = data?.rows.find(
+                      (r) => r.productId === dudaRow.productId && r.unit === s.unit,
+                    );
+                    // Si hay pedidos en esa unidad, lo libre = max(0, diffQty de esa fila)
+                    const free = sameUnitRow
+                      ? Math.max(0, sameUnitRow.diffQty)
+                      : s.qty;
+                    return { unit: s.unit, free, total: s.qty };
+                  })
+                  .filter((s) => s.free > 0 || s.total > 0);
+
+                return (
+                  <div className="rounded-md border bg-muted/30 p-3 space-y-1.5">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                      Stock libre (sin pedidos asignados)
+                    </p>
+                    {netStock.length === 0 ? (
+                      <p className="text-xs text-muted-foreground italic">Sin stock libre</p>
+                    ) : (
+                      netStock.map((s) => (
+                        <div key={s.unit} className="flex items-center justify-between">
+                          <Badge variant="outline" className="text-[10px] font-mono">{s.unit}</Badge>
+                          <span className="font-semibold">
+                            {s.free % 1 === 0 ? s.free.toFixed(0) : s.free.toFixed(2)}
+                            <span className="text-xs font-normal text-muted-foreground ml-1">
+                              de {s.total % 1 === 0 ? s.total.toFixed(0) : s.total.toFixed(2)} total
+                            </span>
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                );
+              })()}
 
               <p className="text-xs text-muted-foreground">
                 ¿Cómo querés manejar este producto?
