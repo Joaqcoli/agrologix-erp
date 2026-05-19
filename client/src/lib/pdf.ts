@@ -497,7 +497,7 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
   const CAT_H   = 8;   // category title row
   const COL_H   = 7;   // column header row
   const ROW_H   = 6;   // product row
-  const CAT_GAP = 8;   // gap between categories on same page
+  const CAT_GAP = 5;   // gap between categories on same page
 
   // Footer
   const FT_GRAY_H  = 12;
@@ -509,8 +509,9 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
   const TABLE_Y1 = 76;  // page 1 (below logo)
   const TABLE_YN = 12;  // pages 2+
 
-  // Colors — single dark charcoal for BOTH header rows
-  const C_HDR:    [number, number, number] = [45,  45,  45 ];
+  // Colors
+  const C_CAT:    [number, number, number] = [68,  68,  68 ];  // dark gray — category title
+  const C_SUBH:   [number, number, number] = [145, 145, 145];  // medium gray — column header
   const C_WHITE:  [number, number, number] = [255, 255, 255];
   const C_TEXT:   [number, number, number] = [40,  40,  40 ];
   const C_BORDER: [number, number, number] = [170, 170, 170];
@@ -559,11 +560,10 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
     doc.text("VEGETALES ARGENTINOS SRL", PW - MR, FT_Y + FT_GRAY_H + 6.5, { align: "right" });
   };
 
-  // Draw category title row + column header row (both same charcoal color).
-  // Returns new y after both rows.
+  // Draw category title row + column header row. Returns new y after both rows.
   const drawCatHeaders = (y: number, catName: string): number => {
-    // Category title: full-width, centered, no column separators
-    doc.setFillColor(...C_HDR);
+    // Category title: dark gray, white bold centered, full-width (no column separators)
+    doc.setFillColor(...C_CAT);
     doc.rect(ML, y, CW, CAT_H, "F");
     doc.setTextColor(...C_WHITE);
     doc.setFont("helvetica", "bold");
@@ -571,11 +571,11 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
     doc.text(catName.toUpperCase(), ML + CW / 2, y + CAT_H / 2 + 2.5, { align: "center" });
     y += CAT_H;
 
-    // Column header: same charcoal, white bold, 3 columns
-    doc.setFillColor(...C_HDR);
+    // Column header: medium gray, white bold-italic, 3 columns
+    doc.setFillColor(...C_SUBH);
     doc.rect(ML, y, CW, COL_H, "F");
     doc.setTextColor(...C_WHITE);
-    doc.setFont("helvetica", "bold");
+    doc.setFont("helvetica", "bolditalic");
     doc.setFontSize(8);
     const ty = y + COL_H / 2 + 2.5;
     doc.text("Producto",       PROD_X  + 3,           ty);
