@@ -510,8 +510,8 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
   const TABLE_YN = 12;  // pages 2+
 
   // Colors
-  const C_CAT:    [number, number, number] = [68,  68,  68 ];  // dark gray — category title row
-  const C_SUBH:   [number, number, number] = [145, 145, 145];  // medium gray — column header row
+  const C_CAT:    [number, number, number] = [68,  68,  68 ];  // dark gray — category title
+  const C_SUBH:   [number, number, number] = [145, 145, 145];  // medium gray — column header
   const C_WHITE:  [number, number, number] = [255, 255, 255];
   const C_TEXT:   [number, number, number] = [40,  40,  40 ];
   const C_BORDER: [number, number, number] = [170, 170, 170];
