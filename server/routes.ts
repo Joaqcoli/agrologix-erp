@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import { storage } from "./storage";
 import { db } from "./db";
 import { sql as drizzleSql } from "drizzle-orm";
-import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema, insertPaymentSchema, insertWithholdingSchema, insertSupplierSchema, insertSupplierPaymentSchema } from "@shared/schema";
+import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema, insertPaymentSchema, insertWithholdingSchema, insertSupplierSchema, insertSupplierPaymentSchema, insertPriceListItemSchema } from "@shared/schema";
 import { z } from "zod";
 import { canonicalizeUnit } from "@shared/units";
 import { getHistoricalMonthStats } from "./historical-stats";
@@ -1216,6 +1216,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ORDER BY name
       `);
       return res.json(rows.rows);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Lista de Precios ──────────────────────────────────────────────────────
+  app.get("/api/price-list", requireAuth, async (_req, res) => {
+    try { return res.json(await storage.getPriceList()); }
+    catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/price-list", requireAuth, async (req, res) => {
+    try {
+      const data = insertPriceListItemSchema.parse(req.body);
+      return res.status(201).json(await storage.createPriceListItem(data));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.patch("/api/price-list/:id", requireAuth, async (req, res) => {
+    try {
+      const data = insertPriceListItemSchema.partial().parse(req.body);
+      return res.json(await storage.updatePriceListItem(Number(req.params.id), data));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.delete("/api/price-list/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deletePriceListItem(Number(req.params.id));
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/price-list/reorder", requireAuth, async (req, res) => {
+    try {
+      const { ids } = req.body as { ids: number[] };
+      await storage.reorderPriceListItems(ids);
+      return res.json({ ok: true });
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 

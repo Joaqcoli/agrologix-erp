@@ -504,5 +504,19 @@ export async function runMigrations() {
       AND (pu.weight_per_unit IS NULL OR pu.weight_per_unit = 0)
   `);
 
+  // ─── Lista de Precios ────────────────────────────────────────────────────────
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS price_list_items (
+      id          SERIAL PRIMARY KEY,
+      category    TEXT NOT NULL,
+      product_name TEXT NOT NULL,
+      unit        TEXT NOT NULL DEFAULT 'KG',
+      price       NUMERIC(12,2) NOT NULL DEFAULT 0,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      active      BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at  TIMESTAMP NOT NULL DEFAULT now()
+    )
+  `);
+
   console.log("Migrations complete.");
 }

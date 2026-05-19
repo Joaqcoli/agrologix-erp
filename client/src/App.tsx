@@ -40,6 +40,7 @@ import CuentasCorrientesPage from "@/pages/cuentas-corrientes/index";
 import CCCustomerDetailPage from "@/pages/cuentas-corrientes/detail";
 import SuppliersPage from "@/pages/suppliers/index";
 import SupplierCCPage from "@/pages/suppliers/cc";
+import PriceListPage from "@/pages/price-list";
 import VendedorDashboard from "@/pages/vendedor/dashboard";
 import VendedorOrders from "@/pages/vendedor/orders";
 import VendedorOrderDetail from "@/pages/vendedor/order-detail";
@@ -97,6 +98,7 @@ function Router() {
           return <SupplierCCPage supplierId={Number(params.id)} month={month} year={year} />;
         }}
       </Route>
+      <Route path="/price-list" component={PriceListPage} />
       <Route path="/vendedor/dashboard" component={VendedorDashboard} />
       <Route path="/vendedor/orders" component={VendedorOrders} />
       <Route path="/vendedor/orders/:id">

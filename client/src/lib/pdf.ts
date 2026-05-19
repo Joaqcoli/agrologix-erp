@@ -469,6 +469,190 @@ export function generateBolsaFvPDF(rows: BolsaFvRow[], grandTotal: number, from:
   doc.save(`BolsaFV-${from}-${to}.pdf`);
 }
 
+// ── Lista de Precios PDF ─────────────────────────────────────────────────────
+
+export type PriceListPdfItem = {
+  category: string;
+  productName: string;
+  unit: string;
+  price: string;
+};
+
+export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel: string) {
+  const logoDataUrl = await loadLogoAsJpeg();
+
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const PW = 210;
+  const ML = 14;
+  const MR = 14;
+  const CW = PW - ML - MR;
+
+  // Colors matching remito
+  const C_HDR:    [number, number, number] = [45, 80, 22];   // dark green
+  const C_CAT:    [number, number, number] = [220, 235, 210]; // light green tint
+  const C_ALT:    [number, number, number] = [245, 245, 245];
+  const C_WHITE:  [number, number, number] = [255, 255, 255];
+  const C_TEXT:   [number, number, number] = [51, 51, 51];
+  const C_SEP:    [number, number, number] = [170, 170, 170];
+  const C_ROW_SEP:[number, number, number] = [210, 210, 210];
+  const C_CAT_TXT:[number, number, number] = [34, 68, 10];
+
+  const fmtMoney = (v: string) => {
+    const n = parseFloat(v);
+    return `$${n.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  // Column layout: Producto | Unidad | Precio
+  const COL = {
+    prodX: ML,       prodW: CW - 40 - 32,
+    unitX: ML + CW - 40 - 32, unitW: 40,
+    priceX: ML + CW - 32, priceW: 32,
+  };
+
+  const ROW_H = 7;
+  const TH_H  = 8;
+  const CAT_H = 8;
+  const FOOTER_H = 20;
+  const FOOTER_Y = 297 - FOOTER_H;
+
+  const drawPageHeader = () => {
+    if (logoDataUrl) {
+      try { doc.addImage(logoDataUrl, "JPEG", ML, 5, 57, 32); } catch { /**/ }
+    } else {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(16);
+      doc.setTextColor(...C_TEXT);
+      doc.text("vegetales argentinos.", ML, 22);
+    }
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.setTextColor(...C_HDR);
+    doc.text("LISTA DE PRECIOS", PW - MR, 18, { align: "right" });
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(...C_TEXT);
+    doc.text(dateLabel, PW - MR, 26, { align: "right" });
+
+    doc.setDrawColor(...C_SEP);
+    doc.setLineWidth(0.4);
+    doc.line(ML, 40, PW - MR, 40);
+    doc.setLineWidth(0.2);
+  };
+
+  const drawFooter = () => {
+    const C_FT_GRAY:  [number, number, number] = [224, 224, 224];
+    const C_FT_GREEN: [number, number, number] = [45, 80, 22];
+    const C_FT_LBL:   [number, number, number] = [102, 102, 102];
+    const C_FT_VAL:   [number, number, number] = [34, 34, 34];
+
+    doc.setFillColor(...C_FT_GRAY);
+    doc.rect(0, FOOTER_Y, PW, 12, "F");
+    doc.setFillColor(...C_FT_GREEN);
+    doc.rect(0, FOOTER_Y + 12, PW, 8, "F");
+
+    const c1 = ML, c2 = ML + CW * 0.34, c3 = ML + CW * 0.66;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(...C_FT_LBL);
+    doc.text("WhatsApp", c1, FOOTER_Y + 4.5);
+    doc.text("Email",    c2, FOOTER_Y + 4.5);
+    doc.text("Website",  c3, FOOTER_Y + 4.5);
+
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...C_FT_VAL);
+    doc.text("11-7123-2459",                       c1, FOOTER_Y + 10);
+    doc.text("vegetalesargentinos.srl@gmail.com",  c2, FOOTER_Y + 10);
+    doc.text("www.vegetalesargentinos.com",         c3, FOOTER_Y + 10);
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.5);
+    doc.setTextColor(...C_WHITE);
+    doc.text("CUIT : 30-71855184-2",     PW - MR, FOOTER_Y + 12 + 3,   { align: "right" });
+    doc.text("VEGETALES ARGENTINOS SRL", PW - MR, FOOTER_Y + 12 + 6.5, { align: "right" });
+  };
+
+  const drawTableHeader = (y: number) => {
+    doc.setFillColor(...C_HDR);
+    doc.rect(ML, y, CW, TH_H, "F");
+    doc.setTextColor(...C_WHITE);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.5);
+    const ty = y + TH_H / 2 + 2.5;
+    doc.text("PRODUCTO", COL.prodX + 3, ty);
+    doc.text("UNIDAD", COL.unitX + COL.unitW / 2, ty, { align: "center" });
+    doc.text("PRECIO", COL.priceX + COL.priceW - 2, ty, { align: "right" });
+  };
+
+  // Group by category preserving insertion order
+  const grouped = new Map<string, PriceListPdfItem[]>();
+  for (const item of items) {
+    if (!grouped.has(item.category)) grouped.set(item.category, []);
+    grouped.get(item.category)!.push(item);
+  }
+
+  drawPageHeader();
+  drawFooter();
+  drawTableHeader(44);
+  let y = 44 + TH_H;
+  let rowIndex = 0;
+
+  for (const [cat, catItems] of grouped) {
+    // Check if category header fits
+    if (y + CAT_H > FOOTER_Y - 10) {
+      doc.addPage();
+      drawPageHeader();
+      drawFooter();
+      drawTableHeader(44);
+      y = 44 + TH_H;
+      rowIndex = 0;
+    }
+
+    // Category header row
+    doc.setFillColor(...C_CAT);
+    doc.rect(ML, y, CW, CAT_H, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    doc.setTextColor(...C_CAT_TXT);
+    doc.text(cat.toUpperCase(), ML + 3, y + CAT_H / 2 + 2.5);
+    y += CAT_H;
+
+    for (const item of catItems) {
+      if (y + ROW_H > FOOTER_Y - 4) {
+        doc.addPage();
+        drawPageHeader();
+        drawFooter();
+        drawTableHeader(44);
+        y = 44 + TH_H;
+        rowIndex = 0;
+      }
+
+      if (rowIndex % 2 === 1) {
+        doc.setFillColor(...C_ALT);
+        doc.rect(ML, y, CW, ROW_H, "F");
+      }
+
+      doc.setDrawColor(...C_ROW_SEP);
+      doc.setLineWidth(0.1);
+      doc.line(ML, y + ROW_H, ML + CW, y + ROW_H);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(...C_TEXT);
+      const ty = y + ROW_H - 2;
+      doc.text(doc.splitTextToSize(item.productName, COL.prodW - 4)[0], COL.prodX + 2, ty);
+      doc.text(item.unit.toUpperCase(), COL.unitX + COL.unitW / 2, ty, { align: "center" });
+      doc.text(fmtMoney(item.price), COL.priceX + COL.priceW - 2, ty, { align: "right" });
+
+      y += ROW_H;
+      rowIndex++;
+    }
+  }
+
+  doc.save(`ListaPrecios-${dateLabel.replace(/\//g, "-")}.pdf`);
+}
+
 export type ComisionRow = {
   orderDate: string;
   customerName: string;

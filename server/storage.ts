@@ -3,12 +3,13 @@ import {
   users, customers, products, purchases, purchaseItems,
   stockMovements, productCostHistory, orders, orderItems,
   priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks,
-  suppliers, supplierPayments, clientGroups, clientGroupMembers,
+  suppliers, supplierPayments, clientGroups, clientGroupMembers, priceListItems,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
   type Payment, type Withholding, type InsertPayment, type InsertWithholding,
   type Supplier, type SupplierPayment, type InsertSupplier, type InsertSupplierPayment,
+  type PriceListItem, type InsertPriceListItem,
 } from "@shared/schema";
 import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
@@ -4005,5 +4006,32 @@ export const storage = {
       totalVentas: rows.reduce((sum, r) => sum + r.total, 0),
       totalComision: rows.reduce((sum, r) => sum + r.commissionAmount, 0),
     };
+  },
+
+  // ─── Lista de Precios ──────────────────────────────────────────────────────
+  async getPriceList(): Promise<PriceListItem[]> {
+    return db.select().from(priceListItems)
+      .where(eq(priceListItems.active, true))
+      .orderBy(asc(priceListItems.category), asc(priceListItems.sortOrder), asc(priceListItems.productName));
+  },
+
+  async createPriceListItem(data: InsertPriceListItem): Promise<PriceListItem> {
+    const [item] = await db.insert(priceListItems).values(data).returning();
+    return item;
+  },
+
+  async updatePriceListItem(id: number, data: Partial<InsertPriceListItem>): Promise<PriceListItem> {
+    const [item] = await db.update(priceListItems).set(data).where(eq(priceListItems.id, id)).returning();
+    return item;
+  },
+
+  async deletePriceListItem(id: number): Promise<void> {
+    await db.update(priceListItems).set({ active: false }).where(eq(priceListItems.id, id));
+  },
+
+  async reorderPriceListItems(ids: number[]): Promise<void> {
+    for (let i = 0; i < ids.length; i++) {
+      await db.update(priceListItems).set({ sortOrder: i }).where(eq(priceListItems.id, ids[i]));
+    }
   },
 };

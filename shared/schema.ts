@@ -320,6 +320,22 @@ export const insertWithholdingSchema = createInsertSchema(withholdings).omit({ i
 export type InsertPayment = z.infer<typeof insertPaymentSchema>;
 export type InsertWithholding = z.infer<typeof insertWithholdingSchema>;
 
+// ─── Lista de Precios ────────────────────────────────────────────────────────
+export const priceListItems = pgTable("price_list_items", {
+  id: serial("id").primaryKey(),
+  category: text("category").notNull(),
+  productName: text("product_name").notNull(),
+  unit: text("unit").notNull().default("KG"),
+  price: numeric("price", { precision: 12, scale: 2 }).notNull().default("0"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
+export const insertPriceListItemSchema = createInsertSchema(priceListItems).omit({ id: true, createdAt: true });
+export type PriceListItem = typeof priceListItems.$inferSelect;
+export type InsertPriceListItem = z.infer<typeof insertPriceListItemSchema>;
+
 // ─── Grupos de clientes con precios compartidos ───────────────────────────────
 export const clientGroups = pgTable("client_groups", {
   id: serial("id").primaryKey(),
