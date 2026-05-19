@@ -11,23 +11,23 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Download, Pencil, Trash2 } from "lucide-react";
 import type { PriceListItem } from "@shared/schema";
-import { PRODUCT_CATEGORIES } from "@shared/schema";
 import { generatePriceListPDF } from "@/lib/pdf";
-
-const UNITS = ["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"] as const;
 
 const CATEGORY_ORDER = [
   "Fruta", "Verdura", "Hortaliza Liviana", "Hortaliza Pesada", "Hongos/Hierbas", "Huevos",
 ];
 
-const fmt = (v: string | number) =>
-  `$${parseFloat(String(v)).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmt = (v: string | number) => {
+  const n = parseFloat(String(v));
+  if (!n) return "—";
+  return `$${n.toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+};
 
 type ItemFormState = {
   category: string;
   productName: string;
-  unit: string;
-  price: string;
+  pricePerCajon: string;
+  pricePerKg: string;
 };
 
 function ItemDialog({
@@ -45,11 +45,8 @@ function ItemDialog({
 }) {
   const [form, setForm] = useState<ItemFormState>(initial);
 
-  // Reset when dialog opens
-  const handleOpen = () => setForm(initial);
-
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); else handleOpen(); }}>
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); else setForm(initial); }}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
           <DialogTitle>{initial.productName ? "Editar producto" : "Agregar producto"}</DialogTitle>
@@ -80,31 +77,31 @@ function ItemDialog({
             />
           </div>
 
-          <div>
-            <Label>Unidad</Label>
-            <Select value={form.unit} onValueChange={(v) => setForm((f) => ({ ...f, unit: v }))}>
-              <SelectTrigger className="mt-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {UNITS.map((u) => (
-                  <SelectItem key={u} value={u}>{u}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div>
-            <Label>Precio ($)</Label>
-            <Input
-              className="mt-1"
-              type="number"
-              min="0"
-              step="0.01"
-              value={form.price}
-              onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
-              placeholder="0.00"
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs">Precio x Cajón ($)</Label>
+              <Input
+                className="mt-1"
+                type="number"
+                min="0"
+                step="1"
+                value={form.pricePerCajon}
+                onChange={(e) => setForm((f) => ({ ...f, pricePerCajon: e.target.value }))}
+                placeholder="0"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Precio x Kg/U ($)</Label>
+              <Input
+                className="mt-1"
+                type="number"
+                min="0"
+                step="1"
+                value={form.pricePerKg}
+                onChange={(e) => setForm((f) => ({ ...f, pricePerKg: e.target.value }))}
+                placeholder="0"
+              />
+            </div>
           </div>
         </div>
 
@@ -112,7 +109,7 @@ function ItemDialog({
           <Button variant="outline" onClick={onClose} disabled={loading}>Cancelar</Button>
           <Button
             onClick={() => onSave(form)}
-            disabled={loading || !form.productName.trim() || !form.price}
+            disabled={loading || !form.productName.trim()}
           >
             {loading ? "Guardando..." : "Guardar"}
           </Button>
@@ -136,8 +133,8 @@ export default function PriceListPage() {
   const emptyForm: ItemFormState = {
     category: CATEGORY_ORDER[0],
     productName: "",
-    unit: "KG",
-    price: "",
+    pricePerCajon: "",
+    pricePerKg: "",
   };
 
   const createMutation = useMutation({
@@ -145,8 +142,8 @@ export default function PriceListPage() {
       apiRequest("POST", "/api/price-list", {
         category: data.category,
         productName: data.productName,
-        unit: data.unit,
-        price: data.price,
+        pricePerCajon: data.pricePerCajon || "0",
+        pricePerKg: data.pricePerKg || "0",
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/price-list"] });
@@ -161,8 +158,8 @@ export default function PriceListPage() {
       apiRequest("PATCH", `/api/price-list/${id}`, {
         category: data.category,
         productName: data.productName,
-        unit: data.unit,
-        price: data.price,
+        pricePerCajon: data.pricePerCajon || "0",
+        pricePerKg: data.pricePerKg || "0",
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/price-list"] });
@@ -189,7 +186,6 @@ export default function PriceListPage() {
       if (!map.has(item.category)) map.set(item.category, []);
       map.get(item.category)!.push(item);
     }
-    // Remove empty categories
     for (const [k, v] of map) { if (v.length === 0) map.delete(k); }
     return map;
   }, [items]);
@@ -202,8 +198,8 @@ export default function PriceListPage() {
       items.map((i) => ({
         category: i.category,
         productName: i.productName,
-        unit: i.unit,
-        price: i.price as string,
+        pricePerCajon: i.pricePerCajon as string,
+        pricePerKg: i.pricePerKg as string,
       })),
       today,
     );
@@ -213,7 +209,7 @@ export default function PriceListPage() {
 
   return (
     <Layout>
-      <div className="p-6 max-w-3xl mx-auto space-y-4">
+      <div className="p-6 max-w-4xl mx-auto space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Lista de Precios</h1>
@@ -253,8 +249,8 @@ export default function PriceListPage() {
                   <thead>
                     <tr className="border-b bg-gray-50 text-xs text-muted-foreground uppercase">
                       <th className="text-left px-4 py-2 font-medium">Producto</th>
-                      <th className="text-center px-3 py-2 font-medium w-24">Unidad</th>
-                      <th className="text-right px-4 py-2 font-medium w-28">Precio</th>
+                      <th className="text-right px-4 py-2 font-medium w-32">Precio x Cajón</th>
+                      <th className="text-right px-4 py-2 font-medium w-28">Precio x Kg/U</th>
                       <th className="w-20"></th>
                     </tr>
                   </thead>
@@ -262,9 +258,11 @@ export default function PriceListPage() {
                     {catItems.map((item, i) => (
                       <tr key={item.id} className={i % 2 === 1 ? "bg-gray-50" : ""}>
                         <td className="px-4 py-2 font-medium">{item.productName}</td>
-                        <td className="px-3 py-2 text-center text-muted-foreground">{item.unit}</td>
                         <td className="px-4 py-2 text-right font-semibold text-green-700">
-                          {fmt(item.price as string)}
+                          {fmt(item.pricePerCajon as string)}
+                        </td>
+                        <td className="px-4 py-2 text-right font-semibold text-green-700">
+                          {fmt(item.pricePerKg as string)}
                         </td>
                         <td className="px-2 py-1 text-right">
                           <div className="flex justify-end gap-1">
@@ -300,7 +298,6 @@ export default function PriceListPage() {
         )}
       </div>
 
-      {/* Add dialog */}
       <ItemDialog
         open={dialogOpen}
         initial={emptyForm}
@@ -309,15 +306,14 @@ export default function PriceListPage() {
         loading={isPending}
       />
 
-      {/* Edit dialog */}
       {editItem && (
         <ItemDialog
           open={true}
           initial={{
             category: editItem.category,
             productName: editItem.productName,
-            unit: editItem.unit,
-            price: editItem.price as string,
+            pricePerCajon: editItem.pricePerCajon as string,
+            pricePerKg: editItem.pricePerKg as string,
           }}
           onClose={() => setEditItem(null)}
           onSave={(data) => updateMutation.mutate({ id: editItem.id, data })}

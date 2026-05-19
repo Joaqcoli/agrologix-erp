@@ -474,8 +474,8 @@ export function generateBolsaFvPDF(rows: BolsaFvRow[], grandTotal: number, from:
 export type PriceListPdfItem = {
   category: string;
   productName: string;
-  unit: string;
-  price: string;
+  pricePerCajon: string;
+  pricePerKg: string;
 };
 
 export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel: string) {
@@ -487,9 +487,8 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
   const MR = 14;
   const CW = PW - ML - MR;
 
-  // Colors matching remito
-  const C_HDR:    [number, number, number] = [45, 80, 22];   // dark green
-  const C_CAT:    [number, number, number] = [220, 235, 210]; // light green tint
+  const C_HDR:    [number, number, number] = [45, 80, 22];
+  const C_CAT:    [number, number, number] = [220, 235, 210];
   const C_ALT:    [number, number, number] = [245, 245, 245];
   const C_WHITE:  [number, number, number] = [255, 255, 255];
   const C_TEXT:   [number, number, number] = [51, 51, 51];
@@ -499,19 +498,20 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
 
   const fmtMoney = (v: string) => {
     const n = parseFloat(v);
-    return `$${n.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    if (!n) return "—";
+    return `$${n.toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
   };
 
-  // Column layout: Producto | Unidad | Precio
+  // Column layout: Producto (wide) | Precio x Cajón | Precio x Kg/U
   const COL = {
-    prodX: ML,       prodW: CW - 40 - 32,
-    unitX: ML + CW - 40 - 32, unitW: 40,
-    priceX: ML + CW - 32, priceW: 32,
+    prodX:  ML,              prodW:  CW - 70,
+    cajonX: ML + CW - 70,    cajonW: 35,
+    kgX:    ML + CW - 35,    kgW:    35,
   };
 
   const ROW_H = 7;
   const TH_H  = 8;
-  const CAT_H = 8;
+  const CAT_H = 7;
   const FOOTER_H = 20;
   const FOOTER_Y = 297 - FOOTER_H;
 
@@ -580,17 +580,19 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
     doc.setFont("helvetica", "bold");
     doc.setFontSize(7.5);
     const ty = y + TH_H / 2 + 2.5;
-    doc.text("PRODUCTO", COL.prodX + 3, ty);
-    doc.text("UNIDAD", COL.unitX + COL.unitW / 2, ty, { align: "center" });
-    doc.text("PRECIO", COL.priceX + COL.priceW - 2, ty, { align: "right" });
+    doc.text("PRODUCTO",      COL.prodX + 3, ty);
+    doc.text("PRECIO X CAJÓN", COL.cajonX + COL.cajonW - 2, ty, { align: "right" });
+    doc.text("PRECIO X KG/U", COL.kgX    + COL.kgW    - 2, ty, { align: "right" });
   };
 
-  // Group by category preserving insertion order
+  const CATEGORY_ORDER_PDF = ["Verdura", "Fruta", "Hortaliza Liviana", "Hortaliza Pesada", "Hongos/Hierbas", "Huevos"];
   const grouped = new Map<string, PriceListPdfItem[]>();
+  for (const cat of CATEGORY_ORDER_PDF) grouped.set(cat, []);
   for (const item of items) {
     if (!grouped.has(item.category)) grouped.set(item.category, []);
     grouped.get(item.category)!.push(item);
   }
+  for (const [k, v] of grouped) { if (v.length === 0) grouped.delete(k); }
 
   drawPageHeader();
   drawFooter();
@@ -599,8 +601,7 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
   let rowIndex = 0;
 
   for (const [cat, catItems] of grouped) {
-    // Check if category header fits
-    if (y + CAT_H > FOOTER_Y - 10) {
+    if (y + CAT_H + ROW_H > FOOTER_Y - 4) {
       doc.addPage();
       drawPageHeader();
       drawFooter();
@@ -609,11 +610,10 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
       rowIndex = 0;
     }
 
-    // Category header row
     doc.setFillColor(...C_CAT);
     doc.rect(ML, y, CW, CAT_H, "F");
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(8);
+    doc.setFontSize(7.5);
     doc.setTextColor(...C_CAT_TXT);
     doc.text(cat.toUpperCase(), ML + 3, y + CAT_H / 2 + 2.5);
     y += CAT_H;
@@ -642,8 +642,8 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
       doc.setTextColor(...C_TEXT);
       const ty = y + ROW_H - 2;
       doc.text(doc.splitTextToSize(item.productName, COL.prodW - 4)[0], COL.prodX + 2, ty);
-      doc.text(item.unit.toUpperCase(), COL.unitX + COL.unitW / 2, ty, { align: "center" });
-      doc.text(fmtMoney(item.price), COL.priceX + COL.priceW - 2, ty, { align: "right" });
+      doc.text(fmtMoney(item.pricePerCajon), COL.cajonX + COL.cajonW - 2, ty, { align: "right" });
+      doc.text(fmtMoney(item.pricePerKg),    COL.kgX    + COL.kgW    - 2, ty, { align: "right" });
 
       y += ROW_H;
       rowIndex++;
