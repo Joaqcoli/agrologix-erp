@@ -480,174 +480,193 @@ export type PriceListPdfItem = {
 
 export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel: string) {
   const logoDataUrl = await loadLogoAsJpeg();
-
   const doc = new jsPDF({ unit: "mm", format: "a4" });
-  const PW = 210;
-  const ML = 14;
-  const MR = 14;
-  const CW = PW - ML - MR;
 
-  const C_HDR:    [number, number, number] = [45, 80, 22];
-  const C_CAT:    [number, number, number] = [220, 235, 210];
-  const C_ALT:    [number, number, number] = [245, 245, 245];
+  const PW = 210, PH = 297;
+  const ML = 14, MR = 14;
+  const CW = PW - ML - MR; // 182mm
+
+  // Column widths: Producto | Precio x Cajón | Precio x Kg/U
+  const PROD_W  = 98;
+  const PRICE_W = (CW - PROD_W) / 2; // 42mm each
+  const PROD_X  = ML;
+  const CAJON_X = ML + PROD_W;
+  const KG_X    = ML + PROD_W + PRICE_W;
+
+  // Row heights
+  const CAT_H  = 8;   // category title row
+  const SUBH_H = 7;   // column sub-header row
+  const ROW_H  = 6;   // product row
+  const CAT_GAP = 5;  // gap between category blocks
+
+  // Footer
+  const FT_GRAY_H  = 12;
+  const FT_GREEN_H = 8;
+  const FT_Y       = PH - FT_GRAY_H - FT_GREEN_H; // 277
+  const MAX_Y      = FT_Y - 3;
+
+  // Table start positions
+  const TABLE_Y1 = 76;  // page 1 (below logo)
+  const TABLE_YN = 12;  // pages 2+
+
+  // Colors
+  const C_CAT:    [number, number, number] = [68,  68,  68 ];  // dark gray — category row bg
+  const C_SUBH:   [number, number, number] = [145, 145, 145];  // medium gray — sub-header bg
   const C_WHITE:  [number, number, number] = [255, 255, 255];
-  const C_TEXT:   [number, number, number] = [51, 51, 51];
-  const C_SEP:    [number, number, number] = [170, 170, 170];
-  const C_ROW_SEP:[number, number, number] = [210, 210, 210];
-  const C_CAT_TXT:[number, number, number] = [34, 68, 10];
+  const C_TEXT:   [number, number, number] = [40,  40,  40 ];
+  const C_BORDER: [number, number, number] = [170, 170, 170];  // outer block border
+  const C_ROWSEP: [number, number, number] = [210, 210, 210];  // row bottom divider
 
-  const fmtMoney = (v: string) => {
-    const n = parseFloat(v);
+  // Argentine price format: $ 15.000 / — for zero
+  const fmtPrice = (v: string) => {
+    const n = Math.round(parseFloat(v));
     if (!n) return "—";
-    return `$${n.toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+    return `$ ${n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")}`;
   };
 
-  // Column layout: Producto (wide) | Precio x Cajón | Precio x Kg/U
-  const COL = {
-    prodX:  ML,              prodW:  CW - 70,
-    cajonX: ML + CW - 70,    cajonW: 35,
-    kgX:    ML + CW - 35,    kgW:    35,
-  };
-
-  const ROW_H = 7;
-  const TH_H  = 8;
-  const CAT_H = 7;
-  const FOOTER_H = 20;
-  const FOOTER_Y = 297 - FOOTER_H;
-
-  const drawPageHeader = () => {
-    if (logoDataUrl) {
-      try { doc.addImage(logoDataUrl, "JPEG", ML, 5, 57, 32); } catch { /**/ }
-    } else {
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(16);
-      doc.setTextColor(...C_TEXT);
-      doc.text("vegetales argentinos.", ML, 22);
-    }
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(13);
-    doc.setTextColor(...C_HDR);
-    doc.text("LISTA DE PRECIOS", PW - MR, 18, { align: "right" });
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(...C_TEXT);
-    doc.text(dateLabel, PW - MR, 26, { align: "right" });
-
-    doc.setDrawColor(...C_SEP);
-    doc.setLineWidth(0.4);
-    doc.line(ML, 40, PW - MR, 40);
-    doc.setLineWidth(0.2);
-  };
-
+  // Footer — same as remito
   const drawFooter = () => {
-    const C_FT_GRAY:  [number, number, number] = [224, 224, 224];
-    const C_FT_GREEN: [number, number, number] = [45, 80, 22];
-    const C_FT_LBL:   [number, number, number] = [102, 102, 102];
-    const C_FT_VAL:   [number, number, number] = [34, 34, 34];
-
-    doc.setFillColor(...C_FT_GRAY);
-    doc.rect(0, FOOTER_Y, PW, 12, "F");
-    doc.setFillColor(...C_FT_GREEN);
-    doc.rect(0, FOOTER_Y + 12, PW, 8, "F");
+    doc.setFillColor(224, 224, 224);
+    doc.rect(0, FT_Y, PW, FT_GRAY_H, "F");
+    doc.setFillColor(45, 80, 22);
+    doc.rect(0, FT_Y + FT_GRAY_H, PW, FT_GREEN_H, "F");
 
     const c1 = ML, c2 = ML + CW * 0.34, c3 = ML + CW * 0.66;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7);
-    doc.setTextColor(...C_FT_LBL);
-    doc.text("WhatsApp", c1, FOOTER_Y + 4.5);
-    doc.text("Email",    c2, FOOTER_Y + 4.5);
-    doc.text("Website",  c3, FOOTER_Y + 4.5);
+    doc.setTextColor(102, 102, 102);
+    doc.text("WhatsApp", c1, FT_Y + 4.5);
+    doc.text("Email",    c2, FT_Y + 4.5);
+    doc.text("Website",  c3, FT_Y + 4.5);
 
     doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(...C_FT_VAL);
-    doc.text("11-7123-2459",                       c1, FOOTER_Y + 10);
-    doc.text("vegetalesargentinos.srl@gmail.com",  c2, FOOTER_Y + 10);
-    doc.text("www.vegetalesargentinos.com",         c3, FOOTER_Y + 10);
+    doc.setTextColor(34, 34, 34);
+    doc.text("11-7123-2459",                       c1, FT_Y + 10);
+    doc.text("vegetalesargentinos.srl@gmail.com",  c2, FT_Y + 10);
+    doc.text("www.vegetalesargentinos.com",         c3, FT_Y + 10);
 
-    doc.setFont("helvetica", "bold");
     doc.setFontSize(7.5);
     doc.setTextColor(...C_WHITE);
-    doc.text("CUIT : 30-71855184-2",     PW - MR, FOOTER_Y + 12 + 3,   { align: "right" });
-    doc.text("VEGETALES ARGENTINOS SRL", PW - MR, FOOTER_Y + 12 + 6.5, { align: "right" });
+    doc.text("CUIT : 30-71855184-2", PW - MR, FT_Y + FT_GRAY_H + 3,   { align: "right" });
+    doc.text("VTINOS SRL",           PW - MR, FT_Y + FT_GRAY_H + 6.5, { align: "right" });
   };
 
-  const drawTableHeader = (y: number) => {
-    doc.setFillColor(...C_HDR);
-    doc.rect(ML, y, CW, TH_H, "F");
+  // Draw category title row + column sub-header row, returns new y
+  const drawCatHeaders = (y: number, catName: string): number => {
+    // Category title: dark gray, white bold centered
+    doc.setFillColor(...C_CAT);
+    doc.rect(ML, y, CW, CAT_H, "F");
     doc.setTextColor(...C_WHITE);
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(7.5);
-    const ty = y + TH_H / 2 + 2.5;
-    doc.text("PRODUCTO",      COL.prodX + 3, ty);
-    doc.text("PRECIO X CAJÓN", COL.cajonX + COL.cajonW - 2, ty, { align: "right" });
-    doc.text("PRECIO X KG/U", COL.kgX    + COL.kgW    - 2, ty, { align: "right" });
+    doc.setFontSize(9.5);
+    doc.text(catName.toUpperCase(), ML + CW / 2, y + CAT_H / 2 + 2.5, { align: "center" });
+    y += CAT_H;
+
+    // Sub-header: medium gray, white bold-italic, 3 columns
+    doc.setFillColor(...C_SUBH);
+    doc.rect(ML, y, CW, SUBH_H, "F");
+    doc.setTextColor(...C_WHITE);
+    doc.setFont("helvetica", "bolditalic");
+    doc.setFontSize(8);
+    const ty = y + SUBH_H / 2 + 2.5;
+    doc.text("Producto",       PROD_X  + 3,            ty);
+    doc.text("Precio x Cajón", CAJON_X + PRICE_W - 3,  ty, { align: "right" });
+    doc.text("Precio x Kg/U",  KG_X    + PRICE_W - 3,  ty, { align: "right" });
+    y += SUBH_H;
+
+    return y;
   };
 
-  const CATEGORY_ORDER_PDF = ["Verdura", "Fruta", "Hortaliza Liviana", "Hortaliza Pesada", "Hongos/Hierbas", "Huevos"];
+  // Draw outer border + vertical column separators for a finished block segment
+  const drawBlockFrame = (startY: number, endY: number) => {
+    doc.setDrawColor(...C_BORDER);
+    doc.setLineWidth(0.25);
+    doc.rect(ML, startY, CW, endY - startY, "S");
+    doc.setLineWidth(0.15);
+    doc.line(CAJON_X, startY, CAJON_X, endY);
+    doc.line(KG_X,    startY, KG_X,    endY);
+  };
+
+  // Group items by category in display order
+  const CAT_ORDER = ["Verdura", "Fruta", "Hortaliza Liviana", "Hortaliza Pesada", "Hongos/Hierbas", "Huevos"];
   const grouped = new Map<string, PriceListPdfItem[]>();
-  for (const cat of CATEGORY_ORDER_PDF) grouped.set(cat, []);
+  for (const c of CAT_ORDER) grouped.set(c, []);
   for (const item of items) {
     if (!grouped.has(item.category)) grouped.set(item.category, []);
     grouped.get(item.category)!.push(item);
   }
   for (const [k, v] of grouped) { if (v.length === 0) grouped.delete(k); }
 
-  drawPageHeader();
+  // ── Page 1: Logo (left) + LISTA DE PRECIOS (right) ────────────────────────
+  if (logoDataUrl) {
+    try {
+      const lH = 52;
+      doc.addImage(logoDataUrl, "JPEG", ML, 8, lH * (1920 / 1080), lH);
+    } catch { /**/ }
+  } else {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(20);
+    doc.setTextColor(45, 80, 22);
+    doc.text("vegetales argentinos.", ML, 38);
+  }
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(20);
+  doc.setTextColor(20, 20, 20);
+  doc.text("LISTA DE PRECIOS", PW - MR, 30, { align: "right" });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(85, 85, 85);
+  doc.text(dateLabel, PW - MR, 40, { align: "right" });
+
   drawFooter();
-  drawTableHeader(44);
-  let y = 44 + TH_H;
-  let rowIndex = 0;
+
+  // ── Render categories ──────────────────────────────────────────────────────
+  let y = TABLE_Y1;
 
   for (const [cat, catItems] of grouped) {
-    if (y + CAT_H + ROW_H > FOOTER_Y - 4) {
+    // Need room for at least header rows + 1 data row
+    if (y + CAT_H + SUBH_H + ROW_H > MAX_Y) {
       doc.addPage();
-      drawPageHeader();
       drawFooter();
-      drawTableHeader(44);
-      y = 44 + TH_H;
-      rowIndex = 0;
+      y = TABLE_YN;
     }
 
-    doc.setFillColor(...C_CAT);
-    doc.rect(ML, y, CW, CAT_H, "F");
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(7.5);
-    doc.setTextColor(...C_CAT_TXT);
-    doc.text(cat.toUpperCase(), ML + 3, y + CAT_H / 2 + 2.5);
-    y += CAT_H;
+    let blockStartY = y;
+    y = drawCatHeaders(y, cat);
 
     for (const item of catItems) {
-      if (y + ROW_H > FOOTER_Y - 4) {
+      if (y + ROW_H > MAX_Y) {
+        // Close block on this page, continue on next
+        drawBlockFrame(blockStartY, y);
         doc.addPage();
-        drawPageHeader();
         drawFooter();
-        drawTableHeader(44);
-        y = 44 + TH_H;
-        rowIndex = 0;
+        y = TABLE_YN;
+        blockStartY = y;
+        y = drawCatHeaders(y, cat);
       }
 
-      if (rowIndex % 2 === 1) {
-        doc.setFillColor(...C_ALT);
-        doc.rect(ML, y, CW, ROW_H, "F");
-      }
-
-      doc.setDrawColor(...C_ROW_SEP);
+      // Product row — white bg, light bottom separator
+      doc.setFillColor(...C_WHITE);
+      doc.rect(ML, y, CW, ROW_H, "F");
+      doc.setDrawColor(...C_ROWSEP);
       doc.setLineWidth(0.1);
       doc.line(ML, y + ROW_H, ML + CW, y + ROW_H);
 
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
       doc.setTextColor(...C_TEXT);
-      const ty = y + ROW_H - 2;
-      doc.text(doc.splitTextToSize(item.productName, COL.prodW - 4)[0], COL.prodX + 2, ty);
-      doc.text(fmtMoney(item.pricePerCajon), COL.cajonX + COL.cajonW - 2, ty, { align: "right" });
-      doc.text(fmtMoney(item.pricePerKg),    COL.kgX    + COL.kgW    - 2, ty, { align: "right" });
+      const ry = y + ROW_H - 2;
+      doc.text(doc.splitTextToSize(item.productName, PROD_W - 5)[0], PROD_X + 3, ry);
+      doc.text(fmtPrice(item.pricePerCajon), CAJON_X + PRICE_W - 3, ry, { align: "right" });
+      doc.text(fmtPrice(item.pricePerKg),    KG_X    + PRICE_W - 3, ry, { align: "right" });
 
       y += ROW_H;
-      rowIndex++;
     }
+
+    // Close block border + column lines
+    drawBlockFrame(blockStartY, y);
+    y += CAT_GAP;
   }
 
   doc.save(`ListaPrecios-${dateLabel.replace(/\//g, "-")}.pdf`);
