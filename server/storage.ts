@@ -333,7 +333,11 @@ export const storage = {
             baseUnit: baseUnitCanonical,
             isActive: true, // reactivar si fue desactivado desde la vista de stock
           };
-          if (isPackagePurchase) puUpdate.weightPerUnit = newWeightPerUnit.toFixed(4);
+          if (isPackagePurchase) {
+            puUpdate.weightPerUnit = newWeightPerUnit.toFixed(4);
+          } else if (baseUnitCanonical === "MAPLE" && parseFloat(existingPU.weightPerUnit as string ?? "0") === 0) {
+            puUpdate.weightPerUnit = "12.0000"; // Huevos: 1 CAJON = 12 MAPLES siempre
+          }
 
           await tx.update(productUnits).set(puUpdate).where(eq(productUnits.id, existingPU.id));
         } else {
@@ -346,7 +350,11 @@ export const storage = {
             stockQty: newQty.toFixed(4),
             baseUnit: baseUnitCanonical,
             isActive: true,
-            ...(weightPerPackage > 0 ? { weightPerUnit: weightPerPackage.toFixed(4) } : {}),
+            ...(weightPerPackage > 0
+              ? { weightPerUnit: weightPerPackage.toFixed(4) }
+              : baseUnitCanonical === "MAPLE"
+              ? { weightPerUnit: "12.0000" } // Huevos: 1 CAJON = 12 MAPLES siempre
+              : {}),
           });
         }
 
@@ -474,6 +482,8 @@ export const storage = {
               .limit(1);
             wpu = parseFloat(anyPi?.weightPerPackage as string ?? "0");
           }
+          // Huevos: 1 CAJON = 12 MAPLES siempre (constante universal)
+          if (wpu === 0 && baseRow.unit === "MAPLE") wpu = 12;
           if (wpu > 0) return (parseFloat(baseRow.avgCost as string) * wpu).toFixed(4);
         }
         return "0"; // base tiene costo pero sin stock
@@ -696,7 +706,11 @@ export const storage = {
             ...(!isPackageCanonical ? { baseUnit: canonicalUnit } : {}),
             isActive: true, // reactivar si fue desactivado desde la vista de stock
           };
-          if (isPackagePurchase) puUpdate.weightPerUnit = newWeightPerUnit.toFixed(4);
+          if (isPackagePurchase) {
+            puUpdate.weightPerUnit = newWeightPerUnit.toFixed(4);
+          } else if (canonicalUnit === "MAPLE" && parseFloat(existingPU.weightPerUnit as string ?? "0") === 0) {
+            puUpdate.weightPerUnit = "12.0000"; // Huevos: 1 CAJON = 12 MAPLES siempre
+          }
           await tx.update(productUnits).set(puUpdate).where(eq(productUnits.id, existingPU.id));
         } else {
           newPuAvgCost = newCost;
@@ -710,7 +724,11 @@ export const storage = {
             ...(!isPackageCanonical ? { baseUnit: canonicalUnit } : {}),
             isActive: true,
           };
-          if (weightPerPackage > 0) insertData.weightPerUnit = weightPerPackage.toFixed(4);
+          if (weightPerPackage > 0) {
+            insertData.weightPerUnit = weightPerPackage.toFixed(4);
+          } else if (canonicalUnit === "MAPLE") {
+            insertData.weightPerUnit = "12.0000"; // Huevos: 1 CAJON = 12 MAPLES siempre
+          }
           await tx.insert(productUnits).values(insertData);
         }
 
