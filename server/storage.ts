@@ -443,8 +443,37 @@ export const storage = {
         .limit(1);
       if (exactPu && parseFloat(exactPu.avgCost as string) > 0) {
         if (ignoreStock || parseFloat(exactPu.stockQty as string) > 0) return exactPu.avgCost as string;
-        return "0"; // hay costo histórico pero sin stock
+        // Hay costo histórico pero sin stock — intentar derivar de otra fila base con stock
       }
+      // 1b) Fallback cross-unit: buscar otra fila base con stock para derivar el costo
+      // Cubre: KG order con ATADO/UNIDAD stock (cost_kg = altCost/wpu)
+      //        MAPLE/UNIDAD order cuando la otra es la que tiene stock (huevos)
+      if (!ignoreStock) {
+        const [altBase] = await tx.select().from(productUnits)
+          .where(and(
+            eq(productUnits.productId, productId),
+            drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+            drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
+            drizzleSql`${productUnits.unit} != ${canonical}`,
+            drizzleSql`${productUnits.stockQty}::numeric > 0`,
+            drizzleSql`${productUnits.avgCost}::numeric > 0`,
+          ))
+          .orderBy(drizzleSql`${productUnits.stockQty}::numeric DESC`)
+          .limit(1);
+        if (altBase) {
+          const altCost = parseFloat(altBase.avgCost as string);
+          const altWpu = parseFloat(altBase.weightPerUnit as string ?? "0");
+          // MAPLE ↔ UNIDAD: misma unidad conceptual (huevos, 1 MAPLE = 1 UNIDAD = 1 docena)
+          if (['MAPLE','UNIDAD'].includes(canonical) && ['MAPLE','UNIDAD'].includes(altBase.unit)) {
+            return altBase.avgCost as string;
+          }
+          // KG order: altBase es ATADO o UNIDAD con wpu = KG por unidad → cost_per_KG = altCost / wpu
+          if (canonical === 'KG' && altWpu > 0) {
+            return (altCost / altWpu).toFixed(4);
+          }
+        }
+      }
+      return "0"; // hay costo histórico pero sin stock (o no hay fallback viable)
     }
 
     // 2) Unidad de envase: derivar de fila base × weight_per_package
