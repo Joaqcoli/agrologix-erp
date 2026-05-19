@@ -1607,9 +1607,8 @@ export const storage = {
         if (!product) continue;
 
         // ── Buscar fila de unidad base (modelo nuevo) ──────────────────────────
-        // Preferir la fila cuya unit coincide con la unidad del item (ej. KG si el pedido es KG).
-        // Fallback: cualquier fila base no-envase (para CAJON → necesita conversión wpu).
-        // Esto evita que productos con múltiples filas base (KG + UNIDAD) elijan la incorrecta.
+        // Prioridad: (1) tiene stock, (2) exact match, (3) más stock.
+        // Esto evita que MAPLE(stock=0) gane sobre UNIDAD(stock=36) cuando el pedido es MAPLE.
         const [baseUnitPu] = await tx.select().from(productUnits)
           .where(and(
             eq(productUnits.productId, item.productId),
@@ -1617,6 +1616,7 @@ export const storage = {
             drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
           ))
           .orderBy(
+            drizzleSql`CASE WHEN ${productUnits.stockQty}::numeric > 0 THEN 0 ELSE 1 END`,
             drizzleSql`CASE WHEN ${productUnits.unit} = ${oiCanonical} THEN 0 ELSE 1 END`,
             drizzleSql`${productUnits.stockQty}::numeric DESC`,
           )
@@ -2269,8 +2269,8 @@ export const storage = {
       const qty = parseFloat(item.quantity as string);
       const oiCanonical = dbEnumToCanonical(item.unit as string);
 
-      // Buscar fila base (modelo nuevo) — preferir la que coincide con la unidad del item,
-      // luego la que tiene más stock real (evita que KG/MAPLE con stock=0 oculte UNIDAD con stock)
+      // Buscar fila base (modelo nuevo) — prioridad: (1) tiene stock, (2) exact match, (3) más stock.
+      // Evita que MAPLE(stock=0) gane sobre UNIDAD(stock=36) cuando el pedido es MAPLE.
       const [baseUnitPu] = await db.select().from(productUnits)
         .where(and(
           eq(productUnits.productId, item.productId),
@@ -2278,6 +2278,7 @@ export const storage = {
           drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
         ))
         .orderBy(
+          drizzleSql`CASE WHEN ${productUnits.stockQty}::numeric > 0 THEN 0 ELSE 1 END`,
           drizzleSql`CASE WHEN ${productUnits.unit} = ${oiCanonical} THEN 0 ELSE 1 END`,
           drizzleSql`${productUnits.stockQty}::numeric DESC`,
         )
