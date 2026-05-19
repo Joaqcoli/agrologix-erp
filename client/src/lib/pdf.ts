@@ -500,20 +500,26 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
   const CAT_GAP = 6; // vertical gap between sections on same page
 
   // Layout: same header on every page
-  const SEP_Y   = 36;   // separator line y
-  const TABLE_Y = 40;   // content starts here (all pages)
-  const FT_Y    = 276;  // footer separator line y
-  const MAX_Y   = FT_Y - 2;
+  const SEP_Y      = 36;   // separator line y
+  const TABLE_Y    = 40;   // content starts here (all pages)
+  const FT_GRAY_H  = 15;   // footer gray section height (matches remito)
+  const FT_GREEN_H = 8;    // footer green section height (matches remito)
+  const FOOTER_H   = FT_GRAY_H + FT_GREEN_H; // 23mm
+  const FT_Y       = PH - FOOTER_H;           // 274mm — where footer starts
+  const MAX_Y      = FT_Y - 2;
 
   // Colors
-  const C_OLIVE:  [number, number, number] = [107, 122, 45];  // olive green — category title bg
-  const C_COL:    [number, number, number] = [74,  74,  74];  // #4a4a4a — column header bg
-  const C_ALT:    [number, number, number] = [245, 245, 245]; // #f5f5f5 — alternate row bg
-  const C_WHITE:  [number, number, number] = [255, 255, 255];
-  const C_TEXT:   [number, number, number] = [30,  30,  30];
-  const C_SEP:    [number, number, number] = [180, 180, 180];
-  const C_ROWSEP: [number, number, number] = [215, 215, 215];
-  const C_GREEN:  [number, number, number] = [45,  80,  22];
+  const C_OLIVE:    [number, number, number] = [107, 122, 45];   // olive green — category title bg
+  const C_COL:      [number, number, number] = [74,  74,  74];   // #4a4a4a — column header bg
+  const C_ALT:      [number, number, number] = [245, 245, 245];  // #f5f5f5 — alternate row bg
+  const C_WHITE:    [number, number, number] = [255, 255, 255];
+  const C_TEXT:     [number, number, number] = [30,  30,  30];
+  const C_SEP:      [number, number, number] = [180, 180, 180];
+  const C_ROWSEP:   [number, number, number] = [215, 215, 215];
+  const C_FT_GRAY:  [number, number, number] = [224, 224, 224];
+  const C_FT_GREEN: [number, number, number] = [45,  80,  22];
+  const C_FT_LBL:   [number, number, number] = [102, 102, 102];
+  const C_FT_VAL:   [number, number, number] = [34,  34,  34];
 
   // Argentine price format: $ 15.000 / — for zero
   const fmtPrice = (v: string) => {
@@ -532,27 +538,27 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
 
   // ── HEADER — identical on every page ──────────────────────────────────────
   const drawHeader = () => {
-    // Logo — left (height 26mm, 16:9 aspect)
+    // Logo — left, bigger (30mm height, 16:9 aspect ≈ 53mm wide)
     if (logoDataUrl) {
-      try { doc.addImage(logoDataUrl, "JPEG", ML, 4, 26 * (1920 / 1080), 26); } catch { /**/ }
+      try { doc.addImage(logoDataUrl, "JPEG", ML, 3, 30 * (1920 / 1080), 30); } catch { /**/ }
+    } else {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(16);
+      doc.setTextColor(45, 80, 22);
+      doc.text("vegetales argentinos.", ML, 22);
     }
-    // "vegetales argentinos." in green below logo
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(10);
-    doc.setTextColor(...C_GREEN);
-    doc.text("vegetales argentinos.", ML, 33);
 
-    // "LISTA DE PRECIOS" — top right, large bold black
+    // "LISTA DE PRECIOS" — top right, slightly smaller bold black
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(20);
+    doc.setFontSize(16);
     doc.setTextColor(20, 20, 20);
-    doc.text("LISTA DE PRECIOS", PW - MR, 19, { align: "right" });
+    doc.text("LISTA DE PRECIOS", PW - MR, 17, { align: "right" });
 
     // Date — below title, gray
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9.5);
     doc.setTextColor(100, 100, 100);
-    doc.text(dateLabel, PW - MR, 28, { align: "right" });
+    doc.text(dateLabel, PW - MR, 26, { align: "right" });
 
     // Separator line
     doc.setDrawColor(...C_SEP);
@@ -561,38 +567,40 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
     doc.setLineWidth(0.2);
   };
 
-  // ── FOOTER — identical on every page ──────────────────────────────────────
+  // ── FOOTER — idéntico al remito (gris + verde) ────────────────────────────
   const drawFooter = () => {
-    // Separator line
-    doc.setDrawColor(...C_SEP);
-    doc.setLineWidth(0.3);
-    doc.line(ML, FT_Y, PW - MR, FT_Y);
-    doc.setLineWidth(0.2);
+    // Gray top section
+    doc.setFillColor(...C_FT_GRAY);
+    doc.rect(0, FT_Y, PW, FT_GRAY_H, "F");
 
-    // 3-column contact info
-    const c1 = ML, c2 = ML + CW * 0.35, c3 = ML + CW * 0.65;
+    // Dark green bottom section
+    doc.setFillColor(...C_FT_GREEN);
+    doc.rect(0, FT_Y + FT_GRAY_H, PW, FT_GREEN_H, "F");
+
+    const c1 = ML, c2 = ML + CW * 0.34, c3 = ML + CW * 0.66;
+
+    // Labels
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7);
-    doc.setTextColor(110, 110, 110);
+    doc.setTextColor(...C_FT_LBL);
     doc.text("WhatsApp", c1, FT_Y + 5);
     doc.text("Email",    c2, FT_Y + 5);
     doc.text("Website",  c3, FT_Y + 5);
 
+    // Values
+    doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(7.5);
-    doc.setTextColor(...C_TEXT);
+    doc.setTextColor(...C_FT_VAL);
     doc.text("11-7123-2459",                      c1, FT_Y + 11);
     doc.text("vegetalesargentinos.srl@gmail.com", c2, FT_Y + 11);
     doc.text("www.vegetalesargentinos.com",        c3, FT_Y + 11);
 
-    // CUIT — bottom right
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7);
-    doc.setTextColor(110, 110, 110);
-    doc.text(
-      "CUIT: 30-71855184-2  |  VEGETALES ARGENTINOS SRL",
-      PW - MR, FT_Y + 18, { align: "right" },
-    );
+    // CUIT + company — right-aligned in green section
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.5);
+    doc.setTextColor(...C_WHITE);
+    doc.text("CUIT: 30-71855184-2",      PW - MR, FT_Y + FT_GRAY_H + 3,   { align: "right" });
+    doc.text("VEGETALES ARGENTINOS SRL", PW - MR, FT_Y + FT_GRAY_H + 6.5, { align: "right" });
   };
 
   // ── TABLE HELPERS ──────────────────────────────────────────────────────────
