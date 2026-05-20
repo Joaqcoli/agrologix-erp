@@ -5,3 +5,6 @@ server/public
 vite.config.ts.*
 .env
 *.tar.gz
+arca_private.key
+arca_certificate.crt
+arca_request.csr

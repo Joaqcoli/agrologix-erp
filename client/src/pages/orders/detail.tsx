@@ -8,18 +8,20 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle, Check, X, Lock, ChevronsUpDown, Trash2, Plus, Edit } from "lucide-react";
+import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle, Check, X, Lock, ChevronsUpDown, Trash2, Plus, Edit, Receipt } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { generateRemitoPDF } from "@/lib/pdf";
+import { generateRemitoPDF, generateInvoicePDF } from "@/lib/pdf";
 import { useState } from "react";
 import type { Customer, Product } from "@shared/schema";
 import type { Order, OrderItem } from "@shared/schema";
@@ -652,6 +654,10 @@ export default function OrderDetailPage({ id }: { id: number }) {
   // Remito num inline edit
   const [editingRemitoNum, setEditingRemitoNum] = useState(false);
   const [remitoNumInput, setRemitoNumInput] = useState("");
+  // Invoice dialog
+  const [invoiceDialog, setInvoiceDialog] = useState(false);
+  const [invoiceForm, setInvoiceForm] = useState<{ type: "A" | "B" | "C"; description: string }>({ type: "B", description: "" });
+  const [emittedInvoice, setEmittedInvoice] = useState<{ id: number; number: string } | null>(null);
 
   // ── Mutations ─────────────────────────────────────────────────────────────
   const deleteMutation = useMutation({
@@ -676,6 +682,18 @@ export default function OrderDetailPage({ id }: { id: number }) {
       toast({ title: "Línea eliminada" });
     },
     onError: (e: any) => toast({ title: "Error al eliminar línea", description: e.message, variant: "destructive" }),
+  });
+
+  const invoiceMutation = useMutation({
+    mutationFn: (body: { orderId: number; invoiceType: string; description: string }) =>
+      apiRequest("POST", "/api/invoices/create", body).then((r) => r.json()),
+    onSuccess: (inv) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
+      setEmittedInvoice({ id: inv.id, number: inv.invoiceNumber });
+      setInvoiceDialog(false);
+      toast({ title: `Factura ${inv.invoiceNumber} emitida` });
+    },
+    onError: (e: any) => toast({ title: "Error al emitir factura", description: e.message, variant: "destructive" }),
   });
 
   const saveAllMutation = useMutation({
@@ -1286,6 +1304,27 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 <Button variant="outline" size="sm" onClick={handleDownloadRemito} data-testid="button-download-remito">
                   <Download className="mr-2 h-4 w-4" /> Remito PDF
                 </Button>
+                {!order.invoiceNumber && !emittedInvoice ? (
+                  <Button size="sm" variant="outline" onClick={() => {
+                    setInvoiceForm({ type: "B", description: `Distribución de verduras y frutas - ${order.customer.name}` });
+                    setInvoiceDialog(true);
+                  }}>
+                    <Receipt className="mr-2 h-4 w-4" /> Emitir Factura
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={async () => {
+                    const invoiceId = emittedInvoice?.id ?? null;
+                    if (!invoiceId) return;
+                    try {
+                      const detail = await fetch(`/api/invoices/${invoiceId}`).then((r) => r.json());
+                      await generateInvoicePDF(detail);
+                    } catch (e: any) {
+                      toast({ title: "Error", description: e.message, variant: "destructive" });
+                    }
+                  }}>
+                    <Download className="mr-2 h-4 w-4" /> Factura {emittedInvoice?.number ?? order.invoiceNumber}
+                  </Button>
+                )}
               </div>
             )}
             {isDraft && (
@@ -1639,6 +1678,56 @@ export default function OrderDetailPage({ id }: { id: number }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Invoice dialog */}
+      <Dialog open={invoiceDialog} onOpenChange={setInvoiceDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Emitir Factura Electrónica</DialogTitle>
+            <DialogDescription>
+              Se emitirá una factura electrónica a través de ARCA (AFIP) por este pedido aprobado.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Tipo de Factura</label>
+              <Select value={invoiceForm.type} onValueChange={(v) => setInvoiceForm({ ...invoiceForm, type: v as "A" | "B" | "C" })}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="A">Factura A — Responsable Inscripto (requiere CUIT del cliente)</SelectItem>
+                  <SelectItem value="B">Factura B — Consumidor Final o Monotributista</SelectItem>
+                  <SelectItem value="C">Factura C — Exento</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Descripción</label>
+              <Textarea
+                value={invoiceForm.description}
+                onChange={(e) => setInvoiceForm({ ...invoiceForm, description: e.target.value })}
+                rows={2}
+                placeholder="Descripción del servicio o productos"
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-md bg-muted px-4 py-3">
+              <span className="text-sm text-muted-foreground">Total del pedido</span>
+              <span className="font-semibold">${parseFloat(order?.total ?? "0").toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span>
+            </div>
+          </div>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={() => setInvoiceDialog(false)}>Cancelar</Button>
+            <Button
+              onClick={() => invoiceMutation.mutate({ orderId: id, invoiceType: invoiceForm.type, description: invoiceForm.description })}
+              disabled={invoiceMutation.isPending}
+            >
+              <Receipt className="mr-2 h-4 w-4" />
+              {invoiceMutation.isPending ? "Emitiendo..." : "Emitir Factura"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Layout>
   );
 }

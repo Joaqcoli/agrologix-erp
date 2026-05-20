@@ -661,5 +661,24 @@ export async function runMigrations() {
     WHERE NOT EXISTS (SELECT 1 FROM price_list_items WHERE active = TRUE LIMIT 1)
   `);
 
+  // ─── Facturación Electrónica ARCA ────────────────────────────────────────────
+  await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS cuit TEXT`);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS invoices (
+      id SERIAL PRIMARY KEY,
+      order_id INTEGER NOT NULL REFERENCES orders(id),
+      customer_id INTEGER NOT NULL REFERENCES customers(id),
+      invoice_type TEXT NOT NULL,
+      invoice_number TEXT NOT NULL,
+      point_of_sale INTEGER NOT NULL DEFAULT 1,
+      cae TEXT NOT NULL,
+      cae_expiry TEXT NOT NULL,
+      total NUMERIC(12,2) NOT NULL,
+      iva_amount NUMERIC(12,2) NOT NULL,
+      description TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+
   console.log("Migrations complete.");
 }

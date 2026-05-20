@@ -24,6 +24,7 @@ import {
   Warehouse,
   Building2,
   Tag,
+  Receipt,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
@@ -39,6 +40,7 @@ const navItems = [
   { title: "Compras", url: "/purchases", icon: ShoppingCart },
   { title: "Stock", url: "/stock", icon: Warehouse },
   { title: "Pedidos", url: "/orders", icon: FileText },
+  { title: "Facturas", url: "/invoices", icon: Receipt },
   { title: "Carga Pedido", url: "/intake", icon: MessageSquarePlus },
   { title: "Lista de Carga", url: "/load-list", icon: ClipboardList },
   { title: "Lista de Precios", url: "/price-list", icon: Tag },

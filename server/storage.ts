@@ -4,12 +4,14 @@ import {
   stockMovements, productCostHistory, orders, orderItems,
   priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks,
   suppliers, supplierPayments, clientGroups, clientGroupMembers, priceListItems,
+  invoices,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
   type Payment, type Withholding, type InsertPayment, type InsertWithholding,
   type Supplier, type SupplierPayment, type InsertSupplier, type InsertSupplierPayment,
   type PriceListItem, type InsertPriceListItem,
+  type Invoice, type InsertInvoice,
 } from "@shared/schema";
 import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
@@ -4034,5 +4036,46 @@ export const storage = {
     for (let i = 0; i < ids.length; i++) {
       await db.update(priceListItems).set({ sortOrder: i }).where(eq(priceListItems.id, ids[i]));
     }
+  },
+
+  // ─── Facturas Electrónicas ────────────────────────────────────────────────────
+  async createInvoice(data: InsertInvoice): Promise<Invoice> {
+    const [inv] = await db.insert(invoices).values(data).returning();
+    return inv;
+  },
+
+  async getInvoices(filters?: { customerId?: number; from?: string; to?: string }): Promise<(Invoice & { customerName: string; orderFolio: string })[]> {
+    let q = drizzleSql`
+      SELECT i.*, c.name AS "customerName", o.folio AS "orderFolio"
+      FROM invoices i
+      JOIN customers c ON c.id = i.customer_id
+      JOIN orders o ON o.id = i.order_id
+      WHERE 1=1
+    `;
+    if (filters?.customerId) q = drizzleSql`${q} AND i.customer_id = ${filters.customerId}`;
+    if (filters?.from) q = drizzleSql`${q} AND i.created_at >= ${filters.from}::date`;
+    if (filters?.to) q = drizzleSql`${q} AND i.created_at < (${filters.to}::date + interval '1 day')`;
+    q = drizzleSql`${q} ORDER BY i.created_at DESC`;
+    const rows = await db.execute(q);
+    return rows.rows as any[];
+  },
+
+  async getInvoiceById(id: number): Promise<(Invoice & { customer: Customer; order: Order & { items: (OrderItem & { product: Product })[] } }) | null> {
+    const rows = await db.execute(drizzleSql`SELECT * FROM invoices WHERE id = ${id}`);
+    if (!rows.rows.length) return null;
+    const inv = rows.rows[0] as any;
+    const customer = await db.select().from(customers).where(eq(customers.id, inv.customer_id)).then((r) => r[0]);
+    const order = await db.select().from(orders).where(eq(orders.id, inv.order_id)).then((r) => r[0]);
+    const itemRows = await db.execute(drizzleSql`
+      SELECT oi.*, p.name AS "productName", p.sku AS "productSku", p.category AS "productCategory"
+      FROM order_items oi
+      LEFT JOIN products p ON p.id = oi.product_id
+      WHERE oi.order_id = ${order.id}
+    `);
+    const items = itemRows.rows.map((r: any) => ({
+      ...r,
+      product: r.productName ? { id: r.product_id, name: r.productName, sku: r.productSku, category: r.productCategory } : null,
+    }));
+    return { ...inv, customer, order: { ...order, items } };
   },
 };
