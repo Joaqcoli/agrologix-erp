@@ -663,8 +663,9 @@ export const storage = {
         if (pu) {
           const newStock = Number(pu.stockQty) - Number(item.quantity);
           // Preserve avgCost — solo zerear stock si queda negativo
+          // Deactivate row if it reaches 0 so it doesn't appear as a ghost when unit changes
           await tx.update(productUnits)
-            .set({ stockQty: newStock <= 0 ? "0" : newStock.toFixed(4) })
+            .set({ stockQty: newStock <= 0 ? "0" : newStock.toFixed(4), ...(newStock <= 0 ? { isActive: false } : {}) })
             .where(eq(productUnits.id, pu.id));
         }
       }
