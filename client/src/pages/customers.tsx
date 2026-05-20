@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Plus, Search, Pencil, Trash2, Users, Building2, Phone, Mail } from "lucide-react";
 import type { Customer } from "@shared/schema";
 
-const EMPTY: Partial<Customer> = { name: "", rfc: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ccType: "por_saldo", bolsaFv: false, salespersonName: "", commissionPct: "0", parentCustomerId: null };
+const EMPTY: Partial<Customer> = { name: "", rfc: "", cuit: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ccType: "por_saldo", bolsaFv: false, salespersonName: "", commissionPct: "0", parentCustomerId: null };
 
 export default function CustomersPage() {
   const { toast } = useToast();
@@ -224,6 +224,10 @@ export default function CustomersPage() {
               <div className="space-y-1.5">
                 <Label htmlFor="rfc">RFC</Label>
                 <Input id="rfc" value={form.rfc ?? ""} onChange={(e) => setForm({ ...form, rfc: e.target.value })} data-testid="input-customer-rfc" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="cuit">CUIT (para Factura A)</Label>
+                <Input id="cuit" value={(form as any).cuit ?? ""} onChange={(e) => setForm({ ...form, cuit: e.target.value } as any)} placeholder="30-12345678-9" data-testid="input-customer-cuit" />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="phone">Teléfono</Label>

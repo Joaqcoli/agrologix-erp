@@ -25,6 +25,7 @@ export const customers = pgTable("customers", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   rfc: text("rfc"),
+  cuit: text("cuit"),
   email: text("email"),
   phone: text("phone"),
   address: text("address"),
@@ -351,3 +352,21 @@ export const clientGroupMembers = pgTable("client_group_members", {
 
 export type ClientGroup = typeof clientGroups.$inferSelect;
 export type ClientGroupMember = typeof clientGroupMembers.$inferSelect;
+
+// ─── Facturas electrónicas ARCA ───────────────────────────────────────────────
+export const invoices = pgTable("invoices", {
+  id: serial("id").primaryKey(),
+  orderId: integer("order_id").references(() => orders.id).notNull(),
+  customerId: integer("customer_id").references(() => customers.id).notNull(),
+  invoiceType: text("invoice_type").notNull(),        // "A" | "B" | "C"
+  invoiceNumber: text("invoice_number").notNull(),    // "A-0001-00000001"
+  pointOfSale: integer("point_of_sale").notNull().default(1),
+  cae: text("cae").notNull(),
+  caeExpiry: text("cae_expiry").notNull(),            // "YYYYMMDD"
+  total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+  ivaAmount: numeric("iva_amount", { precision: 12, scale: 2 }).notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type Invoice = typeof invoices.$inferSelect;
+export type InsertInvoice = typeof invoices.$inferInsert;

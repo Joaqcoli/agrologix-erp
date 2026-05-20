@@ -8,6 +8,7 @@ import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insert
 import { z } from "zod";
 import { canonicalizeUnit } from "@shared/units";
 import { getHistoricalMonthStats } from "./historical-stats";
+import { getAfip } from "./arca";
 
 // IVA helpers
 const IVA_HUEVO = 0.21;
@@ -1270,6 +1271,125 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const data = insertCustomerSchema.partial().parse(req.body);
       return res.json(await storage.updateCustomer(Number(req.params.id), data));
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  // ─── Facturas Electrónicas ARCA ───────────────────────────────────────────────
+  app.post("/api/invoices/create", requireAuth, async (req, res) => {
+    try {
+      const { orderId, invoiceType, description } = z.object({
+        orderId: z.number(),
+        invoiceType: z.enum(["A", "B", "C"]),
+        description: z.string().optional(),
+      }).parse(req.body);
+
+      const order = await storage.getOrder(orderId);
+      if (!order) return res.status(404).json({ error: "Pedido no encontrado" });
+      if (order.status !== "approved") return res.status(400).json({ error: "El pedido debe estar aprobado" });
+
+      const customer = order.customer;
+      if (invoiceType === "A" && !customer.cuit) {
+        return res.status(400).json({ error: "El cliente no tiene CUIT registrado" });
+      }
+
+      // Calculate IVA breakdown
+      let neto105 = 0, iva105 = 0, neto21 = 0, iva21 = 0;
+      for (const item of order.items) {
+        const pName = (item.product?.name ?? item.rawProductName ?? "").toUpperCase();
+        const pCat = (item.product as any)?.category ?? "";
+        const isHuevo = pName.includes("HUEVO") || pName.includes("MAPLE") || pCat.toUpperCase().includes("HUEVO");
+        const sub = parseFloat(item.subtotal);
+        if (isHuevo) {
+          neto21 += sub;
+          iva21  += sub * IVA_HUEVO;
+        } else {
+          neto105 += sub;
+          iva105  += sub * IVA_DEFAULT;
+        }
+      }
+      const totalNeto = neto105 + neto21;
+      const totalIVA  = iva105 + iva21;
+
+      // Map type → AFIP code
+      const cbteTipo = invoiceType === "A" ? 1 : invoiceType === "B" ? 6 : 11;
+
+      const afip = getAfip();
+      const lastVoucher = await afip.ElectronicBilling.getLastVoucher(1, cbteTipo);
+      const nextNumber = lastVoucher + 1;
+
+      const docTipo = invoiceType === "A" ? 80 : 99;
+      const docNro  = invoiceType === "A" ? parseInt((customer.cuit ?? "").replace(/\D/g, "")) : 0;
+
+      const now = new Date();
+      const cbteDate = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+
+      const voucherData: any = {
+        CantReg: 1,
+        PtoVta: 1,
+        CbteTipo: cbteTipo,
+        Concepto: 1,
+        DocTipo: docTipo,
+        DocNro: docNro,
+        CbteDesde: nextNumber,
+        CbteHasta: nextNumber,
+        CbteFch: parseInt(cbteDate),
+        ImpTotal: parseFloat((totalNeto + totalIVA).toFixed(2)),
+        ImpTotConc: 0,
+        ImpNeto: parseFloat(totalNeto.toFixed(2)),
+        ImpOpEx: 0,
+        ImpIVA: parseFloat(totalIVA.toFixed(2)),
+        ImpTrib: 0,
+        MonId: "PES",
+        MonCotiz: 1,
+        Iva: [],
+      };
+
+      if (neto105 > 0) {
+        voucherData.Iva.push({ Id: 4, BaseImp: parseFloat(neto105.toFixed(2)), Importe: parseFloat(iva105.toFixed(2)) });
+      }
+      if (neto21 > 0) {
+        voucherData.Iva.push({ Id: 5, BaseImp: parseFloat(neto21.toFixed(2)), Importe: parseFloat(iva21.toFixed(2)) });
+      }
+
+      const result = await afip.ElectronicBilling.createVoucher(voucherData);
+      const { CAE, CAEFchVto } = result;
+
+      const formattedNumber = `${invoiceType}-0001-${String(nextNumber).padStart(8, "0")}`;
+      const invoice = await storage.createInvoice({
+        orderId,
+        customerId: customer.id,
+        invoiceType,
+        invoiceNumber: formattedNumber,
+        pointOfSale: 1,
+        cae: String(CAE),
+        caeExpiry: String(CAEFchVto),
+        total: String((totalNeto + totalIVA).toFixed(2)),
+        ivaAmount: String(totalIVA.toFixed(2)),
+        description: description ?? null,
+      });
+
+      await storage.updateOrderInvoiceNumber(orderId, formattedNumber);
+
+      return res.json(invoice);
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message ?? "Error emitiendo factura" });
+    }
+  });
+
+  app.get("/api/invoices", requireAuth, async (req, res) => {
+    try {
+      const customerId = req.query.customerId ? Number(req.query.customerId) : undefined;
+      const from = req.query.from as string | undefined;
+      const to   = req.query.to   as string | undefined;
+      return res.json(await storage.getInvoices({ customerId, from, to }));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/invoices/:id", requireAuth, async (req, res) => {
+    try {
+      const inv = await storage.getInvoiceById(Number(req.params.id));
+      if (!inv) return res.status(404).json({ error: "Factura no encontrada" });
+      return res.json(inv);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   return httpServer;
