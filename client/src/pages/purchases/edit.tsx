@@ -13,7 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { Plus, Trash2, ArrowLeft, Save, Calculator, Info, PackagePlus } from "lucide-react";
-import type { Product } from "@shared/schema";
+import type { Product, ProductUnit } from "@shared/schema";
 
 const UNIT_OPTIONS = [
   { value: "KG",      label: "KG" },
@@ -26,6 +26,12 @@ const UNIT_OPTIONS = [
 ] as const;
 
 const PACKAGE_UNIT_SET = new Set(["CAJON", "BOLSA", "BANDEJA"]);
+
+const BASE_UNIT_OPTIONS = [
+  { value: "KG",     label: "KG" },
+  { value: "UNIDAD", label: "UNIDAD" },
+  { value: "ATADO",  label: "ATADO" },
+] as const;
 
 function todayLocal() {
   const d = new Date();
@@ -59,6 +65,13 @@ export default function EditPurchasePage({ id }: { id: number }) {
   });
 
   const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
+  const { data: stockData } = useQuery<(ProductUnit & { product: Product })[]>({ queryKey: ["/api/products/stock"] });
+
+  const getKnownBaseUnit = (productId: number): string => {
+    if (!stockData || !productId) return "KG";
+    const row = stockData.find((pu: ProductUnit) => pu.productId === productId && pu.baseUnit != null);
+    return (row as any)?.unit ?? "KG";
+  };
 
   useEffect(() => {
     if (purchase && !initialized) {
@@ -118,7 +131,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
           updated[i].baseUnit = "MAPLE";
           updated[i].weightPerPackage = "12";
         } else if (isPackageUnit(defaultUnit)) {
-          updated[i].baseUnit = "KG";
+          updated[i].baseUnit = getKnownBaseUnit(Number(value));
           updated[i].weightPerPackage = "";
         } else {
           updated[i].baseUnit = defaultUnit;
@@ -367,10 +380,19 @@ export default function EditPurchasePage({ id }: { id: number }) {
                               readOnly={eggsLocked}
                               className={eggsLocked ? "bg-muted/40" : (!item.weightPerPackage ? "border-destructive/60 focus-visible:ring-destructive/40" : "")}
                             />
-                            {eggsLocked && (
+                            {eggsLocked ? (
                               <div className="flex h-9 items-center rounded-md border border-border bg-muted/40 px-3 whitespace-nowrap">
                                 <span className="text-sm font-medium">MAPLE</span>
                               </div>
+                            ) : (
+                              <Select value={item.baseUnit} onValueChange={(v) => updateItem(idx, "baseUnit", v)}>
+                                <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  {BASE_UNIT_OPTIONS.map((u) => (
+                                    <SelectItem key={u.value} value={u.value}>{u.label}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
                             )}
                           </div>
                         </div>
