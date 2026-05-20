@@ -219,11 +219,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { units, ...rest } = req.body as any;
       const data = insertProductSchema.partial().parse(rest);
       const product = await storage.updateProduct(Number(req.params.id), data, units);
-      // Also process units if provided in the PATCH body (belt-and-suspenders alongside PUT /units)
-      if (Array.isArray(units) && units.length > 0) {
-        const canonical = units.map((u: string) => canonicalizeUnit(u));
-        await storage.setProductUnits(Number(req.params.id), canonical);
-      }
       return res.json(product);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });

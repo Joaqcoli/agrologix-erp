@@ -68,9 +68,13 @@ export default function EditPurchasePage({ id }: { id: number }) {
   const { data: stockData } = useQuery<(ProductUnit & { product: Product })[]>({ queryKey: ["/api/products/stock"] });
 
   const getKnownBaseUnit = (productId: number): string => {
-    if (!stockData || !productId) return "KG";
-    const row = stockData.find((pu: ProductUnit) => pu.productId === productId && pu.baseUnit != null);
-    return (row as any)?.unit ?? "KG";
+    if (!productId) return "KG";
+    const PACKAGE = new Set(["CAJON", "BOLSA", "BANDEJA"]);
+    const stockRow = (stockData ?? []).find((pu: ProductUnit) => pu.productId === productId && pu.baseUnit != null);
+    if (stockRow) return stockRow.unit;
+    const product = (products ?? []).find((p) => p.id === productId);
+    if (product?.unit && !PACKAGE.has(product.unit as string)) return product.unit as string;
+    return "KG";
   };
 
   useEffect(() => {
