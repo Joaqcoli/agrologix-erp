@@ -134,6 +134,13 @@ export default function NewPurchasePage() {
     return wpu > 0 ? String(wpu) : "";
   };
 
+  // Returns the known base unit for a product (e.g. UNIDAD for ajo, KG for tomato)
+  const getKnownBaseUnit = (productId: number): string => {
+    if (!stockData || !productId) return "KG";
+    const row = stockData.find((pu) => pu.productId === productId && pu.baseUnit != null);
+    return row?.unit ?? "KG";
+  };
+
   useEffect(() => { if (folioData?.folio) setFolio(folioData.folio); }, [folioData]);
 
   const createMutation = useMutation({
@@ -174,7 +181,7 @@ export default function NewPurchasePage() {
           updated[i].baseUnit = "MAPLE";
           updated[i].weightPerPackage = "12";
         } else if (isPackageUnit(defaultUnit)) {
-          updated[i].baseUnit = "KG";
+          updated[i].baseUnit = getKnownBaseUnit(Number(value));
           updated[i].weightPerPackage = getKnownWPU(Number(value));
         } else {
           updated[i].baseUnit = defaultUnit;
@@ -191,7 +198,7 @@ export default function NewPurchasePage() {
           updated[i].baseUnit = "MAPLE";
           updated[i].weightPerPackage = "12";
         } else {
-          updated[i].baseUnit = "KG";
+          updated[i].baseUnit = getKnownBaseUnit(productId);
           updated[i].weightPerPackage = getKnownWPU(productId);
         }
       } else {
