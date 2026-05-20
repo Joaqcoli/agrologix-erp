@@ -8,7 +8,7 @@ import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insert
 import { z } from "zod";
 import { canonicalizeUnit } from "@shared/units";
 import { getHistoricalMonthStats } from "./historical-stats";
-import { getAfip } from "./arca";
+import { getLastVoucher, createVoucher } from "./arca";
 
 // IVA helpers
 const IVA_HUEVO = 0.21;
@@ -1312,17 +1312,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Map type → AFIP code
       const cbteTipo = invoiceType === "A" ? 1 : invoiceType === "B" ? 6 : 11;
 
-      const afip = getAfip();
-      const lastVoucher = await afip.ElectronicBilling.getLastVoucher(1, cbteTipo);
+      const lastVoucher = await getLastVoucher(cbteTipo);
       const nextNumber = lastVoucher + 1;
 
       const docTipo = invoiceType === "A" ? 80 : 99;
       const docNro  = invoiceType === "A" ? parseInt((customer.cuit ?? "").replace(/\D/g, "")) : 0;
 
       const now = new Date();
-      const cbteDate = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+      const cbteDate = parseInt(`${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`);
 
-      const voucherData: any = {
+      const iva: { Id: number; BaseImp: number; Importe: number }[] = [];
+      if (neto105 > 0) iva.push({ Id: 4, BaseImp: parseFloat(neto105.toFixed(2)), Importe: parseFloat(iva105.toFixed(2)) });
+      if (neto21  > 0) iva.push({ Id: 5, BaseImp: parseFloat(neto21.toFixed(2)),  Importe: parseFloat(iva21.toFixed(2))  });
+
+      const { CAE, CAEFchVto } = await createVoucher({
         CantReg: 1,
         PtoVta: 1,
         CbteTipo: cbteTipo,
@@ -1331,7 +1334,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         DocNro: docNro,
         CbteDesde: nextNumber,
         CbteHasta: nextNumber,
-        CbteFch: parseInt(cbteDate),
+        CbteFch: cbteDate,
         ImpTotal: parseFloat((totalNeto + totalIVA).toFixed(2)),
         ImpTotConc: 0,
         ImpNeto: parseFloat(totalNeto.toFixed(2)),
@@ -1340,18 +1343,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ImpTrib: 0,
         MonId: "PES",
         MonCotiz: 1,
-        Iva: [],
-      };
-
-      if (neto105 > 0) {
-        voucherData.Iva.push({ Id: 4, BaseImp: parseFloat(neto105.toFixed(2)), Importe: parseFloat(iva105.toFixed(2)) });
-      }
-      if (neto21 > 0) {
-        voucherData.Iva.push({ Id: 5, BaseImp: parseFloat(neto21.toFixed(2)), Importe: parseFloat(iva21.toFixed(2)) });
-      }
-
-      const result = await afip.ElectronicBilling.createVoucher(voucherData);
-      const { CAE, CAEFchVto } = result;
+        Iva: iva,
+      });
 
       const formattedNumber = `${invoiceType}-0001-${String(nextNumber).padStart(8, "0")}`;
       const invoice = await storage.createInvoice({
