@@ -134,11 +134,16 @@ export default function NewPurchasePage() {
     return wpu > 0 ? String(wpu) : "";
   };
 
-  // Returns the known base unit for a product (e.g. UNIDAD for ajo, KG for tomato)
+  // Returns the known base unit for a product (e.g. UNIDAD for ajo, KG for tomato).
+  // Priority: 1) existing product_units row with baseUnit, 2) products.unit if not a package, 3) KG
   const getKnownBaseUnit = (productId: number): string => {
-    if (!stockData || !productId) return "KG";
-    const row = stockData.find((pu) => pu.productId === productId && pu.baseUnit != null);
-    return row?.unit ?? "KG";
+    if (!productId) return "KG";
+    const PACKAGE = new Set(["CAJON", "BOLSA", "BANDEJA"]);
+    const stockRow = (stockData ?? []).find((pu) => pu.productId === productId && pu.baseUnit != null);
+    if (stockRow) return stockRow.unit;
+    const product = activeProducts.find((p) => p.id === productId);
+    if (product?.unit && !PACKAGE.has(product.unit as string)) return product.unit as string;
+    return "KG";
   };
 
   useEffect(() => { if (folioData?.folio) setFolio(folioData.folio); }, [folioData]);
