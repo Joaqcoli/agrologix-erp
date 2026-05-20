@@ -77,6 +77,14 @@ export default function EditPurchasePage({ id }: { id: number }) {
     return "KG";
   };
 
+  const getKnownWPU = (productId: number): string => {
+    if (!stockData || !productId) return "";
+    const row = stockData.find((pu: ProductUnit) => pu.productId === productId && pu.baseUnit != null);
+    if (!row) return "";
+    const wpu = parseFloat((row as any).weightPerUnit ?? "0");
+    return wpu > 0 ? String(wpu) : "";
+  };
+
   useEffect(() => {
     if (purchase && !initialized) {
       setSupplierName(purchase.supplierName ?? "");
@@ -149,8 +157,10 @@ export default function EditPurchasePage({ id }: { id: number }) {
         if (unit === "CAJON" && isEggsProduct(updated[i].productId)) {
           updated[i].baseUnit = "MAPLE";
           updated[i].weightPerPackage = "12";
+        } else {
+          updated[i].baseUnit = getKnownBaseUnit(updated[i].productId);
+          updated[i].weightPerPackage = getKnownWPU(updated[i].productId);
         }
-        // else: keep existing baseUnit/weightPerPackage (pre-filled from loaded purchase)
       } else {
         updated[i].weightPerPackage = "";
         updated[i].baseUnit = unit;
@@ -164,6 +174,20 @@ export default function EditPurchasePage({ id }: { id: number }) {
   const isEggsProduct = (productId: number) => {
     const p = activeProducts.find((x) => x.id === productId);
     return p?.category?.toLowerCase() === "huevos";
+  };
+
+  const getTotalBaseUnits = (item: PurchaseItem): number => {
+    const q = parseFloat(item.quantity) || 0;
+    if (!isPackageUnit(item.unit)) return q;
+    const w = parseFloat(item.weightPerPackage);
+    return !isNaN(w) && w > 0 ? q * w : 0;
+  };
+
+  const getCostPerBaseUnit = (item: PurchaseItem): number => {
+    const c = parseFloat(item.costPerUnit) || 0;
+    if (!isPackageUnit(item.unit)) return c;
+    const w = parseFloat(item.weightPerPackage);
+    return !isNaN(w) && w > 0 ? c / w : 0;
   };
 
   const itemTotal = (item: PurchaseItem) => {
@@ -199,6 +223,12 @@ export default function EditPurchasePage({ id }: { id: number }) {
     const validItems = items.filter((i) => i.productId && parseFloat(i.quantity) > 0 && i.costPerUnit !== "" && parseFloat(i.costPerUnit) >= 0);
     if (!validItems.length) {
       toast({ title: "Sin productos válidos", description: "Agrega al menos un producto con cantidad y costo.", variant: "destructive" });
+      return;
+    }
+    const missingWPU = validItems.filter((i) => isPackageUnit(i.unit) && !(i.unit === "CAJON" && isEggsProduct(i.productId)) && !(parseFloat(i.weightPerPackage) > 0));
+    if (missingWPU.length > 0) {
+      const names = missingWPU.map((i) => activeProducts.find((p) => p.id === i.productId)?.name ?? "producto").join(", ");
+      toast({ title: "Falta cantidad base por envase", description: `Completá cuántos unidades/kg trae cada ${missingWPU[0].unit.toLowerCase()} de: ${names}`, variant: "destructive" });
       return;
     }
     updateMutation.mutate({
@@ -368,50 +398,65 @@ export default function EditPurchasePage({ id }: { id: number }) {
                       </div>
                     </div>
 
-                    {packageMode && (
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <div className="space-y-1.5">
-                          <Label className="flex items-center gap-1">
-                            <PackagePlus className="h-3 w-3 text-muted-foreground" />
-                            ¿Cuántos {item.baseUnit} por {labelFor(item.unit)}?{!eggsLocked && <span className="text-destructive ml-0.5">*</span>}
-                          </Label>
-                          <div className="flex gap-2">
-                            <Input
-                              type="number" min="0.0001" step="0.0001"
-                              placeholder={eggsLocked ? "12" : `ej. 18 ${item.baseUnit}`}
-                              value={item.weightPerPackage}
-                              onChange={(e) => !eggsLocked && updateItem(idx, "weightPerPackage", e.target.value)}
-                              readOnly={eggsLocked}
-                              className={eggsLocked ? "bg-muted/40" : (!item.weightPerPackage ? "border-destructive/60 focus-visible:ring-destructive/40" : "")}
-                            />
-                            {eggsLocked ? (
-                              <div className="flex h-9 items-center rounded-md border border-border bg-muted/40 px-3 whitespace-nowrap">
-                                <span className="text-sm font-medium">MAPLE</span>
+                    {packageMode && (() => {
+                      const totalBase = getTotalBaseUnits(item);
+                      const costBase = getCostPerBaseUnit(item);
+                      const baseUnitLabel = labelFor(item.baseUnit);
+                      return (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div className="space-y-1.5">
+                              <Label className="flex items-center gap-1">
+                                <PackagePlus className="h-3 w-3 text-muted-foreground" />
+                                ¿Cuántos {item.baseUnit} por {labelFor(item.unit)}?{!eggsLocked && <span className="text-destructive ml-0.5">*</span>}
+                              </Label>
+                              <div className="flex gap-2">
+                                <Input
+                                  type="number" min="0.0001" step="0.0001"
+                                  placeholder={eggsLocked ? "12" : `ej. 18 ${item.baseUnit}`}
+                                  value={item.weightPerPackage}
+                                  onChange={(e) => !eggsLocked && updateItem(idx, "weightPerPackage", e.target.value)}
+                                  readOnly={eggsLocked}
+                                  className={eggsLocked ? "bg-muted/40" : (!item.weightPerPackage ? "border-destructive/60 focus-visible:ring-destructive/40" : "")}
+                                />
+                                {eggsLocked ? (
+                                  <div className="flex h-9 items-center rounded-md border border-border bg-muted/40 px-3 whitespace-nowrap">
+                                    <span className="text-sm font-medium">MAPLE</span>
+                                  </div>
+                                ) : (
+                                  <Select value={item.baseUnit} onValueChange={(v) => updateItem(idx, "baseUnit", v)}>
+                                    <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                      {BASE_UNIT_OPTIONS.map((u) => (
+                                        <SelectItem key={u.value} value={u.value}>{u.label}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                )}
                               </div>
-                            ) : (
-                              <Select value={item.baseUnit} onValueChange={(v) => updateItem(idx, "baseUnit", v)}>
-                                <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                  {BASE_UNIT_OPTIONS.map((u) => (
-                                    <SelectItem key={u.value} value={u.value}>{u.label}</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            )}
-                          </div>
-                        </div>
-                        {wpp > 0 && parseFloat(item.quantity) > 0 && (
-                          <div className="space-y-1.5">
-                            <Label className="text-muted-foreground">Total base ({item.baseUnit})</Label>
-                            <div className="flex h-9 items-center rounded-md border border-border bg-muted/40 px-3">
-                              <span className="text-sm font-semibold text-foreground">
-                                {(parseFloat(item.quantity) * wpp).toLocaleString("es-MX", { maximumFractionDigits: 4 })}
-                              </span>
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-muted-foreground">Total a agregar ({baseUnitLabel})</Label>
+                              <div className={`flex h-9 items-center rounded-md border px-3 gap-2 ${totalBase > 0 ? "border-primary/40 bg-primary/5" : "border-border bg-muted/40"}`}>
+                                <span className="text-sm font-semibold text-foreground">
+                                  {totalBase > 0 ? totalBase.toLocaleString("es-MX", { maximumFractionDigits: 4 }) : "—"}
+                                </span>
+                              </div>
                             </div>
                           </div>
-                        )}
-                      </div>
-                    )}
+                          {totalBase > 0 && costBase > 0 && (
+                            <div className="space-y-1.5">
+                              <Label className="text-muted-foreground">Costo por {baseUnitLabel} (calc.)</Label>
+                              <div className="flex h-9 items-center rounded-md border border-border bg-muted/40 px-3">
+                                <span className="text-sm font-semibold text-foreground">
+                                  ${costBase.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                       <div className="space-y-1.5">
