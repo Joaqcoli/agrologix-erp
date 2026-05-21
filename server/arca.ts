@@ -40,6 +40,15 @@ function extractXml(xml: string, tag: string): string {
   return xml.match(re)?.[1]?.trim() ?? "";
 }
 
+/** Extrae TODOS los matches de un tag (para errores múltiples de AFIP) */
+function extractAllXml(xml: string, tag: string): string[] {
+  const re = new RegExp(`<(?:[^:>]+:)?${tag}[^>]*>([\\s\\S]*?)<\\/(?:[^:>]+:)?${tag}>`, "gi");
+  const results: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml)) !== null) results.push(m[1].trim());
+  return results;
+}
+
 /** Desescapa entidades HTML básicas */
 function unescapeHtml(s: string): string {
   return s
@@ -178,6 +187,10 @@ async function wsfeSoap(action: string, bodyInner: string): Promise<string> {
     `</soap:Envelope>`,
   ].join("\n");
 
+  if (action === "FECAESolicitar") {
+    console.log(`[ARCA] FECAESolicitar payload:\n${envelope}`);
+  }
+
   let respData: string;
   try {
     const resp = await axios.post(WSFE_URL, envelope, {
@@ -190,7 +203,11 @@ async function wsfeSoap(action: string, bodyInner: string): Promise<string> {
     respData = resp.data as string;
   } catch (e: any) {
     const body = e.response?.data ?? "(sin cuerpo)";
-    throw new Error(`WSFE HTTP error (${action}): ${e.message} — ${String(body).slice(0, 300)}`);
+    throw new Error(`WSFE HTTP error (${action}): ${e.message} — ${String(body).slice(0, 2000)}`);
+  }
+
+  if (action === "FECAESolicitar") {
+    console.log(`[ARCA] FECAESolicitar respuesta:\n${respData}`);
   }
 
   return respData;
@@ -323,12 +340,20 @@ export async function createVoucher(data: VoucherData): Promise<{ CAE: string; C
 
   const xml = await wsfeSoap("FECAESolicitar", body);
 
-  // Detectar error AFIP en respuesta
+  // Detectar error AFIP en respuesta — extraer TODAS las observaciones/errores
   const resultado = extractXml(xml, "Resultado");
   if (resultado === "R") {
-    const errMsg  = extractXml(xml, "Msg");
-    const errCode = extractXml(xml, "Code");
-    throw new Error(`AFIP rechazó el comprobante — Código ${errCode}: ${errMsg}`);
+    // Cada <Obs> tiene <Code> y <Msg> — capturar todos
+    const obsBlocks = extractAllXml(xml, "Obs");
+    const errBlocks = extractAllXml(xml, "Err");
+    const toMsg = (block: string) => {
+      const code = extractXml(block, "Code");
+      const msg  = extractXml(block, "Msg");
+      return code ? `[${code}] ${msg}` : msg;
+    };
+    const allMsgs = [...obsBlocks, ...errBlocks].map(toMsg).filter(Boolean);
+    const detail = allMsgs.length > 0 ? allMsgs.join(" | ") : extractXml(xml, "Msg") || "(sin detalle)";
+    throw new Error(`AFIP rechazó el comprobante: ${detail}`);
   }
 
   const CAE       = extractXml(xml, "CAE");
