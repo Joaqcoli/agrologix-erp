@@ -1354,19 +1354,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 <Button variant="outline" size="sm" onClick={handleDownloadRemito} data-testid="button-download-remito">
                   <Download className="mr-2 h-4 w-4" /> Remito PDF
                 </Button>
-                <Button
-                  variant="outline" size="sm"
-                  className="border-green-500 text-green-600 hover:bg-green-50 dark:hover:bg-green-950"
-                  onClick={() => {
-                    const hasInvoice = !!(order.invoiceNumber || emittedInvoice);
-                    const def = hasInvoice ? "ambos" : "remito";
-                    setWaOption(def);
-                    setWaMessage(`Hola, te adjunto el ${def === "remito" ? "remito" : def === "factura" ? "la factura" : "el remito y la factura"} correspondiente al pedido del ${formatDate(order.orderDate)}. Gracias!`);
-                    setWaDialog(true);
-                  }}
-                >
-                  <WhatsAppIcon className="mr-2 h-4 w-4" /> WhatsApp
-                </Button>
                 {!order.invoiceNumber && !emittedInvoice ? (
                   <Button size="sm" variant="outline" onClick={() => {
                     setInvoiceForm({ type: "B", description: "FRUTAS Y VERDURAS", condicionIva: 5, detailMode: "completo", ivaIncluido: false });
@@ -1393,6 +1380,19 @@ export default function OrderDetailPage({ id }: { id: number }) {
                     <Download className="mr-2 h-4 w-4" /> Factura {emittedInvoice?.number ?? order.invoiceNumber}
                   </Button>
                 )}
+                <Button
+                  variant="outline" size="sm"
+                  className="border-green-500 text-green-600 hover:bg-green-50 dark:hover:bg-green-950"
+                  onClick={() => {
+                    const hasInvoice = !!(order.invoiceNumber || emittedInvoice);
+                    const def = hasInvoice ? "ambos" : "remito";
+                    setWaOption(def);
+                    setWaMessage(`Hola, te adjunto el ${def === "remito" ? "remito" : def === "factura" ? "la factura" : "el remito y la factura"} correspondiente al pedido del ${formatDate(order.orderDate)}. Gracias!`);
+                    setWaDialog(true);
+                  }}
+                >
+                  <WhatsAppIcon className="mr-2 h-4 w-4" /> WhatsApp
+                </Button>
               </div>
             )}
             {isDraft && (
