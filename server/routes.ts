@@ -1291,6 +1291,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       lastLine:        certLines[certLines.length - 1],
       totalChars:      certNorm.length,
       rawHasLiteralNewlines: certRaw.includes("\\n"),
+      rawHasCR: certRaw.includes("\r"),
+      rawHasQuotes: certRaw.startsWith('"') || certRaw.startsWith("'"),
     };
     const keyLines = keyNorm.split("\n");
     const keyInfo = {

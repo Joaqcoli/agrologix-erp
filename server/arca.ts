@@ -20,7 +20,18 @@ let _ta: { token: string; sign: string; expiresAt: Date } | null = null;
 
 /** Convierte PEM con \n literales (Render env vars) a saltos reales */
 function normalizePem(pem: string): string {
-  return pem.replace(/\\n/g, "\n").trim();
+  // Render puede guardar el PEM con \n literales (\\n), con \r\n, o correcto.
+  // También puede envolver todo en comillas extras o agregar espacios.
+  let pem2 = pem.trim();
+  // Quitar comillas externas si las hay
+  if ((pem2.startsWith('"') && pem2.endsWith('"')) || (pem2.startsWith("'") && pem2.endsWith("'"))) {
+    pem2 = pem2.slice(1, -1);
+  }
+  // Convertir \n literales (dos chars) a salto real
+  pem2 = pem2.replace(/\\n/g, "\n");
+  // Normalizar \r\n a \n
+  pem2 = pem2.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return pem2.trim();
 }
 
 /** Extrae el texto de un tag XML (con o sin prefijo de namespace) */
