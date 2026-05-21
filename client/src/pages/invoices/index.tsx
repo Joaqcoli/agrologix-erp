@@ -25,7 +25,7 @@ type InvoiceRow = {
   description: string | null;
   createdAt: string;
   customerName: string;
-  orderFolio: string;
+  orderRemitoNum: string | null;
 };
 
 const fmtDate = (d: string | Date) =>
@@ -55,7 +55,7 @@ export default function InvoicesPage() {
   const filtered = (invoices ?? []).filter((inv) =>
     !search ||
     inv.customerName.toLowerCase().includes(search.toLowerCase()) ||
-    inv.invoiceNumber.toLowerCase().includes(search.toLowerCase()) ||
+    (inv.invoiceNumber ?? "").toLowerCase().includes(search.toLowerCase()) ||
     inv.cae.includes(search)
   );
 
@@ -138,7 +138,7 @@ export default function InvoicesPage() {
                   <th className="px-4 py-3">Número</th>
                   <th className="px-4 py-3 text-right">Total</th>
                   <th className="px-4 py-3">CAE</th>
-                  <th className="px-4 py-3">Pedido</th>
+                  <th className="px-4 py-3">Remito</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
@@ -151,7 +151,7 @@ export default function InvoicesPage() {
                     <td className="px-4 py-3 font-mono text-xs">{inv.invoiceNumber}</td>
                     <td className="px-4 py-3 text-right font-medium">{fmtMoney(inv.total)}</td>
                     <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{inv.cae}</td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">{inv.orderFolio}</td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs">{inv.orderRemitoNum ?? "—"}</td>
                     <td className="px-4 py-3">
                       <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => handleDownloadPDF(inv)}>
                         <Download className="h-3.5 w-3.5 mr-1" /> PDF
