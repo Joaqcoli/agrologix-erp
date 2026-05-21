@@ -1277,13 +1277,56 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Diagnóstico WSAA — solo para admin, eliminar en producción estable
   app.get("/api/invoices/wsaa-test", requireAuth, async (req, res) => {
+    const certRaw  = process.env.ARCA_CERT ?? "";
+    const keyRaw   = process.env.ARCA_KEY  ?? "";
+    const certNorm = certRaw.replace(/\\n/g, "\n").trim();
+    const keyNorm  = keyRaw.replace(/\\n/g, "\n").trim();
+
+    const certLines = certNorm.split("\n");
+    const certInfo = {
+      hasBeginCert:    certLines[0]?.includes("BEGIN CERTIFICATE"),
+      hasEndCert:      certLines[certLines.length - 1]?.includes("END CERTIFICATE"),
+      lineCount:       certLines.length,
+      firstLine:       certLines[0],
+      lastLine:        certLines[certLines.length - 1],
+      totalChars:      certNorm.length,
+      rawHasLiteralNewlines: certRaw.includes("\\n"),
+    };
+    const keyLines = keyNorm.split("\n");
+    const keyInfo = {
+      hasBeginKey:  keyLines[0]?.includes("BEGIN"),
+      hasEndKey:    keyLines[keyLines.length - 1]?.includes("END"),
+      lineCount:    keyLines.length,
+      firstLine:    keyLines[0],
+    };
+
+    // Try to parse the cert with node-forge
+    let certParsed: any = null;
+    try {
+      const forge = await import("node-forge");
+      const cert = forge.pki.certificateFromPem(certNorm);
+      certParsed = {
+        subject: cert.subject.attributes.map((a: any) => `${a.shortName}=${a.value}`).join(", "),
+        issuer:  cert.issuer.attributes.map((a: any) => `${a.shortName}=${a.value}`).join(", "),
+        validFrom: cert.validity.notBefore,
+        validTo:   cert.validity.notAfter,
+        serialNumber: cert.serialNumber,
+      };
+    } catch (err: any) {
+      certParsed = { parseError: err.message };
+    }
+
+    // Try calling WSAA
+    let wsaaResult: any = null;
     try {
       const { getLastVoucher: glv } = await import("./arca");
-      const last = await glv(6); // Factura B
-      return res.json({ ok: true, lastFacturaB: last });
+      const last = await glv(6);
+      wsaaResult = { ok: true, lastFacturaB: last };
     } catch (e: any) {
-      return res.status(500).json({ error: e.message });
+      wsaaResult = { ok: false, error: e.message };
     }
+
+    return res.json({ certInfo, keyInfo, certParsed, wsaaResult });
   });
   app.post("/api/invoices/create", requireAuth, async (req, res) => {
     try {

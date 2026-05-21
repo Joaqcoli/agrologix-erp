@@ -122,7 +122,7 @@ async function getTA(certPem: string, keyPem: string): Promise<{ token: string; 
     respData = resp.data as string;
   } catch (e: any) {
     const body = e.response?.data ?? "(sin cuerpo)";
-    throw new Error(`WSAA HTTP error: ${e.message} — ${String(body).slice(0, 300)}`);
+    throw new Error(`WSAA HTTP error: ${e.message} — ${String(body).slice(0, 2000)}`);
   }
 
   // Detectar SOAPFault
