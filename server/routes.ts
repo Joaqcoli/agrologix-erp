@@ -1333,10 +1333,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.post("/api/invoices/create", requireAuth, async (req, res) => {
     try {
-      const { orderId, invoiceType, description } = z.object({
+      const { orderId, invoiceType, description, condicionIva } = z.object({
         orderId: z.number(),
         invoiceType: z.enum(["A", "B", "C"]),
         description: z.string().optional(),
+        /** 1=Resp.Inscripto 4=Exento 5=ConsumidorFinal 6=Monotributista 13=MonotributistaSocial */
+        condicionIva: z.number().int().default(5),
       }).parse(req.body);
 
       const order = await storage.getOrder(orderId);
@@ -1404,6 +1406,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ImpTrib: 0,
         MonId: "PES",
         MonCotiz: 1,
+        CondicionIVAReceptorId: condicionIva,
         Iva: iva,
       });
 

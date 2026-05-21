@@ -258,6 +258,9 @@ export type VoucherData = {
   ImpTrib: number;
   MonId: string;
   MonCotiz: number;
+  /** Condición IVA del receptor (obligatorio desde 15/04/2025):
+   *  1=Resp.Inscripto  4=Exento  5=ConsumidorFinal  6=Monotributista  13=MonotributistaSocial */
+  CondicionIVAReceptorId: number;
   Iva: { Id: number; BaseImp: number; Importe: number }[];
 };
 
@@ -311,6 +314,7 @@ export async function createVoucher(data: VoucherData): Promise<{ CAE: string; C
     `            <ar:ImpTrib>${data.ImpTrib.toFixed(2)}</ar:ImpTrib>`,
     `            <ar:MonId>${data.MonId}</ar:MonId>`,
     `            <ar:MonCotiz>${data.MonCotiz}</ar:MonCotiz>`,
+    `            <ar:CondicionIVAReceptorId>${data.CondicionIVAReceptorId}</ar:CondicionIVAReceptorId>`,
     data.Iva.length > 0 ? [`            <ar:Iva>`, ivaItems, `            </ar:Iva>`].join("\n") : "",
     `          </ar:FECAEDetRequest>`,
     `        </ar:FeDetReq>`,

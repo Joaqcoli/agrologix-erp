@@ -656,7 +656,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const [remitoNumInput, setRemitoNumInput] = useState("");
   // Invoice dialog
   const [invoiceDialog, setInvoiceDialog] = useState(false);
-  const [invoiceForm, setInvoiceForm] = useState<{ type: "A" | "B" | "C"; description: string }>({ type: "B", description: "" });
+  const [invoiceForm, setInvoiceForm] = useState<{ type: "A" | "B" | "C"; description: string; condicionIva: number }>({ type: "B", description: "", condicionIva: 5 });
   const [emittedInvoice, setEmittedInvoice] = useState<{ id: number; number: string } | null>(null);
 
   // ── Mutations ─────────────────────────────────────────────────────────────
@@ -1306,7 +1306,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 </Button>
                 {!order.invoiceNumber && !emittedInvoice ? (
                   <Button size="sm" variant="outline" onClick={() => {
-                    setInvoiceForm({ type: "B", description: `Distribución de verduras y frutas - ${order.customer.name}` });
+                    setInvoiceForm({ type: "B", description: `Distribución de verduras y frutas - ${order.customer.name}`, condicionIva: 5 });
                     setInvoiceDialog(true);
                   }}>
                     <Receipt className="mr-2 h-4 w-4" /> Emitir Factura
@@ -1691,14 +1691,33 @@ export default function OrderDetailPage({ id }: { id: number }) {
           <div className="space-y-4 mt-2">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Tipo de Factura</label>
-              <Select value={invoiceForm.type} onValueChange={(v) => setInvoiceForm({ ...invoiceForm, type: v as "A" | "B" | "C" })}>
+              <Select value={invoiceForm.type} onValueChange={(v) => {
+                const tipo = v as "A" | "B" | "C";
+                const defaultCond = tipo === "A" ? 1 : tipo === "C" ? 6 : 5;
+                setInvoiceForm({ ...invoiceForm, type: tipo, condicionIva: defaultCond });
+              }}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="A">Factura A — Responsable Inscripto (requiere CUIT del cliente)</SelectItem>
                   <SelectItem value="B">Factura B — Consumidor Final o Monotributista</SelectItem>
-                  <SelectItem value="C">Factura C — Exento</SelectItem>
+                  <SelectItem value="C">Factura C — Exento / Monotributista</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Condición IVA del receptor</label>
+              <Select value={String(invoiceForm.condicionIva)} onValueChange={(v) => setInvoiceForm({ ...invoiceForm, condicionIva: Number(v) })}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1">Responsable Inscripto</SelectItem>
+                  <SelectItem value="4">IVA Sujeto Exento</SelectItem>
+                  <SelectItem value="5">Consumidor Final</SelectItem>
+                  <SelectItem value="6">Responsable Monotributo</SelectItem>
+                  <SelectItem value="13">Monotributista Social</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1719,7 +1738,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
           <DialogFooter className="mt-4">
             <Button variant="outline" onClick={() => setInvoiceDialog(false)}>Cancelar</Button>
             <Button
-              onClick={() => invoiceMutation.mutate({ orderId: id, invoiceType: invoiceForm.type, description: invoiceForm.description })}
+              onClick={() => invoiceMutation.mutate({ orderId: id, invoiceType: invoiceForm.type, description: invoiceForm.description, condicionIva: invoiceForm.condicionIva })}
               disabled={invoiceMutation.isPending}
             >
               <Receipt className="mr-2 h-4 w-4" />
