@@ -4044,7 +4044,7 @@ export const storage = {
     return inv;
   },
 
-  async getInvoices(filters?: { customerId?: number; orderId?: number; from?: string; to?: string }): Promise<(Invoice & { customerName: string; orderRemitoNum: string | null })[]> {
+  async getInvoices(filters?: { customerId?: number; orderId?: number; from?: string; to?: string }): Promise<(Invoice & { customerName: string; customerPhone: string | null; orderRemitoNum: string | null })[]> {
     let q = drizzleSql`
       SELECT
         i.id, i.order_id AS "orderId", i.customer_id AS "customerId",
@@ -4052,7 +4052,7 @@ export const storage = {
         i.point_of_sale AS "pointOfSale", i.cae, i.cae_expiry AS "caeExpiry",
         i.total, i.iva_amount AS "ivaAmount", i.description,
         i.created_at AS "createdAt",
-        c.name AS "customerName",
+        c.name AS "customerName", c.phone AS "customerPhone",
         o.remito_num AS "orderRemitoNum"
       FROM invoices i
       JOIN customers c ON c.id = i.customer_id
