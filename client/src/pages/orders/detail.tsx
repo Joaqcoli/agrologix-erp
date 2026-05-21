@@ -1313,10 +1313,15 @@ export default function OrderDetailPage({ id }: { id: number }) {
                   </Button>
                 ) : (
                   <Button size="sm" variant="outline" onClick={async () => {
-                    const invoiceId = emittedInvoice?.id ?? null;
-                    if (!invoiceId) return;
                     try {
-                      const detail = await fetch(`/api/invoices/${invoiceId}`).then((r) => r.json());
+                      let invoiceId = emittedInvoice?.id ?? null;
+                      if (!invoiceId) {
+                        // Factura emitida en sesión anterior — buscar por orderId
+                        const list = await fetch(`/api/invoices?orderId=${id}`, { credentials: "include" }).then((r) => r.json());
+                        invoiceId = list?.[0]?.id ?? null;
+                      }
+                      if (!invoiceId) { toast({ title: "No se encontró la factura", variant: "destructive" }); return; }
+                      const detail = await fetch(`/api/invoices/${invoiceId}`, { credentials: "include" }).then((r) => r.json());
                       await generateInvoicePDF(detail);
                     } catch (e: any) {
                       toast({ title: "Error", description: e.message, variant: "destructive" });

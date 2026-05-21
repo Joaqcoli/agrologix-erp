@@ -1435,9 +1435,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/invoices", requireAuth, async (req, res) => {
     try {
       const customerId = req.query.customerId ? Number(req.query.customerId) : undefined;
+      const orderId    = req.query.orderId    ? Number(req.query.orderId)    : undefined;
       const from = req.query.from as string | undefined;
       const to   = req.query.to   as string | undefined;
-      return res.json(await storage.getInvoices({ customerId, from, to }));
+      return res.json(await storage.getInvoices({ customerId, orderId, from, to }));
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
