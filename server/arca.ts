@@ -7,7 +7,7 @@ import forge from "node-forge";
 import axios from "axios";
 
 const CUIT        = 30718551842;
-const PUNTO_VENTA = 1;
+const PUNTO_VENTA = 4;
 
 const WSAA_URL = "https://wsaa.afip.gov.ar/ws/services/LoginCms";
 const WSFE_URL = "https://servicios1.afip.gov.ar/wsfev1/service.asmx";

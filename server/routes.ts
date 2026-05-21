@@ -1390,7 +1390,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const { CAE, CAEFchVto } = await createVoucher({
         CantReg: 1,
-        PtoVta: 1,
+        PtoVta: 4,
         CbteTipo: cbteTipo,
         Concepto: 1,
         DocTipo: docTipo,
@@ -1416,7 +1416,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         customerId: customer.id,
         invoiceType,
         invoiceNumber: formattedNumber,
-        pointOfSale: 1,
+        pointOfSale: 4,
         cae: String(CAE),
         caeExpiry: String(CAEFchVto),
         total: String((totalNeto + totalIVA).toFixed(2)),
