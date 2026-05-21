@@ -1274,6 +1274,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── Facturas Electrónicas ARCA ───────────────────────────────────────────────
+
+  // Diagnóstico WSAA — solo para admin, eliminar en producción estable
+  app.get("/api/invoices/wsaa-test", requireAuth, async (req, res) => {
+    try {
+      const { getLastVoucher: glv } = await import("./arca");
+      const last = await glv(6); // Factura B
+      return res.json({ ok: true, lastFacturaB: last });
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
   app.post("/api/invoices/create", requireAuth, async (req, res) => {
     try {
       const { orderId, invoiceType, description } = z.object({
