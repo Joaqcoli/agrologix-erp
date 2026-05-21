@@ -1308,7 +1308,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const pName = (item.product?.name ?? item.rawProductName ?? "").toUpperCase();
         const pCat = (item.product as any)?.category ?? "";
         const isHuevo = pName.includes("HUEVO") || pName.includes("MAPLE") || pCat.toUpperCase().includes("HUEVO");
-        const sub = parseFloat(item.subtotal);
+        const sub = parseFloat(item.subtotal ?? "0") || 0;
         if (isHuevo) {
           neto21 += sub;
           iva21  += sub * IVA_HUEVO;
@@ -1319,6 +1319,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       const totalNeto = neto105 + neto21;
       const totalIVA  = iva105 + iva21;
+
+      if (!isFinite(totalNeto) || !isFinite(totalIVA)) {
+        throw new Error(`Total del pedido inválido: neto=${totalNeto}, iva=${totalIVA}. Verificar precios de los ítems.`);
+      }
 
       // Map type → AFIP code
       const cbteTipo = invoiceType === "A" ? 1 : invoiceType === "B" ? 6 : 11;
