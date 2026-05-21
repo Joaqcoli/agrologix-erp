@@ -1305,7 +1305,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // Try to parse the cert with node-forge
     let certParsed: any = null;
     try {
-      const forge = await import("node-forge");
+      const forgeImport = await import("node-forge");
+      const forge = (forgeImport as any).default ?? forgeImport;
       const cert = forge.pki.certificateFromPem(certNorm);
       certParsed = {
         subject: cert.subject.attributes.map((a: any) => `${a.shortName}=${a.value}`).join(", "),

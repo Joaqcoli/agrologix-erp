@@ -50,12 +50,15 @@ function unescapeHtml(s: string): string {
     .replace(/&#39;/g,  "'");
 }
 
-/** Formatea fecha a ISO 8601 con offset Argentina */
+/** Formatea fecha a ISO 8601 con offset Argentina (UTC-3).
+ *  Render corre en UTC, por eso restamos 3h y usamos getUTC* para no
+ *  depender del timezone del servidor. */
 function isoAR(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
+  const ar = new Date(d.getTime() - 3 * 3600_000); // UTC → AR (UTC-3)
   return (
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-    `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}-03:00`
+    `${ar.getUTCFullYear()}-${pad(ar.getUTCMonth() + 1)}-${pad(ar.getUTCDate())}` +
+    `T${pad(ar.getUTCHours())}:${pad(ar.getUTCMinutes())}:${pad(ar.getUTCSeconds())}-03:00`
   );
 }
 
