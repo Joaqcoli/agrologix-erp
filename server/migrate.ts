@@ -692,5 +692,12 @@ export async function runMigrations() {
     UPDATE invoices SET point_of_sale = 4 WHERE point_of_sale = 1
   `);
 
+  // Fix: corregir invoice_number en orders (columna que muestra el botón de descarga en detalle pedido)
+  await db.execute(sql`
+    UPDATE orders
+    SET invoice_number = regexp_replace(invoice_number, '^([A-Z])-0001-', '\\1-0004-')
+    WHERE invoice_number ~ '^[A-Z]-0001-'
+  `);
+
   console.log("Migrations complete.");
 }
