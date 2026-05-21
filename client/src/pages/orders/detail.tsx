@@ -656,7 +656,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const [remitoNumInput, setRemitoNumInput] = useState("");
   // Invoice dialog
   const [invoiceDialog, setInvoiceDialog] = useState(false);
-  const [invoiceForm, setInvoiceForm] = useState<{ type: "A" | "B" | "C"; description: string; condicionIva: number }>({ type: "B", description: "", condicionIva: 5 });
+  const [invoiceForm, setInvoiceForm] = useState<{ type: "A" | "B" | "C"; description: string; condicionIva: number; detailMode: "completo" | "agrupado"; ivaIncluido: boolean }>({ type: "B", description: "", condicionIva: 5, detailMode: "completo", ivaIncluido: false });
   const [emittedInvoice, setEmittedInvoice] = useState<{ id: number; number: string } | null>(null);
 
   // ── Mutations ─────────────────────────────────────────────────────────────
@@ -685,7 +685,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   });
 
   const invoiceMutation = useMutation({
-    mutationFn: (body: { orderId: number; invoiceType: string; description: string }) =>
+    mutationFn: (body: { orderId: number; invoiceType: string; description: string; condicionIva: number; ivaIncluido: boolean; detailMode: string }) =>
       apiRequest("POST", "/api/invoices/create", body).then((r) => r.json()),
     onSuccess: (inv) => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
@@ -1306,7 +1306,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 </Button>
                 {!order.invoiceNumber && !emittedInvoice ? (
                   <Button size="sm" variant="outline" onClick={() => {
-                    setInvoiceForm({ type: "B", description: `Distribución de verduras y frutas - ${order.customer.name}`, condicionIva: 5 });
+                    setInvoiceForm({ type: "B", description: "FRUTAS Y VERDURAS", condicionIva: 5, detailMode: "completo", ivaIncluido: false });
                     setInvoiceDialog(true);
                   }}>
                     <Receipt className="mr-2 h-4 w-4" /> Emitir Factura
@@ -1322,7 +1322,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
                       }
                       if (!invoiceId) { toast({ title: "No se encontró la factura", variant: "destructive" }); return; }
                       const detail = await fetch(`/api/invoices/${invoiceId}`, { credentials: "include" }).then((r) => r.json());
-                      await generateInvoicePDF(detail);
+                      await generateInvoicePDF(detail, invoiceForm.detailMode);
                     } catch (e: any) {
                       toast({ title: "Error", description: e.message, variant: "destructive" });
                     }
@@ -1727,6 +1727,23 @@ export default function OrderDetailPage({ id }: { id: number }) {
               </Select>
             </div>
             <div className="space-y-1.5">
+              <label className="text-sm font-medium">Modo detalle</label>
+              <div className="flex gap-4">
+                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input type="radio" name="detailMode" value="completo"
+                    checked={invoiceForm.detailMode === "completo"}
+                    onChange={() => setInvoiceForm({ ...invoiceForm, detailMode: "completo" })} />
+                  Detalle completo
+                </label>
+                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input type="radio" name="detailMode" value="agrupado"
+                    checked={invoiceForm.detailMode === "agrupado"}
+                    onChange={() => setInvoiceForm({ ...invoiceForm, detailMode: "agrupado" })} />
+                  Agrupado (Frutas / Huevos)
+                </label>
+              </div>
+            </div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">Descripción</label>
               <Textarea
                 value={invoiceForm.description}
@@ -1735,6 +1752,12 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 placeholder="Descripción del servicio o productos"
               />
             </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox"
+                checked={invoiceForm.ivaIncluido}
+                onChange={(e) => setInvoiceForm({ ...invoiceForm, ivaIncluido: e.target.checked })} />
+              El total del remito ya incluye IVA
+            </label>
             <div className="flex items-center justify-between rounded-md bg-muted px-4 py-3">
               <span className="text-sm text-muted-foreground">Total del pedido</span>
               <span className="font-semibold">${parseFloat(order?.total ?? "0").toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span>
@@ -1743,7 +1766,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
           <DialogFooter className="mt-4">
             <Button variant="outline" onClick={() => setInvoiceDialog(false)}>Cancelar</Button>
             <Button
-              onClick={() => invoiceMutation.mutate({ orderId: id, invoiceType: invoiceForm.type, description: invoiceForm.description, condicionIva: invoiceForm.condicionIva })}
+              onClick={() => invoiceMutation.mutate({ orderId: id, invoiceType: invoiceForm.type, description: invoiceForm.description, condicionIva: invoiceForm.condicionIva, ivaIncluido: invoiceForm.ivaIncluido, detailMode: invoiceForm.detailMode })}
               disabled={invoiceMutation.isPending}
             >
               <Receipt className="mr-2 h-4 w-4" />

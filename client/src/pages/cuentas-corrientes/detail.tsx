@@ -25,6 +25,14 @@ const MONTHS = [
 ];
 
 const fmtInt = (v: number) => Math.round(v).toLocaleString("es-AR");
+/** Muestra solo el número secuencial de la factura: "B-0004-00000003" → "03" */
+const fmtFacturaSeq = (n: string | null | undefined): string => {
+  if (!n) return "—";
+  const seq = n.split("-").at(-1);
+  if (!seq) return n;
+  const num = parseInt(seq, 10);
+  return isNaN(num) ? n : String(num).padStart(2, "0");
+};
 const today = () => new Date().toISOString().split("T")[0];
 
 type FilterType = "mes" | "semana" | "dia";
@@ -133,7 +141,7 @@ function SubsidiaryDetailModal({
       orderRows: subOrders.map((o) => ({
         fecha: fmtD(o.orderDate),
         remito: formatRemito(o),
-        factura: o.invoiceNumber ?? "—",
+        factura: fmtFacturaSeq(o.invoiceNumber),
         monto: o.total,
       })),
       total: subsidiary.facturacion,
@@ -188,7 +196,7 @@ function SubsidiaryDetailModal({
                   <tr key={o.id} className={`border-b border-border last:border-0 ${o.isPaid ? "bg-green-50/30" : ""}`}>
                     <td className="py-1.5 px-3 font-mono font-medium">{formatRemito(o)}</td>
                     <td className="py-1.5 px-3 text-muted-foreground">{fmtDate(o.orderDate)}</td>
-                    <td className="py-1.5 px-3 text-muted-foreground">{o.invoiceNumber || "—"}</td>
+                    <td className="py-1.5 px-3 text-muted-foreground">{fmtFacturaSeq(o.invoiceNumber)}</td>
                     <td className={`py-1.5 px-3 text-right font-semibold ${o.isPaid ? "line-through text-muted-foreground" : ""}`}>
                       ${fmtInt(o.total)}
                     </td>
@@ -643,7 +651,7 @@ function PaymentModal({
                           <span className="text-[10px] text-muted-foreground shrink-0 w-10">{fmtD(o.orderDate)}</span>
                           <span className="text-xs font-mono font-medium shrink-0">{formatRemito(o)}</span>
                           {o.invoiceNumber && (
-                            <span className="text-[10px] text-muted-foreground shrink-0">{o.invoiceNumber}</span>
+                            <span className="text-[10px] text-muted-foreground shrink-0">FC {fmtFacturaSeq(o.invoiceNumber)}</span>
                           )}
                           {isPartial && (
                             <span className="text-[10px] text-amber-600 dark:text-amber-400 shrink-0">parcial</span>
@@ -1064,7 +1072,7 @@ export default function CCCustomerDetailPage({
       .map((o) => ({
         fecha: fmtD(o.orderDate),
         remito: formatRemito(o),
-        factura: o.invoiceNumber ?? "—",   // cambio 2: usar invoiceNumber real
+        factura: fmtFacturaSeq(o.invoiceNumber),
         monto: Math.round(parseFloat(o.total) - parseFloat(o.paidAmount ?? "0")),
         orderDate: o.orderDate,
       }));
@@ -1075,7 +1083,7 @@ export default function CCCustomerDetailPage({
       .map((o) => ({
         fecha: fmtD(o.orderDate),
         remito: formatRemito(o),
-        factura: o.invoiceNumber ?? "—",
+        factura: fmtFacturaSeq(o.invoiceNumber),
         monto: Math.round(o.total - (o.paidAmount ?? 0)),
         orderDate: o.orderDate,
       }));
@@ -1399,7 +1407,7 @@ export default function CCCustomerDetailPage({
                         >
                           <td className="py-1.5 px-3 font-mono font-medium text-primary">{formatRemito(o)}</td>
                           <td className="py-1.5 px-3 text-muted-foreground">{fmtD(o.orderDate)}</td>
-                          <td className="py-1.5 px-3 text-muted-foreground">{o.invoiceNumber || <span className="italic text-border text-[10px]">—</span>}</td>
+                          <td className="py-1.5 px-3 text-muted-foreground">{fmtFacturaSeq(o.invoiceNumber)}</td>
                           <td className="py-1.5 px-3 text-right">${fmtInt(parseFloat(o.total))}</td>
                           <td className="py-1.5 px-3 text-right font-semibold text-destructive">${fmtInt(remaining)}</td>
                         </tr>

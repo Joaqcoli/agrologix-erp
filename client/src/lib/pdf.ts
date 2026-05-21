@@ -852,7 +852,7 @@ export async function generateInvoicePDF(data: {
       subtotal: string;
     }[];
   };
-}): Promise<void> {
+}, detailMode: "completo" | "agrupado" = "completo"): Promise<void> {
   const { invoice, customer, order } = data;
   const logoDataUrl = await loadLogoAsJpeg();
 
@@ -976,22 +976,42 @@ export async function generateInvoicePDF(data: {
 
   // ── Rows ─────────────────────────────────────────────────────────────────────
   let y = TABLE_Y + TH_H;
-  order.items.forEach((item, i) => {
-    const qty   = parseFloat(item.quantity);
-    const sub   = parseFloat(item.subtotal);
-    const price = parseFloat(item.pricePerUnit ?? "0");
-    const name  = item.product?.name ?? item.rawProductName ?? "Producto sin nombre";
 
+  type PdfRow = { qty: string; unit: string; name: string; price: number; sub: number };
+
+  let pdfRows: PdfRow[];
+  if (detailMode === "agrupado") {
+    let sumFrutas = 0, sumHuevos = 0;
+    for (const item of order.items) {
+      const pName = (item.product?.name ?? item.rawProductName ?? "").toUpperCase();
+      const isHuevo = pName.includes("HUEVO") || pName.includes("MAPLE");
+      const sub = parseFloat(item.subtotal) || 0;
+      if (isHuevo) sumHuevos += sub; else sumFrutas += sub;
+    }
+    pdfRows = [];
+    if (sumFrutas > 0) pdfRows.push({ qty: "1", unit: "", name: "FRUTAS Y VERDURAS", price: sumFrutas, sub: sumFrutas });
+    if (sumHuevos > 0) pdfRows.push({ qty: "1", unit: "", name: "HUEVO N1/N2",       price: sumHuevos, sub: sumHuevos });
+  } else {
+    pdfRows = order.items.map((item) => ({
+      qty:   String(parseFloat(item.quantity) % 1 === 0 ? Math.round(parseFloat(item.quantity)) : parseFloat(item.quantity).toFixed(2)),
+      unit:  item.unit.toUpperCase(),
+      name:  item.product?.name ?? item.rawProductName ?? "Producto sin nombre",
+      price: parseFloat(item.pricePerUnit ?? "0"),
+      sub:   parseFloat(item.subtotal) || 0,
+    }));
+  }
+
+  pdfRows.forEach((row, i) => {
     if (i % 2 === 1) { doc.setFillColor(...C_ALT_ROW); doc.rect(ML, y, CW, ROW_H, "F"); }
     doc.setDrawColor(...C_ROW_SEP); doc.setLineWidth(0.1);
     doc.line(ML, y + ROW_H, ML + CW, y + ROW_H);
     doc.setTextColor(...C_TEXT); doc.setFont("helvetica", "normal"); doc.setFontSize(8);
     const ty = y + ROW_H - 2;
-    doc.text(qty % 1 === 0 ? String(qty) : qty.toFixed(2), cantX + cantW / 2, ty, { align: "center" });
-    doc.text(item.unit.toUpperCase(), unitX + unitW / 2, ty, { align: "center" });
-    doc.text(doc.splitTextToSize(name, prodW - 4)[0], prodX + 2, ty);
-    doc.text(fmtMoney(price), priceX + priceW - 2, ty, { align: "right" });
-    doc.text(fmtMoney(sub),   totX + totW - 2, ty, { align: "right" });
+    doc.text(row.qty,  cantX + cantW / 2, ty, { align: "center" });
+    doc.text(row.unit, unitX + unitW / 2, ty, { align: "center" });
+    doc.text(doc.splitTextToSize(row.name, prodW - 4)[0], prodX + 2, ty);
+    doc.text(fmtMoney(row.price), priceX + priceW - 2, ty, { align: "right" });
+    doc.text(fmtMoney(row.sub),   totX + totW - 2,     ty, { align: "right" });
     y += ROW_H;
   });
 

@@ -1333,12 +1333,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.post("/api/invoices/create", requireAuth, async (req, res) => {
     try {
-      const { orderId, invoiceType, description, condicionIva } = z.object({
+      const { orderId, invoiceType, description, condicionIva, ivaIncluido } = z.object({
         orderId: z.number(),
         invoiceType: z.enum(["A", "B", "C"]),
         description: z.string().optional(),
         /** 1=Resp.Inscripto 4=Exento 5=ConsumidorFinal 6=Monotributista 13=MonotributistaSocial */
         condicionIva: z.number().int().default(5),
+        /** true = el subtotal del ítem ya incluye IVA → calcular neto dividiendo */
+        ivaIncluido: z.boolean().default(false),
       }).parse(req.body);
 
       const order = await storage.getOrder(orderId);
@@ -1357,12 +1359,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const pCat = (item.product as any)?.category ?? "";
         const isHuevo = pName.includes("HUEVO") || pName.includes("MAPLE") || pCat.toUpperCase().includes("HUEVO");
         const sub = parseFloat(item.subtotal ?? "0") || 0;
+        // Si el remito ya incluye IVA, descontar para obtener el neto
+        const rate = isHuevo ? IVA_HUEVO : IVA_DEFAULT;
+        const netSub = ivaIncluido ? sub / (1 + rate) : sub;
         if (isHuevo) {
-          neto21 += sub;
-          iva21  += sub * IVA_HUEVO;
+          neto21 += netSub;
+          iva21  += netSub * IVA_HUEVO;
         } else {
-          neto105 += sub;
-          iva105  += sub * IVA_DEFAULT;
+          neto105 += netSub;
+          iva105  += netSub * IVA_DEFAULT;
         }
       }
       const totalNeto = neto105 + neto21;
@@ -1410,7 +1415,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         Iva: iva,
       });
 
-      const formattedNumber = `${invoiceType}-0001-${String(nextNumber).padStart(8, "0")}`;
+      const formattedNumber = `${invoiceType}-0004-${String(nextNumber).padStart(8, "0")}`;
       const invoice = await storage.createInvoice({
         orderId,
         customerId: customer.id,
