@@ -207,9 +207,21 @@ function authXml(token: string, sign: string): string {
   ].join("\n");
 }
 
+// ── Modo test (ARCA_TEST_MODE=true) ──────────────────────────────────────────
+
+let _testCounter: Record<number, number> = {};
+
+function isTestMode() {
+  return process.env.ARCA_TEST_MODE === "true";
+}
+
 // ── Público: último comprobante autorizado ────────────────────────────────────
 
 export async function getLastVoucher(cbteTipo: number): Promise<number> {
+  if (isTestMode()) {
+    return _testCounter[cbteTipo] ?? 0;
+  }
+
   const cert = normalizePem(process.env.ARCA_CERT ?? "");
   const key  = normalizePem(process.env.ARCA_KEY  ?? "");
   if (!cert || !key) throw new Error("ARCA_CERT y ARCA_KEY son requeridas");
@@ -250,6 +262,17 @@ export type VoucherData = {
 };
 
 export async function createVoucher(data: VoucherData): Promise<{ CAE: string; CAEFchVto: string }> {
+  if (isTestMode()) {
+    // Incrementar contador interno para que el nextNumber sea consistente
+    _testCounter[data.CbteTipo] = (_testCounter[data.CbteTipo] ?? 0) + 1;
+    const vto = new Date();
+    vto.setDate(vto.getDate() + 30);
+    const pad2 = (n: number) => String(n).padStart(2, "0");
+    const CAEFchVto = `${vto.getUTCFullYear()}${pad2(vto.getUTCMonth() + 1)}${pad2(vto.getUTCDate())}`;
+    console.log(`[ARCA TEST MODE] CAE ficticio para CbteTipo=${data.CbteTipo} CbteDesde=${data.CbteDesde}`);
+    return { CAE: "12345678901234", CAEFchVto };
+  }
+
   const cert = normalizePem(process.env.ARCA_CERT ?? "");
   const key  = normalizePem(process.env.ARCA_KEY  ?? "");
   if (!cert || !key) throw new Error("ARCA_CERT y ARCA_KEY son requeridas");
