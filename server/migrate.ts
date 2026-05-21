@@ -680,5 +680,17 @@ export async function runMigrations() {
     )
   `);
 
+  // Fix: corregir números de factura con PV 0001 → 0004 (PV fue cambiado de 1 a 4)
+  await db.execute(sql`
+    UPDATE invoices
+    SET invoice_number = regexp_replace(invoice_number, '^([A-Z])-0001-', '\\1-0004-')
+    WHERE invoice_number ~ '^[A-Z]-0001-'
+  `);
+
+  // Fix: corregir point_of_sale 1 → 4 en las mismas facturas
+  await db.execute(sql`
+    UPDATE invoices SET point_of_sale = 4 WHERE point_of_sale = 1
+  `);
+
   console.log("Migrations complete.");
 }
