@@ -1603,8 +1603,8 @@ export default function CCCustomerDetailPage({
                         }`}
                         data-testid={`row-order-${o.id}`}
                       >
-                        <td className="py-2 px-2 text-center" onClick={(e) => { e.stopPropagation(); toggleOrder(o.id); }}>
-                          <Checkbox checked={selectedOrderIds.has(o.id)} onCheckedChange={() => toggleOrder(o.id)} className="h-3.5 w-3.5" />
+                        <td className="py-2 px-2 text-center">
+                          <Checkbox checked={selectedOrderIds.has(o.id)} onCheckedChange={() => toggleOrder(o.id)} onClick={(e) => e.stopPropagation()} className="h-3.5 w-3.5" />
                         </td>
                         <td
                           className="py-2 px-3 font-mono font-medium text-primary cursor-pointer hover:underline"
@@ -1692,8 +1692,8 @@ export default function CCCustomerDetailPage({
                           key={o.id}
                           className={`border-b border-border last:border-0 cursor-pointer transition-colors ${selectedOrderIds.has(o.id) ? "bg-primary/5" : "hover:bg-muted/20"}`}
                         >
-                          <td className="py-1.5 px-2 text-center" onClick={(e) => { e.stopPropagation(); toggleOrder(o.id); }}>
-                            <Checkbox checked={selectedOrderIds.has(o.id)} onCheckedChange={() => toggleOrder(o.id)} className="h-3.5 w-3.5" />
+                          <td className="py-1.5 px-2 text-center">
+                            <Checkbox checked={selectedOrderIds.has(o.id)} onCheckedChange={() => toggleOrder(o.id)} onClick={(e) => e.stopPropagation()} className="h-3.5 w-3.5" />
                           </td>
                           <td className="py-1.5 px-3 font-mono font-medium text-primary" onClick={() => setLocation(`/orders/${o.id}`)}>{formatRemito(o)}</td>
                           <td className="py-1.5 px-3 text-muted-foreground" onClick={() => setLocation(`/orders/${o.id}`)}>{fmtD(o.orderDate)}</td>
