@@ -31,6 +31,40 @@ function itemIvaRate(name: string): number {
   return /huevo/i.test(name) ? 0.21 : 0.105;
 }
 
+/** Merge items with the same product name+unit into a single row (bolsa/bolsa_propia + normal). */
+function mergeForPDF<T extends {
+  product?: { name: string; [k: string]: any } | null;
+  rawProductName?: string | null;
+  quantity: string;
+  unit: string;
+  pricePerUnit?: string | null;
+  subtotal: string;
+  [k: string]: any;
+}>(items: T[]): T[] {
+  const result: T[] = [];
+  const idx = new Map<string, number>();
+  for (const item of items) {
+    const name = (item.product?.name ?? item.rawProductName ?? "").trim();
+    const isBonif = !!(item as any).isBonification;
+    if (!name || isBonif) { result.push(item); continue; }
+    const key = `${name.toLowerCase()}||${item.unit.toLowerCase()}`;
+    if (idx.has(key)) {
+      const i = idx.get(key)!;
+      const ex = result[i];
+      const newQty  = parseFloat(ex.quantity)  + parseFloat(item.quantity);
+      const newSub  = parseFloat(ex.subtotal)  + parseFloat(item.subtotal);
+      const exPrice = parseFloat(ex.pricePerUnit  ?? "0");
+      const itPrice = parseFloat(item.pricePerUnit ?? "0");
+      result[i] = { ...ex, quantity: String(newQty), subtotal: newSub.toFixed(2),
+        pricePerUnit: String(exPrice > 0 ? exPrice : itPrice) };
+    } else {
+      idx.set(key, result.length);
+      result.push({ ...item });
+    }
+  }
+  return result;
+}
+
 // Load logo from /logo.png, convert RGBA PNG → JPEG via canvas (avoids jsPDF PNG issues)
 async function loadLogoAsJpeg(): Promise<string | null> {
   try {
@@ -70,15 +104,16 @@ export async function generateRemitoPDF(data: RemitoData, opts?: { hidePrecios?:
   const fmtMoney = (v: number) =>
     `$${v.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-  // ── Sort items alphabetically by product name ───────────────────────────────
-  data.order.items = [...data.order.items].sort((a, b) =>
+  // ── Sort + merge same-product items (bolsa/bolsa_propia + normal) ───────────
+  const sortedItems = [...data.order.items].sort((a, b) =>
     (a.product?.name ?? "").localeCompare(b.product?.name ?? "", "es", { sensitivity: "base" })
   );
+  const displayItems = mergeForPDF(sortedItems);
 
   // ── Totals ─────────────────────────────────────────────────────────────────
   let totalSinIva = 0;
   let totalConIva = 0;
-  for (const item of data.order.items) {
+  for (const item of displayItems) {
     const sub = parseFloat(item.subtotal);
     totalSinIva += sub;
     totalConIva += sub * (1 + itemIvaRate(item.product?.name ?? ""));
@@ -271,7 +306,7 @@ export async function generateRemitoPDF(data: RemitoData, opts?: { hidePrecios?:
   // ────────────────────────────────────────────────────────────────────────────
   // ROWS
   // ────────────────────────────────────────────────────────────────────────────
-  data.order.items.forEach((item, i) => {
+  displayItems.forEach((item, i) => {
     // Pagination
     if (rowOnPage >= ROWS_MAX) {
       doc.addPage();
@@ -992,7 +1027,8 @@ export async function generateInvoicePDF(data: {
     if (sumFrutas > 0) pdfRows.push({ qty: "1", unit: "", name: "FRUTAS Y VERDURAS", price: sumFrutas, sub: sumFrutas });
     if (sumHuevos > 0) pdfRows.push({ qty: "1", unit: "", name: "HUEVO N1/N2",       price: sumHuevos, sub: sumHuevos });
   } else {
-    pdfRows = order.items.map((item) => ({
+    const mergedItems = mergeForPDF(order.items);
+    pdfRows = mergedItems.map((item) => ({
       qty:   String(parseFloat(item.quantity) % 1 === 0 ? Math.round(parseFloat(item.quantity)) : parseFloat(item.quantity).toFixed(2)),
       unit:  item.unit.toUpperCase(),
       name:  item.product?.name ?? item.rawProductName ?? "Producto sin nombre",
