@@ -617,7 +617,8 @@ async function generateResumenCCPDF(opts: {
     doc.setTextColor(...BLACK); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
     const ry = y + RH / 2 + 3;
     doc.text(fmtD(o.orderDate), fechaX  + fechaW  / 2, ry, { align: "center" });
-    doc.text(doc.splitTextToSize(o.schoolName, colW - 4)[0], colX + 2, ry);
+    const shortName = o.schoolName.replace(/^colegio\s+/i, "");
+    doc.text(doc.splitTextToSize(shortName, colW - 4)[0], colX + 2, ry);
     doc.text(formatRemito(o),              remitoX + remitoW / 2, ry, { align: "center" });
     doc.text(fmtFacturaSeq(o.invoiceNumber), factX + factW / 2,   ry, { align: "center" });
     doc.setFont("helvetica", "bold");
