@@ -710,17 +710,17 @@ export async function runMigrations() {
       AND stock_qty::numeric <= 0
   `);
 
-  // Fix bolsa FV items: zero out price/cost so they don't inflate order totals
+  // Restore bolsa FV items that were incorrectly zeroed: recalculate subtotal from price * qty
   await db.execute(sql`
     UPDATE order_items
-    SET price_per_unit = '0',
-        override_cost_per_unit = '0',
-        subtotal = '0.00'
+    SET subtotal = (price_per_unit::numeric * quantity::numeric)::text
     WHERE bolsa_type IN ('bolsa', 'bolsa_propia')
-      AND (price_per_unit::numeric > 0 OR override_cost_per_unit::numeric > 0 OR subtotal::numeric > 0)
+      AND price_per_unit IS NOT NULL
+      AND price_per_unit::numeric > 0
+      AND subtotal::numeric = 0
   `);
 
-  // Recalculate orders.total for orders that had bolsa items with non-zero subtotals
+  // Recalculate orders.total for affected orders
   await db.execute(sql`
     UPDATE orders o
     SET total = (
@@ -732,6 +732,7 @@ export async function runMigrations() {
       SELECT 1 FROM order_items oi2
       WHERE oi2.order_id = o.id
         AND oi2.bolsa_type IN ('bolsa', 'bolsa_propia')
+        AND oi2.price_per_unit::numeric > 0
     )
   `);
 
