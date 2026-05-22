@@ -503,11 +503,11 @@ async function generateCCPDF(opts: {
   return doc;
 }
 
-// ── Resumen CC PDF (pedidos seleccionados con IVA desglosado) ──────────────────
+// ── Resumen CC PDF ─────────────────────────────────────────────────────────────
 
 async function generateResumenCCPDF(opts: {
   customerName: string;
-  orders: { orderDate: string; remitoNum: number | null; folio: string; invoiceNumber: string | null; total: number }[];
+  orders: { orderDate: string; remitoNum: number | null; folio: string; invoiceNumber: string | null; total: number; schoolName: string }[];
 }): Promise<void> {
   const { customerName, orders } = opts;
 
@@ -525,15 +525,17 @@ async function generateResumenCCPDF(opts: {
   const fmtM = (n: number) => `$${Math.round(n).toLocaleString("es-AR")}`;
   const todayFmt = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
 
-  // Columns: FECHA 18% | REMITO 20% | FACTURA 20% | NETO 18% | IVA 12% | TOTAL 12%
+  // Columns: FECHA 14% | COLEGIO 28% | REMITO 20% | FACTURA 20% | TOTAL 18%
   const pct = (p: number) => tblW * p / 100;
-  const fechaX   = mx;            const fechaW   = pct(18);
-  const remitoX  = fechaX  + fechaW;  const remitoW  = pct(20);
-  const factX    = remitoX + remitoW; const factW    = pct(20);
-  const netoX    = factX   + factW;   const netoW    = pct(18);
-  const ivaX     = netoX   + netoW;   const ivaW     = pct(12);
-  const totX     = ivaX    + ivaW;    // right-anchor: totX + pct(12)
-  const rightEdge = mx + tblW;
+  const fechaX   = mx;
+  const fechaW   = pct(14);
+  const colX     = fechaX  + fechaW;
+  const colW     = pct(28);
+  const remitoX  = colX    + colW;
+  const remitoW  = pct(20);
+  const factX    = remitoX + remitoW;
+  const factW    = pct(20);
+  const rightEdge = mx + tblW;   // total right-aligned here
 
   const footContactH = 20, footBarH = 12;
   const footY = pageH - footContactH - footBarH;
@@ -545,11 +547,11 @@ async function generateResumenCCPDF(opts: {
     const labels = ["WhatsApp", "Email", "Website"];
     const values = ["11-7123-2459", "vegetalesargentinos.srl@gmail.com", "www.vegetalesargentinos.com"];
     for (let i = 0; i < 3; i++) {
-      const colX = mx + i * col3W;
+      const cx = mx + i * col3W;
       doc.setTextColor(...BLACK); doc.setFont("helvetica", "bold"); doc.setFontSize(8.5);
-      doc.text(labels[i], colX, footY + 7);
+      doc.text(labels[i], cx, footY + 7);
       doc.setFont("helvetica", "normal"); doc.setFontSize(7.5);
-      doc.text(values[i], colX, footY + 13.5);
+      doc.text(values[i], cx, footY + 13.5);
     }
     const barY = footY + footContactH;
     doc.setFillColor(...FOOT_GRN); doc.rect(0, barY, pageW, footBarH, "F");
@@ -582,19 +584,18 @@ async function generateResumenCCPDF(opts: {
   doc.line(mx, clientY + 11, pageW - mx, clientY + 11);
 
   const TH = 11, RH = 12;
-  const contentBottom = footY - 28;
+  const contentBottom = footY - 24;
   let y = clientY + 15;
 
   const drawTH = () => {
     doc.setFillColor(...OLIVE); doc.rect(mx, y, tblW, TH, "F");
     doc.setTextColor(...WHITE); doc.setFont("helvetica", "bold"); doc.setFontSize(8.5);
     const cy = y + TH / 2 + 3;
-    doc.text("FECHA",      fechaX  + fechaW  / 2, cy, { align: "center" });
-    doc.text("NRO REMITO", remitoX + remitoW / 2, cy, { align: "center" });
-    doc.text("NRO FACTURA",factX   + factW   / 2, cy, { align: "center" });
-    doc.text("MONTO NETO", netoX   + netoW   - 2, cy, { align: "right" });
-    doc.text("IVA",        ivaX    + ivaW    - 2, cy, { align: "right" });
-    doc.text("TOTAL",      rightEdge          - 2, cy, { align: "right" });
+    doc.text("FECHA",       fechaX  + fechaW  / 2, cy, { align: "center" });
+    doc.text("COLEGIO",     colX    + colW    / 2, cy, { align: "center" });
+    doc.text("NRO REMITO",  remitoX + remitoW / 2, cy, { align: "center" });
+    doc.text("NRO FACTURA", factX   + factW   / 2, cy, { align: "center" });
+    doc.text("TOTAL",       rightEdge          - 2, cy, { align: "right" });
     y += TH;
   };
   drawTH();
@@ -602,43 +603,36 @@ async function generateResumenCCPDF(opts: {
   const fmtD = (d: string) =>
     new Date(d.replace(/\s.+$/, "T00:00:00")).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
 
-  let sumNeto = 0, sumIva = 0, sumTotal = 0;
+  let sumTotal = 0;
 
   for (let i = 0; i < orders.length; i++) {
     if (y + RH > contentBottom) {
       drawFooter(); doc.addPage(); y = 10; drawTH();
     }
     const o = orders[i];
-    const total = o.total;
-    const neto  = total / 1.105;
-    const iva   = total - neto;
-    sumNeto += neto; sumIva += iva; sumTotal += total;
+    sumTotal += o.total;
 
     doc.setFillColor(...(i % 2 === 0 ? WHITE : GRAY_LITE));
     doc.rect(mx, y, tblW, RH, "F");
     doc.setTextColor(...BLACK); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
     const ry = y + RH / 2 + 3;
-    doc.text(fmtD(o.orderDate), fechaX + fechaW / 2, ry, { align: "center" });
-    doc.text(formatRemito(o),   remitoX + remitoW / 2, ry, { align: "center" });
-    doc.text(fmtFacturaSeq(o.invoiceNumber), factX + factW / 2, ry, { align: "center" });
-    doc.text(fmtM(neto),  netoX    + netoW - 2, ry, { align: "right" });
-    doc.text(fmtM(iva),   ivaX     + ivaW  - 2, ry, { align: "right" });
+    doc.text(fmtD(o.orderDate), fechaX  + fechaW  / 2, ry, { align: "center" });
+    doc.text(doc.splitTextToSize(o.schoolName, colW - 4)[0], colX + 2, ry);
+    doc.text(formatRemito(o),              remitoX + remitoW / 2, ry, { align: "center" });
+    doc.text(fmtFacturaSeq(o.invoiceNumber), factX + factW / 2,   ry, { align: "center" });
     doc.setFont("helvetica", "bold");
-    doc.text(fmtM(total), rightEdge          - 2, ry, { align: "right" });
+    doc.text(fmtM(o.total), rightEdge - 2, ry, { align: "right" });
     y += RH;
   }
 
-  // Totals bar
-  const totalBarY = footY - 26;
+  // Total bar
+  const totalBarY = footY - 22;
   doc.setDrawColor(...GRAY_LINE); doc.setLineWidth(0.4);
   doc.line(mx, totalBarY, pageW - mx, totalBarY);
-  doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(...BLACK);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.setTextColor(...BLACK);
   const ty = totalBarY + 9;
-  doc.text("TOTALES:", factX + factW / 2, ty, { align: "center" });
-  doc.text(fmtM(sumNeto),  netoX    + netoW - 2, ty, { align: "right" });
-  doc.text(fmtM(sumIva),   ivaX     + ivaW  - 2, ty, { align: "right" });
-  doc.setFontSize(10);
-  doc.text(fmtM(sumTotal), rightEdge          - 2, ty, { align: "right" });
+  doc.text("TOTAL:", factX + factW / 2, ty, { align: "center" });
+  doc.text(fmtM(sumTotal), rightEdge - 2, ty, { align: "right" });
 
   drawFooter();
   const today2 = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" }).replace(/\//g, "-");
@@ -1317,18 +1311,24 @@ export default function CCCustomerDetailPage({
 
   // Orders data for resumen PDF (both sections merged)
   const selectedOrdersData = useMemo(() => {
+    const subMap = new Map((data?.subsidiaries ?? []).map((s) => [s.customerId, s.customerName]));
+    const mainName = data?.customer?.name ?? "";
     const periodOrders = (data?.orders ?? []).map((o) => ({
       id: o.id, orderDate: o.orderDate, remitoNum: o.remitoNum ?? null,
       folio: o.folio, invoiceNumber: o.invoiceNumber ?? null, total: o.total,
+      schoolName: data?.isParent && o.customerId && o.customerId !== customerId
+        ? (subMap.get(o.customerId) ?? mainName)
+        : mainName,
     }));
     const prevOrders = prevPendingOrders.map((o) => ({
       id: o.id, orderDate: o.orderDate, remitoNum: o.remitoNum ?? null,
       folio: o.folio, invoiceNumber: o.invoiceNumber ?? null, total: parseFloat(o.total),
+      schoolName: mainName,
     }));
     return [...periodOrders, ...prevOrders]
       .filter((o) => selectedOrderIds.has(o.id))
       .sort((a, b) => a.orderDate.localeCompare(b.orderDate));
-  }, [data?.orders, prevPendingOrders, selectedOrderIds]);
+  }, [data?.orders, data?.subsidiaries, data?.isParent, data?.customer, customerId, prevPendingOrders, selectedOrderIds]);
 
   const selectedInvoiceCount = useMemo(
     () => customerInvoices.filter((inv) => selectedOrderIds.has(inv.orderId)).length,
