@@ -20,6 +20,7 @@ import { useState, useRef, useMemo, useEffect } from "react";
 import type { Payment, Withholding } from "@shared/schema";
 import { PAYMENT_METHODS } from "@shared/schema";
 import { jsPDF } from "jspdf";
+import { generateInvoicePDF } from "@/lib/pdf";
 
 const WhatsAppIcon = ({ className }: { className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor">
@@ -500,6 +501,148 @@ async function generateCCPDF(opts: {
 
   doc.setTextColor(0, 0, 0);
   return doc;
+}
+
+// ── Resumen CC PDF (pedidos seleccionados con IVA desglosado) ──────────────────
+
+async function generateResumenCCPDF(opts: {
+  customerName: string;
+  orders: { orderDate: string; remitoNum: number | null; folio: string; invoiceNumber: string | null; total: number }[];
+}): Promise<void> {
+  const { customerName, orders } = opts;
+
+  const OLIVE:     [number, number, number] = [61,  95,  47];
+  const FOOT_GRN:  [number, number, number] = [38,  68,  22];
+  const WHITE:     [number, number, number] = [255, 255, 255];
+  const GRAY_LITE: [number, number, number] = [245, 245, 245];
+  const GRAY_LINE: [number, number, number] = [200, 200, 200];
+  const GRAY_TEXT: [number, number, number] = [150, 150, 150];
+  const BLACK:     [number, number, number] = [30,  30,  30];
+
+  const pageW = 210, pageH = 297, mx = 15;
+  const tblW = pageW - mx * 2;   // 180mm
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const fmtM = (n: number) => `$${Math.round(n).toLocaleString("es-AR")}`;
+  const todayFmt = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
+
+  // Columns: FECHA 18% | REMITO 20% | FACTURA 20% | NETO 18% | IVA 12% | TOTAL 12%
+  const pct = (p: number) => tblW * p / 100;
+  const fechaX   = mx;            const fechaW   = pct(18);
+  const remitoX  = fechaX  + fechaW;  const remitoW  = pct(20);
+  const factX    = remitoX + remitoW; const factW    = pct(20);
+  const netoX    = factX   + factW;   const netoW    = pct(18);
+  const ivaX     = netoX   + netoW;   const ivaW     = pct(12);
+  const totX     = ivaX    + ivaW;    // right-anchor: totX + pct(12)
+  const rightEdge = mx + tblW;
+
+  const footContactH = 20, footBarH = 12;
+  const footY = pageH - footContactH - footBarH;
+
+  const drawFooter = () => {
+    doc.setDrawColor(...GRAY_LINE); doc.setLineWidth(0.4);
+    doc.line(mx, footY, pageW - mx, footY);
+    const col3W = tblW / 3;
+    const labels = ["WhatsApp", "Email", "Website"];
+    const values = ["11-7123-2459", "vegetalesargentinos.srl@gmail.com", "www.vegetalesargentinos.com"];
+    for (let i = 0; i < 3; i++) {
+      const colX = mx + i * col3W;
+      doc.setTextColor(...BLACK); doc.setFont("helvetica", "bold"); doc.setFontSize(8.5);
+      doc.text(labels[i], colX, footY + 7);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(7.5);
+      doc.text(values[i], colX, footY + 13.5);
+    }
+    const barY = footY + footContactH;
+    doc.setFillColor(...FOOT_GRN); doc.rect(0, barY, pageW, footBarH, "F");
+    doc.setTextColor(...WHITE); doc.setFont("helvetica", "normal"); doc.setFontSize(7);
+    doc.text("CUIT : 30-71855184-2", pageW - mx, barY + 4.5, { align: "right" });
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+    doc.text("VEGETALES ARGENTINOS SRL", pageW - mx, barY + 9.5, { align: "right" });
+  };
+
+  // Header
+  const logoData = await loadLogoJpeg();
+  if (logoData) {
+    const logoH = 26, logoW = Math.min(logoH * logoData.aspect, 80);
+    doc.addImage(logoData.base64, "JPEG", mx, 8, logoW, logoH);
+  }
+  doc.setTextColor(...GRAY_TEXT); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
+  doc.text(`FECHA :  ${todayFmt}`, pageW - mx, 13, { align: "right" });
+  doc.setTextColor(...BLACK); doc.setFont("helvetica", "bold"); doc.setFontSize(15);
+  doc.text("RESUMEN DE CUENTA", pageW - mx, 25, { align: "right" });
+  doc.setTextColor(...GRAY_TEXT); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
+  doc.text(`${orders.length} pedido${orders.length !== 1 ? "s" : ""} seleccionado${orders.length !== 1 ? "s" : ""}`, pageW - mx, 33, { align: "right" });
+
+  const sepY = 41;
+  doc.setFillColor(...OLIVE); doc.rect(0, sepY, pageW, 2.5, "F");
+
+  const clientY = sepY + 7;
+  doc.setTextColor(...BLACK); doc.setFont("helvetica", "bold"); doc.setFontSize(13);
+  doc.text(customerName, mx, clientY + 6);
+  doc.setDrawColor(...GRAY_LINE); doc.setLineWidth(0.4);
+  doc.line(mx, clientY + 11, pageW - mx, clientY + 11);
+
+  const TH = 11, RH = 12;
+  const contentBottom = footY - 28;
+  let y = clientY + 15;
+
+  const drawTH = () => {
+    doc.setFillColor(...OLIVE); doc.rect(mx, y, tblW, TH, "F");
+    doc.setTextColor(...WHITE); doc.setFont("helvetica", "bold"); doc.setFontSize(8.5);
+    const cy = y + TH / 2 + 3;
+    doc.text("FECHA",      fechaX  + fechaW  / 2, cy, { align: "center" });
+    doc.text("NRO REMITO", remitoX + remitoW / 2, cy, { align: "center" });
+    doc.text("NRO FACTURA",factX   + factW   / 2, cy, { align: "center" });
+    doc.text("MONTO NETO", netoX   + netoW   - 2, cy, { align: "right" });
+    doc.text("IVA",        ivaX    + ivaW    - 2, cy, { align: "right" });
+    doc.text("TOTAL",      rightEdge          - 2, cy, { align: "right" });
+    y += TH;
+  };
+  drawTH();
+
+  const fmtD = (d: string) =>
+    new Date(d.replace(/\s.+$/, "T00:00:00")).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
+
+  let sumNeto = 0, sumIva = 0, sumTotal = 0;
+
+  for (let i = 0; i < orders.length; i++) {
+    if (y + RH > contentBottom) {
+      drawFooter(); doc.addPage(); y = 10; drawTH();
+    }
+    const o = orders[i];
+    const total = o.total;
+    const neto  = total / 1.105;
+    const iva   = total - neto;
+    sumNeto += neto; sumIva += iva; sumTotal += total;
+
+    doc.setFillColor(...(i % 2 === 0 ? WHITE : GRAY_LITE));
+    doc.rect(mx, y, tblW, RH, "F");
+    doc.setTextColor(...BLACK); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
+    const ry = y + RH / 2 + 3;
+    doc.text(fmtD(o.orderDate), fechaX + fechaW / 2, ry, { align: "center" });
+    doc.text(formatRemito(o),   remitoX + remitoW / 2, ry, { align: "center" });
+    doc.text(fmtFacturaSeq(o.invoiceNumber), factX + factW / 2, ry, { align: "center" });
+    doc.text(fmtM(neto),  netoX    + netoW - 2, ry, { align: "right" });
+    doc.text(fmtM(iva),   ivaX     + ivaW  - 2, ry, { align: "right" });
+    doc.setFont("helvetica", "bold");
+    doc.text(fmtM(total), rightEdge          - 2, ry, { align: "right" });
+    y += RH;
+  }
+
+  // Totals bar
+  const totalBarY = footY - 26;
+  doc.setDrawColor(...GRAY_LINE); doc.setLineWidth(0.4);
+  doc.line(mx, totalBarY, pageW - mx, totalBarY);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(...BLACK);
+  const ty = totalBarY + 9;
+  doc.text("TOTALES:", factX + factW / 2, ty, { align: "center" });
+  doc.text(fmtM(sumNeto),  netoX    + netoW - 2, ty, { align: "right" });
+  doc.text(fmtM(sumIva),   ivaX     + ivaW  - 2, ty, { align: "right" });
+  doc.setFontSize(10);
+  doc.text(fmtM(sumTotal), rightEdge          - 2, ty, { align: "right" });
+
+  drawFooter();
+  const today2 = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" }).replace(/\//g, "-");
+  doc.save(`Resumen-CC-${customerName.replace(/\s+/g, "_")}-${today2}.pdf`);
 }
 
 // ── Payment modal ──────────────────────────────────────────────────────────────
@@ -1013,6 +1156,8 @@ export default function CCCustomerDetailPage({
   const [waDialog, setWaDialog] = useState(false);
   const [waMessage, setWaMessage] = useState("");
   const [waSending, setWaSending] = useState(false);
+  const [waOption, setWaOption] = useState<"cc" | "resumen">("cc");
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<number>>(new Set());
 
   // ── MEJORA 3: Date range filter state ─────────────────────────────────────────
   const initRange = useMemo<[string, string]>(() => {
@@ -1041,6 +1186,12 @@ export default function CCCustomerDetailPage({
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },
+  });
+
+  // Fetch all invoices for this customer (needed for WA resumen flow)
+  const { data: customerInvoices = [] } = useQuery<{ id: number; orderId: number; invoiceNumber: string }[]>({
+    queryKey: ["/api/invoices", { customerId }],
+    queryFn: () => fetch(`/api/invoices?customerId=${customerId}`, { credentials: "include" }).then((r) => r.json()),
   });
 
   // Fetch pending orders once (not gated on modal open, always available)
@@ -1136,6 +1287,75 @@ export default function CCCustomerDetailPage({
     try {
       await handleDownloadPDF();
       window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(waMessage)}`, "_blank");
+      setWaDialog(false);
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setWaSending(false);
+    }
+  };
+
+  // Extract prevPending at component level (needed for selection + checkboxes)
+  const prevPendingOrders = useMemo(
+    () => pendingOrders.filter((o) => o.orderDate.slice(0, 10) < queryDateFrom),
+    [pendingOrders, queryDateFrom],
+  );
+
+  const allVisibleOrderIds = useMemo(
+    () => [...(data?.orders ?? []).map((o) => o.id), ...prevPendingOrders.map((o) => o.id)],
+    [data?.orders, prevPendingOrders],
+  );
+
+  const toggleOrder = (id: number) =>
+    setSelectedOrderIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  const selectAll = () => setSelectedOrderIds(new Set(allVisibleOrderIds));
+  const deselectAll = () => setSelectedOrderIds(new Set());
+
+  // Orders data for resumen PDF (both sections merged)
+  const selectedOrdersData = useMemo(() => {
+    const periodOrders = (data?.orders ?? []).map((o) => ({
+      id: o.id, orderDate: o.orderDate, remitoNum: o.remitoNum ?? null,
+      folio: o.folio, invoiceNumber: o.invoiceNumber ?? null, total: o.total,
+    }));
+    const prevOrders = prevPendingOrders.map((o) => ({
+      id: o.id, orderDate: o.orderDate, remitoNum: o.remitoNum ?? null,
+      folio: o.folio, invoiceNumber: o.invoiceNumber ?? null, total: parseFloat(o.total),
+    }));
+    return [...periodOrders, ...prevOrders]
+      .filter((o) => selectedOrderIds.has(o.id))
+      .sort((a, b) => a.orderDate.localeCompare(b.orderDate));
+  }, [data?.orders, prevPendingOrders, selectedOrderIds]);
+
+  const selectedInvoiceCount = useMemo(
+    () => customerInvoices.filter((inv) => selectedOrderIds.has(inv.orderId)).length,
+    [customerInvoices, selectedOrderIds],
+  );
+
+  const handleDownloadResumen = async () => {
+    if (!data || selectedOrdersData.length === 0) return;
+    await generateResumenCCPDF({ customerName: data.customer.name, orders: selectedOrdersData });
+  };
+
+  const handleWaSendResumen = async () => {
+    const rawPhone = data?.customer?.phone ?? "";
+    const waPhone = fmtWaPhone(rawPhone);
+    if (!waPhone) { toast({ title: "Número de teléfono inválido", variant: "destructive" }); return; }
+    setWaSending(true);
+    try {
+      await handleDownloadResumen();
+      // Download each invoice PDF for selected orders that have an invoice
+      for (const inv of customerInvoices.filter((i) => selectedOrderIds.has(i.orderId))) {
+        try {
+          const res = await fetch(`/api/invoices/${inv.id}`, { credentials: "include" });
+          if (res.ok) await generateInvoicePDF(await res.json(), "completo");
+        } catch { /* skip if invoice fetch fails */ }
+      }
+      const msg = `Hola ${data?.customer?.name ?? ""}, te adjunto el resumen de cuenta y las facturas correspondientes.`;
+      window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(msg)}`, "_blank");
       setWaDialog(false);
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
@@ -1281,11 +1501,17 @@ export default function CCCustomerDetailPage({
           <Button size="sm" variant="outline" onClick={handleDownloadPDF} disabled={isLoading || !data} data-testid="button-download-pdf">
             <Download className="mr-1 h-3.5 w-3.5" /> Descargar CC
           </Button>
+          {selectedOrderIds.size > 0 && (
+            <Button size="sm" variant="outline" onClick={handleDownloadResumen} data-testid="button-download-resumen">
+              <FileText className="mr-1 h-3.5 w-3.5" /> Bajar Resumen ({selectedOrderIds.size})
+            </Button>
+          )}
           <Button
             size="sm" variant="outline"
             className="border-green-500 text-green-600 hover:bg-green-50 dark:hover:bg-green-950"
             disabled={isLoading || !data}
             onClick={() => {
+              setWaOption("cc");
               setWaMessage(`Hola, te adjunto el estado de cuenta corriente. Gracias!`);
               setWaDialog(true);
             }}
@@ -1330,13 +1556,20 @@ export default function CCCustomerDetailPage({
         {/* Orders in period */}
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2 flex-wrap">
               <FileText className="h-4 w-4" />
               Pedidos del Período ({data?.orders.length ?? 0})
               {!isLoading && (data?.orders ?? []).some((o) => o.isPaid) && (
                 <Badge className="text-[9px] bg-green-100 text-green-700 border-green-200 ml-1">
                   {(data?.orders ?? []).filter((o) => o.isPaid).length} pagado{(data?.orders ?? []).filter((o) => o.isPaid).length > 1 ? "s" : ""}
                 </Badge>
+              )}
+              {!isLoading && (data?.orders.length ?? 0) > 0 && (
+                <div className="ml-auto flex items-center gap-1">
+                  <button className="text-[10px] text-primary hover:underline" onClick={selectAll}>Sel. todos</button>
+                  <span className="text-muted-foreground text-[10px]">·</span>
+                  <button className="text-[10px] text-muted-foreground hover:underline" onClick={deselectAll}>Ninguno</button>
+                </div>
               )}
             </CardTitle>
           </CardHeader>
@@ -1352,6 +1585,7 @@ export default function CCCustomerDetailPage({
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-border bg-muted/30">
+                      <th className="w-8 py-2 px-2"></th>
                       <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Folio</th>
                       <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Fecha</th>
                       {data?.isParent && <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Sede</th>}
@@ -1365,10 +1599,13 @@ export default function CCCustomerDetailPage({
                       <tr
                         key={o.id}
                         className={`border-b border-border last:border-0 transition-colors ${
-                          o.isPaid ? "bg-green-50/50 dark:bg-green-950/20" : "hover:bg-muted/20"
+                          selectedOrderIds.has(o.id) ? "bg-primary/5" : o.isPaid ? "bg-green-50/50 dark:bg-green-950/20" : "hover:bg-muted/20"
                         }`}
                         data-testid={`row-order-${o.id}`}
                       >
+                        <td className="py-2 px-2 text-center" onClick={(e) => { e.stopPropagation(); toggleOrder(o.id); }}>
+                          <Checkbox checked={selectedOrderIds.has(o.id)} onCheckedChange={() => toggleOrder(o.id)} className="h-3.5 w-3.5" />
+                        </td>
                         <td
                           className="py-2 px-3 font-mono font-medium text-primary cursor-pointer hover:underline"
                           onClick={() => setLocation(`/orders/${o.id}`)}
@@ -1419,23 +1656,27 @@ export default function CCCustomerDetailPage({
         </Card>
 
         {/* Pending orders from previous periods */}
-        {(() => {
-          const prevPending = pendingOrders.filter((o) => o.orderDate.slice(0, 10) < queryDateFrom);
-          if (prevPending.length === 0) return null;
-          const prevTotal = prevPending.reduce((s, o) => s + parseFloat(o.total) - parseFloat(o.paidAmount ?? "0"), 0);
+        {prevPendingOrders.length > 0 && (() => {
+          const prevTotal = prevPendingOrders.reduce((s, o) => s + parseFloat(o.total) - parseFloat(o.paidAmount ?? "0"), 0);
           const fmtD = (d: string) => new Date(d.replace(/\s.+$/, "T00:00:00")).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
           return (
             <Card className="border-amber-200 dark:border-amber-800">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold flex items-center gap-2 text-amber-700 dark:text-amber-400">
+                <CardTitle className="text-sm font-semibold flex items-center gap-2 flex-wrap text-amber-700 dark:text-amber-400">
                   <Clock className="h-4 w-4" />
-                  Pendientes de períodos anteriores ({prevPending.length})
+                  Pendientes de períodos anteriores ({prevPendingOrders.length})
+                  <div className="ml-auto flex items-center gap-1">
+                    <button className="text-[10px] text-primary hover:underline" onClick={selectAll}>Sel. todos</button>
+                    <span className="text-muted-foreground text-[10px]">·</span>
+                    <button className="text-[10px] text-muted-foreground hover:underline" onClick={deselectAll}>Ninguno</button>
+                  </div>
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-border bg-muted/30">
+                      <th className="w-8 py-1.5 px-2"></th>
                       <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Folio</th>
                       <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Fecha</th>
                       <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Nro. Factura</th>
@@ -1444,26 +1685,28 @@ export default function CCCustomerDetailPage({
                     </tr>
                   </thead>
                   <tbody>
-                    {prevPending.map((o) => {
+                    {prevPendingOrders.map((o) => {
                       const remaining = parseFloat(o.total) - parseFloat(o.paidAmount ?? "0");
                       return (
                         <tr
                           key={o.id}
-                          className="border-b border-border last:border-0 hover:bg-muted/20 cursor-pointer"
-                          onClick={() => setLocation(`/orders/${o.id}`)}
+                          className={`border-b border-border last:border-0 cursor-pointer transition-colors ${selectedOrderIds.has(o.id) ? "bg-primary/5" : "hover:bg-muted/20"}`}
                         >
-                          <td className="py-1.5 px-3 font-mono font-medium text-primary">{formatRemito(o)}</td>
-                          <td className="py-1.5 px-3 text-muted-foreground">{fmtD(o.orderDate)}</td>
-                          <td className="py-1.5 px-3 text-muted-foreground">{fmtFacturaSeq(o.invoiceNumber)}</td>
-                          <td className="py-1.5 px-3 text-right">${fmtInt(parseFloat(o.total))}</td>
-                          <td className="py-1.5 px-3 text-right font-semibold text-destructive">${fmtInt(remaining)}</td>
+                          <td className="py-1.5 px-2 text-center" onClick={(e) => { e.stopPropagation(); toggleOrder(o.id); }}>
+                            <Checkbox checked={selectedOrderIds.has(o.id)} onCheckedChange={() => toggleOrder(o.id)} className="h-3.5 w-3.5" />
+                          </td>
+                          <td className="py-1.5 px-3 font-mono font-medium text-primary" onClick={() => setLocation(`/orders/${o.id}`)}>{formatRemito(o)}</td>
+                          <td className="py-1.5 px-3 text-muted-foreground" onClick={() => setLocation(`/orders/${o.id}`)}>{fmtD(o.orderDate)}</td>
+                          <td className="py-1.5 px-3 text-muted-foreground" onClick={() => setLocation(`/orders/${o.id}`)}>{fmtFacturaSeq(o.invoiceNumber)}</td>
+                          <td className="py-1.5 px-3 text-right" onClick={() => setLocation(`/orders/${o.id}`)}>${fmtInt(parseFloat(o.total))}</td>
+                          <td className="py-1.5 px-3 text-right font-semibold text-destructive" onClick={() => setLocation(`/orders/${o.id}`)}>${fmtInt(remaining)}</td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
                 <div className="flex items-center justify-between px-3 py-2 border-t border-border bg-amber-50/50 dark:bg-amber-950/20 text-xs">
-                  <span className="text-muted-foreground font-medium">{prevPending.length} pedido{prevPending.length > 1 ? "s" : ""} de períodos anteriores</span>
+                  <span className="text-muted-foreground font-medium">{prevPendingOrders.length} pedido{prevPendingOrders.length > 1 ? "s" : ""} de períodos anteriores</span>
                   <span className="font-bold text-destructive">${fmtInt(prevTotal)}</span>
                 </div>
               </CardContent>
@@ -1657,10 +1900,10 @@ export default function CCCustomerDetailPage({
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <WhatsAppIcon className="h-5 w-5 text-green-500" /> Enviar CC por WhatsApp
+              <WhatsAppIcon className="h-5 w-5 text-green-500" /> Enviar por WhatsApp
             </DialogTitle>
             <DialogDescription>
-              El PDF de cuenta corriente se descargará automáticamente. Adjuntalo en WhatsApp manualmente.
+              Los PDF se descargarán automáticamente. Adjuntalos en WhatsApp manualmente.
             </DialogDescription>
           </DialogHeader>
           {!data?.customer?.phone ? (
@@ -1669,6 +1912,34 @@ export default function CCCustomerDetailPage({
             </Alert>
           ) : (
             <div className="space-y-4 py-1">
+              {/* Opciones */}
+              <div className="space-y-2">
+                <label className={`flex items-start gap-2.5 cursor-pointer p-2.5 rounded-md border transition-colors ${waOption === "cc" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/40"}`}>
+                  <input type="radio" name="waOpt" value="cc" checked={waOption === "cc"}
+                    onChange={() => { setWaOption("cc"); setWaMessage(`Hola, te adjunto el estado de cuenta corriente. Gracias!`); }}
+                    className="mt-0.5 shrink-0"
+                  />
+                  <div>
+                    <p className="text-sm font-medium">Enviar cuenta corriente completa</p>
+                    <p className="text-xs text-muted-foreground">Genera el PDF de estado de cuenta del período</p>
+                  </div>
+                </label>
+                {selectedOrderIds.size > 0 && (
+                  <label className={`flex items-start gap-2.5 cursor-pointer p-2.5 rounded-md border transition-colors ${waOption === "resumen" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/40"}`}>
+                    <input type="radio" name="waOpt" value="resumen" checked={waOption === "resumen"}
+                      onChange={() => { setWaOption("resumen"); setWaMessage(`Hola ${data.customer.name}, te adjunto el resumen de cuenta y las facturas correspondientes.`); }}
+                      className="mt-0.5 shrink-0"
+                    />
+                    <div>
+                      <p className="text-sm font-medium">Enviar resumen de seleccionados + facturas</p>
+                      <p className="text-xs text-muted-foreground">
+                        {selectedOrderIds.size} pedido{selectedOrderIds.size !== 1 ? "s" : ""} seleccionado{selectedOrderIds.size !== 1 ? "s" : ""}
+                        {selectedInvoiceCount > 0 ? ` · ${selectedInvoiceCount} factura${selectedInvoiceCount !== 1 ? "s" : ""}` : ""}
+                      </p>
+                    </div>
+                  </label>
+                )}
+              </div>
               <div className="space-y-1.5">
                 <p className="text-sm font-medium">Mensaje</p>
                 <Textarea value={waMessage} onChange={(e) => setWaMessage(e.target.value)} rows={3} />
@@ -1682,10 +1953,10 @@ export default function CCCustomerDetailPage({
               <Button
                 className="bg-green-600 hover:bg-green-700 text-white"
                 disabled={waSending}
-                onClick={handleWaSend}
+                onClick={waOption === "cc" ? handleWaSend : handleWaSendResumen}
               >
                 <WhatsAppIcon className="mr-2 h-4 w-4" />
-                {waSending ? "Generando PDF..." : "Descargar y abrir WhatsApp"}
+                {waSending ? "Generando..." : "Descargar y abrir WhatsApp"}
               </Button>
             )}
           </DialogFooter>
