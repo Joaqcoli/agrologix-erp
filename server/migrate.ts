@@ -699,5 +699,16 @@ export async function runMigrations() {
     WHERE invoice_number ~ '^[A-Z]-0001-'
   `);
 
+  // Fix: eliminar rows fantasma de product_units con unit CAJON/BOLSA/BANDEJA
+  // Esos rows no deberían tener baseUnit seteado — son un artefacto de compras mal ingresadas
+  // que confunden getKnownBaseUnit() y perpetúan costos erróneos.
+  await db.execute(sql`
+    UPDATE product_units
+    SET base_unit = NULL, is_active = false
+    WHERE unit IN ('CAJON','BOLSA','BANDEJA')
+      AND base_unit IS NOT NULL
+      AND stock_qty::numeric <= 0
+  `);
+
   console.log("Migrations complete.");
 }

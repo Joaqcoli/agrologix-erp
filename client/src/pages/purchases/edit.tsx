@@ -70,7 +70,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
   const getKnownBaseUnit = (productId: number): string => {
     if (!productId) return "KG";
     const PACKAGE = new Set(["CAJON", "BOLSA", "BANDEJA"]);
-    const stockRow = (stockData ?? []).find((pu: ProductUnit) => pu.productId === productId && pu.baseUnit != null);
+    const stockRow = (stockData ?? []).find((pu: ProductUnit) => pu.productId === productId && pu.baseUnit != null && !PACKAGE.has(pu.unit as string));
     if (stockRow) return stockRow.unit;
     const product = (products ?? []).find((p) => p.id === productId);
     if (product?.unit && !PACKAGE.has(product.unit as string)) return product.unit as string;
