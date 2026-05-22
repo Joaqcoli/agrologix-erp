@@ -1229,12 +1229,17 @@ export const storage = {
       const baseCost = newCostPerUnit ?? (item.costPerUnit as string);
       const effectiveCost = overrideVal ? Number(overrideVal) : Number(baseCost);
 
+      const effectiveBolsaType = patch.bolsaType !== undefined ? patch.bolsaType : (item as any).bolsaType;
+      const isBolsa = effectiveBolsaType != null && ['bolsa', 'bolsa_propia'].includes(effectiveBolsaType);
+
       const qty = Number(patch.quantity ?? (item.quantity as string));
       const existingPrice = item.pricePerUnit ? Number(item.pricePerUnit as string) : null;
       const newPriceRaw = patch.pricePerUnit !== undefined ? patch.pricePerUnit : null;
-      const price = newPriceRaw !== undefined && newPriceRaw !== null
+      const rawPrice = newPriceRaw !== undefined && newPriceRaw !== null
         ? Number(newPriceRaw)
         : existingPrice;
+      // Bolsa FV items are always priced at $0 (delivered at no charge)
+      const price = isBolsa ? 0 : rawPrice;
       const subtotal = price != null && price > 0 ? qty * price : 0;
       const margin = price && price > 0 ? (price - effectiveCost) / price : null;
 
@@ -1242,8 +1247,13 @@ export const storage = {
       if (patch.quantity !== undefined) updateData.quantity = qty.toFixed(4);
       if (patch.unit !== undefined) updateData.unit = patch.unit;
       if (patch.productId !== undefined) updateData.productId = patch.productId;
-      if (patch.pricePerUnit !== undefined) updateData.pricePerUnit = patch.pricePerUnit;
-      if (patch.overrideCostPerUnit !== undefined) updateData.overrideCostPerUnit = patch.overrideCostPerUnit;
+      if (isBolsa) {
+        updateData.pricePerUnit = "0";
+        updateData.overrideCostPerUnit = "0";
+      } else {
+        if (patch.pricePerUnit !== undefined) updateData.pricePerUnit = patch.pricePerUnit;
+        if (patch.overrideCostPerUnit !== undefined) updateData.overrideCostPerUnit = patch.overrideCostPerUnit;
+      }
       if (newCostPerUnit !== undefined) updateData.costPerUnit = newCostPerUnit;
       if (margin !== null) updateData.margin = margin.toFixed(4);
       if (patch.bolsaType !== undefined) updateData.bolsaType = patch.bolsaType;
@@ -1350,10 +1360,13 @@ export const storage = {
         costPerUnit = await this._getCostForUnit(data.productId, data.unit, tx);
       }
 
+      const isBolsaNew = data.bolsaType != null && ['bolsa', 'bolsa_propia'].includes(data.bolsaType);
       const qty = Number(data.quantity);
-      const price = data.pricePerUnit ? Number(data.pricePerUnit) : null;
+      const rawPrice = data.pricePerUnit ? Number(data.pricePerUnit) : null;
+      // Bolsa FV items are always priced at $0
+      const price = isBolsaNew ? 0 : rawPrice;
       const subtotal = price && price > 0 ? qty * price : 0;
-      const effectiveCost = data.bolsaType ? 0 : Number(costPerUnit);
+      const effectiveCost = isBolsaNew ? 0 : Number(costPerUnit);
       const margin = price && price > 0 ? (price - effectiveCost) / price : null;
 
       const [item] = await tx.insert(orderItems).values({
@@ -1361,8 +1374,8 @@ export const storage = {
         productId: data.productId ?? null,
         quantity: qty.toFixed(4),
         unit: data.unit as any,
-        pricePerUnit: data.pricePerUnit ?? null,
-        costPerUnit: data.bolsaType ? "0" : costPerUnit,
+        pricePerUnit: isBolsaNew ? "0" : (data.pricePerUnit ?? null),
+        costPerUnit: isBolsaNew ? "0" : costPerUnit,
         subtotal: subtotal.toFixed(2),
         margin: margin !== null ? margin.toFixed(4) : null,
         bolsaType: data.bolsaType ?? null,

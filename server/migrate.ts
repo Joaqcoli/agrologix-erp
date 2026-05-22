@@ -710,5 +710,30 @@ export async function runMigrations() {
       AND stock_qty::numeric <= 0
   `);
 
+  // Fix bolsa FV items: zero out price/cost so they don't inflate order totals
+  await db.execute(sql`
+    UPDATE order_items
+    SET price_per_unit = '0',
+        override_cost_per_unit = '0',
+        subtotal = '0.00'
+    WHERE bolsa_type IN ('bolsa', 'bolsa_propia')
+      AND (price_per_unit::numeric > 0 OR override_cost_per_unit::numeric > 0 OR subtotal::numeric > 0)
+  `);
+
+  // Recalculate orders.total for orders that had bolsa items with non-zero subtotals
+  await db.execute(sql`
+    UPDATE orders o
+    SET total = (
+      SELECT COALESCE(SUM(oi.subtotal::numeric), 0)
+      FROM order_items oi
+      WHERE oi.order_id = o.id
+    )
+    WHERE EXISTS (
+      SELECT 1 FROM order_items oi2
+      WHERE oi2.order_id = o.id
+        AND oi2.bolsa_type IN ('bolsa', 'bolsa_propia')
+    )
+  `);
+
   console.log("Migrations complete.");
 }
