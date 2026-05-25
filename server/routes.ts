@@ -1488,8 +1488,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const r = await fetch("https://api.mercadopago.com/v1/account/balance", {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!r.ok) return res.status(r.status).json({ error: `MP error ${r.status}` });
-      return res.json(await r.json());
+      const body = await r.json();
+      if (!r.ok) {
+        console.error("[MP balance] error", r.status, JSON.stringify(body));
+        return res.status(r.status).json({ error: `MP error ${r.status}`, detail: body });
+      }
+      return res.json(body);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
@@ -1501,14 +1505,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const params = new URLSearchParams();
       if (from)   params.set("begin_date", `${from}T00:00:00.000-03:00`);
       if (to)     params.set("end_date",   `${to}T23:59:59.999-03:00`);
-      if (type)   params.set("type", type);
       if (status) params.set("status", status);
+      params.set("sort", "date_created");
+      params.set("criteria", "desc");
       params.set("limit", "100");
-      const url = `https://api.mercadopago.com/v1/account/movements/search?${params.toString()}`;
+      // Use payments/search — the correct MP endpoint for listing payments
+      const url = `https://api.mercadopago.com/v1/payments/search?${params.toString()}`;
       const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      if (!r.ok) return res.status(r.status).json({ error: `MP error ${r.status}` });
-      const mpData: any = await r.json();
-      const movements: any[] = mpData.results ?? [];
+      const body = await r.json();
+      if (!r.ok) {
+        console.error("[MP movements] error", r.status, JSON.stringify(body));
+        return res.status(r.status).json({ error: `MP error ${r.status}`, detail: body });
+      }
+      const mpData: any = body;
+      // payments/search wraps results in { results: [], paging: {} }
+      const movements: any[] = (mpData.results ?? mpData.elements ?? []).map((p: any) => ({
+        ...p,
+        // normalize fields so client code works regardless of endpoint shape
+        date_created: p.date_created ?? p.date_approved,
+        total: p.transaction_amount ?? p.total,
+        type: p.payment_type_id ?? p.type ?? "payment",
+        fee: { amount: p.taxes_amount ?? p.fee_details?.reduce((s: number, f: any) => s + (f.amount ?? 0), 0) ?? 0 },
+      }));
 
       // Try to link each movement to an order by date + amount (±5%)
       const enriched = await Promise.all(movements.map(async (mov: any) => {

@@ -156,9 +156,9 @@ export default function CajaPage() {
         <section>
           <div className="flex items-center gap-2 mb-3">
             <h2 className="font-semibold text-base">Cobros de clientes</h2>
-            <Badge variant="secondary">{data?.payments.length ?? 0}</Badge>
+            <Badge variant="secondary">{data?.payments?.length ?? 0}</Badge>
           </div>
-          {(data?.payments.length ?? 0) === 0 ? (
+          {(data?.payments?.length ?? 0) === 0 ? (
             <p className="text-sm text-muted-foreground">Sin cobros en este período.</p>
           ) : (
             <div className="border rounded-lg overflow-hidden">
@@ -172,7 +172,7 @@ export default function CajaPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data?.payments.map(p => (
+                  {(data?.payments ?? []).map(p => (
                     <tr key={p.id} className="border-t hover:bg-muted/30">
                       <td className="px-3 py-2 text-muted-foreground">{fmtDate(p.date)}</td>
                       <td className="px-3 py-2">{p.customerName}</td>
@@ -192,9 +192,9 @@ export default function CajaPage() {
         <section>
           <div className="flex items-center gap-2 mb-3">
             <h2 className="font-semibold text-base">Pagos a proveedores</h2>
-            <Badge variant="secondary">{data?.supplierPayments.length ?? 0}</Badge>
+            <Badge variant="secondary">{data?.supplierPayments?.length ?? 0}</Badge>
           </div>
-          {(data?.supplierPayments.length ?? 0) === 0 ? (
+          {(data?.supplierPayments?.length ?? 0) === 0 ? (
             <p className="text-sm text-muted-foreground">Sin pagos en este período.</p>
           ) : (
             <div className="border rounded-lg overflow-hidden">
@@ -208,7 +208,7 @@ export default function CajaPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data?.supplierPayments.map(p => (
+                  {(data?.supplierPayments ?? []).map(p => (
                     <tr key={p.id} className="border-t hover:bg-muted/30">
                       <td className="px-3 py-2 text-muted-foreground">{fmtDate(p.date)}</td>
                       <td className="px-3 py-2">{p.supplierName}</td>
@@ -228,12 +228,12 @@ export default function CajaPage() {
         <section>
           <div className="flex items-center gap-2 mb-3">
             <h2 className="font-semibold text-base">Movimientos manuales</h2>
-            <Badge variant="secondary">{data?.manualMovements.length ?? 0}</Badge>
+            <Badge variant="secondary">{data?.manualMovements?.length ?? 0}</Badge>
             <Button size="sm" variant="outline" className="ml-auto" onClick={() => setDialogOpen(true)}>
               <Plus className="h-4 w-4 mr-1" /> Agregar
             </Button>
           </div>
-          {(data?.manualMovements.length ?? 0) === 0 ? (
+          {(data?.manualMovements?.length ?? 0) === 0 ? (
             <p className="text-sm text-muted-foreground">Sin movimientos manuales en este período.</p>
           ) : (
             <div className="border rounded-lg overflow-hidden">
@@ -248,7 +248,7 @@ export default function CajaPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data?.manualMovements.map(m => (
+                  {(data?.manualMovements ?? []).map(m => (
                     <tr key={m.id} className="border-t hover:bg-muted/30">
                       <td className="px-3 py-2 text-muted-foreground">{fmtDate(m.date)}</td>
                       <td className="px-3 py-2">{m.description}</td>
