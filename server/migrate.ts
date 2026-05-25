@@ -736,5 +736,18 @@ export async function runMigrations() {
     )
   `);
 
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS caja_movements (
+      id SERIAL PRIMARY KEY,
+      date TEXT NOT NULL,
+      type TEXT NOT NULL,
+      description TEXT NOT NULL,
+      amount NUMERIC(12,2) NOT NULL,
+      category TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+
   console.log("Migrations complete.");
 }

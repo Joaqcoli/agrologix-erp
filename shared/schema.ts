@@ -370,3 +370,18 @@ export const invoices = pgTable("invoices", {
 });
 export type Invoice = typeof invoices.$inferSelect;
 export type InsertInvoice = typeof invoices.$inferInsert;
+
+// ─── Caja — movimientos manuales ─────────────────────────────────────────────
+export const cajaMovements = pgTable("caja_movements", {
+  id: serial("id").primaryKey(),
+  date: text("date").notNull(),                          // YYYY-MM-DD
+  type: text("type").notNull(),                          // "ingreso" | "egreso"
+  description: text("description").notNull(),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  category: text("category"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export const insertCajaMovementSchema = createInsertSchema(cajaMovements).omit({ id: true, createdAt: true, createdBy: true });
+export type CajaMovement = typeof cajaMovements.$inferSelect;
+export type InsertCajaMovement = typeof cajaMovements.$inferInsert;

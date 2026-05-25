@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import { storage } from "./storage";
 import { db } from "./db";
 import { sql as drizzleSql } from "drizzle-orm";
-import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema, insertPaymentSchema, insertWithholdingSchema, insertSupplierSchema, insertSupplierPaymentSchema, insertPriceListItemSchema } from "@shared/schema";
+import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema, insertPaymentSchema, insertWithholdingSchema, insertSupplierSchema, insertSupplierPaymentSchema, insertPriceListItemSchema, insertCajaMovementSchema } from "@shared/schema";
 import { z } from "zod";
 import { canonicalizeUnit } from "@shared/units";
 import { getHistoricalMonthStats } from "./historical-stats";
@@ -1452,6 +1452,78 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const inv = await storage.getInvoiceById(Number(req.params.id));
       if (!inv) return res.status(404).json({ error: "Factura no encontrada" });
       return res.json(inv);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Caja ───────────────────────────────────────────────────────────────────
+  app.get("/api/caja/summary", requireAuth, async (req, res) => {
+    try {
+      const from = (req.query.from as string) || new Date().toISOString().slice(0, 10);
+      const to   = (req.query.to   as string) || new Date().toISOString().slice(0, 10);
+      return res.json(await storage.getCajaSummary(from, to));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/caja/movements", requireAuth, async (req: any, res) => {
+    try {
+      const parsed = insertCajaMovementSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+      const m = await storage.createCajaMovement(parsed.data as any, req.user?.id ?? 0);
+      return res.json(m);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.delete("/api/caja/movements/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteCajaMovement(Number(req.params.id));
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Mercado Pago (proxy) ────────────────────────────────────────────────────
+  app.get("/api/mp/balance", requireAuth, async (_req, res) => {
+    const token = process.env.MP_ACCESS_TOKEN;
+    if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });
+    try {
+      const r = await fetch("https://api.mercadopago.com/v1/account/balance", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) return res.status(r.status).json({ error: `MP error ${r.status}` });
+      return res.json(await r.json());
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/mp/movements", requireAuth, async (req, res) => {
+    const token = process.env.MP_ACCESS_TOKEN;
+    if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });
+    try {
+      const { from, to, type, status } = req.query as Record<string, string | undefined>;
+      const params = new URLSearchParams();
+      if (from)   params.set("begin_date", `${from}T00:00:00.000-03:00`);
+      if (to)     params.set("end_date",   `${to}T23:59:59.999-03:00`);
+      if (type)   params.set("type", type);
+      if (status) params.set("status", status);
+      params.set("limit", "100");
+      const url = `https://api.mercadopago.com/v1/account/movements/search?${params.toString()}`;
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!r.ok) return res.status(r.status).json({ error: `MP error ${r.status}` });
+      const mpData: any = await r.json();
+      const movements: any[] = mpData.results ?? [];
+
+      // Try to link each movement to an order by date + amount (±5%)
+      const enriched = await Promise.all(movements.map(async (mov: any) => {
+        const movAmount = Math.abs(parseFloat(mov.amount ?? mov.total ?? "0"));
+        const movDate   = (mov.date_created ?? "").slice(0, 10);
+        if (!movDate || movAmount === 0) return mov;
+        const orders = await storage.getOrders(movDate);
+        const linked = orders.find(o => {
+          const orderTotal = parseFloat((o as any).total ?? "0");
+          return Math.abs(orderTotal - movAmount) / movAmount <= 0.05;
+        });
+        return { ...mov, linkedOrderId: linked?.id ?? null, linkedOrderFolio: linked?.folio ?? null };
+      }));
+
+      return res.json({ ...mpData, results: enriched });
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 

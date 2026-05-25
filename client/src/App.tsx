@@ -42,6 +42,8 @@ import SuppliersPage from "@/pages/suppliers/index";
 import SupplierCCPage from "@/pages/suppliers/cc";
 import PriceListPage from "@/pages/price-list";
 import InvoicesPage from "@/pages/invoices/index";
+import CajaPage from "@/pages/caja/index";
+import BancosPage from "@/pages/bancos/index";
 import VendedorDashboard from "@/pages/vendedor/dashboard";
 import VendedorOrders from "@/pages/vendedor/orders";
 import VendedorOrderDetail from "@/pages/vendedor/order-detail";
@@ -101,6 +103,8 @@ function Router() {
       </Route>
       <Route path="/price-list" component={PriceListPage} />
       <Route path="/invoices" component={InvoicesPage} />
+      <Route path="/caja" component={CajaPage} />
+      <Route path="/bancos" component={BancosPage} />
       <Route path="/vendedor/dashboard" component={VendedorDashboard} />
       <Route path="/vendedor/orders" component={VendedorOrders} />
       <Route path="/vendedor/orders/:id">

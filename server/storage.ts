@@ -4,7 +4,7 @@ import {
   stockMovements, productCostHistory, orders, orderItems,
   priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks,
   suppliers, supplierPayments, clientGroups, clientGroupMembers, priceListItems,
-  invoices,
+  invoices, cajaMovements,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
@@ -12,6 +12,7 @@ import {
   type Supplier, type SupplierPayment, type InsertSupplier, type InsertSupplierPayment,
   type PriceListItem, type InsertPriceListItem,
   type Invoice, type InsertInvoice,
+  type CajaMovement, type InsertCajaMovement,
 } from "@shared/schema";
 import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
@@ -4083,5 +4084,75 @@ export const storage = {
       return { ...item, product: product as Product | null };
     }));
     return { invoice: inv, customer, order: { ...order, items } };
+  },
+
+  // ─── Caja ───────────────────────────────────────────────────────────────────
+  async getCajaSummary(from: string, to: string): Promise<{
+    totalIngresos: number;
+    totalEgresos: number;
+    saldo: number;
+    payments: { id: number; date: string; amount: string; method: string; notes: string | null; customerName: string }[];
+    supplierPayments: { id: number; date: string; amount: string; method: string; notes: string | null; supplierName: string }[];
+    manualMovements: CajaMovement[];
+  }> {
+    const pmts = await db
+      .select({
+        id: payments.id,
+        date: payments.date,
+        amount: payments.amount,
+        method: payments.method,
+        notes: payments.notes,
+        customerName: customers.name,
+      })
+      .from(payments)
+      .innerJoin(customers, eq(payments.customerId, customers.id))
+      .where(and(drizzleSql`${payments.date} >= ${from}`, drizzleSql`${payments.date} <= ${to}`))
+      .orderBy(desc(payments.date));
+
+    const spmts = await db
+      .select({
+        id: supplierPayments.id,
+        date: supplierPayments.date,
+        amount: supplierPayments.amount,
+        method: supplierPayments.method,
+        notes: supplierPayments.notes,
+        supplierName: suppliers.name,
+      })
+      .from(supplierPayments)
+      .innerJoin(suppliers, eq(supplierPayments.supplierId, suppliers.id))
+      .where(and(drizzleSql`${supplierPayments.date} >= ${from}`, drizzleSql`${supplierPayments.date} <= ${to}`))
+      .orderBy(desc(supplierPayments.date));
+
+    const manualMovements = await db
+      .select()
+      .from(cajaMovements)
+      .where(and(drizzleSql`${cajaMovements.date} >= ${from}`, drizzleSql`${cajaMovements.date} <= ${to}`))
+      .orderBy(desc(cajaMovements.date));
+
+    const sumPayments = pmts.reduce((acc, p) => acc + parseFloat(p.amount ?? "0"), 0);
+    const sumManualIn = manualMovements.filter(m => m.type === "ingreso").reduce((acc, m) => acc + parseFloat(m.amount ?? "0"), 0);
+    const sumSupplier = spmts.reduce((acc, p) => acc + parseFloat(p.amount ?? "0"), 0);
+    const sumManualOut = manualMovements.filter(m => m.type === "egreso").reduce((acc, m) => acc + parseFloat(m.amount ?? "0"), 0);
+
+    const totalIngresos = sumPayments + sumManualIn;
+    const totalEgresos = sumSupplier + sumManualOut;
+
+    return {
+      totalIngresos,
+      totalEgresos,
+      saldo: totalIngresos - totalEgresos,
+      payments: pmts.map(p => ({ ...p, amount: p.amount ?? "0" })),
+      supplierPayments: spmts.map(p => ({ ...p, amount: p.amount ?? "0" })),
+      manualMovements,
+    };
+  },
+
+  async createCajaMovement(data: InsertCajaMovement, userId: number): Promise<CajaMovement> {
+    const [m] = await db.insert(cajaMovements).values({ ...data, createdBy: userId }).returning();
+    return m;
+  },
+
+  async deleteCajaMovement(id: number): Promise<void> {
+    await db.delete(cajaMovements).where(eq(cajaMovements.id, id));
   },
 };
