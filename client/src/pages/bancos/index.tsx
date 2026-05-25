@@ -86,6 +86,7 @@ type MpMovement = {
   isOutgoing?: boolean;
   grossAmount?: number;
   feeAmount?: number;
+  netAmount?: number;
   displayName?: string | null;
 };
 
@@ -378,12 +379,11 @@ export default function BancosPage() {
 
                   <div className="bg-card border rounded-2xl overflow-hidden divide-y">
                     {movs.map(m => {
-                      const isOutgoing = m.isOutgoing ?? false;
-                      const gross  = m.grossAmount ?? Math.abs(parseFloat(String(m.total ?? m.amount ?? 0)));
-                      const fee    = m.feeAmount   ?? Math.abs(parseFloat(String(m.fee?.amount ?? 0)));
-                      const net    = isOutgoing ? gross + fee : gross - fee;
-                      const typeLabel = TYPE_LABELS[m.type] ?? m.type;
-                      // Nombre: displayName del servidor (nombre real) o typeLabel como fallback
+                      const isOutgoing  = m.isOutgoing ?? false;
+                      const gross       = m.grossAmount ?? Math.abs(parseFloat(String(m.total ?? m.amount ?? 0)));
+                      const fee         = m.feeAmount   ?? 0;
+                      const net         = m.netAmount   ?? (isOutgoing ? gross + fee : gross - fee);
+                      const typeLabel   = TYPE_LABELS[m.type] ?? m.type;
                       const displayName = m.displayName || typeLabel;
 
                       return (

@@ -1597,75 +1597,74 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         console.error("[MP movements] error", r.status, JSON.stringify(body));
         return res.status(r.status).json({ error: `MP error ${r.status}`, detail: body });
       }
-      // Obtener merchant ID para detectar dirección (se cachea)
-      const merchantId = await getMpMerchantId(token);
-
       const mpData: any = body;
-      const movements: any[] = (mpData.results ?? mpData.elements ?? []).map((p: any) => {
-        // ── Dirección ─────────────────────────────────────────────────────────
-        // Método definitivo: si payer.id == merchant → yo soy quien pagó → egreso
-        // Fallback: operation_type withdrawal, o description contiene "transferencia a"
-        const payerId    = String(p.payer?.id ?? "");
-        const collectorId = String(p.collector_id ?? p.collector?.id ?? "");
-        const desc       = (p.description ?? "").toLowerCase();
+      const rawPayments: any[] = mpData.results ?? mpData.elements ?? [];
 
-        let isOutgoing: boolean;
-        if (merchantId) {
-          isOutgoing = payerId === merchantId && collectorId !== merchantId;
-        } else {
-          isOutgoing = p.operation_type === "withdrawal"
-            || (p.operation_type === "money_transfer" && desc.includes("transferencia a"))
-            || desc.startsWith("transferencia a");
+      // ── Detectar merchant ID desde los propios datos (más fiable que /users/me) ──
+      // El merchant es el collector_id que aparece con más frecuencia
+      if (!_mpMerchantId) {
+        const freq = new Map<string, number>();
+        for (const p of rawPayments) {
+          const cid = String(p.collector_id ?? p.collector?.id ?? "");
+          if (cid && cid !== "0") freq.set(cid, (freq.get(cid) ?? 0) + 1);
         }
+        let best = 0;
+        for (const [id, n] of freq) { if (n > best) { best = n; _mpMerchantId = id; } }
+      }
+      const merchantId = _mpMerchantId;
+
+      const movements: any[] = rawPayments.map((p: any) => {
+        // ── Dirección ─────────────────────────────────────────────────────────
+        // payer_id (top-level) para egresos, payer.id para ingresos
+        const payerIdRaw   = String(p.payer_id   ?? p.payer?.id   ?? "");
+        const collIdRaw    = String(p.collector_id ?? p.collector?.id ?? "");
+        // Egreso: yo soy el payer Y no soy el collector (evita falso positivo en self-transfers)
+        const isOutgoing   = merchantId
+          ? (payerIdRaw === merchantId && collIdRaw !== merchantId)
+          : false;
 
         // ── Monto bruto ───────────────────────────────────────────────────────
         const grossAmount: number = Math.abs(parseFloat(String(p.transaction_amount ?? 0)));
 
-        // ── Comisión ──────────────────────────────────────────────────────────
-        let feeAmount = 0;
-        if (p.transaction_amount != null && p.net_received_amount != null) {
-          feeAmount = Math.abs(parseFloat(String(p.transaction_amount)) - parseFloat(String(p.net_received_amount)));
-        } else if (Array.isArray(p.fee_details) && p.fee_details.length > 0) {
-          feeAmount = p.fee_details.reduce((s: number, f: any) => s + Math.abs(parseFloat(String(f.amount ?? 0))), 0);
-        } else if (p.taxes_amount) {
-          feeAmount = Math.abs(parseFloat(String(p.taxes_amount)));
-        }
+        // ── Comisión desde charges_details (fee_details siempre vacío en este token) ─
+        const chargesArr: any[] = Array.isArray(p.charges_details) ? p.charges_details : [];
+        const feeAmount: number = chargesArr.length > 0
+          ? chargesArr.reduce((s, c) => s + Math.abs(parseFloat(String(c.amounts?.original ?? 0))), 0)
+          : 0;
+
+        // ── Neto ──────────────────────────────────────────────────────────────
+        // Ingreso: gross - fee = net_received
+        // Egreso: gross + fee = total_paid (lo que salió de mi cuenta)
+        const netAmount: number = isOutgoing ? grossAmount + feeAmount : grossAmount - feeAmount;
 
         // ── Nombre de la otra parte ───────────────────────────────────────────
-        // Para egreso: el destinatario. Para ingreso: el pagador.
+        // MP no expone first_name/last_name en este endpoint → usar email
         let displayName: string | null = null;
-
         if (isOutgoing) {
-          // Destinatario: puede venir en description "Transferencia a [Nombre]"
+          // Destinatario: collector.email, o description "Transferencia a [Nombre]"
           const match = (p.description ?? "").match(/transferencia a (.+)/i);
-          if (match) {
-            displayName = match[1].trim();
-          } else {
-            // Intentar additional_info.payee o similar
-            displayName = p.additional_info?.payer?.first_name
-              ? `${p.additional_info.payer.first_name} ${p.additional_info.payer.last_name ?? ""}`.trim()
-              : null;
-          }
+          displayName = match
+            ? match[1].trim()
+            : (p.collector?.email && !p.collector.email.includes("noreply") ? p.collector.email : null);
         } else {
-          // Pagador: payer.first_name/last_name o additional_info.payer
-          if (p.payer?.first_name) {
-            displayName = `${p.payer.first_name} ${p.payer.last_name ?? ""}`.trim();
-          } else if (p.additional_info?.payer?.first_name) {
-            displayName = `${p.additional_info.payer.first_name} ${p.additional_info.payer.last_name ?? ""}`.trim();
-          } else if (p.payer?.email && !p.payer.email.includes("@mp")) {
-            displayName = p.payer.email;
-          }
+          // Pagador: payer.email (first_name siempre null en este endpoint)
+          const email: string = p.payer?.email ?? "";
+          // Si el email es del propio merchant → self-transfer, mostrar operación
+          displayName = (email && email !== "vegetalesargentinos.srl@gmail.com")
+            ? email
+            : null;
         }
 
         return {
           ...p,
           date_created: p.date_created ?? p.date_approved,
           total: p.transaction_amount ?? p.total,
-          type: p.payment_type_id ?? p.type ?? "payment",
+          type: p.payment_type_id ?? p.operation_type ?? "payment",
           fee: { amount: feeAmount },
           isOutgoing,
           grossAmount,
           feeAmount,
+          netAmount,
           displayName,
         };
       });
