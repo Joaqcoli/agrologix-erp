@@ -184,6 +184,7 @@ export default function BancosPage() {
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
   const [filterStatus, setFilterStatus] = useState("all");
+  const [filterCatId, setFilterCatId] = useState<number | null>(null);
 
   // New category dialog
   const [newCatOpen, setNewCatOpen] = useState(false);
@@ -336,9 +337,11 @@ export default function BancosPage() {
   const movements: MpMovement[] = movData?.results ?? [];
   const mpError = movData?.error ?? (movErr as Error)?.message ?? null;
 
-  const filtered = filterStatus === "all"
-    ? movements
-    : movements.filter(m => m.status === filterStatus);
+  const filtered = movements.filter(m => {
+    if (filterStatus !== "all" && m.status !== filterStatus) return false;
+    if (filterCatId !== null && m.categoryId !== filterCatId) return false;
+    return true;
+  });
 
   const { cobradoMes, comisionesMes } = useMemo(() => {
     let cobradoMes = 0;
@@ -443,6 +446,60 @@ export default function BancosPage() {
                 </SelectContent>
               </Select>
             </div>
+            {/* Dropdown de categorías — filtra y permite agregar nuevas */}
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground font-medium">Categoría</label>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className={`h-8 px-3 text-sm rounded-md border flex items-center gap-1.5 min-w-[9rem] justify-between transition-colors
+                    ${filterCatId !== null
+                      ? "border-foreground/30 bg-muted font-medium text-foreground"
+                      : "border-input bg-background text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <span className="truncate">
+                      {filterCatId !== null
+                        ? (categories.find(c => c.id === filterCatId)?.name ?? "Categoría")
+                        : "Todas"}
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56">
+                  <DropdownMenuItem
+                    onClick={() => setFilterCatId(null)}
+                    className={filterCatId === null ? "font-semibold" : ""}
+                  >
+                    Todas las categorías
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  {categories.map(cat => (
+                    <DropdownMenuItem
+                      key={cat.id}
+                      onClick={() => setFilterCatId(cat.id)}
+                      className={cat.id === filterCatId ? "font-semibold" : ""}
+                    >
+                      {cat.name}
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => { setPendingMovId(null); setNewCatOpen(true); }}
+                    className="text-blue-600 font-medium"
+                  >
+                    <Plus className="h-3.5 w-3.5 mr-1" /> Agregar categoría
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            {filterCatId !== null && (
+              <button
+                onClick={() => setFilterCatId(null)}
+                className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground transition-colors self-end"
+              >
+                × Limpiar
+              </button>
+            )}
           </div>
 
           {/* ── Movements — estilo MP ── */}
