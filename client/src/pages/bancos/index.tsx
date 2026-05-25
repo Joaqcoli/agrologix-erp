@@ -484,22 +484,14 @@ export default function BancosPage() {
                           {/* Name + subtitle + category */}
                           <div className="flex-1 min-w-0">
                             {identified ? (
-                              /* ── Identificado ── */
-                              <>
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <ContactTypeIcon type={m.contactType ?? "otro"} />
-                                  <p className="font-semibold text-sm leading-tight">{m.displayName}</p>
-                                  <span className="text-[10px] text-muted-foreground bg-muted rounded px-1.5 py-0.5">
-                                    {CONTACT_TYPE_LABELS[m.contactType ?? "otro"] ?? m.contactType}
-                                  </span>
-                                </div>
-                                <p className="text-xs text-muted-foreground leading-tight mt-0.5">{subtitle}</p>
-                                {fmtRawId(m.rawIdentifier) && (
-                                  <p className="text-[11px] text-muted-foreground/60 font-mono leading-tight">
-                                    {fmtRawId(m.rawIdentifier)}
-                                  </p>
-                                )}
-                              </>
+                              /* ── Identificado — solo nombre + badge ── */
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <ContactTypeIcon type={m.contactType ?? "otro"} />
+                                <p className="font-semibold text-sm leading-tight">{m.displayName}</p>
+                                <span className="text-[10px] text-muted-foreground bg-muted rounded px-1.5 py-0.5">
+                                  {CONTACT_TYPE_LABELS[m.contactType ?? "otro"] ?? m.contactType}
+                                </span>
+                              </div>
                             ) : (
                               /* ── Sin identificar ── */
                               <>

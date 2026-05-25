@@ -4218,10 +4218,12 @@ export const storage = {
 
   async getBankContactsByIdentifiers(identifiers: string[]): Promise<Map<string, BankContact>> {
     if (identifiers.length === 0) return new Map();
-    // Traer todos los contactos y filtrar en JS — evita problemas de interpolación SQL con arrays en Drizzle
     const all = await db.select().from(bankContacts);
     const lowerSet = new Set(identifiers.map(i => i.toLowerCase().trim()));
+    console.log(`[contacts-storage] DB has ${all.length} contacts: [${all.map(c => c.identifier).join(', ')}]`);
+    console.log(`[contacts-storage] looking for: [${[...lowerSet].join(', ')}]`);
     const matching = all.filter(r => lowerSet.has(r.identifier.toLowerCase().trim()));
+    console.log(`[contacts-storage] found ${matching.length} matching contacts`);
     return new Map(matching.map(r => [r.identifier.toLowerCase().trim(), r]));
   },
 

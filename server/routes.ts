@@ -1698,33 +1698,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         catMap = await storage.getMpMovementOverridesMap(mpIds);
       } catch (_) { /* tabla no existe todavía, continuar sin categorías */ }
 
-      // Compute rawIdentifier for each movement:
-      // 1. Use email (displayName) if available — most stable
-      // 2. Fall back to "mp:{payer_id}" when email is null — allows identifying Saldo MP / account_money movements
-      const withRawIds = enriched.map((m: any) => {
+      // Compute candidate identifiers per movement — múltiples fuentes para máximo match rate
+      const withCandidates = enriched.map((m: any) => {
+        const candidates: string[] = [];
+
+        // 1. Email del pagador (para ingresos) o cobrador (para egresos)
         const email = m.displayName as string | null;
+        if (email) candidates.push(email.toLowerCase().trim());
+
+        // 2. CBU/CVU del pagador (bank_transfer: payer.identification.number)
+        const cbu = String(m.payer?.identification?.number ?? "").replace(/[\s-]/g, "").toLowerCase();
+        if (cbu.length >= 10) candidates.push(cbu);
+
+        // 3. MP user ID ("mp:{id}") — fallback estable para account_money sin email
         const otherId = m.isOutgoing
           ? String(m.collector_id ?? m.collector?.id ?? "")
           : String(m.payer_id ?? m.payer?.id ?? "");
         const otherIdValid = otherId && otherId !== "0" && otherId !== merchantId;
-        const rawIdentifier: string | null = email
-          ? email.toLowerCase()
-          : (otherIdValid ? `mp:${otherId}` : null);
-        return { ...m, rawIdentifier };
+        if (otherIdValid) candidates.push(`mp:${otherId}`);
+
+        const rawIdentifier: string | null = candidates[0] ?? null;
+        return { ...m, rawIdentifier, _candidates: candidates };
       });
 
-      // Embed bank_contacts lookup — resolve real names from known identifiers
-      const rawIdentifiers = [...new Set(withRawIds.map((m: any) => m.rawIdentifier).filter(Boolean) as string[])];
+      // Batch lookup — todos los candidatos de todos los movimientos
+      const allCandidates = [...new Set(withCandidates.flatMap((m: any) => m._candidates as string[]))];
       let contactsMap: Map<string, any> = new Map();
       try {
-        contactsMap = await storage.getBankContactsByIdentifiers(rawIdentifiers);
-      } catch (_) { /* tabla no existe todavía, continuar sin contactos */ }
+        contactsMap = await storage.getBankContactsByIdentifiers(allCandidates);
+        // Log diagnóstico (visible en Render)
+        console.log(`[contacts] ${withCandidates.length} movimientos → ${allCandidates.length} candidatos → ${contactsMap.size} matches`);
+        if (contactsMap.size > 0) console.log(`[contacts] matched keys:`, [...contactsMap.keys()]);
+        if (allCandidates.length > 0) console.log(`[contacts] candidatos MP:`, allCandidates.slice(0, 10));
+      } catch (e: any) { console.warn("[contacts] lookup failed:", e.message); }
 
-      const withCats = withRawIds.map((m: any) => {
-        const rawId = m.rawIdentifier as string | null;
-        const contact = rawId ? contactsMap.get(rawId.toLowerCase()) : undefined;
+      const withCats = withCandidates.map((m: any) => {
+        const candidates = m._candidates as string[];
+        // Primer candidato que matchee en bank_contacts
+        const contact = candidates.map(c => contactsMap.get(c.toLowerCase().trim())).find(Boolean);
+        const { _candidates: _, ...cleanM } = m;
         return {
-          ...m,
+          ...cleanM,
           categoryId: catMap.get(String(m.id)) ?? null,
           identified: !!contact,
           displayName: contact ? contact.displayName : (m.displayName ?? null),
