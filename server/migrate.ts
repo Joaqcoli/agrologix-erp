@@ -760,16 +760,18 @@ export async function runMigrations() {
 
   // Categorías por defecto (solo si la tabla está vacía)
   await db.execute(sql`
-    INSERT INTO bank_categories (name)
-    SELECT unnest(ARRAY[
-      'Transferencia a proveedor',
-      'Transferencia a empleado',
-      'Retiro propio',
-      'Pago de servicio',
-      'Cobro de cliente',
-      'Otros'
-    ])
-    WHERE NOT EXISTS (SELECT 1 FROM bank_categories LIMIT 1)
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM bank_categories) THEN
+        INSERT INTO bank_categories (name) VALUES
+          ('Transferencia a proveedor'),
+          ('Transferencia a empleado'),
+          ('Retiro propio'),
+          ('Pago de servicio'),
+          ('Cobro de cliente'),
+          ('Otros');
+      END IF;
+    END $$
   `);
 
   await db.execute(sql`

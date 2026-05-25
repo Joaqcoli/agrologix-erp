@@ -1583,9 +1583,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return { ...mov, linkedOrderId: linked?.id ?? null, linkedOrderFolio: linked?.folio ?? null };
       });
 
-      // Embed category from DB overrides
+      // Embed category from DB overrides (tabla puede no existir aún si la migración no corrió)
       const mpIds = enriched.map((m: any) => String(m.id));
-      const catMap = await storage.getMpMovementOverridesMap(mpIds);
+      let catMap: Map<string, number | null> = new Map();
+      try {
+        catMap = await storage.getMpMovementOverridesMap(mpIds);
+      } catch (_) { /* tabla no existe todavía, continuar sin categorías */ }
       const withCats = enriched.map((m: any) => ({
         ...m,
         categoryId: catMap.get(String(m.id)) ?? null,
