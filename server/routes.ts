@@ -1605,7 +1605,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/bank-categories", requireAuth, async (_req, res) => {
     try {
       return res.json(await storage.getBankCategories());
-    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+    } catch (_) {
+      // Tabla puede no existir aún si la migración no corrió — devolver array vacío
+      return res.json([]);
+    }
   });
 
   app.post("/api/bank-categories", requireAuth, async (req, res) => {

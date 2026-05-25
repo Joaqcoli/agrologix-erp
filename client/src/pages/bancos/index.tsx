@@ -177,7 +177,10 @@ export default function BancosPage() {
 
   const { data: categories = [] } = useQuery<BankCategory[]>({
     queryKey: ["/api/bank-categories"],
-    queryFn: () => fetch("/api/bank-categories", { credentials: "include" }).then(r => r.json()),
+    queryFn: () =>
+      fetch("/api/bank-categories", { credentials: "include" })
+        .then(r => r.json())
+        .then(d => (Array.isArray(d) ? d : [])),
   });
 
   // ── mutations ─────────────────────────────────────────────────────────────────
