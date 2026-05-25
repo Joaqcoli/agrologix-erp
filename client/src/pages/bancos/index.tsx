@@ -9,30 +9,20 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { AlertCircle, Landmark, TrendingUp, Percent, ArrowDownLeft, ArrowUpRight, ChevronDown, Plus, User, Building2, UserCheck } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
-import {
-  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
-} from "recharts";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 const fmt = (v: number) => "$" + Math.round(Math.abs(v)).toLocaleString("es-AR");
 
-// Formatea el rawIdentifier para mostrar en UI (trunca emails, formatea IDs de MP)
+// Solo muestra emails o CBU, oculta IDs internos de MP
 function fmtRawId(id: string | null | undefined): string {
-  if (!id) return "";
-  if (id.startsWith("mp:")) return `ID MP: ${id.slice(3)}`;
-  if (id.length > 28) return id.slice(0, 14) + "…" + id.slice(-8);
+  if (!id || id.startsWith("mp:")) return "";  // ocultar IDs de MP
+  if (id.length > 30) return id.slice(0, 15) + "…" + id.slice(-8);
   return id;
 }
 
 function pad(n: number) { return String(n).padStart(2, "0"); }
 function isoDate(d: Date) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
-
-function fmtDateShort(s: string) {
-  if (!s) return "";
-  const d = new Date(s);
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
-}
 
 function fmtDateLong(iso: string) {
   const [y, m, day] = iso.split("-").map(Number);
@@ -362,20 +352,6 @@ export default function BancosPage() {
     return { cobradoMes, comisionesMes };
   }, [filtered]);
 
-  const chartData = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const m of filtered) {
-      const raw = parseFloat(String(m.total ?? m.amount ?? 0));
-      if (raw <= 0) continue;
-      const d = fmtDateShort(m.date_created);
-      if (!d) continue;
-      map[d] = (map[d] ?? 0) + raw;
-    }
-    return Object.entries(map)
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([date, total]) => ({ date, total }));
-  }, [filtered]);
-
   const grouped = useMemo(() => {
     const map = new Map<string, MpMovement[]>();
     for (const m of filtered) {
@@ -412,20 +388,18 @@ export default function BancosPage() {
             </div>
           )}
 
-          {/* Cards */}
-          <div className="grid grid-cols-3 gap-4">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Saldo disponible</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold">
-                  {balanceLoading ? "..." : (balance?.unavailable || balance?.available_balance == null)
-                    ? <span className="text-base text-muted-foreground font-normal">No disponible</span>
-                    : fmt(balance.available_balance ?? 0)}
-                </p>
-              </CardContent>
-            </Card>
+          {/* Cards — solo mostrar saldo si está disponible, siempre cobrado/comisiones */}
+          <div className={`grid gap-4 ${!balance?.unavailable && balance?.available_balance != null ? "grid-cols-3" : "grid-cols-2"}`}>
+            {!balanceLoading && !balance?.unavailable && balance?.available_balance != null && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Saldo disponible</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-2xl font-bold">{fmt(balance.available_balance ?? 0)}</p>
+                </CardContent>
+              </Card>
+            )}
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
@@ -447,26 +421,6 @@ export default function BancosPage() {
               </CardContent>
             </Card>
           </div>
-
-          {/* Chart */}
-          {chartData.length > 0 && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium">Cobros por día</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={160}>
-                  <BarChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} tickFormatter={v => "$" + Math.round(v / 1000) + "k"} />
-                    <Tooltip formatter={(v: number) => [fmt(v), "Cobrado"]} />
-                    <Bar dataKey="total" fill="#2E7D32" radius={[3, 3, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          )}
 
           {/* Filters */}
           <div className="flex flex-wrap gap-3 items-end">
@@ -540,7 +494,7 @@ export default function BancosPage() {
                                   </span>
                                 </div>
                                 <p className="text-xs text-muted-foreground leading-tight mt-0.5">{subtitle}</p>
-                                {m.rawIdentifier && (
+                                {fmtRawId(m.rawIdentifier) && (
                                   <p className="text-[11px] text-muted-foreground/60 font-mono leading-tight">
                                     {fmtRawId(m.rawIdentifier)}
                                   </p>
@@ -551,9 +505,11 @@ export default function BancosPage() {
                               <>
                                 <p className="font-semibold text-sm leading-tight text-foreground">{subtitle}</p>
                                 <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                  <span className="text-xs text-muted-foreground">
-                                    {m.rawIdentifier ? fmtRawId(m.rawIdentifier) : "Sin identificar"}
-                                  </span>
+                                  {fmtRawId(m.rawIdentifier) && (
+                                    <span className="text-xs text-muted-foreground font-mono">
+                                      {fmtRawId(m.rawIdentifier)}
+                                    </span>
+                                  )}
                                   <button
                                     onClick={() => openIdentifyDialog(m)}
                                     className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors flex-shrink-0"
@@ -574,20 +530,20 @@ export default function BancosPage() {
                             </div>
                           </div>
 
-                          {/* Monto / Comisión / Total / Hora */}
-                          <div className="text-right flex-shrink-0 space-y-0.5">
-                            <p className="text-sm text-foreground">
-                              {fmt(gross)}
-                            </p>
+                          {/* Montos — layout 2×2: bruto+comisión | neto+hora */}
+                          <div className="flex gap-3 items-start flex-shrink-0">
                             {fee > 0 && (
-                              <p className="text-xs text-orange-600">
-                                comisión {fmt(fee)}
-                              </p>
+                              <div className="text-right space-y-0.5">
+                                <p className="text-sm text-foreground">{fmt(gross)}</p>
+                                <p className="text-xs text-orange-600">comisión {fmt(fee)}</p>
+                              </div>
                             )}
-                            <p className={`font-bold text-sm ${isOutgoing ? "text-red-600" : "text-green-700"}`}>
-                              {isOutgoing ? "-" : "+"}{fmt(net)}
-                            </p>
-                            <p className="text-xs text-muted-foreground">{fmtTime(m.date_created)}</p>
+                            <div className="text-right space-y-0.5">
+                              <p className={`font-bold text-sm ${isOutgoing ? "text-red-600" : "text-green-700"}`}>
+                                {isOutgoing ? "-" : "+"}{fmt(net)}
+                              </p>
+                              <p className="text-xs text-muted-foreground">{fmtTime(m.date_created)}</p>
+                            </div>
                           </div>
                         </div>
                       );

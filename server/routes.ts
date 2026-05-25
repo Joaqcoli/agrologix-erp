@@ -1557,12 +1557,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       const body = await r.json();
       if (!r.ok) {
-        // 404 = endpoint no disponible para este tipo de cuenta (no es error crítico)
-        console.warn("[MP balance]", r.status, JSON.stringify(body));
-        return res.json({ available_balance: null, unavailable: true });
+        // Loguear el error exacto para diagnóstico en Render
+        console.warn(`[MP balance] HTTP ${r.status}:`, JSON.stringify(body));
+        return res.json({ available_balance: null, unavailable: true, _debug: { status: r.status, body } });
       }
       return res.json(body);
     } catch (e: any) {
+      console.warn("[MP balance] exception:", e.message);
       return res.json({ available_balance: null, unavailable: true });
     }
   });

@@ -4218,12 +4218,11 @@ export const storage = {
 
   async getBankContactsByIdentifiers(identifiers: string[]): Promise<Map<string, BankContact>> {
     if (identifiers.length === 0) return new Map();
-    // Case-insensitive lookup — MP emails can have different casing across calls
-    const lower = identifiers.map(i => i.toLowerCase());
-    const rows = await db.execute(drizzleSql`
-      SELECT * FROM bank_contacts WHERE LOWER(identifier) = ANY(${lower}::text[])
-    `);
-    return new Map((rows.rows as any[]).map(r => [(r.identifier as string).toLowerCase(), r]));
+    // Traer todos los contactos y filtrar en JS — evita problemas de interpolación SQL con arrays en Drizzle
+    const all = await db.select().from(bankContacts);
+    const lowerSet = new Set(identifiers.map(i => i.toLowerCase().trim()));
+    const matching = all.filter(r => lowerSet.has(r.identifier.toLowerCase().trim()));
+    return new Map(matching.map(r => [r.identifier.toLowerCase().trim(), r]));
   },
 
   async createBankContact(data: InsertBankContact): Promise<BankContact> {
