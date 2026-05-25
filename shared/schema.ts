@@ -385,3 +385,20 @@ export const cajaMovements = pgTable("caja_movements", {
 export const insertCajaMovementSchema = createInsertSchema(cajaMovements).omit({ id: true, createdAt: true, createdBy: true });
 export type CajaMovement = typeof cajaMovements.$inferSelect;
 export type InsertCajaMovement = typeof cajaMovements.$inferInsert;
+
+// ─── Bancos — categorías y overrides MP ──────────────────────────────────────
+
+export const bankCategories = pgTable("bank_categories", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type BankCategory = typeof bankCategories.$inferSelect;
+
+export const mpMovementOverrides = pgTable("mp_movement_overrides", {
+  id: serial("id").primaryKey(),
+  mpMovementId: text("mp_movement_id").notNull().unique(),
+  categoryId: integer("category_id").references(() => bankCategories.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type MpMovementOverride = typeof mpMovementOverrides.$inferSelect;

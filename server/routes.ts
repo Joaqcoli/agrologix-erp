@@ -1583,11 +1583,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return { ...mov, linkedOrderId: linked?.id ?? null, linkedOrderFolio: linked?.folio ?? null };
       });
 
-      return res.json({ ...mpData, results: enriched });
+      // Embed category from DB overrides
+      const mpIds = enriched.map((m: any) => String(m.id));
+      const catMap = await storage.getMpMovementOverridesMap(mpIds);
+      const withCats = enriched.map((m: any) => ({
+        ...m,
+        categoryId: catMap.get(String(m.id)) ?? null,
+      }));
+
+      return res.json({ ...mpData, results: withCats });
     } catch (e: any) {
       const msg = (e as any)?.name === "AbortError" ? "Timeout al conectar con Mercado Pago" : e.message;
       return res.status(500).json({ error: msg });
     }
+  });
+
+  // ─── Bank Categories ─────────────────────────────────────────────────────────
+  app.get("/api/bank-categories", requireAuth, async (_req, res) => {
+    try {
+      return res.json(await storage.getBankCategories());
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/bank-categories", requireAuth, async (req, res) => {
+    try {
+      const { name } = req.body as { name?: string };
+      if (!name?.trim()) return res.status(400).json({ error: "Nombre requerido" });
+      return res.json(await storage.createBankCategory(name.trim()));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.put("/api/mp/movements/:mpId/category", requireAuth, async (req, res) => {
+    try {
+      const { mpId } = req.params;
+      const { categoryId } = req.body as { categoryId: number | null };
+      await storage.setMpMovementCategory(mpId, categoryId ?? null);
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   return httpServer;

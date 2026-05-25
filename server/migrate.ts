@@ -749,5 +749,37 @@ export async function runMigrations() {
     )
   `);
 
+  // ─── Bancos — categorías y overrides MP ──────────────────────────────────
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS bank_categories (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  // Categorías por defecto (solo si la tabla está vacía)
+  await db.execute(sql`
+    INSERT INTO bank_categories (name)
+    SELECT unnest(ARRAY[
+      'Transferencia a proveedor',
+      'Transferencia a empleado',
+      'Retiro propio',
+      'Pago de servicio',
+      'Cobro de cliente',
+      'Otros'
+    ])
+    WHERE NOT EXISTS (SELECT 1 FROM bank_categories LIMIT 1)
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS mp_movement_overrides (
+      id SERIAL PRIMARY KEY,
+      mp_movement_id TEXT NOT NULL UNIQUE,
+      category_id INTEGER REFERENCES bank_categories(id) ON DELETE SET NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+
   console.log("Migrations complete.");
 }

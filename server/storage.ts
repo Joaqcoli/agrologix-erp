@@ -4,7 +4,7 @@ import {
   stockMovements, productCostHistory, orders, orderItems,
   priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks,
   suppliers, supplierPayments, clientGroups, clientGroupMembers, priceListItems,
-  invoices, cajaMovements,
+  invoices, cajaMovements, bankCategories, mpMovementOverrides,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
@@ -13,6 +13,7 @@ import {
   type PriceListItem, type InsertPriceListItem,
   type Invoice, type InsertInvoice,
   type CajaMovement, type InsertCajaMovement,
+  type BankCategory,
 } from "@shared/schema";
 import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
@@ -4181,5 +4182,31 @@ export const storage = {
 
   async deleteCajaMovement(id: number): Promise<void> {
     await db.delete(cajaMovements).where(eq(cajaMovements.id, id));
+  },
+
+  // ─── Bank Categories ─────────────────────────────────────────────────────────
+  async getBankCategories(): Promise<BankCategory[]> {
+    return db.select().from(bankCategories).orderBy(asc(bankCategories.id));
+  },
+
+  async createBankCategory(name: string): Promise<BankCategory> {
+    const [cat] = await db.insert(bankCategories).values({ name }).returning();
+    return cat;
+  },
+
+  // ─── MP Movement Overrides ────────────────────────────────────────────────────
+  async getMpMovementOverridesMap(mpIds: string[]): Promise<Map<string, number | null>> {
+    if (mpIds.length === 0) return new Map();
+    const rows = await db.select().from(mpMovementOverrides)
+      .where(inArray(mpMovementOverrides.mpMovementId, mpIds));
+    return new Map(rows.map(r => [r.mpMovementId, r.categoryId ?? null]));
+  },
+
+  async setMpMovementCategory(mpMovementId: string, categoryId: number | null): Promise<void> {
+    await db.execute(drizzleSql`
+      INSERT INTO mp_movement_overrides (mp_movement_id, category_id)
+      VALUES (${mpMovementId}, ${categoryId})
+      ON CONFLICT (mp_movement_id) DO UPDATE SET category_id = ${categoryId}
+    `);
   },
 };
