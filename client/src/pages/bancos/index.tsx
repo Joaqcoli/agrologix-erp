@@ -86,7 +86,7 @@ type MpMovement = {
   isOutgoing?: boolean;
   grossAmount?: number;
   feeAmount?: number;
-  payerName?: string | null;
+  displayName?: string | null;
 };
 
 type MpMovementsResponse = {
@@ -378,18 +378,13 @@ export default function BancosPage() {
 
                   <div className="bg-card border rounded-2xl overflow-hidden divide-y">
                     {movs.map(m => {
-                      const isOutgoing = m.isOutgoing
-                        ?? ((m.description ?? "").toLowerCase().startsWith("transferencia a") || m.type === "withdrawal");
+                      const isOutgoing = m.isOutgoing ?? false;
                       const gross  = m.grossAmount ?? Math.abs(parseFloat(String(m.total ?? m.amount ?? 0)));
                       const fee    = m.feeAmount   ?? Math.abs(parseFloat(String(m.fee?.amount ?? 0)));
                       const net    = isOutgoing ? gross + fee : gross - fee;
                       const typeLabel = TYPE_LABELS[m.type] ?? m.type;
-                      // Nombre: payerName del servidor, o descripción si no es genérica, o typeLabel
-                      const genericDescs = ["varios", "pago debin", "pago qr", ""];
-                      const rawDesc = (m.description ?? "").trim();
-                      const displayName = m.payerName
-                        ?? (genericDescs.includes(rawDesc.toLowerCase()) ? null : rawDesc)
-                        ?? typeLabel;
+                      // Nombre: displayName del servidor (nombre real) o typeLabel como fallback
+                      const displayName = m.displayName || typeLabel;
 
                       return (
                         <div key={m.id} className="flex items-start gap-3 px-4 py-3 hover:bg-muted/40 transition-colors">

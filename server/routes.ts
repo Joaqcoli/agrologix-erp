@@ -1481,6 +1481,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── Mercado Pago (proxy) ────────────────────────────────────────────────────
+  // Cache del merchant user ID (se resuelve una vez, luego se reutiliza)
+  let _mpMerchantId: string | null = null;
+  async function getMpMerchantId(token: string): Promise<string | null> {
+    if (_mpMerchantId) return _mpMerchantId;
+    try {
+      const ac = new AbortController();
+      const t  = setTimeout(() => ac.abort(), 5000);
+      try {
+        const r = await fetch("https://api.mercadopago.com/v1/users/me", {
+          headers: { Authorization: `Bearer ${token}` }, signal: ac.signal,
+        });
+        if (r.ok) { const d = await r.json(); _mpMerchantId = String(d.id); }
+      } finally { clearTimeout(t); }
+    } catch {}
+    return _mpMerchantId;
+  }
 
   // Diagnostic endpoint — tests multiple MP endpoints and returns which ones respond
   app.get("/api/mp/test", requireAuth, async (_req, res) => {
@@ -1502,6 +1518,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
     }
     return res.json(results);
+  });
+
+  // Debug: devuelve los primeros 3 pagos crudos (sin normalizar) + merchant_id
+  app.get("/api/mp/raw", requireAuth, async (_req, res) => {
+    const token = process.env.MP_ACCESS_TOKEN;
+    if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });
+    try {
+      const merchantId = await getMpMerchantId(token);
+      const r = await fetch(
+        "https://api.mercadopago.com/v1/payments/search?range=date_created&sort=date_created&criteria=desc&limit=3",
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const body = await r.json();
+      return res.json({ merchantId, raw: body?.results ?? body });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   app.get("/api/mp/balance", requireAuth, async (_req, res) => {
@@ -1553,31 +1584,65 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         console.error("[MP movements] error", r.status, JSON.stringify(body));
         return res.status(r.status).json({ error: `MP error ${r.status}`, detail: body });
       }
+      // Obtener merchant ID para detectar dirección (se cachea)
+      const merchantId = await getMpMerchantId(token);
+
       const mpData: any = body;
       const movements: any[] = (mpData.results ?? mpData.elements ?? []).map((p: any) => {
-        // ── Dirección: salida si es retiro o transfer enviada ──────────────────
-        const desc = (p.description ?? "").toLowerCase();
-        const isOutgoing: boolean =
-          p.operation_type === "withdrawal" ||
-          (p.operation_type === "money_transfer" && desc.includes("transferencia a")) ||
-          (p.net_received_amount != null && parseFloat(p.net_received_amount) < 0);
+        // ── Dirección ─────────────────────────────────────────────────────────
+        // Método definitivo: si payer.id == merchant → yo soy quien pagó → egreso
+        // Fallback: operation_type withdrawal, o description contiene "transferencia a"
+        const payerId    = String(p.payer?.id ?? "");
+        const collectorId = String(p.collector_id ?? p.collector?.id ?? "");
+        const desc       = (p.description ?? "").toLowerCase();
 
-        // ── Monto bruto ────────────────────────────────────────────────────────
-        const grossAmount: number = Math.abs(parseFloat(String(p.transaction_amount ?? p.total ?? 0)));
+        let isOutgoing: boolean;
+        if (merchantId) {
+          isOutgoing = payerId === merchantId && collectorId !== merchantId;
+        } else {
+          isOutgoing = p.operation_type === "withdrawal"
+            || (p.operation_type === "money_transfer" && desc.includes("transferencia a"))
+            || desc.startsWith("transferencia a");
+        }
 
-        // ── Comisión: transaction_amount - net_received_amount si ambos disponibles
-        const feeAmount: number = (p.transaction_amount != null && p.net_received_amount != null)
-          ? Math.abs(parseFloat(String(p.transaction_amount)) - parseFloat(String(p.net_received_amount)))
-          : Math.abs(parseFloat(String(
-              p.taxes_amount ??
-              (p.fee_details as any[] | undefined)?.reduce((s: number, f: any) => s + Math.abs(f.amount ?? 0), 0) ??
-              0
-            )));
+        // ── Monto bruto ───────────────────────────────────────────────────────
+        const grossAmount: number = Math.abs(parseFloat(String(p.transaction_amount ?? 0)));
 
-        // ── Nombre: pagador (ingreso) o descripción MP tal cual (egreso) ───────
-        const payerName: string | null = !isOutgoing && p.payer?.first_name
-          ? `${p.payer.first_name} ${p.payer.last_name ?? ""}`.trim()
-          : null;
+        // ── Comisión ──────────────────────────────────────────────────────────
+        let feeAmount = 0;
+        if (p.transaction_amount != null && p.net_received_amount != null) {
+          feeAmount = Math.abs(parseFloat(String(p.transaction_amount)) - parseFloat(String(p.net_received_amount)));
+        } else if (Array.isArray(p.fee_details) && p.fee_details.length > 0) {
+          feeAmount = p.fee_details.reduce((s: number, f: any) => s + Math.abs(parseFloat(String(f.amount ?? 0))), 0);
+        } else if (p.taxes_amount) {
+          feeAmount = Math.abs(parseFloat(String(p.taxes_amount)));
+        }
+
+        // ── Nombre de la otra parte ───────────────────────────────────────────
+        // Para egreso: el destinatario. Para ingreso: el pagador.
+        let displayName: string | null = null;
+
+        if (isOutgoing) {
+          // Destinatario: puede venir en description "Transferencia a [Nombre]"
+          const match = (p.description ?? "").match(/transferencia a (.+)/i);
+          if (match) {
+            displayName = match[1].trim();
+          } else {
+            // Intentar additional_info.payee o similar
+            displayName = p.additional_info?.payer?.first_name
+              ? `${p.additional_info.payer.first_name} ${p.additional_info.payer.last_name ?? ""}`.trim()
+              : null;
+          }
+        } else {
+          // Pagador: payer.first_name/last_name o additional_info.payer
+          if (p.payer?.first_name) {
+            displayName = `${p.payer.first_name} ${p.payer.last_name ?? ""}`.trim();
+          } else if (p.additional_info?.payer?.first_name) {
+            displayName = `${p.additional_info.payer.first_name} ${p.additional_info.payer.last_name ?? ""}`.trim();
+          } else if (p.payer?.email && !p.payer.email.includes("@mp")) {
+            displayName = p.payer.email;
+          }
+        }
 
         return {
           ...p,
@@ -1585,11 +1650,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           total: p.transaction_amount ?? p.total,
           type: p.payment_type_id ?? p.type ?? "payment",
           fee: { amount: feeAmount },
-          // campos normalizados
           isOutgoing,
           grossAmount,
           feeAmount,
-          payerName,
+          displayName,
         };
       });
 
