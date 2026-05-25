@@ -17,6 +17,14 @@ import {
 
 const fmt = (v: number) => "$" + Math.round(Math.abs(v)).toLocaleString("es-AR");
 
+// Formatea el rawIdentifier para mostrar en UI (trunca emails, formatea IDs de MP)
+function fmtRawId(id: string | null | undefined): string {
+  if (!id) return "";
+  if (id.startsWith("mp:")) return `ID MP: ${id.slice(3)}`;
+  if (id.length > 28) return id.slice(0, 14) + "…" + id.slice(-8);
+  return id;
+}
+
 function pad(n: number) { return String(n).padStart(2, "0"); }
 function isoDate(d: Date) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 
@@ -264,24 +272,6 @@ export default function BancosPage() {
   const createContactMut = useMutation({
     mutationFn: (data: { identifier: string; displayName: string; type: string; entityId: number | null }) =>
       apiRequest("POST", "/api/bank-contacts", data).then(r => r.json()) as Promise<BankContact>,
-    onSuccess: (contact) => {
-      // Actualizar la caché de movimientos de forma optimista — sin re-fetch
-      qc.setQueriesData<MpMovementsResponse>(
-        { queryKey: ["/api/mp/movements"] },
-        (old) => {
-          if (!old?.results) return old;
-          return {
-            ...old,
-            results: old.results.map(m =>
-              m.rawIdentifier === contact.identifier
-                ? { ...m, identified: true, displayName: contact.displayName, contactType: contact.type, entityId: contact.entityId, contactId: contact.id }
-                : m
-            ),
-          };
-        }
-      );
-      closeIdentifyDialog();
-    },
     onError: (e: Error) => {
       const msg = e.message.includes("23505") || e.message.includes("409")
         ? "Ese identificador ya está registrado"
@@ -322,12 +312,33 @@ export default function BancosPage() {
   const handleSaveContact = () => {
     if (!idIdentifier.trim() || !idName.trim()) return;
     setIdError(null);
-    createContactMut.mutate({
-      identifier: idIdentifier.trim(),
-      displayName: idName.trim(),
-      type: idType,
-      entityId: idEntityId,
-    });
+    const movId = identifyMov?.id;
+    createContactMut.mutate(
+      { identifier: idIdentifier.trim(), displayName: idName.trim(), type: idType, entityId: idEntityId },
+      {
+        onSuccess: (contact: BankContact) => {
+          // Actualizar caché de forma optimista — sin re-fetch (staleTime: Infinity)
+          // Matchear por: rawIdentifier (case-insensitive) O por movement ID cuando no hay rawIdentifier
+          qc.setQueriesData<MpMovementsResponse>(
+            { queryKey: ["/api/mp/movements"] },
+            (old) => {
+              if (!old?.results) return old;
+              return {
+                ...old,
+                results: old.results.map(m => {
+                  const byId = !m.rawIdentifier && m.id === movId;
+                  const byIdentifier = m.rawIdentifier &&
+                    m.rawIdentifier.toLowerCase() === contact.identifier.toLowerCase();
+                  if (!byId && !byIdentifier) return m;
+                  return { ...m, identified: true, displayName: contact.displayName, contactType: contact.type, entityId: contact.entityId, contactId: contact.id };
+                }),
+              };
+            }
+          );
+          closeIdentifyDialog();
+        },
+      }
+    );
   };
 
   // ── derived data ──────────────────────────────────────────────────────────────
@@ -501,8 +512,8 @@ export default function BancosPage() {
                       const net         = m.netAmount   ?? (isOutgoing ? gross + fee : gross - fee);
                       const typeLabel   = TYPE_LABELS[m.type] ?? m.type;
                       const identified  = m.identified ?? false;
-                      const nameLabel   = m.displayName || typeLabel;
-                      const hasRawId    = !!m.rawIdentifier;
+                      // Subtitle: prefer MP description over typeLabel
+                      const subtitle    = m.description || typeLabel;
 
                       return (
                         <div key={m.id} className="flex items-start gap-3 px-4 py-3 hover:bg-muted/40 transition-colors">
@@ -516,34 +527,42 @@ export default function BancosPage() {
                             }
                           </div>
 
-                          {/* Name + type + category */}
+                          {/* Name + subtitle + category */}
                           <div className="flex-1 min-w-0">
                             {identified ? (
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <ContactTypeIcon type={m.contactType ?? "otro"} />
-                                <p className="font-semibold text-sm leading-tight">{nameLabel}</p>
-                                <span className="text-[10px] text-muted-foreground bg-muted rounded px-1.5 py-0.5">
-                                  {CONTACT_TYPE_LABELS[m.contactType ?? "otro"] ?? m.contactType}
-                                </span>
-                              </div>
-                            ) : (
-                              <div className="flex items-center gap-2 flex-wrap">
-                                {hasRawId ? (
-                                  <p className="text-sm text-muted-foreground leading-tight font-mono truncate max-w-[200px]">
-                                    {m.rawIdentifier}
+                              /* ── Identificado ── */
+                              <>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <ContactTypeIcon type={m.contactType ?? "otro"} />
+                                  <p className="font-semibold text-sm leading-tight">{m.displayName}</p>
+                                  <span className="text-[10px] text-muted-foreground bg-muted rounded px-1.5 py-0.5">
+                                    {CONTACT_TYPE_LABELS[m.contactType ?? "otro"] ?? m.contactType}
+                                  </span>
+                                </div>
+                                <p className="text-xs text-muted-foreground leading-tight mt-0.5">{subtitle}</p>
+                                {m.rawIdentifier && (
+                                  <p className="text-[11px] text-muted-foreground/60 font-mono leading-tight">
+                                    {fmtRawId(m.rawIdentifier)}
                                   </p>
-                                ) : (
-                                  <p className="font-semibold text-sm leading-tight">{nameLabel}</p>
                                 )}
-                                <button
-                                  onClick={() => openIdentifyDialog(m)}
-                                  className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors flex-shrink-0"
-                                >
-                                  Identificar
-                                </button>
-                              </div>
+                              </>
+                            ) : (
+                              /* ── Sin identificar ── */
+                              <>
+                                <p className="font-semibold text-sm leading-tight text-foreground">{subtitle}</p>
+                                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                  <span className="text-xs text-muted-foreground">
+                                    {m.rawIdentifier ? fmtRawId(m.rawIdentifier) : "Sin identificar"}
+                                  </span>
+                                  <button
+                                    onClick={() => openIdentifyDialog(m)}
+                                    className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors flex-shrink-0"
+                                  >
+                                    Identificar
+                                  </button>
+                                </div>
+                              </>
                             )}
-                            <p className="text-xs text-muted-foreground leading-tight mt-0.5">{typeLabel}</p>
                             <div className="mt-1.5">
                               <CategoryPicker
                                 movId={m.id}
@@ -629,13 +648,14 @@ export default function BancosPage() {
               <label className="text-sm font-medium">Identificador (email, CBU, alias)</label>
               {identifyMov?.rawIdentifier ? (
                 <p className="text-xs text-muted-foreground font-mono bg-muted rounded px-2 py-1.5 break-all">
-                  {identifyMov.rawIdentifier}
+                  {fmtRawId(identifyMov.rawIdentifier)}
                 </p>
               ) : (
                 <Input
                   value={idIdentifier}
                   onChange={e => { setIdIdentifier(e.target.value); setIdError(null); }}
                   placeholder="Ej: juan@email.com · 0000003100..."
+                  autoFocus
                 />
               )}
             </div>

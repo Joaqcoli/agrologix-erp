@@ -1697,22 +1697,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         catMap = await storage.getMpMovementOverridesMap(mpIds);
       } catch (_) { /* tabla no existe todavía, continuar sin categorías */ }
 
+      // Compute rawIdentifier for each movement:
+      // 1. Use email (displayName) if available — most stable
+      // 2. Fall back to "mp:{payer_id}" when email is null — allows identifying Saldo MP / account_money movements
+      const withRawIds = enriched.map((m: any) => {
+        const email = m.displayName as string | null;
+        const otherId = m.isOutgoing
+          ? String(m.collector_id ?? m.collector?.id ?? "")
+          : String(m.payer_id ?? m.payer?.id ?? "");
+        const otherIdValid = otherId && otherId !== "0" && otherId !== merchantId;
+        const rawIdentifier: string | null = email
+          ? email.toLowerCase()
+          : (otherIdValid ? `mp:${otherId}` : null);
+        return { ...m, rawIdentifier };
+      });
+
       // Embed bank_contacts lookup — resolve real names from known identifiers
-      const rawIdentifiers = enriched.map((m: any) => m.displayName).filter(Boolean) as string[];
+      const rawIdentifiers = [...new Set(withRawIds.map((m: any) => m.rawIdentifier).filter(Boolean) as string[])];
       let contactsMap: Map<string, any> = new Map();
       try {
         contactsMap = await storage.getBankContactsByIdentifiers(rawIdentifiers);
       } catch (_) { /* tabla no existe todavía, continuar sin contactos */ }
 
-      const withCats = enriched.map((m: any) => {
-        const rawId = m.displayName as string | null;
-        const contact = rawId ? contactsMap.get(rawId) : undefined;
+      const withCats = withRawIds.map((m: any) => {
+        const rawId = m.rawIdentifier as string | null;
+        const contact = rawId ? contactsMap.get(rawId.toLowerCase()) : undefined;
         return {
           ...m,
           categoryId: catMap.get(String(m.id)) ?? null,
-          rawIdentifier: rawId,
           identified: !!contact,
-          displayName: contact ? contact.displayName : rawId,
+          displayName: contact ? contact.displayName : (m.displayName ?? null),
           contactType: contact?.type ?? null,
           entityId: contact?.entityId ?? null,
           contactId: contact?.id ?? null,

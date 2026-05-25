@@ -4218,13 +4218,20 @@ export const storage = {
 
   async getBankContactsByIdentifiers(identifiers: string[]): Promise<Map<string, BankContact>> {
     if (identifiers.length === 0) return new Map();
-    const rows = await db.select().from(bankContacts)
-      .where(inArray(bankContacts.identifier, identifiers));
-    return new Map(rows.map(r => [r.identifier, r]));
+    // Case-insensitive lookup — MP emails can have different casing across calls
+    const lower = identifiers.map(i => i.toLowerCase());
+    const rows = await db.execute(drizzleSql`
+      SELECT * FROM bank_contacts WHERE LOWER(identifier) = ANY(${lower}::text[])
+    `);
+    return new Map((rows.rows as any[]).map(r => [(r.identifier as string).toLowerCase(), r]));
   },
 
   async createBankContact(data: InsertBankContact): Promise<BankContact> {
-    const [row] = await db.insert(bankContacts).values(data).returning();
+    // Normalize identifier to lowercase so lookups always match regardless of casing
+    const [row] = await db.insert(bankContacts).values({
+      ...data,
+      identifier: data.identifier.toLowerCase().trim(),
+    }).returning();
     return row;
   },
 
