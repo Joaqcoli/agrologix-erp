@@ -44,7 +44,7 @@ function getLast30() {
 }
 
 const DESCRIPTION_OPTIONS = [
-  { value: "", label: "— Sin categoría —" },
+  { value: "none", label: "— Sin categoría —" },
   { value: "Cobro de cliente", label: "Cobro de cliente" },
   { value: "Retiro de dinero", label: "Retiro de dinero" },
   { value: "Pago a proveedor", label: "Pago a proveedor" },
@@ -101,7 +101,7 @@ export default function BancosPage() {
   const [descriptions, setDescriptions] = useState<Record<string, string>>(loadDescriptions);
 
   const saveDescription = (id: string | number, value: string) => {
-    const next = { ...descriptions, [String(id)]: value };
+    const next = { ...descriptions, [String(id)]: value === "none" ? "" : value };
     setDescriptions(next);
     localStorage.setItem("mp-mov-descriptions", JSON.stringify(next));
   };
@@ -293,7 +293,7 @@ export default function BancosPage() {
                         </td>
                         <td className="px-3 py-2 min-w-[170px]">
                           <Select
-                            value={descriptions[String(m.id)] ?? ""}
+                            value={descriptions[String(m.id)] || "none"}
                             onValueChange={v => saveDescription(m.id, v)}
                           >
                             <SelectTrigger className="h-7 text-xs border-dashed">
