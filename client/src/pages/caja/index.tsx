@@ -8,7 +8,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { TrendingUp, TrendingDown, DollarSign, Plus, Trash2 } from "lucide-react";
+import { TrendingUp, TrendingDown, DollarSign, Plus, Trash2, ShoppingBag } from "lucide-react";
+import { useLocation } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 
 const fmt = (v: number) =>
@@ -51,6 +52,7 @@ type CajaSummary = {
   payments: { id: number; date: string; amount: string; method: string; notes: string | null; customerName: string }[];
   supplierPayments: { id: number; date: string; amount: string; method: string; notes: string | null; supplierName: string }[];
   manualMovements: { id: number; date: string; type: string; description: string; amount: string; category: string | null }[];
+  approvedOrders: { id: number; folio: string; approvedAt: string; total: string; customerName: string }[];
 };
 
 type MovForm = { date: string; type: "ingreso" | "egreso"; description: string; amount: string; category: string };
@@ -64,6 +66,7 @@ const emptyForm = (): MovForm => ({
 });
 
 export default function CajaPage() {
+  const [, navigate] = useLocation();
   const [period, setPeriod] = useState<"day" | "week" | "month">("day");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<MovForm>(emptyForm());
@@ -180,6 +183,46 @@ export default function CajaPage() {
                         <Badge variant="outline" className="text-xs">{p.method}</Badge>
                       </td>
                       <td className="px-3 py-2 text-right font-medium text-green-700">{fmt(parseFloat(p.amount))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        {/* Pedidos aprobados */}
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <h2 className="font-semibold text-base flex items-center gap-1">
+              <ShoppingBag className="h-4 w-4 text-green-600" /> Pedidos aprobados
+            </h2>
+            <Badge variant="secondary">{data?.approvedOrders?.length ?? 0}</Badge>
+          </div>
+          {(data?.approvedOrders?.length ?? 0) === 0 ? (
+            <p className="text-sm text-muted-foreground">Sin pedidos aprobados en este período.</p>
+          ) : (
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-medium">Fecha</th>
+                    <th className="text-left px-3 py-2 font-medium">Folio</th>
+                    <th className="text-left px-3 py-2 font-medium">Cliente</th>
+                    <th className="text-right px-3 py-2 font-medium">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data?.approvedOrders ?? []).map(o => (
+                    <tr
+                      key={o.id}
+                      className="border-t hover:bg-muted/30 cursor-pointer"
+                      onClick={() => navigate(`/orders/${o.id}`)}
+                    >
+                      <td className="px-3 py-2 text-muted-foreground">{fmtDate(o.approvedAt)}</td>
+                      <td className="px-3 py-2 font-mono text-xs">{o.folio}</td>
+                      <td className="px-3 py-2">{o.customerName}</td>
+                      <td className="px-3 py-2 text-right font-medium text-green-700">{fmt(parseFloat(o.total))}</td>
                     </tr>
                   ))}
                 </tbody>

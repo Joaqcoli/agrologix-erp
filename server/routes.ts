@@ -1481,6 +1481,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── Mercado Pago (proxy) ────────────────────────────────────────────────────
+
+  // Diagnostic endpoint — tests multiple MP endpoints and returns which ones respond
+  app.get("/api/mp/test", requireAuth, async (_req, res) => {
+    const token = process.env.MP_ACCESS_TOKEN;
+    if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });
+    const candidates = [
+      "https://api.mercadopago.com/v1/account/balance",
+      "https://api.mercadopago.com/v1/payments/search?limit=5",
+      "https://api.mercadopago.com/merchant_orders/search?limit=5",
+    ];
+    const results: Record<string, { status: number; ok: boolean; body: any }> = {};
+    for (const url of candidates) {
+      try {
+        const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        const body = await r.json().catch(() => null);
+        results[url] = { status: r.status, ok: r.ok, body };
+      } catch (e: any) {
+        results[url] = { status: 0, ok: false, body: { error: e.message } };
+      }
+    }
+    return res.json(results);
+  });
+
   app.get("/api/mp/balance", requireAuth, async (_req, res) => {
     const token = process.env.MP_ACCESS_TOKEN;
     if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });

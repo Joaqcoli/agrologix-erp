@@ -4094,6 +4094,7 @@ export const storage = {
     payments: { id: number; date: string; amount: string; method: string; notes: string | null; customerName: string }[];
     supplierPayments: { id: number; date: string; amount: string; method: string; notes: string | null; supplierName: string }[];
     manualMovements: CajaMovement[];
+    approvedOrders: { id: number; folio: string; approvedAt: string; total: string; customerName: string }[];
   }> {
     const pmts = await db
       .select({
@@ -4129,12 +4130,31 @@ export const storage = {
       .where(and(drizzleSql`${cajaMovements.date} >= ${from}`, drizzleSql`${cajaMovements.date} <= ${to}`))
       .orderBy(desc(cajaMovements.date));
 
+    // Pedidos aprobados en el período (ventas efectivizadas)
+    const approvedOrdersQ = await db
+      .select({
+        id: orders.id,
+        folio: orders.folio,
+        approvedAt: orders.approvedAt,
+        total: orders.total,
+        customerName: customers.name,
+      })
+      .from(orders)
+      .innerJoin(customers, eq(orders.customerId, customers.id))
+      .where(and(
+        eq(orders.status, "approved"),
+        drizzleSql`${orders.approvedAt}::date >= ${from}::date`,
+        drizzleSql`${orders.approvedAt}::date <= ${to}::date`,
+      ))
+      .orderBy(desc(orders.approvedAt));
+
     const sumPayments = pmts.reduce((acc, p) => acc + parseFloat(p.amount ?? "0"), 0);
+    const sumApprovedOrders = approvedOrdersQ.reduce((acc, o) => acc + parseFloat(o.total ?? "0"), 0);
     const sumManualIn = manualMovements.filter(m => m.type === "ingreso").reduce((acc, m) => acc + parseFloat(m.amount ?? "0"), 0);
     const sumSupplier = spmts.reduce((acc, p) => acc + parseFloat(p.amount ?? "0"), 0);
     const sumManualOut = manualMovements.filter(m => m.type === "egreso").reduce((acc, m) => acc + parseFloat(m.amount ?? "0"), 0);
 
-    const totalIngresos = sumPayments + sumManualIn;
+    const totalIngresos = sumPayments + sumApprovedOrders + sumManualIn;
     const totalEgresos = sumSupplier + sumManualOut;
 
     return {
@@ -4144,6 +4164,13 @@ export const storage = {
       payments: pmts.map(p => ({ ...p, amount: p.amount ?? "0" })),
       supplierPayments: spmts.map(p => ({ ...p, amount: p.amount ?? "0" })),
       manualMovements,
+      approvedOrders: approvedOrdersQ.map(o => ({
+        id: o.id,
+        folio: o.folio,
+        approvedAt: o.approvedAt ? new Date(o.approvedAt).toISOString().slice(0, 10) : from,
+        total: o.total ?? "0",
+        customerName: o.customerName,
+      })),
     };
   },
 
