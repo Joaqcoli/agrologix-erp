@@ -1506,18 +1506,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/mp/balance", requireAuth, async (_req, res) => {
     const token = process.env.MP_ACCESS_TOKEN;
-    if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });
+    if (!token) return res.json({ available_balance: null, unavailable: true });
     try {
       const r = await fetch("https://api.mercadopago.com/v1/account/balance", {
         headers: { Authorization: `Bearer ${token}` },
       });
       const body = await r.json();
       if (!r.ok) {
-        console.error("[MP balance] error", r.status, JSON.stringify(body));
-        return res.status(r.status).json({ error: `MP error ${r.status}`, detail: body });
+        // 404 = endpoint no disponible para este tipo de cuenta (no es error crítico)
+        console.warn("[MP balance]", r.status, JSON.stringify(body));
+        return res.json({ available_balance: null, unavailable: true });
       }
       return res.json(body);
-    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+    } catch (e: any) {
+      return res.json({ available_balance: null, unavailable: true });
+    }
   });
 
   app.get("/api/mp/movements", requireAuth, async (req, res) => {
@@ -1526,13 +1529,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const { from, to, type, status } = req.query as Record<string, string | undefined>;
       const params = new URLSearchParams();
+      // range=date_created es requerido por MP para filtrar por fecha
+      params.set("range", "date_created");
       if (from)   params.set("begin_date", `${from}T00:00:00.000-03:00`);
       if (to)     params.set("end_date",   `${to}T23:59:59.999-03:00`);
       if (status) params.set("status", status);
       params.set("sort", "date_created");
       params.set("criteria", "desc");
       params.set("limit", "100");
-      // Use payments/search — the correct MP endpoint for listing payments
       const url = `https://api.mercadopago.com/v1/payments/search?${params.toString()}`;
       const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       const body = await r.json();

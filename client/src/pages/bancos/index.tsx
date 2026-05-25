@@ -36,8 +36,9 @@ function getLast30() {
 }
 
 type MpBalance = {
-  available_balance?: number;
+  available_balance?: number | null;
   total_amount?: number;
+  unavailable?: boolean; // true cuando el endpoint no está disponible para este token
   error?: string;
 };
 
@@ -129,7 +130,8 @@ export default function BancosPage() {
     return true;
   });
 
-  const mpError = balance?.error ?? movData?.error ?? (balanceErr as Error)?.message ?? (movErr as Error)?.message ?? null;
+  // Solo mostrar error si fallan los movimientos (balance indisponible es degradación silenciosa)
+  const mpError = movData?.error ?? (movErr as Error)?.message ?? null;
 
   return (
     <Layout>
@@ -152,7 +154,9 @@ export default function BancosPage() {
               </CardHeader>
               <CardContent>
                 <p className="text-2xl font-bold">
-                  {balanceLoading ? "..." : balance?.error ? "—" : fmt(balance?.available_balance ?? 0)}
+                  {balanceLoading ? "..." : (balance?.unavailable || balance?.available_balance == null) ? (
+                    <span className="text-base text-muted-foreground font-normal">No disponible</span>
+                  ) : fmt(balance.available_balance ?? 0)}
                 </p>
               </CardContent>
             </Card>
