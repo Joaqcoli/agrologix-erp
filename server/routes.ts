@@ -1520,18 +1520,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(results);
   });
 
-  // Debug: devuelve los primeros 3 pagos crudos (sin normalizar) + merchant_id
+  // Debug: devuelve los primeros 3 pagos crudos (sin normalizar) + merchant_id + users/me
   app.get("/api/mp/raw", requireAuth, async (_req, res) => {
     const token = process.env.MP_ACCESS_TOKEN;
     if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });
     try {
-      const merchantId = await getMpMerchantId(token);
-      const r = await fetch(
-        "https://api.mercadopago.com/v1/payments/search?range=date_created&sort=date_created&criteria=desc&limit=3",
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      // 1. Obtener info del usuario
+      const meRes  = await fetch("https://api.mercadopago.com/v1/users/me", { headers: { Authorization: `Bearer ${token}` } });
+      const meBody = await meRes.json();
+
+      // 2. Pagos últimos 30 días con fechas explícitas
+      const now  = new Date();
+      const from = new Date(now); from.setDate(now.getDate() - 29);
+      const pad  = (n: number) => String(n).padStart(2, "0");
+      const isoFrom = `${from.getFullYear()}-${pad(from.getMonth()+1)}-${pad(from.getDate())}T00:00:00.000-03:00`;
+      const isoTo   = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T23:59:59.999-03:00`;
+      const url = `https://api.mercadopago.com/v1/payments/search?range=date_created&begin_date=${encodeURIComponent(isoFrom)}&end_date=${encodeURIComponent(isoTo)}&sort=date_created&criteria=desc&limit=3`;
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       const body = await r.json();
-      return res.json({ merchantId, raw: body?.results ?? body });
+
+      return res.json({
+        me_status: meRes.status,
+        me: meBody,
+        payments_status: r.status,
+        payments: body?.results ?? body,
+      });
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
