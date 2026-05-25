@@ -1,10 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertCircle, Landmark, TrendingUp, Percent } from "lucide-react";
@@ -18,14 +15,25 @@ import {
   CartesianGrid,
 } from "recharts";
 
-const fmt = (v: number) => "$" + Math.round(v).toLocaleString("es-AR");
+const fmt = (v: number) => "$" + Math.round(Math.abs(v)).toLocaleString("es-AR");
 
 function pad(n: number) { return String(n).padStart(2, "0"); }
 function isoDate(d: Date) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
+
 function fmtDate(s: string) {
   if (!s) return "";
   const d = new Date(s);
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
+}
+
+function fmtTime(s: string) {
+  if (!s) return "";
+  const d = new Date(s);
+  return d.toLocaleTimeString("es-AR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/Argentina/Buenos_Aires",
+  }) + " hs";
 }
 
 function getLast30() {
@@ -35,10 +43,26 @@ function getLast30() {
   return { from: isoDate(from), to: isoDate(to) };
 }
 
+const DESCRIPTION_OPTIONS = [
+  { value: "", label: "— Sin categoría —" },
+  { value: "Cobro de cliente", label: "Cobro de cliente" },
+  { value: "Retiro de dinero", label: "Retiro de dinero" },
+  { value: "Pago a proveedor", label: "Pago a proveedor" },
+  { value: "Comisión Mercado Pago", label: "Comisión Mercado Pago" },
+  { value: "Devolución", label: "Devolución" },
+  { value: "Transferencia entre cuentas", label: "Transferencia entre cuentas" },
+  { value: "Otro", label: "Otro" },
+];
+
+function loadDescriptions(): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem("mp-mov-descriptions") || "{}"); }
+  catch { return {}; }
+}
+
 type MpBalance = {
   available_balance?: number | null;
   total_amount?: number;
-  unavailable?: boolean; // true cuando el endpoint no está disponible para este token
+  unavailable?: boolean;
   error?: string;
 };
 
@@ -70,24 +94,28 @@ function ErrorBanner({ message }: { message: string }) {
 }
 
 export default function BancosPage() {
-  const [, navigate] = useLocation();
   const { from: defaultFrom, to: defaultTo } = getLast30();
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
-  const [filterType, setFilterType] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [descriptions, setDescriptions] = useState<Record<string, string>>(loadDescriptions);
 
-  const { data: balance, isLoading: balanceLoading, error: balanceErr } = useQuery<MpBalance>({
+  const saveDescription = (id: string | number, value: string) => {
+    const next = { ...descriptions, [String(id)]: value };
+    setDescriptions(next);
+    localStorage.setItem("mp-mov-descriptions", JSON.stringify(next));
+  };
+
+  const { data: balance, isLoading: balanceLoading } = useQuery<MpBalance>({
     queryKey: ["/api/mp/balance"],
     queryFn: () => fetch("/api/mp/balance", { credentials: "include" }).then(r => r.json()),
     retry: false,
   });
 
   const { data: movData, isLoading: movLoading, error: movErr } = useQuery<MpMovementsResponse>({
-    queryKey: ["/api/mp/movements", from, to, filterType, filterStatus],
+    queryKey: ["/api/mp/movements", from, to, filterStatus],
     queryFn: () => {
       const p = new URLSearchParams({ from, to });
-      if (filterType !== "all") p.set("type", filterType);
       if (filterStatus !== "all") p.set("status", filterStatus);
       return fetch(`/api/mp/movements?${p}`, { credentials: "include" }).then(r => r.json());
     },
@@ -96,42 +124,39 @@ export default function BancosPage() {
 
   const movements: MpMovement[] = movData?.results ?? [];
 
-  // Stats for current period
+  const mpError = movData?.error ?? (movErr as Error)?.message ?? null;
+
+  // Stats
   const { cobradoMes, comisionesMes } = useMemo(() => {
     let cobradoMes = 0;
     let comisionesMes = 0;
     for (const m of movements) {
-      const amt = Math.abs(parseFloat(String(m.total ?? m.amount ?? 0)));
+      const raw = parseFloat(String(m.total ?? m.amount ?? 0));
       const fee = Math.abs(parseFloat(String(m.fee?.amount ?? 0)));
-      if (m.type === "payment") cobradoMes += amt;
+      if (raw > 0) cobradoMes += raw;
       comisionesMes += fee;
     }
     return { cobradoMes, comisionesMes };
   }, [movements]);
 
-  // Chart data: group payments by date
+  // Chart
   const chartData = useMemo(() => {
     const map: Record<string, number> = {};
     for (const m of movements) {
-      if (m.type !== "payment") continue;
+      const raw = parseFloat(String(m.total ?? m.amount ?? 0));
+      if (raw <= 0) continue;
       const d = fmtDate(m.date_created);
       if (!d) continue;
-      map[d] = (map[d] ?? 0) + Math.abs(parseFloat(String(m.total ?? m.amount ?? 0)));
+      map[d] = (map[d] ?? 0) + raw;
     }
     return Object.entries(map)
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([date, total]) => ({ date, total }));
   }, [movements]);
 
-  // Filtered rows
-  const filtered = movements.filter(m => {
-    if (filterType !== "all" && m.type !== filterType) return false;
-    if (filterStatus !== "all" && m.status !== filterStatus) return false;
-    return true;
-  });
-
-  // Solo mostrar error si fallan los movimientos (balance indisponible es degradación silenciosa)
-  const mpError = movData?.error ?? (movErr as Error)?.message ?? null;
+  const filtered = filterStatus === "all"
+    ? movements
+    : movements.filter(m => m.status === filterStatus);
 
   return (
     <Layout>
@@ -154,9 +179,9 @@ export default function BancosPage() {
               </CardHeader>
               <CardContent>
                 <p className="text-2xl font-bold">
-                  {balanceLoading ? "..." : (balance?.unavailable || balance?.available_balance == null) ? (
-                    <span className="text-base text-muted-foreground font-normal">No disponible</span>
-                  ) : fmt(balance.available_balance ?? 0)}
+                  {balanceLoading ? "..." : (balance?.unavailable || balance?.available_balance == null)
+                    ? <span className="text-base text-muted-foreground font-normal">No disponible</span>
+                    : fmt(balance.available_balance ?? 0)}
                 </p>
               </CardContent>
             </Card>
@@ -186,7 +211,7 @@ export default function BancosPage() {
           {chartData.length > 0 && (
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium">Cobros por día (pagos)</CardTitle>
+                <CardTitle className="text-sm font-medium">Cobros por día</CardTitle>
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={180}>
@@ -213,24 +238,12 @@ export default function BancosPage() {
               <Input type="date" value={to} onChange={e => setTo(e.target.value)} className="h-8 text-sm w-36" />
             </div>
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground font-medium">Tipo</label>
-              <Select value={filterType} onValueChange={setFilterType}>
-                <SelectTrigger className="h-8 text-sm w-36"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todos</SelectItem>
-                  <SelectItem value="payment">Pago</SelectItem>
-                  <SelectItem value="transfer">Transferencia</SelectItem>
-                  <SelectItem value="withdrawal">Retiro</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
               <label className="text-xs text-muted-foreground font-medium">Estado</label>
               <Select value={filterStatus} onValueChange={setFilterStatus}>
                 <SelectTrigger className="h-8 text-sm w-36"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todos</SelectItem>
-                  <SelectItem value="settled">Acreditado</SelectItem>
+                  <SelectItem value="approved">Aprobado</SelectItem>
                   <SelectItem value="pending">Pendiente</SelectItem>
                 </SelectContent>
               </Select>
@@ -243,51 +256,64 @@ export default function BancosPage() {
           ) : filtered.length === 0 ? (
             <p className="text-sm text-muted-foreground">Sin movimientos para los filtros seleccionados.</p>
           ) : (
-            <div className="border rounded-lg overflow-hidden">
+            <div className="border rounded-lg overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50">
                   <tr>
-                    <th className="text-left px-3 py-2 font-medium">Fecha</th>
-                    <th className="text-left px-3 py-2 font-medium">Tipo</th>
+                    <th className="text-left px-3 py-2 font-medium whitespace-nowrap">Fecha</th>
+                    <th className="text-left px-3 py-2 font-medium whitespace-nowrap">Hora</th>
+                    <th className="text-left px-3 py-2 font-medium">Info</th>
                     <th className="text-left px-3 py-2 font-medium">Descripción</th>
-                    <th className="text-right px-3 py-2 font-medium">Monto</th>
-                    <th className="text-right px-3 py-2 font-medium">Comisión</th>
-                    <th className="text-right px-3 py-2 font-medium">Neto</th>
-                    <th className="text-left px-3 py-2 font-medium">Estado</th>
-                    <th className="text-left px-3 py-2 font-medium">Pedido</th>
+                    <th className="text-right px-3 py-2 font-medium whitespace-nowrap">Monto</th>
+                    <th className="text-right px-3 py-2 font-medium whitespace-nowrap">Comisión</th>
+                    <th className="text-right px-3 py-2 font-medium whitespace-nowrap">Neto</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map(m => {
-                    const gross = Math.abs(parseFloat(String(m.total ?? m.amount ?? 0)));
+                    const raw   = parseFloat(String(m.total ?? m.amount ?? 0));
+                    const gross = Math.abs(raw);
                     const fee   = Math.abs(parseFloat(String(m.fee?.amount ?? 0)));
-                    const net   = gross - fee;
+                    // Salida si el monto es negativo o la descripción indica transferencia enviada
+                    const isOutgoing = raw < 0
+                      || (m.description ?? "").toLowerCase().startsWith("transferencia a")
+                      || m.type === "withdrawal";
+                    const net = isOutgoing ? -(gross + fee) : gross - fee;
+
                     return (
                       <tr key={m.id} className="border-t hover:bg-muted/30">
-                        <td className="px-3 py-2 text-muted-foreground">{fmtDate(m.date_created)}</td>
-                        <td className="px-3 py-2">
-                          <Badge variant="outline" className="text-xs uppercase">{m.type}</Badge>
+                        <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
+                          {fmtDate(m.date_created)}
                         </td>
-                        <td className="px-3 py-2">{m.description ?? "—"}</td>
-                        <td className="px-3 py-2 text-right">{fmt(gross)}</td>
-                        <td className="px-3 py-2 text-right text-orange-700">{fee > 0 ? `-${fmt(fee)}` : "—"}</td>
-                        <td className="px-3 py-2 text-right font-medium">{fmt(net)}</td>
-                        <td className="px-3 py-2">
-                          <Badge variant={m.status === "settled" ? "default" : "secondary"} className="text-xs">
-                            {m.status}
-                          </Badge>
+                        <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
+                          {fmtTime(m.date_created)}
                         </td>
-                        <td className="px-3 py-2">
-                          {m.linkedOrderFolio ? (
-                            <Button
-                              size="sm"
-                              variant="link"
-                              className="h-auto p-0 text-xs text-blue-600"
-                              onClick={() => navigate(`/orders/${m.linkedOrderId}`)}
-                            >
-                              #{m.linkedOrderFolio} →
-                            </Button>
-                          ) : "—"}
+                        <td className="px-3 py-2 max-w-[220px] truncate" title={m.description ?? ""}>
+                          {m.description ?? "—"}
+                        </td>
+                        <td className="px-3 py-2 min-w-[170px]">
+                          <Select
+                            value={descriptions[String(m.id)] ?? ""}
+                            onValueChange={v => saveDescription(m.id, v)}
+                          >
+                            <SelectTrigger className="h-7 text-xs border-dashed">
+                              <SelectValue placeholder="Categorizar…" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {DESCRIPTION_OPTIONS.map(o => (
+                                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">
+                          {fmt(gross)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-orange-700 whitespace-nowrap">
+                          {fee > 0 ? `-${fmt(fee)}` : "—"}
+                        </td>
+                        <td className={`px-3 py-2 text-right font-semibold whitespace-nowrap ${net >= 0 ? "text-green-700" : "text-red-700"}`}>
+                          {net < 0 ? `-${fmt(net)}` : fmt(net)}
                         </td>
                       </tr>
                     );
@@ -306,7 +332,6 @@ export default function BancosPage() {
               <p className="font-medium text-muted-foreground">Cuenta Bancaria</p>
               <p className="text-sm text-muted-foreground/70">Próximamente — integración con banco.</p>
             </div>
-            <Badge variant="secondary" className="ml-auto">Próximamente</Badge>
           </div>
         </section>
       </div>
