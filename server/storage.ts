@@ -4195,6 +4195,11 @@ export const storage = {
     return cat;
   },
 
+  async updateBankCategory(id: number, name: string): Promise<BankCategory> {
+    const [cat] = await db.update(bankCategories).set({ name }).where(eq(bankCategories.id, id)).returning();
+    return cat;
+  },
+
   // ─── MP Movement Overrides ────────────────────────────────────────────────────
   async getMpMovementOverridesMap(mpIds: string[]): Promise<Map<string, number | null>> {
     if (mpIds.length === 0) return new Map();

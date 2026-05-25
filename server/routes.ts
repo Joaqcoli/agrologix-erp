@@ -1773,6 +1773,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  app.put("/api/bank-categories/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const { name } = req.body as { name?: string };
+      if (!name?.trim()) return res.status(400).json({ error: "Nombre requerido" });
+      return res.json(await storage.updateBankCategory(id, name.trim()));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   app.put("/api/mp/movements/:mpId/category", requireAuth, async (req, res) => {
     try {
       const { mpId } = req.params;

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { AlertCircle, Landmark, TrendingUp, Percent, ArrowDownLeft, ArrowUpRight, ChevronDown, Plus, User, Building2, UserCheck } from "lucide-react";
+import { AlertCircle, Landmark, TrendingUp, Percent, ArrowDownLeft, ArrowUpRight, ChevronDown, Plus, User, Building2, UserCheck, Pencil } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -191,7 +191,12 @@ export default function BancosPage() {
   const [newCatName, setNewCatName] = useState("");
   const [pendingMovId, setPendingMovId] = useState<string | number | null>(null);
 
-  // Identificar dialog
+  // Edit category dialog
+  const [editCatOpen, setEditCatOpen] = useState(false);
+  const [editCat, setEditCat] = useState<BankCategory | null>(null);
+  const [editCatName, setEditCatName] = useState("");
+
+  // Identificar / Editar contacto dialog
   const [identifyOpen, setIdentifyOpen] = useState(false);
   const [identifyMov, setIdentifyMov] = useState<MpMovement | null>(null);
   const [idName, setIdName] = useState("");
@@ -200,6 +205,7 @@ export default function BancosPage() {
   const [idEntityId, setIdEntityId] = useState<number | null>(null);
   const [entitySearch, setEntitySearch] = useState("");
   const [idError, setIdError] = useState<string | null>(null);
+  const [idEditMode, setIdEditMode] = useState(false); // true = editar contacto existente
 
   // ── queries ──────────────────────────────────────────────────────────────────
 
@@ -271,6 +277,23 @@ export default function BancosPage() {
     },
   });
 
+  const updateContactMut = useMutation({
+    mutationFn: ({ id, ...data }: { id: number; displayName: string; type: string; entityId: number | null }) =>
+      apiRequest("PUT", `/api/bank-contacts/${id}`, data).then(r => r.json()) as Promise<BankContact>,
+    onError: (e: Error) => setIdError(e.message),
+  });
+
+  const updateCategoryMut = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) =>
+      apiRequest("PUT", `/api/bank-categories/${id}`, { name }).then(r => r.json()),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/bank-categories"] });
+      setEditCatOpen(false);
+      setEditCat(null);
+      setEditCatName("");
+    },
+  });
+
   // ── handlers ─────────────────────────────────────────────────────────────────
 
   const handleAddNew = (movId: string | number) => {
@@ -286,6 +309,19 @@ export default function BancosPage() {
     setIdEntityId(null);
     setEntitySearch("");
     setIdError(null);
+    setIdEditMode(false);
+    setIdentifyOpen(true);
+  };
+
+  const openEditContactDialog = (mov: MpMovement) => {
+    setIdentifyMov(mov);
+    setIdName(mov.displayName ?? "");
+    setIdIdentifier(mov.rawIdentifier ?? "");
+    setIdType(mov.contactType ?? "otro");
+    setIdEntityId(mov.entityId ?? null);
+    setEntitySearch("");
+    setIdError(null);
+    setIdEditMode(true);
     setIdentifyOpen(true);
   };
 
@@ -298,38 +334,60 @@ export default function BancosPage() {
     setIdEntityId(null);
     setEntitySearch("");
     setIdError(null);
+    setIdEditMode(false);
+  };
+
+  const applyContactToCache = (contact: BankContact, movId?: string | number) => {
+    qc.setQueriesData<MpMovementsResponse>(
+      { queryKey: ["/api/mp/movements"] },
+      (old) => {
+        if (!old?.results) return old;
+        return {
+          ...old,
+          results: old.results.map(m => {
+            const byId = !m.rawIdentifier && m.id === movId;
+            const byIdentifier = m.rawIdentifier &&
+              m.rawIdentifier.toLowerCase() === contact.identifier.toLowerCase();
+            // En edición también matchear por contactId
+            const byContactId = idEditMode && m.contactId === contact.id;
+            if (!byId && !byIdentifier && !byContactId) return m;
+            return { ...m, identified: true, displayName: contact.displayName, contactType: contact.type, entityId: contact.entityId, contactId: contact.id };
+          }),
+        };
+      }
+    );
   };
 
   const handleSaveContact = () => {
-    if (!idIdentifier.trim() || !idName.trim()) return;
+    if (!idName.trim()) return;
     setIdError(null);
     const movId = identifyMov?.id;
-    createContactMut.mutate(
-      { identifier: idIdentifier.trim(), displayName: idName.trim(), type: idType, entityId: idEntityId },
-      {
-        onSuccess: (contact: BankContact) => {
-          // Actualizar caché de forma optimista — sin re-fetch (staleTime: Infinity)
-          // Matchear por: rawIdentifier (case-insensitive) O por movement ID cuando no hay rawIdentifier
-          qc.setQueriesData<MpMovementsResponse>(
-            { queryKey: ["/api/mp/movements"] },
-            (old) => {
-              if (!old?.results) return old;
-              return {
-                ...old,
-                results: old.results.map(m => {
-                  const byId = !m.rawIdentifier && m.id === movId;
-                  const byIdentifier = m.rawIdentifier &&
-                    m.rawIdentifier.toLowerCase() === contact.identifier.toLowerCase();
-                  if (!byId && !byIdentifier) return m;
-                  return { ...m, identified: true, displayName: contact.displayName, contactType: contact.type, entityId: contact.entityId, contactId: contact.id };
-                }),
-              };
-            }
-          );
-          closeIdentifyDialog();
-        },
-      }
-    );
+    const contactId = identifyMov?.contactId;
+
+    if (idEditMode && contactId) {
+      // Modo edición — PUT /api/bank-contacts/:id
+      updateContactMut.mutate(
+        { id: contactId, displayName: idName.trim(), type: idType, entityId: idEntityId },
+        {
+          onSuccess: (contact: BankContact) => {
+            applyContactToCache(contact, movId);
+            closeIdentifyDialog();
+          },
+        }
+      );
+    } else {
+      // Modo creación — POST /api/bank-contacts
+      if (!idIdentifier.trim()) return;
+      createContactMut.mutate(
+        { identifier: idIdentifier.trim(), displayName: idName.trim(), type: idType, entityId: idEntityId },
+        {
+          onSuccess: (contact: BankContact) => {
+            applyContactToCache(contact, movId);
+            closeIdentifyDialog();
+          },
+        }
+      );
+    }
   };
 
   // ── derived data ──────────────────────────────────────────────────────────────
@@ -477,9 +535,16 @@ export default function BancosPage() {
                     <DropdownMenuItem
                       key={cat.id}
                       onClick={() => setFilterCatId(cat.id)}
-                      className={cat.id === filterCatId ? "font-semibold" : ""}
+                      className={`flex items-center justify-between ${cat.id === filterCatId ? "font-semibold" : ""}`}
                     >
-                      {cat.name}
+                      <span>{cat.name}</span>
+                      <button
+                        onClick={e => { e.stopPropagation(); setEditCat(cat); setEditCatName(cat.name); setEditCatOpen(true); }}
+                        className="text-muted-foreground/40 hover:text-muted-foreground transition-colors ml-2"
+                        title="Editar"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
                     </DropdownMenuItem>
                   ))}
                   <DropdownMenuSeparator />
@@ -541,32 +606,37 @@ export default function BancosPage() {
                           {/* Name + subtitle + category */}
                           <div className="flex-1 min-w-0">
                             {identified ? (
-                              /* ── Identificado — solo nombre + badge ── */
+                              /* ── Identificado — nombre + badge + editar ── */
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <ContactTypeIcon type={m.contactType ?? "otro"} />
                                 <p className="font-semibold text-sm leading-tight">{m.displayName}</p>
                                 <span className="text-[10px] text-muted-foreground bg-muted rounded px-1.5 py-0.5">
                                   {CONTACT_TYPE_LABELS[m.contactType ?? "otro"] ?? m.contactType}
                                 </span>
+                                <button
+                                  onClick={() => openEditContactDialog(m)}
+                                  className="text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+                                  title="Editar contacto"
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </button>
                               </div>
                             ) : (
                               /* ── Sin identificar ── */
-                              <>
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <p className="font-semibold text-sm leading-tight text-foreground">{subtitle}</p>
-                                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                                  {fmtRawId(m.rawIdentifier) && (
-                                    <span className="text-xs text-muted-foreground font-mono">
-                                      {fmtRawId(m.rawIdentifier)}
-                                    </span>
-                                  )}
-                                  <button
-                                    onClick={() => openIdentifyDialog(m)}
-                                    className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors flex-shrink-0"
-                                  >
-                                    Identificar
-                                  </button>
-                                </div>
-                              </>
+                                {fmtRawId(m.rawIdentifier) && (
+                                  <span className="text-xs text-muted-foreground font-mono">
+                                    {fmtRawId(m.rawIdentifier)}
+                                  </span>
+                                )}
+                                <button
+                                  onClick={() => openIdentifyDialog(m)}
+                                  className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors flex-shrink-0"
+                                >
+                                  Identificar
+                                </button>
+                              </div>
                             )}
                             <div className="mt-1.5">
                               <CategoryPicker
@@ -641,29 +711,56 @@ export default function BancosPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Dialog identificar contacto ── */}
+      {/* ── Dialog editar categoría ── */}
+      <Dialog open={editCatOpen} onOpenChange={v => { setEditCatOpen(v); if (!v) { setEditCat(null); setEditCatName(""); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Editar categoría</DialogTitle>
+          </DialogHeader>
+          <Input
+            value={editCatName}
+            onChange={e => setEditCatName(e.target.value)}
+            placeholder="Nombre de la categoría"
+            onKeyDown={e => { if (e.key === "Enter" && editCatName.trim() && editCat) updateCategoryMut.mutate({ id: editCat.id, name: editCatName.trim() }); }}
+            autoFocus
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditCatOpen(false)}>Cancelar</Button>
+            <Button
+              onClick={() => { if (editCatName.trim() && editCat) updateCategoryMut.mutate({ id: editCat.id, name: editCatName.trim() }); }}
+              disabled={!editCatName.trim() || updateCategoryMut.isPending}
+            >
+              {updateCategoryMut.isPending ? "Guardando..." : "Guardar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Dialog identificar / editar contacto ── */}
       <Dialog open={identifyOpen} onOpenChange={v => { if (!v) closeIdentifyDialog(); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Identificar contacto</DialogTitle>
+            <DialogTitle>{idEditMode ? "Editar contacto" : "Identificar contacto"}</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4 py-1">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Identificador (email, CBU, alias)</label>
-              {identifyMov?.rawIdentifier ? (
-                <p className="text-xs text-muted-foreground font-mono bg-muted rounded px-2 py-1.5 break-all">
-                  {fmtRawId(identifyMov.rawIdentifier)}
-                </p>
-              ) : (
-                <Input
-                  value={idIdentifier}
-                  onChange={e => { setIdIdentifier(e.target.value); setIdError(null); }}
-                  placeholder="Ej: juan@email.com · 0000003100..."
-                  autoFocus
-                />
-              )}
-            </div>
+            {!idEditMode && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Identificador (email, CBU, alias)</label>
+                {identifyMov?.rawIdentifier ? (
+                  <p className="text-xs text-muted-foreground font-mono bg-muted rounded px-2 py-1.5 break-all">
+                    {fmtRawId(identifyMov.rawIdentifier) || identifyMov.rawIdentifier}
+                  </p>
+                ) : (
+                  <Input
+                    value={idIdentifier}
+                    onChange={e => { setIdIdentifier(e.target.value); setIdError(null); }}
+                    placeholder="Ej: juan@email.com · 0000003100..."
+                    autoFocus
+                  />
+                )}
+              </div>
+            )}
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Nombre a mostrar</label>
@@ -671,7 +768,7 @@ export default function BancosPage() {
                 value={idName}
                 onChange={e => setIdName(e.target.value)}
                 placeholder="Ej: Juan García"
-                autoFocus={!!identifyMov?.rawIdentifier}
+                autoFocus={idEditMode || !!identifyMov?.rawIdentifier}
               />
             </div>
 
@@ -726,9 +823,16 @@ export default function BancosPage() {
             <Button variant="outline" onClick={closeIdentifyDialog}>Cancelar</Button>
             <Button
               onClick={handleSaveContact}
-              disabled={!idName.trim() || !idIdentifier.trim() || createContactMut.isPending}
+              disabled={
+                !idName.trim() ||
+                (!idEditMode && !idIdentifier.trim() && !identifyMov?.rawIdentifier) ||
+                createContactMut.isPending ||
+                updateContactMut.isPending
+              }
             >
-              {createContactMut.isPending ? "Guardando..." : "Guardar"}
+              {(createContactMut.isPending || updateContactMut.isPending)
+                ? "Guardando..."
+                : idEditMode ? "Actualizar" : "Guardar"}
             </Button>
           </DialogFooter>
         </DialogContent>
