@@ -1529,7 +1529,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const { from, to, type, status } = req.query as Record<string, string | undefined>;
       const params = new URLSearchParams();
-      // range=date_created es requerido por MP para filtrar por fecha
       params.set("range", "date_created");
       if (from)   params.set("begin_date", `${from}T00:00:00.000-03:00`);
       if (to)     params.set("end_date",   `${to}T23:59:59.999-03:00`);
@@ -1538,38 +1537,57 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       params.set("criteria", "desc");
       params.set("limit", "100");
       const url = `https://api.mercadopago.com/v1/payments/search?${params.toString()}`;
-      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+
+      // Timeout de 12 segundos para no colgar el servidor
+      const abort = new AbortController();
+      const timer = setTimeout(() => abort.abort(), 12000);
+      let r: Response;
+      try {
+        r = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: abort.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+
       const body = await r.json();
       if (!r.ok) {
         console.error("[MP movements] error", r.status, JSON.stringify(body));
         return res.status(r.status).json({ error: `MP error ${r.status}`, detail: body });
       }
       const mpData: any = body;
-      // payments/search wraps results in { results: [], paging: {} }
       const movements: any[] = (mpData.results ?? mpData.elements ?? []).map((p: any) => ({
         ...p,
-        // normalize fields so client code works regardless of endpoint shape
         date_created: p.date_created ?? p.date_approved,
         total: p.transaction_amount ?? p.total,
         type: p.payment_type_id ?? p.type ?? "payment",
         fee: { amount: p.taxes_amount ?? p.fee_details?.reduce((s: number, f: any) => s + (f.amount ?? 0), 0) ?? 0 },
       }));
 
-      // Try to link each movement to an order by date + amount (±5%)
-      const enriched = await Promise.all(movements.map(async (mov: any) => {
-        const movAmount = Math.abs(parseFloat(mov.amount ?? mov.total ?? "0"));
-        const movDate   = (mov.date_created ?? "").slice(0, 10);
-        if (!movDate || movAmount === 0) return mov;
-        const orders = await storage.getOrders(movDate);
-        const linked = orders.find(o => {
-          const orderTotal = parseFloat((o as any).total ?? "0");
-          return Math.abs(orderTotal - movAmount) / movAmount <= 0.05;
+      // Fetch órdenes del período UNA sola vez con query liviana y linkear en memoria (evita N+1)
+      const rangeFrom = from ?? (movements[movements.length - 1]?.date_created ?? "").slice(0, 10);
+      const rangeTo   = to ?? (movements[0]?.date_created ?? "").slice(0, 10);
+      let periodOrders: { id: number; folio: string; total: string }[] = [];
+      if (rangeFrom && rangeTo) {
+        const rows = await db.execute(
+          drizzleSql`SELECT id, folio, total FROM orders WHERE order_date::date >= ${rangeFrom}::date AND order_date::date <= ${rangeTo}::date`
+        );
+        periodOrders = rows.rows as any[];
+      }
+
+      const enriched = movements.map((mov: any) => {
+        const movAmount = Math.abs(parseFloat(String(mov.total ?? mov.amount ?? 0)));
+        if (movAmount === 0) return { ...mov, linkedOrderId: null, linkedOrderFolio: null };
+        const linked = (periodOrders as any[]).find((o: any) => {
+          const orderTotal = parseFloat(String(o.total ?? "0"));
+          return orderTotal > 0 && Math.abs(orderTotal - movAmount) / movAmount <= 0.05;
         });
         return { ...mov, linkedOrderId: linked?.id ?? null, linkedOrderFolio: linked?.folio ?? null };
-      }));
+      });
 
       return res.json({ ...mpData, results: enriched });
-    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+    } catch (e: any) {
+      const msg = (e as any)?.name === "AbortError" ? "Timeout al conectar con Mercado Pago" : e.message;
+      return res.status(500).json({ error: msg });
+    }
   });
 
   return httpServer;
