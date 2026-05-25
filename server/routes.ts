@@ -1554,13 +1554,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(r.status).json({ error: `MP error ${r.status}`, detail: body });
       }
       const mpData: any = body;
-      const movements: any[] = (mpData.results ?? mpData.elements ?? []).map((p: any) => ({
-        ...p,
-        date_created: p.date_created ?? p.date_approved,
-        total: p.transaction_amount ?? p.total,
-        type: p.payment_type_id ?? p.type ?? "payment",
-        fee: { amount: p.taxes_amount ?? p.fee_details?.reduce((s: number, f: any) => s + (f.amount ?? 0), 0) ?? 0 },
-      }));
+      const movements: any[] = (mpData.results ?? mpData.elements ?? []).map((p: any) => {
+        // ── Dirección: salida si es retiro o transfer enviada ──────────────────
+        const desc = (p.description ?? "").toLowerCase();
+        const isOutgoing: boolean =
+          p.operation_type === "withdrawal" ||
+          (p.operation_type === "money_transfer" && desc.includes("transferencia a")) ||
+          (p.net_received_amount != null && parseFloat(p.net_received_amount) < 0);
+
+        // ── Monto bruto ────────────────────────────────────────────────────────
+        const grossAmount: number = Math.abs(parseFloat(String(p.transaction_amount ?? p.total ?? 0)));
+
+        // ── Comisión: transaction_amount - net_received_amount si ambos disponibles
+        const feeAmount: number = (p.transaction_amount != null && p.net_received_amount != null)
+          ? Math.abs(parseFloat(String(p.transaction_amount)) - parseFloat(String(p.net_received_amount)))
+          : Math.abs(parseFloat(String(
+              p.taxes_amount ??
+              (p.fee_details as any[] | undefined)?.reduce((s: number, f: any) => s + Math.abs(f.amount ?? 0), 0) ??
+              0
+            )));
+
+        // ── Nombre: pagador (ingreso) o descripción MP tal cual (egreso) ───────
+        const payerName: string | null = !isOutgoing && p.payer?.first_name
+          ? `${p.payer.first_name} ${p.payer.last_name ?? ""}`.trim()
+          : null;
+
+        return {
+          ...p,
+          date_created: p.date_created ?? p.date_approved,
+          total: p.transaction_amount ?? p.total,
+          type: p.payment_type_id ?? p.type ?? "payment",
+          fee: { amount: feeAmount },
+          // campos normalizados
+          isOutgoing,
+          grossAmount,
+          feeAmount,
+          payerName,
+        };
+      });
 
       // Fetch órdenes del período UNA sola vez con query liviana y linkear en memoria (evita N+1)
       const rangeFrom = from ?? (movements[movements.length - 1]?.date_created ?? "").slice(0, 10);

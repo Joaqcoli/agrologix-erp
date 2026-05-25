@@ -82,6 +82,11 @@ type MpMovement = {
   amount?: number;
   fee?: { amount?: number };
   categoryId?: number | null;
+  // campos normalizados en el servidor
+  isOutgoing?: boolean;
+  grossAmount?: number;
+  feeAmount?: number;
+  payerName?: string | null;
 };
 
 type MpMovementsResponse = {
@@ -373,19 +378,23 @@ export default function BancosPage() {
 
                   <div className="bg-card border rounded-2xl overflow-hidden divide-y">
                     {movs.map(m => {
-                      const raw   = parseFloat(String(m.total ?? m.amount ?? 0));
-                      const gross = Math.abs(raw);
-                      const fee   = Math.abs(parseFloat(String(m.fee?.amount ?? 0)));
-                      const isOutgoing = raw < 0
-                        || (m.description ?? "").toLowerCase().startsWith("transferencia a")
-                        || m.type === "withdrawal";
-                      const net = isOutgoing ? -(gross + fee) : gross - fee;
+                      const isOutgoing = m.isOutgoing
+                        ?? ((m.description ?? "").toLowerCase().startsWith("transferencia a") || m.type === "withdrawal");
+                      const gross  = m.grossAmount ?? Math.abs(parseFloat(String(m.total ?? m.amount ?? 0)));
+                      const fee    = m.feeAmount   ?? Math.abs(parseFloat(String(m.fee?.amount ?? 0)));
+                      const net    = isOutgoing ? gross + fee : gross - fee;
                       const typeLabel = TYPE_LABELS[m.type] ?? m.type;
+                      // Nombre: payerName del servidor, o descripción si no es genérica, o typeLabel
+                      const genericDescs = ["varios", "pago debin", "pago qr", ""];
+                      const rawDesc = (m.description ?? "").trim();
+                      const displayName = m.payerName
+                        ?? (genericDescs.includes(rawDesc.toLowerCase()) ? null : rawDesc)
+                        ?? typeLabel;
 
                       return (
-                        <div key={m.id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors">
+                        <div key={m.id} className="flex items-start gap-3 px-4 py-3 hover:bg-muted/40 transition-colors">
                           {/* Icon */}
-                          <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${
                             isOutgoing ? "bg-red-50" : "bg-green-50"
                           }`}>
                             {isOutgoing
@@ -396,13 +405,9 @@ export default function BancosPage() {
 
                           {/* Name + type + category */}
                           <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-sm truncate leading-tight">
-                              {m.description ?? typeLabel}
-                            </p>
-                            <p className="text-xs text-muted-foreground leading-tight mt-0.5">
-                              {typeLabel}
-                            </p>
-                            <div className="mt-1">
+                            <p className="font-semibold text-sm leading-tight">{displayName}</p>
+                            <p className="text-xs text-muted-foreground leading-tight mt-0.5">{typeLabel}</p>
+                            <div className="mt-1.5">
                               <CategoryPicker
                                 movId={m.id}
                                 categoryId={m.categoryId}
@@ -413,19 +418,20 @@ export default function BancosPage() {
                             </div>
                           </div>
 
-                          {/* Amount + time */}
-                          <div className="text-right flex-shrink-0">
-                            <p className={`font-bold text-sm ${net >= 0 ? "text-green-700" : "text-red-600"}`}>
-                              {net < 0 ? "-" : "+"}{fmt(net)}
+                          {/* Monto / Comisión / Total / Hora */}
+                          <div className="text-right flex-shrink-0 space-y-0.5">
+                            <p className="text-sm text-foreground">
+                              {fmt(gross)}
                             </p>
                             {fee > 0 && (
-                              <p className="text-xs text-orange-600 leading-tight">
-                                comisión -{fmt(fee)}
+                              <p className="text-xs text-orange-600">
+                                comisión {fmt(fee)}
                               </p>
                             )}
-                            <p className="text-xs text-muted-foreground leading-tight mt-0.5">
-                              {fmtTime(m.date_created)}
+                            <p className={`font-bold text-sm ${isOutgoing ? "text-red-600" : "text-green-700"}`}>
+                              {isOutgoing ? "-" : "+"}{fmt(net)}
                             </p>
+                            <p className="text-xs text-muted-foreground">{fmtTime(m.date_created)}</p>
                           </div>
                         </div>
                       );
