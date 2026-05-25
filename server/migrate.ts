@@ -783,5 +783,27 @@ export async function runMigrations() {
     )
   `);
 
+  // ─── Bank Contacts ───────────────────────────────────────────────────────
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS bank_contacts (
+      id SERIAL PRIMARY KEY,
+      identifier TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      entity_id INTEGER,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS bank_payment_links (
+      id SERIAL PRIMARY KEY,
+      movement_id TEXT NOT NULL,
+      pedido_id INTEGER REFERENCES orders(id) ON DELETE SET NULL,
+      monto_aplicado NUMERIC(12,2) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+
   console.log("Migrations complete.");
 }

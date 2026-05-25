@@ -402,3 +402,24 @@ export const mpMovementOverrides = pgTable("mp_movement_overrides", {
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 export type MpMovementOverride = typeof mpMovementOverrides.$inferSelect;
+
+// ─── Bank Contacts ────────────────────────────────────────────────────────────
+
+export const bankContacts = pgTable("bank_contacts", {
+  id: serial("id").primaryKey(),
+  identifier: text("identifier").notNull().unique(),   // email, CBU, MP user ID
+  displayName: text("display_name").notNull(),
+  type: text("type").notNull(),                        // 'cliente'|'proveedor'|'banco'|'otro'
+  entityId: integer("entity_id"),                      // FK a customers o suppliers según type
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type BankContact = typeof bankContacts.$inferSelect;
+export type InsertBankContact = typeof bankContacts.$inferInsert;
+
+export const bankPaymentLinks = pgTable("bank_payment_links", {
+  id: serial("id").primaryKey(),
+  movementId: text("movement_id").notNull(),
+  pedidoId: integer("pedido_id").references(() => orders.id, { onDelete: "set null" }),
+  montoAplicado: numeric("monto_aplicado", { precision: 12, scale: 2 }).notNull(),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});

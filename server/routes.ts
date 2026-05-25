@@ -1696,10 +1696,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       try {
         catMap = await storage.getMpMovementOverridesMap(mpIds);
       } catch (_) { /* tabla no existe todavía, continuar sin categorías */ }
-      const withCats = enriched.map((m: any) => ({
-        ...m,
-        categoryId: catMap.get(String(m.id)) ?? null,
-      }));
+
+      // Embed bank_contacts lookup — resolve real names from known identifiers
+      const rawIdentifiers = enriched.map((m: any) => m.displayName).filter(Boolean) as string[];
+      let contactsMap: Map<string, any> = new Map();
+      try {
+        contactsMap = await storage.getBankContactsByIdentifiers(rawIdentifiers);
+      } catch (_) { /* tabla no existe todavía, continuar sin contactos */ }
+
+      const withCats = enriched.map((m: any) => {
+        const rawId = m.displayName as string | null;
+        const contact = rawId ? contactsMap.get(rawId) : undefined;
+        return {
+          ...m,
+          categoryId: catMap.get(String(m.id)) ?? null,
+          rawIdentifier: rawId,
+          identified: !!contact,
+          displayName: contact ? contact.displayName : rawId,
+          contactType: contact?.type ?? null,
+          entityId: contact?.entityId ?? null,
+          contactId: contact?.id ?? null,
+        };
+      });
 
       return res.json({ ...mpData, results: withCats });
     } catch (e: any) {
@@ -1732,6 +1750,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { categoryId } = req.body as { categoryId: number | null };
       await storage.setMpMovementCategory(mpId, categoryId ?? null);
       return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Bank Contacts ────────────────────────────────────────────────────────────
+  app.get("/api/bank-contacts", requireAuth, async (_req, res) => {
+    try {
+      return res.json(await storage.getBankContacts());
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/bank-contacts", requireAuth, async (req, res) => {
+    try {
+      const { identifier, displayName, type, entityId } = req.body as {
+        identifier: string; displayName: string; type: string; entityId?: number | null;
+      };
+      if (!identifier?.trim()) return res.status(400).json({ error: "identifier requerido" });
+      if (!displayName?.trim()) return res.status(400).json({ error: "displayName requerido" });
+      if (!type?.trim()) return res.status(400).json({ error: "type requerido" });
+      const contact = await storage.createBankContact({
+        identifier: identifier.trim(),
+        displayName: displayName.trim(),
+        type,
+        entityId: entityId ?? null,
+      });
+      return res.json(contact);
+    } catch (e: any) {
+      if ((e as any).code === "23505") return res.status(409).json({ error: "Ese identificador ya existe" });
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/bank-contacts/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const { displayName, type, entityId } = req.body as { displayName?: string; type?: string; entityId?: number | null };
+      const contact = await storage.updateBankContact(id, {
+        ...(displayName ? { displayName: displayName.trim() } : {}),
+        ...(type ? { type } : {}),
+        ...(entityId !== undefined ? { entityId: entityId ?? null } : {}),
+      });
+      return res.json(contact);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 

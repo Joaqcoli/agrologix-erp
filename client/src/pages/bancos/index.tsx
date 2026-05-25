@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { AlertCircle, Landmark, TrendingUp, Percent, ArrowDownLeft, ArrowUpRight, ChevronDown, Plus } from "lucide-react";
+import { AlertCircle, Landmark, TrendingUp, Percent, ArrowDownLeft, ArrowUpRight, ChevronDown, Plus, User, Building2, UserCheck } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -27,7 +27,6 @@ function fmtDateShort(s: string) {
 }
 
 function fmtDateLong(iso: string) {
-  // iso = "YYYY-MM-DD"
   const [y, m, day] = iso.split("-").map(Number);
   const d = new Date(y, m - 1, day);
   return d.toLocaleDateString("es-AR", { day: "numeric", month: "long" });
@@ -62,9 +61,24 @@ const TYPE_LABELS: Record<string, string> = {
   withdrawal: "Retiro",
 };
 
+const CONTACT_TYPE_LABELS: Record<string, string> = {
+  cliente: "Cliente",
+  proveedor: "Proveedor",
+  banco: "Banco",
+  otro: "Otro",
+};
+
 // ─── types ─────────────────────────────────────────────────────────────────────
 
 type BankCategory = { id: number; name: string };
+
+type BankContact = {
+  id: number;
+  identifier: string;
+  displayName: string;
+  type: string;
+  entityId: number | null;
+};
 
 type MpBalance = {
   available_balance?: number | null;
@@ -88,12 +102,28 @@ type MpMovement = {
   feeAmount?: number;
   netAmount?: number;
   displayName?: string | null;
+  rawIdentifier?: string | null;
+  identified?: boolean;
+  contactType?: string | null;
+  entityId?: number | null;
+  contactId?: number | null;
 };
 
 type MpMovementsResponse = {
   results?: MpMovement[];
   error?: string;
 };
+
+type SimpleEntity = { id: number; name: string };
+
+// ─── subcomponent: contact type icon ─────────────────────────────────────────
+
+function ContactTypeIcon({ type }: { type: string }) {
+  if (type === "cliente") return <User className="h-3.5 w-3.5 text-blue-500" />;
+  if (type === "proveedor") return <Building2 className="h-3.5 w-3.5 text-purple-500" />;
+  if (type === "banco") return <Landmark className="h-3.5 w-3.5 text-blue-400" />;
+  return <UserCheck className="h-3.5 w-3.5 text-gray-400" />;
+}
 
 // ─── subcomponent: category picker ────────────────────────────────────────────
 
@@ -160,8 +190,15 @@ export default function BancosPage() {
   // New category dialog
   const [newCatOpen, setNewCatOpen] = useState(false);
   const [newCatName, setNewCatName] = useState("");
-  // Pending assignment: when user clicks "+ Agregar categoría" we store which mov is waiting
   const [pendingMovId, setPendingMovId] = useState<string | number | null>(null);
+
+  // Identificar dialog
+  const [identifyOpen, setIdentifyOpen] = useState(false);
+  const [identifyMov, setIdentifyMov] = useState<MpMovement | null>(null);
+  const [idName, setIdName] = useState("");
+  const [idType, setIdType] = useState("otro");
+  const [idEntityId, setIdEntityId] = useState<number | null>(null);
+  const [entitySearch, setEntitySearch] = useState("");
 
   // ── queries ──────────────────────────────────────────────────────────────────
 
@@ -189,6 +226,18 @@ export default function BancosPage() {
         .then(d => (Array.isArray(d) ? d : [])),
   });
 
+  const { data: customers = [] } = useQuery<SimpleEntity[]>({
+    queryKey: ["/api/customers"],
+    queryFn: () => fetch("/api/customers", { credentials: "include" }).then(r => r.json()),
+    enabled: identifyOpen && (idType === "cliente"),
+  });
+
+  const { data: suppliers = [] } = useQuery<SimpleEntity[]>({
+    queryKey: ["/api/suppliers"],
+    queryFn: () => fetch("/api/suppliers", { credentials: "include" }).then(r => r.json()),
+    enabled: identifyOpen && (idType === "proveedor"),
+  });
+
   // ── mutations ─────────────────────────────────────────────────────────────────
 
   const setCategoryMut = useMutation({
@@ -201,7 +250,6 @@ export default function BancosPage() {
     mutationFn: (name: string) => apiRequest("POST", "/api/bank-categories", { name }),
     onSuccess: async (res: any) => {
       await qc.invalidateQueries({ queryKey: ["/api/bank-categories"] });
-      // Auto-assign to the pending movement if any
       if (pendingMovId != null && res?.id) {
         setCategoryMut.mutate({ mpId: pendingMovId, categoryId: res.id });
       }
@@ -211,9 +259,48 @@ export default function BancosPage() {
     },
   });
 
+  const createContactMut = useMutation({
+    mutationFn: (data: { identifier: string; displayName: string; type: string; entityId: number | null }) =>
+      apiRequest("POST", "/api/bank-contacts", data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/mp/movements"] });
+      closeIdentifyDialog();
+    },
+  });
+
+  // ── handlers ─────────────────────────────────────────────────────────────────
+
   const handleAddNew = (movId: string | number) => {
     setPendingMovId(movId);
     setNewCatOpen(true);
+  };
+
+  const openIdentifyDialog = (mov: MpMovement) => {
+    setIdentifyMov(mov);
+    setIdName("");
+    setIdType("otro");
+    setIdEntityId(null);
+    setEntitySearch("");
+    setIdentifyOpen(true);
+  };
+
+  const closeIdentifyDialog = () => {
+    setIdentifyOpen(false);
+    setIdentifyMov(null);
+    setIdName("");
+    setIdType("otro");
+    setIdEntityId(null);
+    setEntitySearch("");
+  };
+
+  const handleSaveContact = () => {
+    if (!identifyMov?.rawIdentifier || !idName.trim()) return;
+    createContactMut.mutate({
+      identifier: identifyMov.rawIdentifier,
+      displayName: idName.trim(),
+      type: idType,
+      entityId: idEntityId,
+    });
   };
 
   // ── derived data ──────────────────────────────────────────────────────────────
@@ -225,7 +312,6 @@ export default function BancosPage() {
     ? movements
     : movements.filter(m => m.status === filterStatus);
 
-  // Stats
   const { cobradoMes, comisionesMes } = useMemo(() => {
     let cobradoMes = 0;
     let comisionesMes = 0;
@@ -238,7 +324,6 @@ export default function BancosPage() {
     return { cobradoMes, comisionesMes };
   }, [filtered]);
 
-  // Chart
   const chartData = useMemo(() => {
     const map: Record<string, number> = {};
     for (const m of filtered) {
@@ -253,7 +338,6 @@ export default function BancosPage() {
       .map(([date, total]) => ({ date, total }));
   }, [filtered]);
 
-  // Group by date descending
   const grouped = useMemo(() => {
     const map = new Map<string, MpMovement[]>();
     for (const m of filtered) {
@@ -263,6 +347,12 @@ export default function BancosPage() {
     }
     return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]));
   }, [filtered]);
+
+  // Entity list for modal (customers or suppliers based on idType)
+  const entityList: SimpleEntity[] = idType === "cliente" ? customers : idType === "proveedor" ? suppliers : [];
+  const filteredEntities = entitySearch.trim()
+    ? entityList.filter(e => e.name.toLowerCase().includes(entitySearch.toLowerCase()))
+    : entityList;
 
   // ── render ────────────────────────────────────────────────────────────────────
 
@@ -372,7 +462,6 @@ export default function BancosPage() {
             <div className="space-y-5">
               {grouped.map(([dateKey, movs]) => (
                 <div key={dateKey}>
-                  {/* Date header */}
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 px-1">
                     {fmtDateLong(dateKey)}
                   </p>
@@ -384,7 +473,9 @@ export default function BancosPage() {
                       const fee         = m.feeAmount   ?? 0;
                       const net         = m.netAmount   ?? (isOutgoing ? gross + fee : gross - fee);
                       const typeLabel   = TYPE_LABELS[m.type] ?? m.type;
-                      const displayName = m.displayName || typeLabel;
+                      const identified  = m.identified ?? false;
+                      const nameLabel   = m.displayName || typeLabel;
+                      const hasRawId    = !!m.rawIdentifier;
 
                       return (
                         <div key={m.id} className="flex items-start gap-3 px-4 py-3 hover:bg-muted/40 transition-colors">
@@ -400,7 +491,29 @@ export default function BancosPage() {
 
                           {/* Name + type + category */}
                           <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-sm leading-tight">{displayName}</p>
+                            {identified ? (
+                              <div className="flex items-center gap-1.5">
+                                <ContactTypeIcon type={m.contactType ?? "otro"} />
+                                <p className="font-semibold text-sm leading-tight">{nameLabel}</p>
+                                <span className="text-[10px] text-muted-foreground bg-muted rounded px-1.5 py-0.5">
+                                  {CONTACT_TYPE_LABELS[m.contactType ?? "otro"] ?? m.contactType}
+                                </span>
+                              </div>
+                            ) : hasRawId ? (
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="text-sm text-muted-foreground leading-tight font-mono truncate max-w-[200px]">
+                                  {m.rawIdentifier}
+                                </p>
+                                <button
+                                  onClick={() => openIdentifyDialog(m)}
+                                  className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors"
+                                >
+                                  Identificar
+                                </button>
+                              </div>
+                            ) : (
+                              <p className="font-semibold text-sm leading-tight">{nameLabel}</p>
+                            )}
                             <p className="text-xs text-muted-foreground leading-tight mt-0.5">{typeLabel}</p>
                             <div className="mt-1.5">
                               <CategoryPicker
@@ -470,6 +583,85 @@ export default function BancosPage() {
               disabled={!newCatName.trim() || createCategoryMut.isPending}
             >
               {createCategoryMut.isPending ? "Guardando..." : "Guardar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Dialog identificar contacto ── */}
+      <Dialog open={identifyOpen} onOpenChange={v => { if (!v) closeIdentifyDialog(); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Identificar contacto</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-1">
+            {identifyMov?.rawIdentifier && (
+              <p className="text-xs text-muted-foreground font-mono bg-muted rounded px-2 py-1.5 break-all">
+                {identifyMov.rawIdentifier}
+              </p>
+            )}
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Nombre a mostrar</label>
+              <Input
+                value={idName}
+                onChange={e => setIdName(e.target.value)}
+                placeholder="Ej: Juan García"
+                autoFocus
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Tipo</label>
+              <Select value={idType} onValueChange={v => { setIdType(v); setIdEntityId(null); setEntitySearch(""); }}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cliente">Cliente</SelectItem>
+                  <SelectItem value="proveedor">Proveedor</SelectItem>
+                  <SelectItem value="banco">Banco</SelectItem>
+                  <SelectItem value="otro">Otro</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {(idType === "cliente" || idType === "proveedor") && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">
+                  Vincular a {idType === "cliente" ? "cliente" : "proveedor"} (opcional)
+                </label>
+                <Input
+                  value={entitySearch}
+                  onChange={e => { setEntitySearch(e.target.value); setIdEntityId(null); }}
+                  placeholder="Buscar por nombre..."
+                />
+                {entitySearch.trim() && filteredEntities.length > 0 && idEntityId == null && (
+                  <div className="border rounded-md overflow-hidden max-h-40 overflow-y-auto">
+                    {filteredEntities.slice(0, 8).map(e => (
+                      <button
+                        key={e.id}
+                        onClick={() => { setIdEntityId(e.id); setEntitySearch(e.name); }}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors border-b last:border-b-0"
+                      >
+                        {e.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {idEntityId != null && (
+                  <p className="text-xs text-green-600 font-medium">✓ Vinculado correctamente</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={closeIdentifyDialog}>Cancelar</Button>
+            <Button
+              onClick={handleSaveContact}
+              disabled={!idName.trim() || createContactMut.isPending}
+            >
+              {createContactMut.isPending ? "Guardando..." : "Guardar"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -4,7 +4,7 @@ import {
   stockMovements, productCostHistory, orders, orderItems,
   priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks,
   suppliers, supplierPayments, clientGroups, clientGroupMembers, priceListItems,
-  invoices, cajaMovements, bankCategories, mpMovementOverrides,
+  invoices, cajaMovements, bankCategories, mpMovementOverrides, bankContacts,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
@@ -14,6 +14,7 @@ import {
   type Invoice, type InsertInvoice,
   type CajaMovement, type InsertCajaMovement,
   type BankCategory,
+  type BankContact, type InsertBankContact,
 } from "@shared/schema";
 import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
@@ -4208,5 +4209,27 @@ export const storage = {
       VALUES (${mpMovementId}, ${categoryId})
       ON CONFLICT (mp_movement_id) DO UPDATE SET category_id = ${categoryId}
     `);
+  },
+
+  // ─── Bank Contacts ────────────────────────────────────────────────────────────
+  async getBankContacts(): Promise<BankContact[]> {
+    return db.select().from(bankContacts).orderBy(asc(bankContacts.displayName));
+  },
+
+  async getBankContactsByIdentifiers(identifiers: string[]): Promise<Map<string, BankContact>> {
+    if (identifiers.length === 0) return new Map();
+    const rows = await db.select().from(bankContacts)
+      .where(inArray(bankContacts.identifier, identifiers));
+    return new Map(rows.map(r => [r.identifier, r]));
+  },
+
+  async createBankContact(data: InsertBankContact): Promise<BankContact> {
+    const [row] = await db.insert(bankContacts).values(data).returning();
+    return row;
+  },
+
+  async updateBankContact(id: number, data: Partial<Pick<BankContact, "displayName" | "type" | "entityId">>): Promise<BankContact> {
+    const [row] = await db.update(bankContacts).set(data).where(eq(bankContacts.id, id)).returning();
+    return row;
   },
 };
