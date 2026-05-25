@@ -196,9 +196,11 @@ export default function BancosPage() {
   const [identifyOpen, setIdentifyOpen] = useState(false);
   const [identifyMov, setIdentifyMov] = useState<MpMovement | null>(null);
   const [idName, setIdName] = useState("");
+  const [idIdentifier, setIdIdentifier] = useState("");  // editable cuando no hay rawIdentifier
   const [idType, setIdType] = useState("otro");
   const [idEntityId, setIdEntityId] = useState<number | null>(null);
   const [entitySearch, setEntitySearch] = useState("");
+  const [idError, setIdError] = useState<string | null>(null);
 
   // ── queries ──────────────────────────────────────────────────────────────────
 
@@ -261,10 +263,30 @@ export default function BancosPage() {
 
   const createContactMut = useMutation({
     mutationFn: (data: { identifier: string; displayName: string; type: string; entityId: number | null }) =>
-      apiRequest("POST", "/api/bank-contacts", data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/mp/movements"] });
+      apiRequest("POST", "/api/bank-contacts", data).then(r => r.json()) as Promise<BankContact>,
+    onSuccess: (contact) => {
+      // Actualizar la caché de movimientos de forma optimista — sin re-fetch
+      qc.setQueriesData<MpMovementsResponse>(
+        { queryKey: ["/api/mp/movements"] },
+        (old) => {
+          if (!old?.results) return old;
+          return {
+            ...old,
+            results: old.results.map(m =>
+              m.rawIdentifier === contact.identifier
+                ? { ...m, identified: true, displayName: contact.displayName, contactType: contact.type, entityId: contact.entityId, contactId: contact.id }
+                : m
+            ),
+          };
+        }
+      );
       closeIdentifyDialog();
+    },
+    onError: (e: Error) => {
+      const msg = e.message.includes("23505") || e.message.includes("409")
+        ? "Ese identificador ya está registrado"
+        : e.message;
+      setIdError(msg);
     },
   });
 
@@ -278,9 +300,11 @@ export default function BancosPage() {
   const openIdentifyDialog = (mov: MpMovement) => {
     setIdentifyMov(mov);
     setIdName("");
+    setIdIdentifier(mov.rawIdentifier ?? "");
     setIdType("otro");
     setIdEntityId(null);
     setEntitySearch("");
+    setIdError(null);
     setIdentifyOpen(true);
   };
 
@@ -288,15 +312,18 @@ export default function BancosPage() {
     setIdentifyOpen(false);
     setIdentifyMov(null);
     setIdName("");
+    setIdIdentifier("");
     setIdType("otro");
     setIdEntityId(null);
     setEntitySearch("");
+    setIdError(null);
   };
 
   const handleSaveContact = () => {
-    if (!identifyMov?.rawIdentifier || !idName.trim()) return;
+    if (!idIdentifier.trim() || !idName.trim()) return;
+    setIdError(null);
     createContactMut.mutate({
-      identifier: identifyMov.rawIdentifier,
+      identifier: idIdentifier.trim(),
       displayName: idName.trim(),
       type: idType,
       entityId: idEntityId,
@@ -492,27 +519,29 @@ export default function BancosPage() {
                           {/* Name + type + category */}
                           <div className="flex-1 min-w-0">
                             {identified ? (
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex items-center gap-1.5 flex-wrap">
                                 <ContactTypeIcon type={m.contactType ?? "otro"} />
                                 <p className="font-semibold text-sm leading-tight">{nameLabel}</p>
                                 <span className="text-[10px] text-muted-foreground bg-muted rounded px-1.5 py-0.5">
                                   {CONTACT_TYPE_LABELS[m.contactType ?? "otro"] ?? m.contactType}
                                 </span>
                               </div>
-                            ) : hasRawId ? (
+                            ) : (
                               <div className="flex items-center gap-2 flex-wrap">
-                                <p className="text-sm text-muted-foreground leading-tight font-mono truncate max-w-[200px]">
-                                  {m.rawIdentifier}
-                                </p>
+                                {hasRawId ? (
+                                  <p className="text-sm text-muted-foreground leading-tight font-mono truncate max-w-[200px]">
+                                    {m.rawIdentifier}
+                                  </p>
+                                ) : (
+                                  <p className="font-semibold text-sm leading-tight">{nameLabel}</p>
+                                )}
                                 <button
                                   onClick={() => openIdentifyDialog(m)}
-                                  className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors"
+                                  className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors flex-shrink-0"
                                 >
                                   Identificar
                                 </button>
                               </div>
-                            ) : (
-                              <p className="font-semibold text-sm leading-tight">{nameLabel}</p>
                             )}
                             <p className="text-xs text-muted-foreground leading-tight mt-0.5">{typeLabel}</p>
                             <div className="mt-1.5">
@@ -596,11 +625,20 @@ export default function BancosPage() {
           </DialogHeader>
 
           <div className="space-y-4 py-1">
-            {identifyMov?.rawIdentifier && (
-              <p className="text-xs text-muted-foreground font-mono bg-muted rounded px-2 py-1.5 break-all">
-                {identifyMov.rawIdentifier}
-              </p>
-            )}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Identificador (email, CBU, alias)</label>
+              {identifyMov?.rawIdentifier ? (
+                <p className="text-xs text-muted-foreground font-mono bg-muted rounded px-2 py-1.5 break-all">
+                  {identifyMov.rawIdentifier}
+                </p>
+              ) : (
+                <Input
+                  value={idIdentifier}
+                  onChange={e => { setIdIdentifier(e.target.value); setIdError(null); }}
+                  placeholder="Ej: juan@email.com · 0000003100..."
+                />
+              )}
+            </div>
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Nombre a mostrar</label>
@@ -608,7 +646,7 @@ export default function BancosPage() {
                 value={idName}
                 onChange={e => setIdName(e.target.value)}
                 placeholder="Ej: Juan García"
-                autoFocus
+                autoFocus={!!identifyMov?.rawIdentifier}
               />
             </div>
 
@@ -655,11 +693,15 @@ export default function BancosPage() {
             )}
           </div>
 
+          {idError && (
+            <p className="text-sm text-destructive bg-destructive/10 rounded px-3 py-2">{idError}</p>
+          )}
+
           <DialogFooter>
             <Button variant="outline" onClick={closeIdentifyDialog}>Cancelar</Button>
             <Button
               onClick={handleSaveContact}
-              disabled={!idName.trim() || createContactMut.isPending}
+              disabled={!idName.trim() || !idIdentifier.trim() || createContactMut.isPending}
             >
               {createContactMut.isPending ? "Guardando..." : "Guardar"}
             </Button>
