@@ -671,7 +671,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const [remitoNumInput, setRemitoNumInput] = useState("");
   // Invoice dialog
   const [invoiceDialog, setInvoiceDialog] = useState(false);
-  const [invoiceForm, setInvoiceForm] = useState<{ type: "A" | "B" | "C"; description: string; condicionIva: number; detailMode: "completo" | "agrupado"; ivaIncluido: boolean }>({ type: "B", description: "", condicionIva: 5, detailMode: "completo", ivaIncluido: false });
+  const [invoiceForm, setInvoiceForm] = useState<{ type: "A" | "B" | "C"; description: string; condicionIva: number; detailMode: "completo" | "agrupado"; ivaIncluido: boolean }>({ type: "A", description: "", condicionIva: 1, detailMode: "completo", ivaIncluido: false });
   const [emittedInvoice, setEmittedInvoice] = useState<{ id: number; number: string } | null>(null);
   // WhatsApp dialog
   const [waDialog, setWaDialog] = useState(false);
@@ -825,6 +825,13 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const { data: allProducts = [] } = useQuery<Product[]>({
     queryKey: ["/api/products"],
+  });
+
+  const parentCustomerIdForQuery = (order?.customer as any)?.parentCustomerId ?? null;
+  const { data: parentCustomer } = useQuery<{ id: number; name: string; cuit?: string | null }>({
+    queryKey: ["/api/customers", parentCustomerIdForQuery],
+    queryFn: () => fetch(`/api/customers/${parentCustomerIdForQuery}`, { credentials: "include" }).then((r) => r.json()),
+    enabled: !!parentCustomerIdForQuery,
   });
 
   // ── Edit handlers ─────────────────────────────────────────────────────────
@@ -1190,6 +1197,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const isApproved = order.status === "approved";
   const hasIva = order.customer.hasIva;
   const hasBolsaFv = !!(order.customer as any).bolsaFv;
+  const parentCustomerId: number | null = (order.customer as any).parentCustomerId ?? null;
 
   const statusConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" }> = {
     draft:     { label: "Borrador", variant: "secondary" },
@@ -1356,7 +1364,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 </Button>
                 {!order.invoiceNumber && !emittedInvoice ? (
                   <Button size="sm" variant="outline" onClick={() => {
-                    setInvoiceForm({ type: "B", description: "FRUTAS Y VERDURAS", condicionIva: 5, detailMode: "completo", ivaIncluido: false });
+                    setInvoiceForm({ type: "A", description: "FRUTAS Y VERDURAS", condicionIva: 1, detailMode: "completo", ivaIncluido: false });
                     setInvoiceDialog(true);
                   }}>
                     <Receipt className="mr-2 h-4 w-4" /> Emitir Factura
@@ -1818,6 +1826,13 @@ export default function OrderDetailPage({ id }: { id: number }) {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 mt-2">
+            {parentCustomer ? (
+              <div className="rounded-md bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 px-3 py-2 text-sm">
+                <p className="font-medium text-blue-800 dark:text-blue-300">Se facturará a: {parentCustomer.name}</p>
+                {parentCustomer.cuit && <p className="text-blue-600 dark:text-blue-400 text-xs mt-0.5">CUIT: {parentCustomer.cuit}</p>}
+                <p className="text-blue-500 dark:text-blue-500 text-xs mt-0.5">La descripción incluirá "{order?.customer.name}" automáticamente.</p>
+              </div>
+            ) : null}
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Tipo de Factura</label>
               <Select value={invoiceForm.type} onValueChange={(v) => {

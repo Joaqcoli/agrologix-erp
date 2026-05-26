@@ -4127,6 +4127,7 @@ export const storage = {
         : null;
       return { ...item, product: product as Product | null };
     }));
+    // customer in the invoice record is already the billing customer (parent, if applicable)
     return { invoice: inv, customer, order: { ...order, items } };
   },
 

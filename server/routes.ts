@@ -1348,9 +1348,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (order.status !== "approved") return res.status(400).json({ error: "El pedido debe estar aprobado" });
 
       const customer = order.customer;
-      if (invoiceType === "A" && !customer.cuit) {
-        return res.status(400).json({ error: "El cliente no tiene CUIT registrado" });
+      // If child client → bill to parent (they hold the CUIT)
+      const billingCustomer = customer.parentCustomerId
+        ? (await storage.getCustomer(customer.parentCustomerId) ?? customer)
+        : customer;
+      if (invoiceType === "A" && !billingCustomer.cuit) {
+        return res.status(400).json({ error: "El cliente (ni su cliente padre) tiene CUIT registrado" });
       }
+      // Auto-prepend child name to description so the invoice identifies the source
+      const effectiveDescription = customer.parentCustomerId && customer.name !== billingCustomer.name
+        ? `${customer.name}${description ? ` — ${description}` : ""}`
+        : (description ?? null);
 
       // Calculate IVA breakdown
       let neto105 = 0, iva105 = 0, neto21 = 0, iva21 = 0;
@@ -1384,7 +1392,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const nextNumber = lastVoucher + 1;
 
       const docTipo = invoiceType === "A" ? 80 : 99;
-      const docNro  = invoiceType === "A" ? parseInt((customer.cuit ?? "").replace(/\D/g, "")) : 0;
+      const docNro  = invoiceType === "A" ? parseInt((billingCustomer.cuit ?? "").replace(/\D/g, "")) : 0;
 
       const now = new Date();
       const cbteDate = parseInt(`${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`);
@@ -1418,7 +1426,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const formattedNumber = `${invoiceType}-0004-${String(nextNumber).padStart(8, "0")}`;
       const invoice = await storage.createInvoice({
         orderId,
-        customerId: customer.id,
+        customerId: billingCustomer.id,
         invoiceType,
         invoiceNumber: formattedNumber,
         pointOfSale: 4,
@@ -1426,7 +1434,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         caeExpiry: String(CAEFchVto),
         total: String((totalNeto + totalIVA).toFixed(2)),
         ivaAmount: String(totalIVA.toFixed(2)),
-        description: description ?? null,
+        description: effectiveDescription,
       });
 
       await storage.updateOrderInvoiceNumber(orderId, formattedNumber);
