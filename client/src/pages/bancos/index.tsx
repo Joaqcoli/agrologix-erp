@@ -36,7 +36,7 @@ function fmtTime(s: string) {
   if (!s) return "";
   const d = new Date(s);
   return d.toLocaleTimeString("es-AR", {
-    hour: "2-digit", minute: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
     timeZone: "America/Argentina/Buenos_Aires",
   }) + " hs";
 }
@@ -91,6 +91,8 @@ type BankPaymentLink = {
   pedidoId: number | null;
   montoAplicado: string;
   folio: string | null;
+  remitoNum: number | null;
+  invoiceNumber: string | null;
 };
 
 type PendingOrder = {
@@ -134,6 +136,26 @@ type MpMovementsResponse = {
 };
 
 type SimpleEntity = { id: number; name: string };
+
+function fmtList(items: string[]): string {
+  if (items.length === 0) return "";
+  if (items.length === 1) return items[0];
+  return items.slice(0, -1).join(", ") + " y " + items[items.length - 1];
+}
+
+function fmtBankLinks(links: BankPaymentLink[]): string {
+  const invoices = links.filter(l => l.invoiceNumber).map(l => {
+    // Extraer solo el número final de "A-0004-00000125" → "125"
+    const parts = l.invoiceNumber!.split("-");
+    return String(parseInt(parts[parts.length - 1] ?? "0", 10));
+  });
+  const remitos = links.filter(l => !l.invoiceNumber && l.remitoNum != null).map(l => String(l.remitoNum));
+
+  if (invoices.length > 0 && remitos.length === 0) return `FC ${fmtList(invoices)}`;
+  if (remitos.length > 0 && invoices.length === 0) return `Remito ${fmtList(remitos)}`;
+  if (invoices.length > 0 && remitos.length > 0) return `FC ${fmtList(invoices)}, Remito ${fmtList(remitos)}`;
+  return links.map(l => l.folio ?? `#${l.pedidoId}`).join(", ");
+}
 
 // ─── subcomponent: contact type icon ─────────────────────────────────────────
 
@@ -690,8 +712,8 @@ export default function BancosPage() {
                               {/* Aplicar pago — solo para ingresos de clientes identificados */}
                               {!isOutgoing && m.contactType === "cliente" && m.entityId && (
                                 (m.bankPaymentLinks && m.bankPaymentLinks.length > 0) ? (
-                                  <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium flex items-center gap-1">
-                                    ✓ {m.bankPaymentLinks.map(l => l.folio ?? `#${l.pedidoId}`).join(", ")}
+                                  <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">
+                                    ✓ {fmtBankLinks(m.bankPaymentLinks)}
                                   </span>
                                 ) : (
                                   <button
@@ -896,10 +918,11 @@ export default function BancosPage() {
 
       {/* ── Dialog aplicar pago ── */}
       {applyPayOpen && applyPayMov && (() => {
-        const net = applyPayMov.netAmount ?? Math.abs(parseFloat(String(applyPayMov.total ?? applyPayMov.amount ?? 0)));
+        // El cliente paga el monto BRUTO (antes de comisiones MP)
+        const gross = applyPayMov.grossAmount ?? Math.abs(parseFloat(String(applyPayMov.total ?? applyPayMov.amount ?? 0)));
         const totalAssigned = [...applyAmounts.values()].reduce((s, v) => s + (parseFloat(v) || 0), 0);
-        const remaining = net - totalAssigned;
-        const canConfirm = applyAmounts.size > 0 && totalAssigned > 0 && totalAssigned <= net + 0.01;
+        const remaining = gross - totalAssigned;
+        const canConfirm = applyAmounts.size > 0 && totalAssigned > 0 && totalAssigned <= gross + 0.01;
 
         const toggleOrder = (orderId: number, pendingAmt: number) => {
           const next = new Map(applyAmounts);
@@ -907,7 +930,7 @@ export default function BancosPage() {
             next.delete(orderId);
           } else {
             const alreadyAssigned = [...next.values()].reduce((s, v) => s + (parseFloat(v) || 0), 0);
-            const rem = net - alreadyAssigned;
+            const rem = gross - alreadyAssigned;
             next.set(orderId, Math.min(pendingAmt, Math.max(0, rem)).toFixed(2));
           }
           setApplyAmounts(next);
@@ -959,7 +982,7 @@ export default function BancosPage() {
                     <p className="font-semibold text-sm">{applyPayMov.displayName}</p>
                     <p className="text-xs text-muted-foreground">{fmtDateLong((applyPayMov.date_created ?? "").slice(0, 10))}</p>
                   </div>
-                  <p className="text-lg font-bold text-green-700">+{fmt(net)}</p>
+                  <p className="text-lg font-bold text-green-700">+{fmt(gross)}</p>
                 </div>
 
                 {/* Lista de pedidos pendientes */}

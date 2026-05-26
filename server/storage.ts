@@ -4252,7 +4252,7 @@ export const storage = {
     if (movementIds.length === 0) return new Map();
     const escaped = movementIds.map(id => `'${id.replace(/'/g, "''")}'`).join(",");
     const rows = await db.execute(drizzleSql.raw(`
-      SELECT bpl.id, bpl.movement_id, bpl.pedido_id, bpl.monto_aplicado::text, o.folio
+      SELECT bpl.id, bpl.movement_id, bpl.pedido_id, bpl.monto_aplicado::text, o.folio, o.remito_num, o.invoice_number
       FROM bank_payment_links bpl
       LEFT JOIN orders o ON o.id = bpl.pedido_id
       WHERE bpl.movement_id IN (${escaped})
@@ -4261,7 +4261,7 @@ export const storage = {
     for (const r of rows.rows as any[]) {
       const key = r.movement_id;
       if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push({ id: r.id, pedidoId: r.pedido_id, montoAplicado: r.monto_aplicado, folio: r.folio });
+      map.get(key)!.push({ id: r.id, pedidoId: r.pedido_id, montoAplicado: r.monto_aplicado, folio: r.folio, remitoNum: r.remito_num ?? null, invoiceNumber: r.invoice_number ?? null });
     }
     return map;
   },
