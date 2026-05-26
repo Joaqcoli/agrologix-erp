@@ -1067,6 +1067,10 @@ export const storage = {
     );
     if (itemsToInsert.length > 0) {
       await db.insert(orderItems).values(itemsToInsert);
+      // Recalculate order total after inserting items
+      const allItems = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+      const total = allItems.reduce((s, i) => s + Number(i.subtotal), 0);
+      await db.update(orders).set({ total: total.toFixed(2) }).where(eq(orders.id, orderId));
     }
   },
 
@@ -1079,7 +1083,7 @@ export const storage = {
   }[]): Promise<void> {
     await db.delete(orderItems).where(eq(orderItems.orderId, orderId));
     await this.addItemsToOrder(orderId, items);
-    await db.update(orders).set({ total: "0" }).where(eq(orders.id, orderId));
+    // Total is recalculated inside addItemsToOrder; no override needed here
   },
 
   async deleteOrder(id: number): Promise<void> {
