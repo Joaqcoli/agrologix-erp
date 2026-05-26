@@ -326,30 +326,12 @@ export default function BancosPage() {
     },
   });
 
+  const [applyPayError, setApplyPayError] = useState<string | null>(null);
+
   const applyPayMut = useMutation({
     mutationFn: (data: { movementId: string; customerId: number; date: string; notes?: string; links: Array<{ pedidoId: number; montoAplicado: number }> }) =>
       apiRequest("POST", "/api/bank-payment-links", data).then(r => r.json()),
-    onSuccess: (result: { paymentId: number; bankLinks: BankPaymentLink[] }) => {
-      const movId = applyPayMov?.id;
-      // Actualizar cache: agregar bankPaymentLinks al movimiento
-      qc.setQueriesData<MpMovementsResponse>(
-        { queryKey: ["/api/mp/movements"] },
-        (old) => {
-          if (!old?.results) return old;
-          return {
-            ...old,
-            results: old.results.map(m =>
-              String(m.id) === String(movId)
-                ? { ...m, bankPaymentLinks: result.bankLinks }
-                : m
-            ),
-          };
-        }
-      );
-      setApplyPayOpen(false);
-      setApplyPayMov(null);
-      setApplyAmounts(new Map());
-    },
+    onError: (e: Error) => setApplyPayError(e.message),
   });
 
   // ── handlers ─────────────────────────────────────────────────────────────────
@@ -931,9 +913,35 @@ export default function BancosPage() {
         };
 
         const handleConfirm = () => {
+          setApplyPayError(null);
+          const movId = applyPayMov.id;
           const links = [...applyAmounts.entries()].map(([pedidoId, monto]) => ({ pedidoId, montoAplicado: parseFloat(monto) }));
           const date = (applyPayMov.date_created ?? new Date().toISOString()).slice(0, 10);
-          applyPayMut.mutate({ movementId: String(applyPayMov.id), customerId: applyPayMov.entityId!, date, links });
+          applyPayMut.mutate(
+            { movementId: String(movId), customerId: applyPayMov.entityId!, date, links },
+            {
+              onSuccess: (result: { paymentId: number; bankLinks: BankPaymentLink[] }) => {
+                qc.setQueriesData<MpMovementsResponse>(
+                  { queryKey: ["/api/mp/movements"] },
+                  (old) => {
+                    if (!old?.results) return old;
+                    return {
+                      ...old,
+                      results: old.results.map(m =>
+                        String(m.id) === String(movId)
+                          ? { ...m, bankPaymentLinks: result.bankLinks }
+                          : m
+                      ),
+                    };
+                  }
+                );
+                setApplyPayOpen(false);
+                setApplyPayMov(null);
+                setApplyAmounts(new Map());
+                setApplyPayError(null);
+              },
+            }
+          );
         };
 
         return (
@@ -961,7 +969,7 @@ export default function BancosPage() {
                   ) : pendingOrders.length === 0 ? (
                     <p className="text-sm text-muted-foreground py-4 text-center">No hay pedidos con saldo pendiente.</p>
                   ) : (
-                    <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
                       {pendingOrders.map(order => {
                         const checked = applyAmounts.has(order.id);
                         const pendingAmt = parseFloat(order.pendingAmount);
@@ -973,39 +981,50 @@ export default function BancosPage() {
                               checked ? "border-green-400 bg-green-50" : "border-input hover:bg-muted/40"
                             }`}
                           >
+                            {/* Checkbox */}
                             <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 ${
                               checked ? "border-green-500 bg-green-500" : "border-muted-foreground/40"
                             }`}>
                               {checked && <span className="text-white text-[9px] leading-none">✓</span>}
                             </div>
+
+                            {/* Info del pedido */}
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium">
-                                {order.folio}
-                                {order.remitoNum && <span className="text-muted-foreground font-normal"> · R#{order.remitoNum}</span>}
-                              </p>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {order.remitoNum && (
+                                  <span className="text-sm font-medium">R#{order.remitoNum}</span>
+                                )}
+                                {order.invoiceNumber && (
+                                  <span className="text-xs text-muted-foreground bg-muted rounded px-1 py-0.5">{order.invoiceNumber}</span>
+                                )}
+                              </div>
                               <p className="text-xs text-muted-foreground">{fmtDateLong(order.orderDate)}</p>
                             </div>
-                            <div className="text-right flex-shrink-0">
-                              <p className="text-xs text-muted-foreground">Pendiente</p>
-                              <p className="text-sm font-semibold text-orange-700">{fmt(pendingAmt)}</p>
+
+                            {/* Monto pendiente + input editable si está marcado */}
+                            <div className="flex items-center gap-2 flex-shrink-0" onClick={e => checked && e.stopPropagation()}>
+                              {checked ? (
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs text-muted-foreground">$</span>
+                                  <input
+                                    type="number"
+                                    value={applyAmounts.get(order.id) ?? ""}
+                                    onChange={e => {
+                                      const next = new Map(applyAmounts);
+                                      next.set(order.id, e.target.value);
+                                      setApplyAmounts(next);
+                                    }}
+                                    onClick={e => e.stopPropagation()}
+                                    className="w-24 text-sm text-right bg-transparent border-b border-green-400 focus:outline-none focus:border-green-600 py-0.5"
+                                    min={0}
+                                    max={pendingAmt}
+                                    step={1}
+                                  />
+                                </div>
+                              ) : (
+                                <p className="text-sm font-semibold text-orange-700">{fmt(pendingAmt)}</p>
+                              )}
                             </div>
-                            {checked && (
-                              <div className="flex-shrink-0" onClick={e => e.stopPropagation()}>
-                                <Input
-                                  type="number"
-                                  value={applyAmounts.get(order.id) ?? ""}
-                                  onChange={e => {
-                                    const next = new Map(applyAmounts);
-                                    next.set(order.id, e.target.value);
-                                    setApplyAmounts(next);
-                                  }}
-                                  className="h-7 w-24 text-sm text-right"
-                                  min={0}
-                                  max={pendingAmt}
-                                  step={0.01}
-                                />
-                              </div>
-                            )}
                           </div>
                         );
                       })}
@@ -1026,8 +1045,12 @@ export default function BancosPage() {
                 )}
               </div>
 
+              {applyPayError && (
+                <p className="text-sm text-destructive bg-destructive/10 rounded px-3 py-2">{applyPayError}</p>
+              )}
+
               <DialogFooter>
-                <Button variant="outline" onClick={() => { setApplyPayOpen(false); setApplyPayMov(null); setApplyAmounts(new Map()); }}>
+                <Button variant="outline" onClick={() => { setApplyPayOpen(false); setApplyPayMov(null); setApplyAmounts(new Map()); setApplyPayError(null); }}>
                   Cancelar
                 </Button>
                 <Button onClick={handleConfirm} disabled={!canConfirm || applyPayMut.isPending}>

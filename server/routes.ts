@@ -1866,7 +1866,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!Array.isArray(links) || links.length === 0) return res.status(400).json({ error: "links requerido" });
       const result = await storage.applyBankMovementToOrders({
         movementId, customerId, date: date ?? new Date().toISOString().slice(0, 10),
-        notes, links, userId: (req as any).user?.id ?? 1,
+        notes, links, userId: req.session.userId!,
       });
       return res.json(result);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
