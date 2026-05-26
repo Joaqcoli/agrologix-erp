@@ -24,9 +24,11 @@ function fmtRawId(id: string | null | undefined): string {
 function pad(n: number) { return String(n).padStart(2, "0"); }
 function isoDate(d: Date) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 
-function fmtDateLong(iso: string) {
-  const [y, m, day] = iso.split("-").map(Number);
-  const d = new Date(y, m - 1, day);
+function fmtDateLong(iso: string | null | undefined) {
+  if (!iso) return "";
+  const match = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return iso;
+  const d = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
   return d.toLocaleDateString("es-AR", { day: "numeric", month: "long" });
 }
 
@@ -88,7 +90,6 @@ type BankPaymentLink = {
   id: number;
   pedidoId: number | null;
   montoAplicado: string;
-  paymentId: number | null;
   folio: string | null;
 };
 
@@ -992,39 +993,22 @@ export default function BancosPage() {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 {order.remitoNum && (
-                                  <span className="text-sm font-medium">R#{order.remitoNum}</span>
+                                  <span className="text-sm font-medium">Remito {order.remitoNum}</span>
                                 )}
                                 {order.invoiceNumber && (
                                   <span className="text-xs text-muted-foreground bg-muted rounded px-1 py-0.5">{order.invoiceNumber}</span>
+                                )}
+                                {!order.remitoNum && !order.invoiceNumber && (
+                                  <span className="text-sm text-muted-foreground">Sin remito</span>
                                 )}
                               </div>
                               <p className="text-xs text-muted-foreground">{fmtDateLong(order.orderDate)}</p>
                             </div>
 
-                            {/* Monto pendiente + input editable si está marcado */}
-                            <div className="flex items-center gap-2 flex-shrink-0" onClick={e => checked && e.stopPropagation()}>
-                              {checked ? (
-                                <div className="flex items-center gap-1">
-                                  <span className="text-xs text-muted-foreground">$</span>
-                                  <input
-                                    type="number"
-                                    value={applyAmounts.get(order.id) ?? ""}
-                                    onChange={e => {
-                                      const next = new Map(applyAmounts);
-                                      next.set(order.id, e.target.value);
-                                      setApplyAmounts(next);
-                                    }}
-                                    onClick={e => e.stopPropagation()}
-                                    className="w-24 text-sm text-right bg-transparent border-b border-green-400 focus:outline-none focus:border-green-600 py-0.5"
-                                    min={0}
-                                    max={pendingAmt}
-                                    step={1}
-                                  />
-                                </div>
-                              ) : (
-                                <p className="text-sm font-semibold text-orange-700">{fmt(pendingAmt)}</p>
-                              )}
-                            </div>
+                            {/* Monto pendiente — mismo formato, cambia color al seleccionar */}
+                            <p className={`text-sm font-semibold flex-shrink-0 ${checked ? "text-green-700" : "text-orange-700"}`}>
+                              {fmt(pendingAmt)}
+                            </p>
                           </div>
                         );
                       })}
