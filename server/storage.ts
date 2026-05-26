@@ -1232,12 +1232,43 @@ export const storage = {
       const baseCost = newCostPerUnit ?? (item.costPerUnit as string);
       const effectiveCost = overrideVal ? Number(overrideVal) : Number(baseCost);
 
+      // Auto-fill price for bolsa FV: when toggling bolsa type on an item with no price,
+      // fetch the last known sale price from price_history (same unit, prefer customer-specific)
+      let bolsaAutoPrice: number | null = null;
+      if (patch.bolsaType && ['bolsa', 'bolsa_propia'].includes(patch.bolsaType) &&
+          !patch.pricePerUnit && newProductId) {
+        const existingPriceNum = item.pricePerUnit ? Number(item.pricePerUnit as string) : 0;
+        if (existingPriceNum === 0) {
+          const unitForLookup = newUnit.toUpperCase();
+          const [ph] = await tx.select().from(priceHistory)
+            .where(and(
+              eq(priceHistory.productId, newProductId),
+              eq(priceHistory.customerId, customerId),
+              eq(priceHistory.unit, unitForLookup),
+              drizzleSql`${priceHistory.pricePerUnit}::numeric > 0`,
+            ))
+            .orderBy(desc(priceHistory.createdAt)).limit(1);
+          if (ph) {
+            bolsaAutoPrice = Number(ph.pricePerUnit);
+          } else {
+            const [phAny] = await tx.select().from(priceHistory)
+              .where(and(
+                eq(priceHistory.productId, newProductId),
+                eq(priceHistory.unit, unitForLookup),
+                drizzleSql`${priceHistory.pricePerUnit}::numeric > 0`,
+              ))
+              .orderBy(desc(priceHistory.createdAt)).limit(1);
+            if (phAny) bolsaAutoPrice = Number(phAny.pricePerUnit);
+          }
+        }
+      }
+
       const qty = Number(patch.quantity ?? (item.quantity as string));
       const existingPrice = item.pricePerUnit ? Number(item.pricePerUnit as string) : null;
       const newPriceRaw = patch.pricePerUnit !== undefined ? patch.pricePerUnit : null;
       const price = newPriceRaw !== undefined && newPriceRaw !== null
         ? Number(newPriceRaw)
-        : existingPrice;
+        : (bolsaAutoPrice ?? existingPrice);
       const subtotal = price != null && price > 0 ? qty * price : 0;
       const margin = price && price > 0 ? (price - effectiveCost) / price : null;
 
@@ -1246,6 +1277,7 @@ export const storage = {
       if (patch.unit !== undefined) updateData.unit = patch.unit;
       if (patch.productId !== undefined) updateData.productId = patch.productId;
       if (patch.pricePerUnit !== undefined) updateData.pricePerUnit = patch.pricePerUnit;
+      else if (bolsaAutoPrice !== null) updateData.pricePerUnit = bolsaAutoPrice.toFixed(2);
       if (patch.overrideCostPerUnit !== undefined) updateData.overrideCostPerUnit = patch.overrideCostPerUnit;
       if (newCostPerUnit !== undefined) updateData.costPerUnit = newCostPerUnit;
       if (margin !== null) updateData.margin = margin.toFixed(4);

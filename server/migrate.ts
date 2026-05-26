@@ -805,5 +805,65 @@ export async function runMigrations() {
     )
   `);
 
+  // Fix bolsa FV order items that were saved without a sale price.
+  // Sets price_per_unit from price_history (customer-specific first, then any customer)
+  // and recalculates subtotal. Then recalculates order totals.
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      -- Pass 1: customer-specific price from price_history
+      UPDATE order_items oi
+      SET
+        price_per_unit = ph.price_per_unit,
+        subtotal       = ROUND(oi.quantity::numeric * ph.price_per_unit::numeric, 2)
+      FROM orders o
+      JOIN (
+        SELECT DISTINCT ON (product_id, customer_id, unit)
+          product_id, customer_id, unit, price_per_unit
+        FROM price_history
+        WHERE price_per_unit IS NOT NULL AND price_per_unit::numeric > 0
+        ORDER BY product_id, customer_id, unit, created_at DESC
+      ) ph ON ph.product_id = oi.product_id
+           AND ph.customer_id = o.customer_id
+           AND ph.unit = UPPER(oi.unit::text)
+      WHERE oi.order_id = o.id
+        AND oi.bolsa_type IN ('bolsa', 'bolsa_propia')
+        AND (oi.price_per_unit IS NULL OR oi.price_per_unit::numeric = 0)
+        AND o.status = 'approved';
+
+      -- Pass 2: fallback to any customer's price if still missing
+      UPDATE order_items oi
+      SET
+        price_per_unit = ph.price_per_unit,
+        subtotal       = ROUND(oi.quantity::numeric * ph.price_per_unit::numeric, 2)
+      FROM orders o
+      JOIN (
+        SELECT DISTINCT ON (product_id, unit)
+          product_id, unit, price_per_unit
+        FROM price_history
+        WHERE price_per_unit IS NOT NULL AND price_per_unit::numeric > 0
+        ORDER BY product_id, unit, created_at DESC
+      ) ph ON ph.product_id = oi.product_id
+           AND ph.unit = UPPER(oi.unit::text)
+      WHERE oi.order_id = o.id
+        AND oi.bolsa_type IN ('bolsa', 'bolsa_propia')
+        AND (oi.price_per_unit IS NULL OR oi.price_per_unit::numeric = 0)
+        AND o.status = 'approved';
+
+      -- Recalculate order totals for all orders that have bolsa FV items
+      UPDATE orders o
+      SET total = (
+        SELECT COALESCE(SUM(oi2.subtotal::numeric), 0)
+        FROM order_items oi2
+        WHERE oi2.order_id = o.id
+      )
+      WHERE o.id IN (
+        SELECT DISTINCT order_id FROM order_items
+        WHERE bolsa_type IN ('bolsa', 'bolsa_propia')
+      )
+        AND o.status = 'approved';
+    END $$
+  `);
+
   console.log("Migrations complete.");
 }
