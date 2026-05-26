@@ -805,64 +805,73 @@ export async function runMigrations() {
     )
   `);
 
-  // Fix bolsa FV order items that were saved without a sale price.
-  // Sets price_per_unit from price_history (customer-specific first, then any customer)
-  // and recalculates subtotal. Then recalculates order totals.
+  // Fix bolsa FV order items saved without a sale price.
+  // Pass 1: use price from the same order (non-bolsa item, same product+unit).
+  // Pass 2: fallback to most recent price for the same product+unit from any approved order.
+  // Finally recalculate order totals.
   await db.execute(sql`
-    DO $$
-    BEGIN
-      -- Pass 1: customer-specific price from price_history
-      UPDATE order_items oi
-      SET
-        price_per_unit = ph.price_per_unit,
-        subtotal       = ROUND(oi.quantity::numeric * ph.price_per_unit::numeric, 2)
-      FROM orders o
-      JOIN (
-        SELECT DISTINCT ON (product_id, customer_id, unit)
-          product_id, customer_id, unit, price_per_unit
-        FROM price_history
-        WHERE price_per_unit IS NOT NULL AND price_per_unit::numeric > 0
-        ORDER BY product_id, customer_id, unit, created_at DESC
-      ) ph ON ph.product_id = oi.product_id
-           AND ph.customer_id = o.customer_id
-           AND ph.unit = UPPER(oi.unit::text)
-      WHERE oi.order_id = o.id
-        AND oi.bolsa_type IN ('bolsa', 'bolsa_propia')
+    WITH prices_same_order AS (
+      SELECT DISTINCT ON (oi.order_id, oi.product_id, oi.unit)
+        oi.order_id, oi.product_id, oi.unit, oi.price_per_unit
+      FROM order_items oi
+      WHERE oi.bolsa_type IS NULL AND oi.price_per_unit::numeric > 0
+      ORDER BY oi.order_id, oi.product_id, oi.unit
+    ),
+    to_fix_pass1 AS (
+      SELECT oi.id, p.price_per_unit,
+             ROUND(oi.quantity::numeric * p.price_per_unit::numeric, 2) AS new_subtotal
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      JOIN prices_same_order p ON p.order_id = oi.order_id
+        AND p.product_id = oi.product_id AND p.unit = oi.unit
+      WHERE oi.bolsa_type IN ('bolsa','bolsa_propia')
         AND (oi.price_per_unit IS NULL OR oi.price_per_unit::numeric = 0)
-        AND o.status = 'approved';
+        AND o.status = 'approved'
+    )
+    UPDATE order_items
+    SET price_per_unit = to_fix_pass1.price_per_unit,
+        subtotal       = to_fix_pass1.new_subtotal
+    FROM to_fix_pass1
+    WHERE order_items.id = to_fix_pass1.id
+  `);
 
-      -- Pass 2: fallback to any customer's price if still missing
-      UPDATE order_items oi
-      SET
-        price_per_unit = ph.price_per_unit,
-        subtotal       = ROUND(oi.quantity::numeric * ph.price_per_unit::numeric, 2)
-      FROM orders o
-      JOIN (
-        SELECT DISTINCT ON (product_id, unit)
-          product_id, unit, price_per_unit
-        FROM price_history
-        WHERE price_per_unit IS NOT NULL AND price_per_unit::numeric > 0
-        ORDER BY product_id, unit, created_at DESC
-      ) ph ON ph.product_id = oi.product_id
-           AND ph.unit = UPPER(oi.unit::text)
-      WHERE oi.order_id = o.id
-        AND oi.bolsa_type IN ('bolsa', 'bolsa_propia')
+  await db.execute(sql`
+    WITH any_recent AS (
+      SELECT DISTINCT ON (oi.product_id, oi.unit)
+        oi.product_id, oi.unit, oi.price_per_unit
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      WHERE oi.bolsa_type IS NULL AND oi.price_per_unit::numeric > 0 AND o.status = 'approved'
+      ORDER BY oi.product_id, oi.unit, o.order_date DESC, oi.id DESC
+    ),
+    to_fix_pass2 AS (
+      SELECT oi.id, ar.price_per_unit,
+             ROUND(oi.quantity::numeric * ar.price_per_unit::numeric, 2) AS new_subtotal
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      JOIN any_recent ar ON ar.product_id = oi.product_id AND ar.unit = oi.unit
+      WHERE oi.bolsa_type IN ('bolsa','bolsa_propia')
         AND (oi.price_per_unit IS NULL OR oi.price_per_unit::numeric = 0)
-        AND o.status = 'approved';
+        AND o.status = 'approved'
+    )
+    UPDATE order_items
+    SET price_per_unit = to_fix_pass2.price_per_unit,
+        subtotal       = to_fix_pass2.new_subtotal
+    FROM to_fix_pass2
+    WHERE order_items.id = to_fix_pass2.id
+  `);
 
-      -- Recalculate order totals for all orders that have bolsa FV items
-      UPDATE orders o
-      SET total = (
-        SELECT COALESCE(SUM(oi2.subtotal::numeric), 0)
-        FROM order_items oi2
-        WHERE oi2.order_id = o.id
-      )
-      WHERE o.id IN (
-        SELECT DISTINCT order_id FROM order_items
-        WHERE bolsa_type IN ('bolsa', 'bolsa_propia')
-      )
-        AND o.status = 'approved';
-    END $$
+  await db.execute(sql`
+    UPDATE orders o
+    SET total = (
+      SELECT COALESCE(SUM(oi.subtotal::numeric), 0)
+      FROM order_items oi WHERE oi.order_id = o.id
+    )
+    WHERE o.id IN (
+      SELECT DISTINCT order_id FROM order_items
+      WHERE bolsa_type IN ('bolsa','bolsa_propia')
+    )
+      AND o.status = 'approved'
   `);
 
   console.log("Migrations complete.");
