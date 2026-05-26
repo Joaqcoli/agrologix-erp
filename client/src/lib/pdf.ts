@@ -1014,18 +1014,40 @@ export async function generateInvoicePDF(data: {
 
   type PdfRow = { qty: string; unit: string; name: string; price: number; sub: number };
 
+  // Pre-compute IVA breakdown (10.5% frutas / 21% huevos) from items for the totals section
+  let subtotalFrutas = 0, subtotalHuevos = 0;
+  for (const item of order.items) {
+    const pName = (item.product?.name ?? (item as any).rawProductName ?? "").toUpperCase();
+    const isHuevo = pName.includes("HUEVO") || pName.includes("MAPLE");
+    const sub = parseFloat((item as any).subtotal) || 0;
+    if (isHuevo) subtotalHuevos += sub; else subtotalFrutas += sub;
+  }
+  const totalIva = parseFloat(invoice.ivaAmount);
+  const total    = parseFloat(invoice.total);
+  const neto     = total - totalIva;
+  // Split stored IVA proportionally by expected IVA weights
+  const ivaW105 = subtotalFrutas * 0.105;
+  const ivaW21  = subtotalHuevos * 0.21;
+  const ivaWTotal = ivaW105 + ivaW21;
+  const iva105 = ivaWTotal > 0 ? totalIva * (ivaW105 / ivaWTotal) : (subtotalHuevos === 0 ? totalIva : 0);
+  const iva21  = totalIva - iva105;
+
   let pdfRows: PdfRow[];
   if (detailMode === "agrupado") {
-    let sumFrutas = 0, sumHuevos = 0;
+    // Collect distinct egg product names for correct label
+    const huevoNames: string[] = [];
+    const seen = new Set<string>();
     for (const item of order.items) {
-      const pName = (item.product?.name ?? item.rawProductName ?? "").toUpperCase();
-      const isHuevo = pName.includes("HUEVO") || pName.includes("MAPLE");
-      const sub = parseFloat(item.subtotal) || 0;
-      if (isHuevo) sumHuevos += sub; else sumFrutas += sub;
+      const pName = (item.product?.name ?? (item as any).rawProductName ?? "").toUpperCase();
+      if ((pName.includes("HUEVO") || pName.includes("MAPLE")) && !seen.has(pName)) {
+        seen.add(pName);
+        huevoNames.push(item.product?.name ?? (item as any).rawProductName ?? pName);
+      }
     }
+    const huevoLabel = huevoNames.length > 0 ? huevoNames.join(" / ") : "HUEVO";
     pdfRows = [];
-    if (sumFrutas > 0) pdfRows.push({ qty: "1", unit: "", name: "FRUTAS Y VERDURAS", price: sumFrutas, sub: sumFrutas });
-    if (sumHuevos > 0) pdfRows.push({ qty: "1", unit: "", name: "HUEVO N1/N2",       price: sumHuevos, sub: sumHuevos });
+    if (subtotalFrutas > 0) pdfRows.push({ qty: "1", unit: "", name: "FRUTAS Y VERDURAS", price: subtotalFrutas, sub: subtotalFrutas });
+    if (subtotalHuevos > 0) pdfRows.push({ qty: "1", unit: "", name: huevoLabel,           price: subtotalHuevos, sub: subtotalHuevos });
   } else {
     const mergedItems = mergeForPDF(order.items);
     pdfRows = mergedItems.map((item) => ({
@@ -1057,15 +1079,21 @@ export async function generateInvoicePDF(data: {
   doc.line(ML, y, ML + CW, y);
   y += 7;
 
-  const totalIva = parseFloat(invoice.ivaAmount);
-  const total    = parseFloat(invoice.total);
-  const neto     = total - totalIva;
-
   doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(...C_TEXT);
   doc.text("Subtotal Neto:", priceX, y); doc.text(fmtMoney(neto), totX + totW - 2, y, { align: "right" });
   y += 7;
-  doc.text("IVA:", priceX, y); doc.text(fmtMoney(totalIva), totX + totW - 2, y, { align: "right" });
-  y += 7;
+  if (iva105 > 0 && iva21 > 0) {
+    doc.text("IVA 10.5%:", priceX, y); doc.text(fmtMoney(iva105), totX + totW - 2, y, { align: "right" });
+    y += 7;
+    doc.text("IVA 21%:", priceX, y); doc.text(fmtMoney(iva21), totX + totW - 2, y, { align: "right" });
+    y += 7;
+  } else if (iva21 > 0) {
+    doc.text("IVA 21%:", priceX, y); doc.text(fmtMoney(iva21), totX + totW - 2, y, { align: "right" });
+    y += 7;
+  } else {
+    doc.text("IVA 10.5%:", priceX, y); doc.text(fmtMoney(iva105 > 0 ? iva105 : totalIva), totX + totW - 2, y, { align: "right" });
+    y += 7;
+  }
   doc.setFont("helvetica", "bold"); doc.setFontSize(10);
   doc.text("TOTAL:", priceX, y); doc.text(fmtMoney(total), totX + totW - 2, y, { align: "right" });
 
