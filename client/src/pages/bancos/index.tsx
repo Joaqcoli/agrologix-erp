@@ -84,6 +84,25 @@ type MpBalance = {
   error?: string;
 };
 
+type BankPaymentLink = {
+  id: number;
+  pedidoId: number | null;
+  montoAplicado: string;
+  paymentId: number | null;
+  folio: string | null;
+};
+
+type PendingOrder = {
+  id: number;
+  folio: string;
+  remitoNum: number | null;
+  total: string;
+  paidAmount: string;
+  pendingAmount: string;
+  orderDate: string;
+  invoiceNumber: string | null;
+};
+
 type MpMovement = {
   id: string | number;
   date_created: string;
@@ -105,6 +124,7 @@ type MpMovement = {
   contactType?: string | null;
   entityId?: number | null;
   contactId?: number | null;
+  bankPaymentLinks?: BankPaymentLink[];
 };
 
 type MpMovementsResponse = {
@@ -196,6 +216,12 @@ export default function BancosPage() {
   const [editCat, setEditCat] = useState<BankCategory | null>(null);
   const [editCatName, setEditCatName] = useState("");
 
+  // Aplicar pago dialog
+  const [applyPayOpen, setApplyPayOpen] = useState(false);
+  const [applyPayMov, setApplyPayMov] = useState<MpMovement | null>(null);
+  // orderId → monto a aplicar (string para input controlado)
+  const [applyAmounts, setApplyAmounts] = useState<Map<number, string>>(new Map());
+
   // Identificar / Editar contacto dialog
   const [identifyOpen, setIdentifyOpen] = useState(false);
   const [identifyMov, setIdentifyMov] = useState<MpMovement | null>(null);
@@ -237,6 +263,12 @@ export default function BancosPage() {
     queryKey: ["/api/customers"],
     queryFn: () => fetch("/api/customers", { credentials: "include" }).then(r => r.json()),
     enabled: identifyOpen && (idType === "cliente"),
+  });
+
+  const { data: pendingOrders = [], isLoading: pendingOrdersLoading } = useQuery<PendingOrder[]>({
+    queryKey: ["/api/customers/pedidos-pendientes", applyPayMov?.entityId],
+    queryFn: () => fetch(`/api/customers/${applyPayMov!.entityId}/pedidos-pendientes`, { credentials: "include" }).then(r => r.json()),
+    enabled: applyPayOpen && !!applyPayMov?.entityId,
   });
 
   const { data: suppliers = [] } = useQuery<SimpleEntity[]>({
@@ -291,6 +323,32 @@ export default function BancosPage() {
       setEditCatOpen(false);
       setEditCat(null);
       setEditCatName("");
+    },
+  });
+
+  const applyPayMut = useMutation({
+    mutationFn: (data: { movementId: string; customerId: number; date: string; notes?: string; links: Array<{ pedidoId: number; montoAplicado: number }> }) =>
+      apiRequest("POST", "/api/bank-payment-links", data).then(r => r.json()),
+    onSuccess: (result: { paymentId: number; bankLinks: BankPaymentLink[] }) => {
+      const movId = applyPayMov?.id;
+      // Actualizar cache: agregar bankPaymentLinks al movimiento
+      qc.setQueriesData<MpMovementsResponse>(
+        { queryKey: ["/api/mp/movements"] },
+        (old) => {
+          if (!old?.results) return old;
+          return {
+            ...old,
+            results: old.results.map(m =>
+              String(m.id) === String(movId)
+                ? { ...m, bankPaymentLinks: result.bankLinks }
+                : m
+            ),
+          };
+        }
+      );
+      setApplyPayOpen(false);
+      setApplyPayMov(null);
+      setApplyAmounts(new Map());
     },
   });
 
@@ -638,7 +696,7 @@ export default function BancosPage() {
                                 </button>
                               </div>
                             )}
-                            <div className="mt-1.5">
+                            <div className="mt-1.5 flex items-center gap-2 flex-wrap">
                               <CategoryPicker
                                 movId={m.id}
                                 categoryId={m.categoryId}
@@ -646,6 +704,21 @@ export default function BancosPage() {
                                 onSelect={(id, catId) => setCategoryMut.mutate({ mpId: id, categoryId: catId })}
                                 onAddNew={() => handleAddNew(m.id)}
                               />
+                              {/* Aplicar pago — solo para ingresos de clientes identificados */}
+                              {!isOutgoing && m.contactType === "cliente" && m.entityId && (
+                                (m.bankPaymentLinks && m.bankPaymentLinks.length > 0) ? (
+                                  <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium flex items-center gap-1">
+                                    ✓ {m.bankPaymentLinks.map(l => l.folio ?? `#${l.pedidoId}`).join(", ")}
+                                  </span>
+                                ) : (
+                                  <button
+                                    onClick={() => { setApplyPayMov(m); setApplyAmounts(new Map()); setApplyPayOpen(true); }}
+                                    className="text-[11px] text-green-700 hover:text-green-900 font-medium border border-green-300 rounded px-1.5 py-0.5 leading-tight hover:bg-green-50 transition-colors flex-shrink-0"
+                                  >
+                                    Aplicar pago
+                                  </button>
+                                )
+                              )}
                             </div>
                           </div>
 
@@ -837,6 +910,134 @@ export default function BancosPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Dialog aplicar pago ── */}
+      {applyPayOpen && applyPayMov && (() => {
+        const net = applyPayMov.netAmount ?? Math.abs(parseFloat(String(applyPayMov.total ?? applyPayMov.amount ?? 0)));
+        const totalAssigned = [...applyAmounts.values()].reduce((s, v) => s + (parseFloat(v) || 0), 0);
+        const remaining = net - totalAssigned;
+        const canConfirm = applyAmounts.size > 0 && totalAssigned > 0 && totalAssigned <= net + 0.01;
+
+        const toggleOrder = (orderId: number, pendingAmt: number) => {
+          const next = new Map(applyAmounts);
+          if (next.has(orderId)) {
+            next.delete(orderId);
+          } else {
+            const alreadyAssigned = [...next.values()].reduce((s, v) => s + (parseFloat(v) || 0), 0);
+            const rem = net - alreadyAssigned;
+            next.set(orderId, Math.min(pendingAmt, Math.max(0, rem)).toFixed(2));
+          }
+          setApplyAmounts(next);
+        };
+
+        const handleConfirm = () => {
+          const links = [...applyAmounts.entries()].map(([pedidoId, monto]) => ({ pedidoId, montoAplicado: parseFloat(monto) }));
+          const date = (applyPayMov.date_created ?? new Date().toISOString()).slice(0, 10);
+          applyPayMut.mutate({ movementId: String(applyPayMov.id), customerId: applyPayMov.entityId!, date, links });
+        };
+
+        return (
+          <Dialog open={applyPayOpen} onOpenChange={v => { if (!v) { setApplyPayOpen(false); setApplyPayMov(null); setApplyAmounts(new Map()); } }}>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Aplicar pago</DialogTitle>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                {/* Info del movimiento */}
+                <div className="bg-muted/50 rounded-lg px-4 py-3 flex items-center justify-between">
+                  <div>
+                    <p className="font-semibold text-sm">{applyPayMov.displayName}</p>
+                    <p className="text-xs text-muted-foreground">{fmtDateLong((applyPayMov.date_created ?? "").slice(0, 10))}</p>
+                  </div>
+                  <p className="text-lg font-bold text-green-700">+{fmt(net)}</p>
+                </div>
+
+                {/* Lista de pedidos pendientes */}
+                <div>
+                  <p className="text-sm font-medium mb-2">Pedidos con saldo pendiente</p>
+                  {pendingOrdersLoading ? (
+                    <p className="text-sm text-muted-foreground py-4 text-center">Cargando...</p>
+                  ) : pendingOrders.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-4 text-center">No hay pedidos con saldo pendiente.</p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                      {pendingOrders.map(order => {
+                        const checked = applyAmounts.has(order.id);
+                        const pendingAmt = parseFloat(order.pendingAmount);
+                        return (
+                          <div
+                            key={order.id}
+                            onClick={() => toggleOrder(order.id, pendingAmt)}
+                            className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors ${
+                              checked ? "border-green-400 bg-green-50" : "border-input hover:bg-muted/40"
+                            }`}
+                          >
+                            <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+                              checked ? "border-green-500 bg-green-500" : "border-muted-foreground/40"
+                            }`}>
+                              {checked && <span className="text-white text-[9px] leading-none">✓</span>}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium">
+                                {order.folio}
+                                {order.remitoNum && <span className="text-muted-foreground font-normal"> · R#{order.remitoNum}</span>}
+                              </p>
+                              <p className="text-xs text-muted-foreground">{fmtDateLong(order.orderDate)}</p>
+                            </div>
+                            <div className="text-right flex-shrink-0">
+                              <p className="text-xs text-muted-foreground">Pendiente</p>
+                              <p className="text-sm font-semibold text-orange-700">{fmt(pendingAmt)}</p>
+                            </div>
+                            {checked && (
+                              <div className="flex-shrink-0" onClick={e => e.stopPropagation()}>
+                                <Input
+                                  type="number"
+                                  value={applyAmounts.get(order.id) ?? ""}
+                                  onChange={e => {
+                                    const next = new Map(applyAmounts);
+                                    next.set(order.id, e.target.value);
+                                    setApplyAmounts(next);
+                                  }}
+                                  className="h-7 w-24 text-sm text-right"
+                                  min={0}
+                                  max={pendingAmt}
+                                  step={0.01}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Resumen */}
+                {applyAmounts.size > 0 && (
+                  <div className="border-t pt-3 flex items-center justify-between text-sm">
+                    <div className="flex gap-4">
+                      <span className="text-muted-foreground">Asignado: <span className="font-semibold text-foreground">{fmt(totalAssigned)}</span></span>
+                      <span className={`${remaining < -0.01 ? "text-destructive" : "text-muted-foreground"}`}>
+                        Restante: <span className="font-semibold">{fmt(remaining)}</span>
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { setApplyPayOpen(false); setApplyPayMov(null); setApplyAmounts(new Map()); }}>
+                  Cancelar
+                </Button>
+                <Button onClick={handleConfirm} disabled={!canConfirm || applyPayMut.isPending}>
+                  {applyPayMut.isPending ? "Aplicando..." : "Confirmar"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
     </Layout>
   );
 }

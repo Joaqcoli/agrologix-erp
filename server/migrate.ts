@@ -805,5 +805,8 @@ export async function runMigrations() {
     )
   `);
 
+  // ─── Bank Payment Links: vincular con registro de pago ───────────────────
+  await db.execute(sql`ALTER TABLE bank_payment_links ADD COLUMN IF NOT EXISTS payment_id INTEGER REFERENCES payments(id) ON DELETE SET NULL`);
+
   console.log("Migrations complete.");
 }

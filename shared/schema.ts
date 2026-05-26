@@ -421,5 +421,7 @@ export const bankPaymentLinks = pgTable("bank_payment_links", {
   movementId: text("movement_id").notNull(),
   pedidoId: integer("pedido_id").references(() => orders.id, { onDelete: "set null" }),
   montoAplicado: numeric("monto_aplicado", { precision: 12, scale: 2 }).notNull(),
+  paymentId: integer("payment_id").references(() => payments.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
+export type BankPaymentLink = typeof bankPaymentLinks.$inferSelect;

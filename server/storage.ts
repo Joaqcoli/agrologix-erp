@@ -4,7 +4,7 @@ import {
   stockMovements, productCostHistory, orders, orderItems,
   priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks,
   suppliers, supplierPayments, clientGroups, clientGroupMembers, priceListItems,
-  invoices, cajaMovements, bankCategories, mpMovementOverrides, bankContacts,
+  invoices, cajaMovements, bankCategories, mpMovementOverrides, bankContacts, bankPaymentLinks,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
@@ -4244,5 +4244,68 @@ export const storage = {
   async updateBankContact(id: number, data: Partial<Pick<BankContact, "displayName" | "type" | "entityId">>): Promise<BankContact> {
     const [row] = await db.update(bankContacts).set(data).where(eq(bankContacts.id, id)).returning();
     return row;
+  },
+
+  // ─── Bank Payment Links ────────────────────────────────────────────────────
+
+  async getBankPaymentLinksByMovements(movementIds: string[]): Promise<Map<string, Array<{ id: number; pedidoId: number | null; montoAplicado: string; paymentId: number | null; folio: string | null }>>> {
+    if (movementIds.length === 0) return new Map();
+    const escaped = movementIds.map(id => `'${id.replace(/'/g, "''")}'`).join(",");
+    const rows = await db.execute(drizzleSql.raw(`
+      SELECT bpl.id, bpl.movement_id, bpl.pedido_id, bpl.monto_aplicado::text, bpl.payment_id, o.folio
+      FROM bank_payment_links bpl
+      LEFT JOIN orders o ON o.id = bpl.pedido_id
+      WHERE bpl.movement_id IN (${escaped})
+    `));
+    const map = new Map<string, any[]>();
+    for (const r of rows.rows as any[]) {
+      const key = r.movement_id;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push({ id: r.id, pedidoId: r.pedido_id, montoAplicado: r.monto_aplicado, paymentId: r.payment_id, folio: r.folio });
+    }
+    return map;
+  },
+
+  async applyBankMovementToOrders(data: {
+    movementId: string;
+    customerId: number;
+    date: string;
+    notes?: string;
+    links: Array<{ pedidoId: number; montoAplicado: number }>;
+    userId: number;
+  }): Promise<{ paymentId: number; bankLinks: any[] }> {
+    const totalAmount = data.links.reduce((s, l) => s + l.montoAplicado, 0);
+    return await db.transaction(async (tx) => {
+      // 1. Crear registro de pago en payments (actualiza CC automáticamente vía cálculo dinámico)
+      const [payment] = await tx.insert(payments).values({
+        customerId: data.customerId,
+        date: data.date,
+        amount: String(totalAmount.toFixed(2)),
+        method: "TRANSFERENCIA" as any,
+        notes: data.notes ?? `Pago MP — movimiento ${data.movementId}`,
+        createdBy: data.userId,
+      }).returning();
+
+      // 2. Vincular pago a pedidos en payment_order_links (FIFO explícito)
+      await tx.insert(paymentOrderLinks).values(
+        data.links.map(l => ({
+          paymentId: payment.id,
+          orderId: l.pedidoId,
+          amountApplied: String(l.montoAplicado.toFixed(2)),
+        }))
+      );
+
+      // 3. Registrar vínculos en bank_payment_links (para UI de bancos)
+      const bankLinks = await tx.insert(bankPaymentLinks).values(
+        data.links.map(l => ({
+          movementId: data.movementId,
+          pedidoId: l.pedidoId,
+          montoAplicado: String(l.montoAplicado.toFixed(2)),
+          paymentId: payment.id,
+        }))
+      ).returning();
+
+      return { paymentId: payment.id, bankLinks };
+    });
   },
 };

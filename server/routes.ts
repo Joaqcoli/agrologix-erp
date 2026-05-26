@@ -1732,6 +1732,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (allCandidates.length > 0) console.log(`[contacts] candidatos MP:`, allCandidates.slice(0, 10));
       } catch (e: any) { console.warn("[contacts] lookup failed:", e.message); }
 
+      // Batch-fetch bank_payment_links for all movements
+      let paymentLinksMap: Map<string, any[]> = new Map();
+      try {
+        paymentLinksMap = await storage.getBankPaymentLinksByMovements(mpIds);
+      } catch (_) {}
+
       const withCats = withCandidates.map((m: any) => {
         const candidates = m._candidates as string[];
         // Primer candidato que matchee en bank_contacts
@@ -1745,6 +1751,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           contactType: contact?.type ?? null,
           entityId: contact?.entityId ?? null,
           contactId: contact?.id ?? null,
+          bankPaymentLinks: paymentLinksMap.get(String(m.id)) ?? [],
         };
       });
 
@@ -1829,6 +1836,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ...(entityId !== undefined ? { entityId: entityId ?? null } : {}),
       });
       return res.json(contact);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Pedidos pendientes por cliente (para vincular pagos MP) ──────────────
+  app.get("/api/customers/:id/pedidos-pendientes", requireAuth, async (req, res) => {
+    try {
+      const customerId = parseInt(req.params.id);
+      const pending = await storage.getPendingOrdersForCustomer(customerId);
+      return res.json(pending.map(o => ({
+        ...o,
+        pendingAmount: String((parseFloat(o.total) - parseFloat(o.paidAmount)).toFixed(2)),
+      })));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Bank Payment Links — vincular movimiento MP a pedidos ───────────────
+  app.post("/api/bank-payment-links", requireAuth, async (req, res) => {
+    try {
+      const { movementId, customerId, date, notes, links } = req.body as {
+        movementId: string;
+        customerId: number;
+        date: string;
+        notes?: string;
+        links: Array<{ pedidoId: number; montoAplicado: number }>;
+      };
+      if (!movementId) return res.status(400).json({ error: "movementId requerido" });
+      if (!customerId) return res.status(400).json({ error: "customerId requerido" });
+      if (!Array.isArray(links) || links.length === 0) return res.status(400).json({ error: "links requerido" });
+      const result = await storage.applyBankMovementToOrders({
+        movementId, customerId, date: date ?? new Date().toISOString().slice(0, 10),
+        notes, links, userId: (req as any).user?.id ?? 1,
+      });
+      return res.json(result);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
