@@ -3149,6 +3149,8 @@ export const storage = {
       const retenciones = withholdingsInMap.get(c.id) ?? 0;
       const saldo = saldoMesAnterior + facturacion - cobranza - retenciones;
 
+      const hasEverOrdered = (billingBeforeMap.get(c.id) ?? 0) !== 0 || (billingInMap.get(c.id) ?? 0) !== 0;
+      const hasEverPaid = (paymentsBeforeMap.get(c.id) ?? 0) !== 0 || (paymentsInMap.get(c.id) ?? 0) !== 0;
       return {
         customerId: c.id,
         customerName: c.name,
@@ -3159,10 +3161,14 @@ export const storage = {
         retenciones: Math.round(retenciones),
         saldo: Math.round(saldo),
         fiado: Math.max(Math.round(saldo), 0),
+        hasEverOrdered,
+        hasEverPaid,
       };
     }).filter((r) =>
-      // show customers with any movement or non-zero balance
+      // Mostrar si tiene movimiento en el período, saldo no cero,
+      // o si alguna vez tuvo pedidos/pagos (aunque hoy esté en $0)
       r.saldoMesAnterior !== 0 || r.facturacion !== 0 || r.cobranza !== 0 || r.retenciones !== 0 || r.saldo !== 0
+      || r.hasEverOrdered || r.hasEverPaid
     );
 
     // Compute % del fiado
