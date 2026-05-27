@@ -86,7 +86,7 @@ export default function InvoicesPage() {
   const handleDownloadPDF = async (inv: InvoiceRow) => {
     try {
       const detail = await fetch(`/api/invoices/${inv.id}`).then((r) => r.json());
-      await generateInvoicePDF(detail);
+      await generateInvoicePDF(detail, "agrupado");
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     }
@@ -133,7 +133,7 @@ export default function InvoicesPage() {
       }
       if (waOption === "factura" || waOption === "ambos") {
         const detail = await fetch(`/api/invoices/${waRow.id}`, { credentials: "include" }).then((r) => r.json());
-        await generateInvoicePDF(detail);
+        await generateInvoicePDF(detail, "agrupado");
       }
       window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(waMessage)}`, "_blank");
       setWaRow(null);

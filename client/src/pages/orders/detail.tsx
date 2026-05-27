@@ -671,7 +671,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const [remitoNumInput, setRemitoNumInput] = useState("");
   // Invoice dialog
   const [invoiceDialog, setInvoiceDialog] = useState(false);
-  const [invoiceForm, setInvoiceForm] = useState<{ type: "A" | "B" | "C"; description: string; condicionIva: number; detailMode: "completo" | "agrupado"; ivaIncluido: boolean }>({ type: "A", description: "", condicionIva: 1, detailMode: "completo", ivaIncluido: false });
+  const [invoiceForm, setInvoiceForm] = useState<{ type: "A" | "B" | "C"; description: string; condicionIva: number; detailMode: "completo" | "agrupado"; ivaIncluido: boolean }>({ type: "A", description: "", condicionIva: 1, detailMode: "agrupado", ivaIncluido: false });
   const [emittedInvoice, setEmittedInvoice] = useState<{ id: number; number: string } | null>(null);
   // WhatsApp dialog
   const [waDialog, setWaDialog] = useState(false);
@@ -1364,7 +1364,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 </Button>
                 {!order.invoiceNumber && !emittedInvoice ? (
                   <Button size="sm" variant="outline" onClick={() => {
-                    setInvoiceForm({ type: "A", description: "FRUTAS Y VERDURAS", condicionIva: 1, detailMode: "completo", ivaIncluido: false });
+                    setInvoiceForm({ type: "A", description: "FRUTAS Y VERDURAS", condicionIva: 1, detailMode: "agrupado", ivaIncluido: false });
                     setInvoiceDialog(true);
                   }}>
                     <Receipt className="mr-2 h-4 w-4" /> Emitir Factura

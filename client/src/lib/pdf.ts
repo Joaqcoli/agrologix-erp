@@ -999,18 +999,21 @@ export async function generateInvoicePDF(data: {
   const priceX = ML + 120, priceW = 30;
   const totX  = ML + 150,  totW  = 32;
 
-  doc.setFillColor(...C_TBL_HDR);
-  doc.rect(ML, TABLE_Y, CW, TH_H, "F");
-  doc.setTextColor(...C_WHITE); doc.setFont("helvetica", "bold"); doc.setFontSize(7.5);
-  const hty = TABLE_Y + TH_H / 2 + 2.5;
-  doc.text("CANTIDAD", cantX + cantW / 2, hty, { align: "center" });
-  doc.text("UNIDAD",   unitX + unitW / 2, hty, { align: "center" });
-  doc.text("PRODUCTO", prodX + 3, hty);
-  doc.text("PRECIO",   priceX + priceW - 2, hty, { align: "right" });
-  doc.text("TOTAL",    totX + totW - 2, hty, { align: "right" });
+  const drawTableHeader = (atY: number): number => {
+    doc.setFillColor(...C_TBL_HDR);
+    doc.rect(ML, atY, CW, TH_H, "F");
+    doc.setTextColor(...C_WHITE); doc.setFont("helvetica", "bold"); doc.setFontSize(7.5);
+    const hty = atY + TH_H / 2 + 2.5;
+    doc.text("CANTIDAD", cantX + cantW / 2, hty, { align: "center" });
+    doc.text("UNIDAD",   unitX + unitW / 2, hty, { align: "center" });
+    doc.text("PRODUCTO", prodX + 3, hty);
+    doc.text("PRECIO",   priceX + priceW - 2, hty, { align: "right" });
+    doc.text("TOTAL",    totX + totW - 2, hty, { align: "right" });
+    return atY + TH_H;
+  };
 
   // ── Rows ─────────────────────────────────────────────────────────────────────
-  let y = TABLE_Y + TH_H;
+  let y = drawTableHeader(TABLE_Y);
 
   type PdfRow = { qty: string; unit: string; name: string; price: number; sub: number };
 
@@ -1060,6 +1063,11 @@ export async function generateInvoicePDF(data: {
   }
 
   pdfRows.forEach((row, i) => {
+    if (y + ROW_H > FOOTER_Y - 2) {
+      drawFooter();
+      doc.addPage();
+      y = drawTableHeader(20);
+    }
     if (i % 2 === 1) { doc.setFillColor(...C_ALT_ROW); doc.rect(ML, y, CW, ROW_H, "F"); }
     doc.setDrawColor(...C_ROW_SEP); doc.setLineWidth(0.1);
     doc.line(ML, y + ROW_H, ML + CW, y + ROW_H);
@@ -1074,6 +1082,11 @@ export async function generateInvoicePDF(data: {
   });
 
   // ── Totals ────────────────────────────────────────────────────────────────────
+  if (y + 55 > FOOTER_Y) {
+    drawFooter();
+    doc.addPage();
+    y = 20;
+  }
   y += 5;
   doc.setDrawColor(...C_SEP); doc.setLineWidth(0.3);
   doc.line(ML, y, ML + CW, y);
