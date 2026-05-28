@@ -4182,13 +4182,37 @@ export const storage = {
   },
 
   async createCreditNote(data: InsertCreditNote): Promise<CreditNote> {
-    const [cn] = await db.insert(creditNotes).values(data).returning();
-    return cn;
+    const rows = await db.execute(drizzleSql`
+      INSERT INTO credit_notes
+        (invoice_id, customer_id, credit_note_type, credit_note_number, point_of_sale,
+         cae, cae_expiry, total, iva_amount, condicion_iva_receptor_id, description)
+      VALUES
+        (${data.invoiceId}, ${data.customerId}, ${data.creditNoteType}, ${data.creditNoteNumber},
+         ${data.pointOfSale ?? 4}, ${data.cae}, ${data.caeExpiry}, ${data.total}, ${data.ivaAmount},
+         ${data.condicionIvaReceptorId ?? null}, ${data.description ?? null})
+      RETURNING id, invoice_id AS "invoiceId", customer_id AS "customerId",
+                credit_note_type AS "creditNoteType", credit_note_number AS "creditNoteNumber",
+                point_of_sale AS "pointOfSale", cae, cae_expiry AS "caeExpiry",
+                total, iva_amount AS "ivaAmount", condicion_iva_receptor_id AS "condicionIvaReceptorId",
+                description, created_at AS "createdAt"
+    `);
+    return rows.rows[0] as CreditNote;
   },
 
   async getCreditNoteByInvoiceId(invoiceId: number): Promise<CreditNote | null> {
-    const [cn] = await db.select().from(creditNotes).where(eq(creditNotes.invoiceId, invoiceId));
-    return cn ?? null;
+    try {
+      const rows = await db.execute(drizzleSql`
+        SELECT id, invoice_id AS "invoiceId", customer_id AS "customerId",
+               credit_note_type AS "creditNoteType", credit_note_number AS "creditNoteNumber",
+               point_of_sale AS "pointOfSale", cae, cae_expiry AS "caeExpiry",
+               total, iva_amount AS "ivaAmount", condicion_iva_receptor_id AS "condicionIvaReceptorId",
+               description, created_at AS "createdAt"
+        FROM credit_notes WHERE invoice_id = ${invoiceId}
+      `);
+      return (rows.rows[0] as CreditNote) ?? null;
+    } catch {
+      return null;
+    }
   },
 
   // ─── Caja ───────────────────────────────────────────────────────────────────
