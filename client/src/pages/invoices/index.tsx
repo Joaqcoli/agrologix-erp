@@ -126,10 +126,13 @@ export default function InvoicesPage() {
     if (!ncRow) return;
     setNcLoading(true);
     try {
-      await apiRequest("POST", `/api/invoices/${ncRow.id}/credit-note`, {});
-      toast({ title: "Nota de crédito emitida correctamente" });
+      const cn = await apiRequest("POST", `/api/invoices/${ncRow.id}/credit-note`, {}).then((r) => r.json());
+      toast({ title: `Nota de Crédito ${cn.creditNoteNumber} emitida correctamente` });
       queryClient.invalidateQueries({
-        predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/invoices"),
+        predicate: (q) => {
+          const k = q.queryKey[0] as string;
+          return typeof k === "string" && (k.startsWith("/api/invoices") || k.startsWith("/api/orders") || k.startsWith("/api/ar/"));
+        },
       });
       setNcRow(null);
     } catch (e: any) {

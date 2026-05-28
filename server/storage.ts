@@ -4096,6 +4096,7 @@ export const storage = {
   },
 
   async getInvoices(filters?: { customerId?: number; orderId?: number; from?: string; to?: string }): Promise<(Invoice & { customerName: string; customerPhone: string | null; orderRemitoNum: string | null; creditNoteId: number | null; creditNoteNumber: string | null; creditNoteCae: string | null; creditNoteCaeExpiry: string | null; creditNoteCreatedAt: string | null })[]> {
+    // Base query — no credit_notes join so it always succeeds even if table is missing
     let q = drizzleSql`
       SELECT
         i.id, i.order_id AS "orderId", i.customer_id AS "customerId",
@@ -4104,14 +4105,10 @@ export const storage = {
         i.total, i.iva_amount AS "ivaAmount", i.description,
         i.created_at AS "createdAt",
         c.name AS "customerName", c.phone AS "customerPhone",
-        o.remito_num AS "orderRemitoNum",
-        cn.id AS "creditNoteId", cn.credit_note_number AS "creditNoteNumber",
-        cn.cae AS "creditNoteCae", cn.cae_expiry AS "creditNoteCaeExpiry",
-        cn.created_at AS "creditNoteCreatedAt"
+        o.remito_num AS "orderRemitoNum"
       FROM invoices i
       JOIN customers c ON c.id = i.customer_id
       JOIN orders o ON o.id = i.order_id
-      LEFT JOIN credit_notes cn ON cn.invoice_id = i.id
       WHERE 1=1
     `;
     if (filters?.customerId) q = drizzleSql`${q} AND i.customer_id = ${filters.customerId}`;
@@ -4119,8 +4116,23 @@ export const storage = {
     if (filters?.from) q = drizzleSql`${q} AND i.created_at >= ${filters.from}::date`;
     if (filters?.to) q = drizzleSql`${q} AND i.created_at < (${filters.to}::date + interval '1 day')`;
     q = drizzleSql`${q} ORDER BY i.created_at DESC`;
-    const rows = await db.execute(q);
-    return rows.rows as any[];
+    const invoiceRows = (await db.execute(q)).rows as any[];
+
+    // Enrich with credit note data — optional, falls back gracefully if table missing
+    const emptyCn = { creditNoteId: null, creditNoteNumber: null, creditNoteCae: null, creditNoteCaeExpiry: null, creditNoteCreatedAt: null };
+    try {
+      const cnRows = (await db.execute(drizzleSql`
+        SELECT invoice_id AS "invoiceId", id AS "creditNoteId",
+               credit_note_number AS "creditNoteNumber",
+               cae AS "creditNoteCae", cae_expiry AS "creditNoteCaeExpiry",
+               created_at AS "creditNoteCreatedAt"
+        FROM credit_notes
+      `)).rows as any[];
+      const cnMap = new Map(cnRows.map((r: any) => [r.invoiceId, r]));
+      return invoiceRows.map((r: any) => ({ ...r, ...(cnMap.get(r.id) ?? emptyCn) }));
+    } catch {
+      return invoiceRows.map((r: any) => ({ ...r, ...emptyCn }));
+    }
   },
 
   async getInvoiceById(id: number): Promise<{ invoice: Invoice; customer: Customer; order: Order & { items: (OrderItem & { product: Product | null })[] } } | null> {

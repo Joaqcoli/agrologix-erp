@@ -1554,6 +1554,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         description: `NC de ${invoice.invoiceNumber}`,
       });
 
+      // Clear invoice number from order so it can be re-invoiced
+      await storage.updateOrderInvoiceNumber(invoice.orderId, null);
+
       return res.json(creditNote);
     } catch (e: any) {
       return res.status(500).json({ error: e.message ?? "Error emitiendo nota de crédito" });
