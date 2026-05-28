@@ -1251,10 +1251,13 @@ export default function CCCustomerDetailPage({
     const fmtD = (d: string) =>
       new Date(d.replace(/\s.+$/, "T00:00:00")).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
 
-    const subMap = new Map((data?.subsidiaries ?? []).map((s) => [s.customerId, s.customerName]));
-    const getSede = (custId: number | undefined) => {
-      if (!data?.isParent || !custId || custId === customerId) return "";
-      return (subMap.get(custId) ?? "").replace(/^colegio\s+/i, "");
+    // Use string keys to avoid number/string type mismatch from raw SQL results
+    const subMap = new Map((data?.subsidiaries ?? []).map((s) => [String(s.customerId), s.customerName]));
+    const getSede = (custId: number | string | undefined | null) => {
+      if (!data?.isParent || custId == null) return "";
+      const cidStr = String(custId);
+      if (Number(cidStr) === customerId) return "Principal";
+      return (subMap.get(cidStr) ?? "").replace(/^colegio\s+/i, "");
     };
 
     // Pedidos pendientes de períodos anteriores (de pendingOrders que no están en el período actual)
