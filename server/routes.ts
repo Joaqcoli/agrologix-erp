@@ -1435,6 +1435,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         caeExpiry: String(CAEFchVto),
         total: String((totalNeto + totalIVA).toFixed(2)),
         ivaAmount: String(totalIVA.toFixed(2)),
+        condicionIvaReceptorId: condicionIva,
         description: effectiveDescription,
       });
 
@@ -1462,6 +1463,101 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!inv) return res.status(404).json({ error: "Factura no encontrada" });
       return res.json(inv);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/invoices/:id/credit-note", requireAuth, async (req, res) => {
+    try {
+      const invoiceId = Number(req.params.id);
+      const invData = await storage.getInvoiceById(invoiceId);
+      if (!invData) return res.status(404).json({ error: "Factura no encontrada" });
+
+      const existing = await storage.getCreditNoteByInvoiceId(invoiceId);
+      if (existing) return res.status(400).json({ error: "Ya existe una nota de crédito para esta factura" });
+
+      const { invoice, customer, order } = invData;
+
+      // NC type codes — A=3, B=8, C=13
+      const ncTypes: Record<string, number> = { A: 3, B: 8, C: 13 };
+      const origTypes: Record<string, number> = { A: 1, B: 6, C: 11 };
+      const ncCbteTipo  = ncTypes[invoice.invoiceType];
+      const origCbteTipo = origTypes[invoice.invoiceType];
+      if (!ncCbteTipo) return res.status(400).json({ error: "Tipo de factura no soportado para NC" });
+
+      // Original voucher number extracted from invoiceNumber (e.g. "A-0004-00000001" → 1)
+      const origNumber = parseInt(invoice.invoiceNumber.split("-").pop() ?? "0", 10);
+
+      const lastVoucher = await getLastVoucher(ncCbteTipo);
+      const nextNumber  = lastVoucher + 1;
+
+      // Recalculate IVA breakdown from order items (same logic as invoice creation)
+      let neto105 = 0, iva105 = 0, neto21 = 0, iva21 = 0;
+      for (const item of order.items) {
+        const pName = ((item.product?.name ?? (item as any).rawProductName ?? "") as string).toUpperCase();
+        const pCat  = ((item.product as any)?.category ?? "") as string;
+        const isHuevo = pName.includes("HUEVO") || pName.includes("MAPLE") || pCat.toUpperCase().includes("HUEVO");
+        const sub  = parseFloat((item as any).subtotal ?? "0") || 0;
+        const rate = isHuevo ? IVA_HUEVO : IVA_DEFAULT;
+        const isFacturaB = invoice.invoiceType === "B";
+        const netSub = isFacturaB ? sub / (1 + rate) : sub;
+        if (isHuevo) { neto21 += netSub; iva21 += netSub * IVA_HUEVO; }
+        else         { neto105 += netSub; iva105 += netSub * IVA_DEFAULT; }
+      }
+      const totalNeto = neto105 + neto21;
+      const totalIVA  = iva105 + iva21;
+
+      const iva: { Id: number; BaseImp: number; Importe: number }[] = [];
+      if (neto105 > 0) iva.push({ Id: 4, BaseImp: parseFloat(neto105.toFixed(2)), Importe: parseFloat(iva105.toFixed(2)) });
+      if (neto21  > 0) iva.push({ Id: 5, BaseImp: parseFloat(neto21.toFixed(2)),  Importe: parseFloat(iva21.toFixed(2))  });
+
+      const docTipo  = invoice.invoiceType === "A" ? 80 : 99;
+      const docNro   = invoice.invoiceType === "A" ? parseInt((customer.cuit ?? "").replace(/\D/g, "")) : 0;
+      const condicion = invoice.condicionIvaReceptorId ?? (invoice.invoiceType === "A" ? 1 : 5);
+
+      const now = new Date();
+      const cbteDate = parseInt(`${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`);
+
+      const { CAE, CAEFchVto } = await createVoucher({
+        CantReg: 1,
+        PtoVta: 4,
+        CbteTipo: ncCbteTipo,
+        Concepto: 1,
+        DocTipo: docTipo,
+        DocNro: docNro,
+        CbteDesde: nextNumber,
+        CbteHasta: nextNumber,
+        CbteFch: cbteDate,
+        ImpTotal: parseFloat((totalNeto + totalIVA).toFixed(2)),
+        ImpTotConc: 0,
+        ImpNeto: parseFloat(totalNeto.toFixed(2)),
+        ImpOpEx: 0,
+        ImpIVA: parseFloat(totalIVA.toFixed(2)),
+        ImpTrib: 0,
+        MonId: "PES",
+        MonCotiz: 1,
+        CondicionIVAReceptorId: condicion,
+        Iva: iva,
+        CbtesAsoc: [{ Tipo: origCbteTipo, PtoVta: 4, Nro: origNumber }],
+      });
+
+      const formattedNumber = `NC-${invoice.invoiceType}-0004-${String(nextNumber).padStart(8, "0")}`;
+      const creditNote = await storage.createCreditNote({
+        invoiceId,
+        customerId: invoice.customerId,
+        creditNoteType: invoice.invoiceType,
+        creditNoteNumber: formattedNumber,
+        pointOfSale: 4,
+        cae: String(CAE),
+        caeExpiry: String(CAEFchVto),
+        total: String((totalNeto + totalIVA).toFixed(2)),
+        ivaAmount: String(totalIVA.toFixed(2)),
+        condicionIvaReceptorId: condicion,
+        description: `NC de ${invoice.invoiceNumber}`,
+      });
+
+      return res.json(creditNote);
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message ?? "Error emitiendo nota de crédito" });
+    }
   });
 
   // ─── Caja ───────────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import {
   priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks,
   suppliers, supplierPayments, clientGroups, clientGroupMembers, priceListItems,
   invoices, cajaMovements, bankCategories, mpMovementOverrides, bankContacts, bankPaymentLinks,
+  creditNotes,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
@@ -12,6 +13,7 @@ import {
   type Supplier, type SupplierPayment, type InsertSupplier, type InsertSupplierPayment,
   type PriceListItem, type InsertPriceListItem,
   type Invoice, type InsertInvoice,
+  type CreditNote, type InsertCreditNote,
   type CajaMovement, type InsertCajaMovement,
   type BankCategory,
   type BankContact, type InsertBankContact,
@@ -4093,7 +4095,7 @@ export const storage = {
     return inv;
   },
 
-  async getInvoices(filters?: { customerId?: number; orderId?: number; from?: string; to?: string }): Promise<(Invoice & { customerName: string; customerPhone: string | null; orderRemitoNum: string | null })[]> {
+  async getInvoices(filters?: { customerId?: number; orderId?: number; from?: string; to?: string }): Promise<(Invoice & { customerName: string; customerPhone: string | null; orderRemitoNum: string | null; creditNoteId: number | null; creditNoteNumber: string | null; creditNoteCae: string | null; creditNoteCaeExpiry: string | null; creditNoteCreatedAt: string | null })[]> {
     let q = drizzleSql`
       SELECT
         i.id, i.order_id AS "orderId", i.customer_id AS "customerId",
@@ -4102,10 +4104,14 @@ export const storage = {
         i.total, i.iva_amount AS "ivaAmount", i.description,
         i.created_at AS "createdAt",
         c.name AS "customerName", c.phone AS "customerPhone",
-        o.remito_num AS "orderRemitoNum"
+        o.remito_num AS "orderRemitoNum",
+        cn.id AS "creditNoteId", cn.credit_note_number AS "creditNoteNumber",
+        cn.cae AS "creditNoteCae", cn.cae_expiry AS "creditNoteCaeExpiry",
+        cn.created_at AS "creditNoteCreatedAt"
       FROM invoices i
       JOIN customers c ON c.id = i.customer_id
       JOIN orders o ON o.id = i.order_id
+      LEFT JOIN credit_notes cn ON cn.invoice_id = i.id
       WHERE 1=1
     `;
     if (filters?.customerId) q = drizzleSql`${q} AND i.customer_id = ${filters.customerId}`;
@@ -4131,6 +4137,16 @@ export const storage = {
     }));
     // customer in the invoice record is already the billing customer (parent, if applicable)
     return { invoice: inv, customer, order: { ...order, items } };
+  },
+
+  async createCreditNote(data: InsertCreditNote): Promise<CreditNote> {
+    const [cn] = await db.insert(creditNotes).values(data).returning();
+    return cn;
+  },
+
+  async getCreditNoteByInvoiceId(invoiceId: number): Promise<CreditNote | null> {
+    const [cn] = await db.select().from(creditNotes).where(eq(creditNotes.invoiceId, invoiceId));
+    return cn ?? null;
   },
 
   // ─── Caja ───────────────────────────────────────────────────────────────────

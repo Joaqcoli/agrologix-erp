@@ -365,11 +365,31 @@ export const invoices = pgTable("invoices", {
   caeExpiry: text("cae_expiry").notNull(),            // "YYYYMMDD"
   total: numeric("total", { precision: 12, scale: 2 }).notNull(),
   ivaAmount: numeric("iva_amount", { precision: 12, scale: 2 }).notNull(),
+  condicionIvaReceptorId: integer("condicion_iva_receptor_id"),
   description: text("description"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 export type Invoice = typeof invoices.$inferSelect;
 export type InsertInvoice = typeof invoices.$inferInsert;
+
+// ─── Notas de Crédito ────────────────────────────────────────────────────────
+export const creditNotes = pgTable("credit_notes", {
+  id: serial("id").primaryKey(),
+  invoiceId: integer("invoice_id").notNull().references(() => invoices.id),
+  customerId: integer("customer_id").notNull().references(() => customers.id),
+  creditNoteType: text("credit_note_type").notNull(),      // "A" | "B" | "C"
+  creditNoteNumber: text("credit_note_number").notNull(),  // "NC-A-0004-00000001"
+  pointOfSale: integer("point_of_sale").notNull().default(4),
+  cae: text("cae").notNull(),
+  caeExpiry: text("cae_expiry").notNull(),
+  total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+  ivaAmount: numeric("iva_amount", { precision: 12, scale: 2 }).notNull(),
+  condicionIvaReceptorId: integer("condicion_iva_receptor_id"),
+  description: text("description"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type CreditNote = typeof creditNotes.$inferSelect;
+export type InsertCreditNote = typeof creditNotes.$inferInsert;
 
 // ─── Caja — movimientos manuales ─────────────────────────────────────────────
 export const cajaMovements = pgTable("caja_movements", {

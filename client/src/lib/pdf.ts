@@ -887,7 +887,8 @@ export async function generateInvoicePDF(data: {
       subtotal: string;
     }[];
   };
-}, detailMode: "completo" | "agrupado" = "completo"): Promise<void> {
+}, detailMode: "completo" | "agrupado" = "completo", opts?: { isNotaCredito?: boolean }): Promise<void> {
+  const isNotaCredito = opts?.isNotaCredito ?? false;
   const { invoice, customer, order } = data;
   const logoDataUrl = await loadLogoAsJpeg();
 
@@ -970,7 +971,7 @@ export async function generateInvoicePDF(data: {
   doc.setFont("helvetica", "bold"); doc.setFontSize(22); doc.setTextColor(...C_TEXT);
   doc.text(tipoLetter, boxX + boxW / 2, boxY + 14, { align: "center" });
   doc.setFont("helvetica", "normal"); doc.setFontSize(7);
-  doc.text("Factura", boxX + boxW / 2, boxY + 20, { align: "center" });
+  doc.text(isNotaCredito ? "N. Crédito" : "Factura", boxX + boxW / 2, boxY + 20, { align: "center" });
   doc.setFont("helvetica", "normal"); doc.setFontSize(7.5);
   doc.text(`Nro: ${invoice.invoiceNumber.split("-").slice(1).join("-")}`, boxX + boxW / 2, boxY + 26, { align: "center" });
   doc.text(`Fecha: ${invoiceDate}`, boxX + boxW / 2, boxY + 31, { align: "center" });
@@ -1031,7 +1032,7 @@ export async function generateInvoicePDF(data: {
 
   // Factura B: IVA no discriminado — está contenido en el total, no se suma.
   // El total que paga el cliente = subtotal bruto de los ítems (independiente del total almacenado).
-  const isFacturaB = invoice.invoiceNumber.startsWith("B-");
+  const isFacturaB = invoice.invoiceType === "B";
   const grossItemTotal = subtotalFrutas + subtotalHuevos;
 
   // Para Factura B, IVA contenido derivado de los brutos de los ítems

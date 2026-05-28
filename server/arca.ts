@@ -279,6 +279,8 @@ export type VoucherData = {
    *  1=Resp.Inscripto  4=Exento  5=ConsumidorFinal  6=Monotributista  13=MonotributistaSocial */
   CondicionIVAReceptorId: number;
   Iva: { Id: number; BaseImp: number; Importe: number }[];
+  /** Comprobantes asociados (requerido para Notas de Crédito) */
+  CbtesAsoc?: { Tipo: number; PtoVta: number; Nro: number }[];
 };
 
 export async function createVoucher(data: VoucherData): Promise<{ CAE: string; CAEFchVto: string }> {
@@ -333,6 +335,17 @@ export async function createVoucher(data: VoucherData): Promise<{ CAE: string; C
     `            <ar:MonCotiz>${data.MonCotiz}</ar:MonCotiz>`,
     `            <ar:CondicionIVAReceptorId>${data.CondicionIVAReceptorId}</ar:CondicionIVAReceptorId>`,
     data.Iva.length > 0 ? [`            <ar:Iva>`, ivaItems, `            </ar:Iva>`].join("\n") : "",
+    data.CbtesAsoc?.length ? [
+      `            <ar:CbtesAsoc>`,
+      ...data.CbtesAsoc.map((a) => [
+        `              <ar:CbteAsoc>`,
+        `                <ar:Tipo>${a.Tipo}</ar:Tipo>`,
+        `                <ar:PtoVta>${a.PtoVta}</ar:PtoVta>`,
+        `                <ar:Nro>${a.Nro}</ar:Nro>`,
+        `              </ar:CbteAsoc>`,
+      ].join("\n")).join("\n"),
+      `            </ar:CbtesAsoc>`,
+    ].join("\n") : "",
     `          </ar:FECAEDetRequest>`,
     `        </ar:FeDetReq>`,
     `      </ar:FeCAEReq>`,

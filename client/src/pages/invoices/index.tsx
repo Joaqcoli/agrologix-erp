@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Layout } from "@/components/layout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,8 +10,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Download, Receipt, Search } from "lucide-react";
+import { Download, Receipt, Search, RotateCcw } from "lucide-react";
 import { generateInvoicePDF, generateRemitoPDF } from "@/lib/pdf";
+import { apiRequest } from "@/lib/queryClient";
 import type { Customer } from "@shared/schema";
 
 const WhatsAppIcon = ({ className }: { className?: string }) => (
@@ -44,6 +45,11 @@ type InvoiceRow = {
   customerName: string;
   customerPhone: string | null;
   orderRemitoNum: string | null;
+  creditNoteId: number | null;
+  creditNoteNumber: string | null;
+  creditNoteCae: string | null;
+  creditNoteCaeExpiry: string | null;
+  creditNoteCreatedAt: string | null;
 };
 
 const fmtDate = (d: string | Date) =>
@@ -53,10 +59,15 @@ const fmtMoney = (v: string | number) =>
 
 export default function InvoicesPage() {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [customerFilter, setCustomerFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+
+  // Nota de crédito dialog
+  const [ncRow, setNcRow] = useState<InvoiceRow | null>(null);
+  const [ncLoading, setNcLoading] = useState(false);
 
   // WhatsApp dialog
   const [waRow, setWaRow] = useState<InvoiceRow | null>(null);
@@ -89,6 +100,42 @@ export default function InvoicesPage() {
       await generateInvoicePDF(detail, "agrupado");
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
+    }
+  };
+
+  const handleDownloadNcPDF = async (inv: InvoiceRow) => {
+    try {
+      const detail = await fetch(`/api/invoices/${inv.id}`).then((r) => r.json());
+      const ncDetail = {
+        ...detail,
+        invoice: {
+          ...detail.invoice,
+          invoiceNumber: inv.creditNoteNumber,
+          cae: inv.creditNoteCae,
+          caeExpiry: inv.creditNoteCaeExpiry,
+          createdAt: inv.creditNoteCreatedAt ?? detail.invoice.createdAt,
+        },
+      };
+      await generateInvoicePDF(ncDetail, "agrupado", { isNotaCredito: true });
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    }
+  };
+
+  const handleCreateNC = async () => {
+    if (!ncRow) return;
+    setNcLoading(true);
+    try {
+      await apiRequest("POST", `/api/invoices/${ncRow.id}/credit-note`, {});
+      toast({ title: "Nota de crédito emitida correctamente" });
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/invoices"),
+      });
+      setNcRow(null);
+    } catch (e: any) {
+      toast({ title: "Error al emitir NC", description: e.message, variant: "destructive" });
+    } finally {
+      setNcLoading(false);
     }
   };
 
@@ -224,7 +271,12 @@ export default function InvoicesPage() {
                     <td className="px-4 py-3 text-muted-foreground">{fmtDate(inv.createdAt)}</td>
                     <td className="px-4 py-3 font-medium">{inv.customerName}</td>
                     <td className="px-4 py-3">{typeBadge(inv.invoiceType)}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{inv.invoiceNumber}</td>
+                    <td className="px-4 py-3 font-mono text-xs">
+                      <div>{inv.invoiceNumber}</div>
+                      {inv.creditNoteNumber && (
+                        <div className="text-orange-500 text-[10px]">{inv.creditNoteNumber}</div>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-right font-medium">{fmtMoney(inv.total)}</td>
                     <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{inv.cae}</td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">{inv.orderRemitoNum ?? "—"}</td>
@@ -244,6 +296,25 @@ export default function InvoicesPage() {
                         >
                           <WhatsAppIcon className="h-3.5 w-3.5" />
                         </Button>
+                        {inv.creditNoteId ? (
+                          <Button
+                            size="sm" variant="ghost"
+                            className="h-7 px-2 text-orange-600 hover:text-orange-700 hover:bg-orange-50"
+                            title={`Descargar NC: ${inv.creditNoteNumber}`}
+                            onClick={() => handleDownloadNcPDF(inv)}
+                          >
+                            <Download className="h-3.5 w-3.5 mr-1" /> NC
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm" variant="ghost"
+                            className="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            title="Emitir Nota de Crédito"
+                            onClick={() => setNcRow(inv)}
+                          >
+                            <RotateCcw className="h-3.5 w-3.5 mr-1" /> NC
+                          </Button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -253,6 +324,36 @@ export default function InvoicesPage() {
           </div>
         )}
       </div>
+
+      {/* Nota de Crédito confirm dialog */}
+      <Dialog open={!!ncRow} onOpenChange={(o) => { if (!o) setNcRow(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RotateCcw className="h-5 w-5 text-red-500" /> Emitir Nota de Crédito
+            </DialogTitle>
+            <DialogDescription>
+              Se emitirá una Nota de Crédito {ncRow?.invoiceType} ante AFIP por el total de la factura {ncRow?.invoiceNumber}.
+              Esta acción no se puede deshacer.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2 space-y-1 text-sm">
+            <p><span className="font-medium">Cliente:</span> {ncRow?.customerName}</p>
+            <p><span className="font-medium">Factura:</span> {ncRow?.invoiceNumber}</p>
+            <p><span className="font-medium">Total a acreditar:</span> {ncRow ? fmtMoney(ncRow.total) : ""}</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNcRow(null)} disabled={ncLoading}>Cancelar</Button>
+            <Button
+              variant="destructive"
+              disabled={ncLoading}
+              onClick={handleCreateNC}
+            >
+              {ncLoading ? "Emitiendo..." : "Confirmar y emitir NC"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* WhatsApp dialog */}
       <Dialog open={!!waRow} onOpenChange={(o) => { if (!o) setWaRow(null); }}>
