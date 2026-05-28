@@ -507,9 +507,10 @@ async function generateCCPDF(opts: {
 
 async function generateResumenCCPDF(opts: {
   customerName: string;
+  isParent?: boolean;
   orders: { orderDate: string; remitoNum: number | null; folio: string; invoiceNumber: string | null; total: number; schoolName: string }[];
 }): Promise<void> {
-  const { customerName, orders } = opts;
+  const { customerName, orders, isParent = false } = opts;
 
   const OLIVE:     [number, number, number] = [61,  95,  47];
   const FOOT_GRN:  [number, number, number] = [38,  68,  22];
@@ -525,16 +526,16 @@ async function generateResumenCCPDF(opts: {
   const fmtM = (n: number) => `$${Math.round(n).toLocaleString("es-AR")}`;
   const todayFmt = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
 
-  // Columns: FECHA 14% | COLEGIO 28% | REMITO 20% | FACTURA 20% | TOTAL 18%
+  // Columns: FECHA | [SEDE — only when isParent] | REMITO | FACTURA | TOTAL
   const pct = (p: number) => tblW * p / 100;
   const fechaX   = mx;
-  const fechaW   = pct(14);
-  const colX     = fechaX  + fechaW;
-  const colW     = pct(28);
-  const remitoX  = colX    + colW;
-  const remitoW  = pct(20);
+  const fechaW   = pct(isParent ? 14 : 18);
+  const sedeX    = fechaX  + fechaW;
+  const sedeW    = pct(isParent ? 28 : 0);
+  const remitoX  = sedeX   + sedeW;
+  const remitoW  = pct(isParent ? 20 : 27);
   const factX    = remitoX + remitoW;
-  const factW    = pct(20);
+  const factW    = pct(isParent ? 20 : 27);
   const rightEdge = mx + tblW;   // total right-aligned here
 
   const footContactH = 20, footBarH = 12;
@@ -592,7 +593,7 @@ async function generateResumenCCPDF(opts: {
     doc.setTextColor(...WHITE); doc.setFont("helvetica", "bold"); doc.setFontSize(8.5);
     const cy = y + TH / 2 + 3;
     doc.text("FECHA",       fechaX  + fechaW  / 2, cy, { align: "center" });
-    doc.text("COLEGIO",     colX    + colW    / 2, cy, { align: "center" });
+    if (isParent) doc.text("SEDE",   sedeX   + sedeW   / 2, cy, { align: "center" });
     doc.text("NRO REMITO",  remitoX + remitoW / 2, cy, { align: "center" });
     doc.text("NRO FACTURA", factX   + factW   / 2, cy, { align: "center" });
     doc.text("TOTAL",       rightEdge          - 2, cy, { align: "right" });
@@ -617,8 +618,10 @@ async function generateResumenCCPDF(opts: {
     doc.setTextColor(...BLACK); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
     const ry = y + RH / 2 + 3;
     doc.text(fmtD(o.orderDate), fechaX  + fechaW  / 2, ry, { align: "center" });
-    const shortName = o.schoolName.replace(/^colegio\s+/i, "");
-    doc.text(doc.splitTextToSize(shortName, colW - 4)[0], colX + 2, ry);
+    if (isParent) {
+      const shortName = o.schoolName.replace(/^colegio\s+/i, "");
+      doc.text(doc.splitTextToSize(shortName, sedeW - 4)[0], sedeX + 2, ry);
+    }
     doc.text(formatRemito(o),              remitoX + remitoW / 2, ry, { align: "center" });
     doc.text(fmtFacturaSeq(o.invoiceNumber), factX + factW / 2,   ry, { align: "center" });
     doc.setFont("helvetica", "bold");
@@ -1338,7 +1341,7 @@ export default function CCCustomerDetailPage({
 
   const handleDownloadResumen = async () => {
     if (!data || selectedOrdersData.length === 0) return;
-    await generateResumenCCPDF({ customerName: data.customer.name, orders: selectedOrdersData });
+    await generateResumenCCPDF({ customerName: data.customer.name, isParent: data.isParent ?? false, orders: selectedOrdersData });
   };
 
   const handleWaSendResumen = async () => {
