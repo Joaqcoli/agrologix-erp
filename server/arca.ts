@@ -337,7 +337,7 @@ export async function createVoucher(data: VoucherData): Promise<{ CAE: string; C
     data.Iva.length > 0 ? [`            <ar:Iva>`, ivaItems, `            </ar:Iva>`].join("\n") : "",
     data.CbtesAsoc?.length ? [
       `            <ar:CbtesAsoc>`,
-      ...data.CbtesAsoc.map((a) => [
+      data.CbtesAsoc.map((a) => [
         `              <ar:CbteAsoc>`,
         `                <ar:Tipo>${a.Tipo}</ar:Tipo>`,
         `                <ar:PtoVta>${a.PtoVta}</ar:PtoVta>`,
