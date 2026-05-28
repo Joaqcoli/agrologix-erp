@@ -1017,7 +1017,7 @@ export async function generateInvoicePDF(data: {
 
   type PdfRow = { qty: string; unit: string; name: string; price: number; sub: number };
 
-  // Pre-compute IVA breakdown (10.5% frutas / 21% huevos) from items for the totals section
+  // Pre-compute gross item subtotals per category
   let subtotalFrutas = 0, subtotalHuevos = 0;
   for (const item of order.items) {
     const pName = (item.product?.name ?? (item as any).rawProductName ?? "").toUpperCase();
@@ -1028,12 +1028,26 @@ export async function generateInvoicePDF(data: {
   const totalIva = parseFloat(invoice.ivaAmount);
   const total    = parseFloat(invoice.total);
   const neto     = total - totalIva;
-  // Split stored IVA proportionally by expected IVA weights
-  const ivaW105 = subtotalFrutas * 0.105;
-  const ivaW21  = subtotalHuevos * 0.21;
-  const ivaWTotal = ivaW105 + ivaW21;
-  const iva105 = ivaWTotal > 0 ? totalIva * (ivaW105 / ivaWTotal) : (subtotalHuevos === 0 ? totalIva : 0);
-  const iva21  = totalIva - iva105;
+
+  // Derive correct NET amounts per IVA category from the authoritative stored invoice totals.
+  // Solves: netoFrutas + netoHuevos = neto  AND  netoFrutas×0.105 + netoHuevos×0.21 = totalIva
+  // This is always correct regardless of whether ivaIncluido was used at invoice creation.
+  let netoFrutas = 0, netoHuevos = 0;
+  if (subtotalFrutas > 0 && subtotalHuevos > 0) {
+    netoHuevos = Math.max(0, Math.min(neto, (totalIva - neto * 0.105) / 0.105));
+    netoFrutas = neto - netoHuevos;
+  } else if (subtotalHuevos > 0) {
+    netoHuevos = neto;
+  } else {
+    netoFrutas = neto;
+  }
+  const iva105 = netoFrutas * 0.105;
+  const iva21  = netoHuevos * 0.21;
+
+  // Detect if item prices already included IVA (ivaIncluido=true at invoice creation).
+  // If the gross item sum is closer to the invoice total than to neto, IVA was included.
+  const grossItemTotal = subtotalFrutas + subtotalHuevos;
+  const itemsHaveIva = grossItemTotal > 1 && Math.abs(grossItemTotal - total) < Math.abs(grossItemTotal - neto);
 
   let pdfRows: PdfRow[];
   if (detailMode === "agrupado") {
@@ -1049,17 +1063,23 @@ export async function generateInvoicePDF(data: {
     }
     const huevoLabel = huevoNames.length > 0 ? huevoNames.join(" / ") : "HUEVO";
     pdfRows = [];
-    if (subtotalFrutas > 0) pdfRows.push({ qty: "1", unit: "", name: "FRUTAS Y VERDURAS", price: subtotalFrutas, sub: subtotalFrutas });
-    if (subtotalHuevos > 0) pdfRows.push({ qty: "1", unit: "", name: huevoLabel,           price: subtotalHuevos, sub: subtotalHuevos });
+    if (subtotalFrutas > 0) pdfRows.push({ qty: "1", unit: "", name: "FRUTAS Y VERDURAS", price: netoFrutas, sub: netoFrutas });
+    if (subtotalHuevos > 0) pdfRows.push({ qty: "1", unit: "", name: huevoLabel,           price: netoHuevos, sub: netoHuevos });
   } else {
     const mergedItems = mergeForPDF(order.items);
-    pdfRows = mergedItems.map((item) => ({
-      qty:   String(parseFloat(item.quantity) % 1 === 0 ? Math.round(parseFloat(item.quantity)) : parseFloat(item.quantity).toFixed(2)),
-      unit:  item.unit.toUpperCase(),
-      name:  item.product?.name ?? item.rawProductName ?? "Producto sin nombre",
-      price: parseFloat(item.pricePerUnit ?? "0"),
-      sub:   parseFloat(item.subtotal) || 0,
-    }));
+    pdfRows = mergedItems.map((item) => {
+      const pName = item.product?.name ?? item.rawProductName ?? "Producto sin nombre";
+      const rate  = itemIvaRate(pName);
+      const rawPrice = parseFloat(item.pricePerUnit ?? "0");
+      const rawSub   = parseFloat(item.subtotal) || 0;
+      return {
+        qty:   String(parseFloat(item.quantity) % 1 === 0 ? Math.round(parseFloat(item.quantity)) : parseFloat(item.quantity).toFixed(2)),
+        unit:  item.unit.toUpperCase(),
+        name:  pName,
+        price: itemsHaveIva ? rawPrice / (1 + rate) : rawPrice,
+        sub:   itemsHaveIva ? rawSub   / (1 + rate) : rawSub,
+      };
+    });
   }
 
   pdfRows.forEach((row, i) => {
