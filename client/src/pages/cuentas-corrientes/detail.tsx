@@ -452,13 +452,13 @@ async function generateCCPDF(opts: {
   drawTH();
 
   // Build row list
-  type FullRow = { fecha: string; remito: string; factura: string; monto: number; bold?: boolean };
+  type FullRow = { fecha: string; remito: string; factura: string; monto: number; sede?: string; bold?: boolean };
   const allRows: FullRow[] = [];
   if (saldoAnterior > 0) {
     allRows.push({ fecha: "---", remito: "SALDO ANTERIOR", factura: "---", monto: saldoAnterior, bold: true });
   }
   for (const r of orderRows) {
-    allRows.push({ fecha: r.fecha, remito: r.remito, factura: r.factura || "---", monto: r.monto });
+    allRows.push({ ...r, factura: r.factura || "---" });
   }
 
   for (let i = 0; i < allRows.length; i++) {
