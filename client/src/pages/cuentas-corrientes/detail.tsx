@@ -277,7 +277,7 @@ type CCDetail = {
   subsidiaries?: SubsidiaryRow[];
 };
 
-type PendingOrder = { id: number; folio: string; remitoNum: number | null; total: string; paidAmount: string; orderDate: string; invoiceNumber?: string | null };
+type PendingOrder = { id: number; folio: string; remitoNum: number | null; total: string; paidAmount: string; orderDate: string; invoiceNumber?: string | null; customerId?: number };
 
 function formatRemito(order: { remitoNum?: number | null; folio?: string | null }): string {
   if (order.remitoNum != null) return `VA-${String(order.remitoNum).padStart(6, "0")}`;
@@ -311,12 +311,13 @@ async function loadLogoJpeg(): Promise<{ base64: string; aspect: number } | null
 async function generateCCPDF(opts: {
   clientLabel: string;
   saldoAnterior: number;
-  orderRows: { fecha: string; remito: string; factura: string; monto: number }[];
+  orderRows: { fecha: string; remito: string; factura: string; monto: number; sede?: string }[];
   total: number;
   periodLabel: string;
   hideFactura?: boolean;
+  showSede?: boolean;
 }): Promise<jsPDF> {
-  const { clientLabel, saldoAnterior, orderRows, total, periodLabel, hideFactura = false } = opts;
+  const { clientLabel, saldoAnterior, orderRows, total, periodLabel, hideFactura = false, showSede = false } = opts;
 
   // ── Colors ─────────────────────────────────────────────────────────────────
   const OLIVE:     [number, number, number] = [61,  95,  47];   // table header + separator
@@ -337,13 +338,21 @@ async function generateCCPDF(opts: {
   const todayFmt = new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
 
   // ── Column positions ────────────────────────────────────────────────────────
-  // With factura:    FECHA 20% | N° REMITO 27% | N° FACTURA 27% | MONTO 26%
-  // Without factura: FECHA 20% | N° REMITO 54%                  | MONTO 26%
-  const fechaW   = tblW * 0.20;
-  const remitoW  = hideFactura ? tblW * 0.54 : tblW * 0.27;
-  const facturaW = hideFactura ? 0 : tblW * 0.27;
+  // Without sede + factura:  FECHA 20% | N° REMITO 27% | N° FACTURA 27% | MONTO 26%
+  // Without sede, no fact:   FECHA 20% | N° REMITO 54%                  | MONTO 26%
+  // With sede + factura:     FECHA 13% | SEDE 25% | N° REMITO 20% | N° FACTURA 20% | MONTO 22%
+  // With sede, no factura:   FECHA 13% | SEDE 25% | N° REMITO 40%                  | MONTO 22%
+  const fechaW   = tblW * (showSede ? 0.13 : 0.20);
+  const sedeW    = tblW * (showSede ? 0.25 : 0);
+  const remitoW  = showSede
+    ? (hideFactura ? tblW * 0.40 : tblW * 0.20)
+    : (hideFactura ? tblW * 0.54 : tblW * 0.27);
+  const facturaW = showSede
+    ? (hideFactura ? 0 : tblW * 0.20)
+    : (hideFactura ? 0 : tblW * 0.27);
   const fechaX   = mx;
-  const remitoX  = fechaX + fechaW;
+  const sedeX    = fechaX + fechaW;
+  const remitoX  = sedeX  + sedeW;
   const facturaX = remitoX + remitoW;
   const montoX   = mx + tblW;     // 195mm — right-align anchor
 
@@ -434,6 +443,7 @@ async function generateCCPDF(opts: {
     doc.setTextColor(...WHITE);
     doc.setFont("helvetica", "bold"); doc.setFontSize(9);
     doc.text("FECHA",      fechaX + fechaW / 2,     y + 9, { align: "center" });
+    if (showSede) doc.text("SEDE",    sedeX + sedeW / 2,     y + 9, { align: "center" });
     doc.text("N° REMITO",  remitoX + remitoW / 2,   y + 9, { align: "center" });
     if (!hideFactura) doc.text("N° FACTURA", facturaX + facturaW / 2, y + 9, { align: "center" });
     doc.text("MONTO",      montoX - 5,              y + 9, { align: "right" });
@@ -467,6 +477,13 @@ async function generateCCPDF(opts: {
     // FECHA — centered
     doc.setFont("helvetica", row.bold ? "bold" : "normal");
     doc.text(row.fecha, fechaX + fechaW / 2, y + 9, { align: "center" });
+
+    // SEDE — left-aligned in column (only if showSede)
+    if (showSede) {
+      doc.setFont("helvetica", "normal");
+      const sedeText = (row as any).sede ?? "";
+      doc.text(doc.splitTextToSize(sedeText, sedeW - 4)[0], sedeX + 2, y + 9);
+    }
 
     // N° REMITO — centrado en la columna
     doc.setFont("helvetica", row.bold ? "bold" : "normal");
@@ -1234,6 +1251,12 @@ export default function CCCustomerDetailPage({
     const fmtD = (d: string) =>
       new Date(d.replace(/\s.+$/, "T00:00:00")).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
 
+    const subMap = new Map((data?.subsidiaries ?? []).map((s) => [s.customerId, s.customerName]));
+    const getSede = (custId: number | undefined) => {
+      if (!data?.isParent || !custId || custId === customerId) return "";
+      return (subMap.get(custId) ?? "").replace(/^colegio\s+/i, "");
+    };
+
     // Pedidos pendientes de períodos anteriores (de pendingOrders que no están en el período actual)
     const inPeriodIds = new Set((data.orders ?? []).map((o) => o.id));
     const prevPendingRows = pendingOrders
@@ -1244,6 +1267,7 @@ export default function CCCustomerDetailPage({
         factura: fmtFacturaSeq(o.invoiceNumber),
         monto: Math.round(parseFloat(o.total) - parseFloat(o.paidAmount ?? "0")),
         orderDate: o.orderDate,
+        sede: getSede(o.customerId),
       }));
 
     // Pedidos pendientes del período actual
@@ -1255,6 +1279,7 @@ export default function CCCustomerDetailPage({
         factura: fmtFacturaSeq(o.invoiceNumber),
         monto: Math.round(o.total - (o.paidAmount ?? 0)),
         orderDate: o.orderDate,
+        sede: getSede(o.customerId),
       }));
 
     // Combinar y ordenar de más viejo a más nuevo
@@ -1273,6 +1298,7 @@ export default function CCCustomerDetailPage({
       total: Math.max(0, data.saldo),
       periodLabel: `Saldo al ${todayLabel}`,
       hideFactura: !hasInvoices,
+      showSede: data.isParent ?? false,
     });
     doc.save(`CC-${data.customer.name.replace(/\s+/g, "_")}-${todayLabel.replace(/\//g, "-")}.pdf`);
   };

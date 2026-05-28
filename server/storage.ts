@@ -2847,7 +2847,7 @@ export const storage = {
       .onConflictDoNothing();
   },
 
-  async getPendingOrdersForCustomer(customerId: number): Promise<{ id: number; folio: string; remitoNum: number | null; total: string; paidAmount: string; orderDate: string; invoiceNumber: string | null }[]> {
+  async getPendingOrdersForCustomer(customerId: number): Promise<{ id: number; folio: string; remitoNum: number | null; total: string; paidAmount: string; orderDate: string; invoiceNumber: string | null; customerId: number }[]> {
     // Incluir sucursales si este cliente es un padre
     const childRows = await db.execute(drizzleSql`
       SELECT id FROM customers WHERE parent_customer_id = ${customerId} AND active = true
@@ -2889,6 +2889,7 @@ export const storage = {
           o.remito_num,
           o.order_date,
           o.invoice_number,
+          o.customer_id AS "customerId",
           CASE WHEN c.has_iva THEN
             COALESCE(ROUND(SUM(CASE
               WHEN oi.price_per_unit::numeric = 0 THEN 0
@@ -3001,6 +3002,7 @@ export const storage = {
         paidAmount: Math.max(0, covered).toFixed(2),
         orderDate: r.order_date instanceof Date ? r.order_date.toISOString() : String(r.order_date),
         invoiceNumber: r.invoice_number ?? null,
+        customerId: Number(r.customerId),
       });
     }
 
