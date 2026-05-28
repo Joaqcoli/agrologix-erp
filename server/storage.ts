@@ -4091,7 +4091,24 @@ export const storage = {
 
   // ─── Facturas Electrónicas ────────────────────────────────────────────────────
   async createInvoice(data: InsertInvoice): Promise<Invoice> {
-    const [inv] = await db.insert(invoices).values(data).returning();
+    // Use explicit raw SQL to avoid RETURNING * including condicion_iva_receptor_id
+    // if the migration hasn't run yet.
+    const { condicionIvaReceptorId, ...rest } = data as any;
+    const rows = await db.execute(drizzleSql`
+      INSERT INTO invoices (order_id, customer_id, invoice_type, invoice_number, point_of_sale, cae, cae_expiry, total, iva_amount, description)
+      VALUES (${rest.orderId}, ${rest.customerId}, ${rest.invoiceType}, ${rest.invoiceNumber}, ${rest.pointOfSale ?? 4},
+              ${rest.cae}, ${rest.caeExpiry}, ${rest.total}, ${rest.ivaAmount}, ${rest.description ?? null})
+      RETURNING id, order_id AS "orderId", customer_id AS "customerId",
+                invoice_type AS "invoiceType", invoice_number AS "invoiceNumber",
+                point_of_sale AS "pointOfSale", cae, cae_expiry AS "caeExpiry",
+                total, iva_amount AS "ivaAmount", description, created_at AS "createdAt"
+    `);
+    const inv = (rows.rows[0] as any) as Invoice;
+    if (condicionIvaReceptorId != null) {
+      try {
+        await db.execute(drizzleSql`UPDATE invoices SET condicion_iva_receptor_id = ${condicionIvaReceptorId} WHERE id = ${inv.id}`);
+      } catch { /* column not yet created by migration */ }
+    }
     return inv;
   },
 
@@ -4136,8 +4153,22 @@ export const storage = {
   },
 
   async getInvoiceById(id: number): Promise<{ invoice: Invoice; customer: Customer; order: Order & { items: (OrderItem & { product: Product | null })[] } } | null> {
-    const [inv] = await db.select().from(invoices).where(eq(invoices.id, id));
+    // Raw SQL to avoid Drizzle including condicion_iva_receptor_id if not yet created
+    const invRows = await db.execute(drizzleSql`
+      SELECT id, order_id AS "orderId", customer_id AS "customerId",
+             invoice_type AS "invoiceType", invoice_number AS "invoiceNumber",
+             point_of_sale AS "pointOfSale", cae, cae_expiry AS "caeExpiry",
+             total, iva_amount AS "ivaAmount", description, created_at AS "createdAt"
+      FROM invoices WHERE id = ${id}
+    `);
+    const inv = (invRows.rows[0] as any) as (Invoice & { condicionIvaReceptorId?: number | null }) | undefined;
     if (!inv) return null;
+    // Try to read condicion (column may not exist yet)
+    try {
+      const cRows = await db.execute(drizzleSql`SELECT condicion_iva_receptor_id AS "condicionIvaReceptorId" FROM invoices WHERE id = ${id}`);
+      inv.condicionIvaReceptorId = (cRows.rows[0] as any)?.condicionIvaReceptorId ?? null;
+    } catch { inv.condicionIvaReceptorId = null; }
+
     const [customer] = await db.select().from(customers).where(eq(customers.id, inv.customerId));
     const [order]    = await db.select().from(orders).where(eq(orders.id, inv.orderId));
     const rawItems   = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
@@ -4147,7 +4178,6 @@ export const storage = {
         : null;
       return { ...item, product: product as Product | null };
     }));
-    // customer in the invoice record is already the billing customer (parent, if applicable)
     return { invoice: inv, customer, order: { ...order, items } };
   },
 

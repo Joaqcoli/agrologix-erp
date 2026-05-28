@@ -1468,6 +1468,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/invoices/:id/credit-note", requireAuth, async (req, res) => {
     try {
       const invoiceId = Number(req.params.id);
+      const { condicionIva } = z.object({ condicionIva: z.number().int().optional() }).parse(req.body);
+
       const invData = await storage.getInvoiceById(invoiceId);
       if (!invData) return res.status(404).json({ error: "Factura no encontrada" });
 
@@ -1511,7 +1513,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const docTipo  = invoice.invoiceType === "A" ? 80 : 99;
       const docNro   = invoice.invoiceType === "A" ? parseInt((customer.cuit ?? "").replace(/\D/g, "")) : 0;
-      const condicion = invoice.condicionIvaReceptorId ?? (invoice.invoiceType === "A" ? 1 : 5);
+      // condicionIva from request body > stored in invoice > fallback by type
+      const condicion = condicionIva ?? (invoice as any).condicionIvaReceptorId ?? (invoice.invoiceType === "A" ? 1 : 5);
 
       const now = new Date();
       const cbteDate = parseInt(`${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`);

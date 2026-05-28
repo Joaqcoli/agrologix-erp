@@ -68,6 +68,7 @@ export default function InvoicesPage() {
   // Nota de crédito dialog
   const [ncRow, setNcRow] = useState<InvoiceRow | null>(null);
   const [ncLoading, setNcLoading] = useState(false);
+  const [ncCondicion, setNcCondicion] = useState<number>(5);
 
   // WhatsApp dialog
   const [waRow, setWaRow] = useState<InvoiceRow | null>(null);
@@ -126,7 +127,7 @@ export default function InvoicesPage() {
     if (!ncRow) return;
     setNcLoading(true);
     try {
-      const cn = await apiRequest("POST", `/api/invoices/${ncRow.id}/credit-note`, {}).then((r) => r.json());
+      const cn = await apiRequest("POST", `/api/invoices/${ncRow.id}/credit-note`, { condicionIva: ncCondicion }).then((r) => r.json());
       toast({ title: `Nota de Crédito ${cn.creditNoteNumber} emitida correctamente` });
       queryClient.invalidateQueries({
         predicate: (q) => {
@@ -313,7 +314,7 @@ export default function InvoicesPage() {
                             size="sm" variant="ghost"
                             className="h-7 px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
                             title="Emitir Nota de Crédito"
-                            onClick={() => setNcRow(inv)}
+                            onClick={() => { setNcRow(inv); setNcCondicion(inv.invoiceType === "A" ? 1 : 4); }}
                           >
                             <RotateCcw className="h-3.5 w-3.5 mr-1" /> NC
                           </Button>
@@ -340,10 +341,27 @@ export default function InvoicesPage() {
               Esta acción no se puede deshacer.
             </DialogDescription>
           </DialogHeader>
-          <div className="py-2 space-y-1 text-sm">
-            <p><span className="font-medium">Cliente:</span> {ncRow?.customerName}</p>
-            <p><span className="font-medium">Factura:</span> {ncRow?.invoiceNumber}</p>
-            <p><span className="font-medium">Total a acreditar:</span> {ncRow ? fmtMoney(ncRow.total) : ""}</p>
+          <div className="py-2 space-y-3 text-sm">
+            <div className="space-y-1">
+              <p><span className="font-medium">Cliente:</span> {ncRow?.customerName}</p>
+              <p><span className="font-medium">Factura:</span> {ncRow?.invoiceNumber}</p>
+              <p><span className="font-medium">Total a acreditar:</span> {ncRow ? fmtMoney(ncRow.total) : ""}</p>
+            </div>
+            <div className="space-y-1.5">
+              <p className="font-medium">Condición IVA receptor</p>
+              <Select value={String(ncCondicion)} onValueChange={(v) => setNcCondicion(Number(v))}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1">1 — Responsable Inscripto</SelectItem>
+                  <SelectItem value="4">4 — IVA Exento / Sujeto Exento</SelectItem>
+                  <SelectItem value="5">5 — Consumidor Final</SelectItem>
+                  <SelectItem value="6">6 — Monotributista</SelectItem>
+                  <SelectItem value="13">13 — Monotributista Social</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setNcRow(null)} disabled={ncLoading}>Cancelar</Button>
