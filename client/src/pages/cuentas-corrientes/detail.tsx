@@ -1206,7 +1206,11 @@ export default function CCCustomerDetailPage({
   // Fetch all invoices for this customer (needed for WA resumen flow)
   const { data: customerInvoices = [] } = useQuery<{ id: number; orderId: number; invoiceNumber: string }[]>({
     queryKey: ["/api/invoices", { customerId }],
-    queryFn: () => fetch(`/api/invoices?customerId=${customerId}`, { credentials: "include" }).then((r) => r.json()),
+    queryFn: async () => {
+      const r = await fetch(`/api/invoices?customerId=${customerId}`, { credentials: "include" });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    },
   });
 
   // Fetch pending orders once (not gated on modal open, always available)
