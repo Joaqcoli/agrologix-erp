@@ -1017,7 +1017,7 @@ export async function generateInvoicePDF(data: {
 
   type PdfRow = { qty: string; unit: string; name: string; price: number; sub: number };
 
-  // Pre-compute gross item subtotals per category
+  // Pre-compute gross item subtotals per category (always from order items, unmodified)
   let subtotalFrutas = 0, subtotalHuevos = 0;
   for (const item of order.items) {
     const pName = (item.product?.name ?? (item as any).rawProductName ?? "").toUpperCase();
@@ -1029,9 +1029,17 @@ export async function generateInvoicePDF(data: {
   const total    = parseFloat(invoice.total);
   const neto     = total - totalIva;
 
-  // Derive correct NET amounts per IVA category from the authoritative stored invoice totals.
-  // Solves: netoFrutas + netoHuevos = neto  AND  netoFrutas×0.105 + netoHuevos×0.21 = totalIva
-  // This is always correct regardless of whether ivaIncluido was used at invoice creation.
+  // Factura B: IVA no discriminado — está contenido en el total, no se suma.
+  // El total que paga el cliente = subtotal bruto de los ítems (independiente del total almacenado).
+  const isFacturaB = invoice.invoiceNumber.startsWith("B-");
+  const grossItemTotal = subtotalFrutas + subtotalHuevos;
+
+  // Para Factura B, IVA contenido derivado de los brutos de los ítems
+  const ivaContenidoFrutas = subtotalFrutas * 0.105 / 1.105;
+  const ivaContenidoHuevos = subtotalHuevos * 0.21  / 1.21;
+
+  // Para Factura A: derivar netos exactos resolviendo el sistema:
+  //   netoF + netoH = neto  y  netoF×0.105 + netoH×0.21 = totalIva
   let netoFrutas = 0, netoHuevos = 0;
   if (subtotalFrutas > 0 && subtotalHuevos > 0) {
     netoHuevos = Math.max(0, Math.min(neto, (totalIva - neto * 0.105) / 0.105));
@@ -1044,10 +1052,8 @@ export async function generateInvoicePDF(data: {
   const iva105 = netoFrutas * 0.105;
   const iva21  = netoHuevos * 0.21;
 
-  // Detect if item prices already included IVA (ivaIncluido=true at invoice creation).
-  // If the gross item sum is closer to the invoice total than to neto, IVA was included.
-  const grossItemTotal = subtotalFrutas + subtotalHuevos;
-  const itemsHaveIva = grossItemTotal > 1 && Math.abs(grossItemTotal - total) < Math.abs(grossItemTotal - neto);
+  // Detectar si los ítems de Factura A tienen IVA incluido (ivaIncluido=true al crear)
+  const itemsHaveIva = !isFacturaB && grossItemTotal > 1 && Math.abs(grossItemTotal - total) < Math.abs(grossItemTotal - neto);
 
   let pdfRows: PdfRow[];
   if (detailMode === "agrupado") {
@@ -1063,8 +1069,15 @@ export async function generateInvoicePDF(data: {
     }
     const huevoLabel = huevoNames.length > 0 ? huevoNames.join(" / ") : "HUEVO";
     pdfRows = [];
-    if (subtotalFrutas > 0) pdfRows.push({ qty: "1", unit: "", name: "FRUTAS Y VERDURAS", price: netoFrutas, sub: netoFrutas });
-    if (subtotalHuevos > 0) pdfRows.push({ qty: "1", unit: "", name: huevoLabel,           price: netoHuevos, sub: netoHuevos });
+    if (isFacturaB) {
+      // Factura B: mostrar precios brutos (IVA contenido)
+      if (subtotalFrutas > 0) pdfRows.push({ qty: "1", unit: "", name: "FRUTAS Y VERDURAS", price: subtotalFrutas, sub: subtotalFrutas });
+      if (subtotalHuevos > 0) pdfRows.push({ qty: "1", unit: "", name: huevoLabel,           price: subtotalHuevos, sub: subtotalHuevos });
+    } else {
+      // Factura A: mostrar precios netos
+      if (subtotalFrutas > 0) pdfRows.push({ qty: "1", unit: "", name: "FRUTAS Y VERDURAS", price: netoFrutas, sub: netoFrutas });
+      if (subtotalHuevos > 0) pdfRows.push({ qty: "1", unit: "", name: huevoLabel,           price: netoHuevos, sub: netoHuevos });
+    }
   } else {
     const mergedItems = mergeForPDF(order.items);
     pdfRows = mergedItems.map((item) => {
@@ -1072,12 +1085,14 @@ export async function generateInvoicePDF(data: {
       const rate  = itemIvaRate(pName);
       const rawPrice = parseFloat(item.pricePerUnit ?? "0");
       const rawSub   = parseFloat(item.subtotal) || 0;
+      // Factura B: siempre brutos. Factura A + ivaIncluido: dividir por (1+tasa).
+      const divIva = !isFacturaB && itemsHaveIva;
       return {
         qty:   String(parseFloat(item.quantity) % 1 === 0 ? Math.round(parseFloat(item.quantity)) : parseFloat(item.quantity).toFixed(2)),
         unit:  item.unit.toUpperCase(),
         name:  pName,
-        price: itemsHaveIva ? rawPrice / (1 + rate) : rawPrice,
-        sub:   itemsHaveIva ? rawSub   / (1 + rate) : rawSub,
+        price: divIva ? rawPrice / (1 + rate) : rawPrice,
+        sub:   divIva ? rawSub   / (1 + rate) : rawSub,
       };
     });
   }
@@ -1113,22 +1128,43 @@ export async function generateInvoicePDF(data: {
   y += 7;
 
   doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(...C_TEXT);
-  doc.text("Subtotal Neto:", priceX, y); doc.text(fmtMoney(neto), totX + totW - 2, y, { align: "right" });
-  y += 7;
-  if (iva105 > 0 && iva21 > 0) {
-    doc.text("IVA 10.5%:", priceX, y); doc.text(fmtMoney(iva105), totX + totW - 2, y, { align: "right" });
+  if (isFacturaB) {
+    // Factura B: IVA contenido en el total, no se suma
+    doc.text("Subtotal:", priceX, y); doc.text(fmtMoney(grossItemTotal), totX + totW - 2, y, { align: "right" });
     y += 7;
-    doc.text("IVA 21%:", priceX, y); doc.text(fmtMoney(iva21), totX + totW - 2, y, { align: "right" });
-    y += 7;
-  } else if (iva21 > 0) {
-    doc.text("IVA 21%:", priceX, y); doc.text(fmtMoney(iva21), totX + totW - 2, y, { align: "right" });
-    y += 7;
+    if (ivaContenidoFrutas > 0 && ivaContenidoHuevos > 0) {
+      doc.text("IVA contenido 10.5%:", priceX, y); doc.text(fmtMoney(ivaContenidoFrutas), totX + totW - 2, y, { align: "right" });
+      y += 7;
+      doc.text("IVA contenido 21%:", priceX, y); doc.text(fmtMoney(ivaContenidoHuevos), totX + totW - 2, y, { align: "right" });
+      y += 7;
+    } else if (ivaContenidoHuevos > 0) {
+      doc.text("IVA contenido 21%:", priceX, y); doc.text(fmtMoney(ivaContenidoHuevos), totX + totW - 2, y, { align: "right" });
+      y += 7;
+    } else {
+      doc.text("IVA contenido 10.5%:", priceX, y); doc.text(fmtMoney(ivaContenidoFrutas), totX + totW - 2, y, { align: "right" });
+      y += 7;
+    }
+    doc.setFont("helvetica", "bold"); doc.setFontSize(10);
+    doc.text("TOTAL:", priceX, y); doc.text(fmtMoney(grossItemTotal), totX + totW - 2, y, { align: "right" });
   } else {
-    doc.text("IVA 10.5%:", priceX, y); doc.text(fmtMoney(iva105 > 0 ? iva105 : totalIva), totX + totW - 2, y, { align: "right" });
+    // Factura A: IVA discriminado, se suma al neto
+    doc.text("Subtotal Neto:", priceX, y); doc.text(fmtMoney(neto), totX + totW - 2, y, { align: "right" });
     y += 7;
+    if (iva105 > 0 && iva21 > 0) {
+      doc.text("IVA 10.5%:", priceX, y); doc.text(fmtMoney(iva105), totX + totW - 2, y, { align: "right" });
+      y += 7;
+      doc.text("IVA 21%:", priceX, y); doc.text(fmtMoney(iva21), totX + totW - 2, y, { align: "right" });
+      y += 7;
+    } else if (iva21 > 0) {
+      doc.text("IVA 21%:", priceX, y); doc.text(fmtMoney(iva21), totX + totW - 2, y, { align: "right" });
+      y += 7;
+    } else {
+      doc.text("IVA 10.5%:", priceX, y); doc.text(fmtMoney(iva105 > 0 ? iva105 : totalIva), totX + totW - 2, y, { align: "right" });
+      y += 7;
+    }
+    doc.setFont("helvetica", "bold"); doc.setFontSize(10);
+    doc.text("TOTAL:", priceX, y); doc.text(fmtMoney(total), totX + totW - 2, y, { align: "right" });
   }
-  doc.setFont("helvetica", "bold"); doc.setFontSize(10);
-  doc.text("TOTAL:", priceX, y); doc.text(fmtMoney(total), totX + totW - 2, y, { align: "right" });
 
   // ── CAE block ─────────────────────────────────────────────────────────────────
   const caeY = Math.max(y + 12, FOOTER_Y - 22);

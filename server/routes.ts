@@ -1367,9 +1367,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const pCat = (item.product as any)?.category ?? "";
         const isHuevo = pName.includes("HUEVO") || pName.includes("MAPLE") || pCat.toUpperCase().includes("HUEVO");
         const sub = parseFloat(item.subtotal ?? "0") || 0;
-        // Si el remito ya incluye IVA, descontar para obtener el neto
+        // Para Factura B el precio ya incluye IVA (no discriminado).
+        // Para Factura A con ivaIncluido=true, ídem.
         const rate = isHuevo ? IVA_HUEVO : IVA_DEFAULT;
-        const netSub = ivaIncluido ? sub / (1 + rate) : sub;
+        const netSub = (invoiceType === "B" || ivaIncluido) ? sub / (1 + rate) : sub;
         if (isHuevo) {
           neto21 += netSub;
           iva21  += netSub * IVA_HUEVO;
