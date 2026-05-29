@@ -2283,6 +2283,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  app.delete("/api/bank-contacts/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      await storage.deleteBankContact(id);
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Pedidos pendientes por cliente (para vincular pagos MP) ──────────────
   app.get("/api/customers/:id/pedidos-pendientes", requireAuth, async (req, res) => {
     try {

@@ -4505,6 +4505,10 @@ export const storage = {
     return row;
   },
 
+  async deleteBankContact(id: number): Promise<void> {
+    await db.delete(bankContacts).where(eq(bankContacts.id, id));
+  },
+
   // ─── Bank Payment Links ────────────────────────────────────────────────────
 
   async getBankPaymentLinksByMovements(movementIds: string[]): Promise<Map<string, Array<{ id: number; pedidoId: number | null; montoAplicado: string; paymentId: number | null; folio: string | null }>>> {

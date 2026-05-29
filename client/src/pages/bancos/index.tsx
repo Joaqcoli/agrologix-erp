@@ -47,6 +47,18 @@ function getDefaultRange() {
   return { from: isoDate(from), to: isoDate(now) };
 }
 
+// Convierte una fecha UTC (ISO string de MP) a fecha en Argentina (UTC-3)
+function toArgDate(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  // Restar 3 horas (UTC-3) para obtener hora argentina
+  const ar = new Date(d.getTime() - 3 * 60 * 60 * 1000);
+  const y = ar.getUTCFullYear();
+  const m = String(ar.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(ar.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 const TYPE_LABELS: Record<string, string> = {
   account_money: "Saldo MP",
   credit_card: "Tarjeta de crédito",
@@ -346,6 +358,30 @@ export default function BancosPage() {
     onError: (e: Error) => setIdError(e.message),
   });
 
+  const deleteContactMut = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/bank-contacts/${id}`),
+    onSuccess: () => {
+      // Unidentify all movements that had this contact
+      const deletedContactId = identifyMov?.contactId;
+      qc.setQueriesData<MpMovementsResponse>(
+        { queryKey: ["/api/mp/movements"] },
+        (old) => {
+          if (!old?.results) return old;
+          return {
+            ...old,
+            results: old.results.map(m =>
+              m.contactId === deletedContactId
+                ? { ...m, identified: false, displayName: null, contactType: null, entityId: null, contactId: null }
+                : m
+            ),
+          };
+        }
+      );
+      closeIdentifyDialog();
+    },
+    onError: (e: Error) => setIdError(e.message),
+  });
+
   const updateCategoryMut = useMutation({
     mutationFn: ({ id, name }: { id: number; name: string }) =>
       apiRequest("PUT", `/api/bank-categories/${id}`, { name }).then(r => r.json()),
@@ -487,7 +523,7 @@ export default function BancosPage() {
   const grouped = useMemo(() => {
     const map = new Map<string, MpMovement[]>();
     for (const m of filtered) {
-      const dateKey = (m.date_created ?? "").slice(0, 10);
+      const dateKey = toArgDate(m.date_created ?? "");
       if (!map.has(dateKey)) map.set(dateKey, []);
       map.get(dateKey)!.push(m);
     }
@@ -718,7 +754,7 @@ export default function BancosPage() {
                                   mpId: id,
                                   categoryId: catId,
                                   amount: m.netAmount,
-                                  date: (m.date_created ?? "").slice(0, 10),
+                                  date: toArgDate(m.date_created ?? ""),
                                   isOutgoing: m.isOutgoing,
                                   description: m.displayName || m.description || "",
                                 })}
@@ -912,21 +948,35 @@ export default function BancosPage() {
             <p className="text-sm text-destructive bg-destructive/10 rounded px-3 py-2">{idError}</p>
           )}
 
-          <DialogFooter>
-            <Button variant="outline" onClick={closeIdentifyDialog}>Cancelar</Button>
-            <Button
-              onClick={handleSaveContact}
-              disabled={
-                !idName.trim() ||
-                (!idEditMode && !idIdentifier.trim() && !identifyMov?.rawIdentifier) ||
-                createContactMut.isPending ||
-                updateContactMut.isPending
-              }
-            >
-              {(createContactMut.isPending || updateContactMut.isPending)
-                ? "Guardando..."
-                : idEditMode ? "Actualizar" : "Guardar"}
-            </Button>
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
+            {idEditMode && identifyMov?.contactId && (
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  if (identifyMov.contactId) deleteContactMut.mutate(identifyMov.contactId);
+                }}
+                disabled={deleteContactMut.isPending}
+                className="sm:mr-auto"
+              >
+                {deleteContactMut.isPending ? "Eliminando..." : "Eliminar contacto"}
+              </Button>
+            )}
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={closeIdentifyDialog}>Cancelar</Button>
+              <Button
+                onClick={handleSaveContact}
+                disabled={
+                  !idName.trim() ||
+                  (!idEditMode && !idIdentifier.trim() && !identifyMov?.rawIdentifier) ||
+                  createContactMut.isPending ||
+                  updateContactMut.isPending
+                }
+              >
+                {(createContactMut.isPending || updateContactMut.isPending)
+                  ? "Guardando..."
+                  : idEditMode ? "Actualizar" : "Guardar"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
