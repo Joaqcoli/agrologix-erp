@@ -4513,6 +4513,17 @@ export const storage = {
 
   // ─── MP User Cache ────────────────────────────────────────────────────────
 
+  async cleanMpUserCache(): Promise<void> {
+    await db.execute(drizzleSql`
+      CREATE TABLE IF NOT EXISTS mp_user_cache (
+        mp_user_id BIGINT PRIMARY KEY,
+        display_name TEXT,
+        fetched_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await db.execute(drizzleSql`DELETE FROM mp_user_cache WHERE display_name IS NULL OR display_name = ''`);
+  },
+
   async getMpUserCache(mpUserIds: string[]): Promise<Map<string, { displayName: string; fetchedAt: Date }>> {
     if (mpUserIds.length === 0) return new Map();
     await db.execute(drizzleSql`

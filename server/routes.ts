@@ -2328,12 +2328,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (collId && collId !== "0" && collId !== merchantId) unresolvedCollectorIds.add(collId);
       }
 
+      // Log: IDs a resolver (incluye los 3 que el usuario quiere ver)
+      console.log(`[mp-users] intentando resolver IDs (${unresolvedCollectorIds.size}):`, [...unresolvedCollectorIds].join(", "));
+
       // Lookup cache para ids no resueltos
       let userNameMap = new Map<string, string>();
       if (unresolvedCollectorIds.size > 0) {
         try {
+          // Limpiar entradas vacías del caché antes de lookup
+          try {
+            await storage.cleanMpUserCache();
+          } catch (_) {}
+
           const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
           const cached = await storage.getMpUserCache([...unresolvedCollectorIds]);
+          console.log(`[mp-users] en cache: ${cached.size} de ${unresolvedCollectorIds.size}`);
           const toFetch: string[] = [];
           for (const uid of unresolvedCollectorIds) {
             const entry = cached.get(uid);
@@ -2345,16 +2354,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
           // Fetch los que faltan — batches de 5 en paralelo
           if (toFetch.length > 0 && token) {
-            console.log(`[mp-users] fetching ${toFetch.length} IDs: ${toFetch.slice(0, 5).join(", ")}${toFetch.length > 5 ? "…" : ""}`);
+            console.log(`[mp-users] fetching ${toFetch.length} IDs: ${toFetch.join(", ")}`);
             const fetched = await resolveMpUserNames(toFetch, token);
-            console.log(`[mp-users] resolved ${fetched.size}/${toFetch.length} names`);
+            console.log(`[mp-users] resolved ${fetched.size}/${toFetch.length} names:`, [...fetched.entries()].map(([k,v]) => `${k}="${v}"`).join(", "));
             for (const [uid, name] of fetched) {
               userNameMap.set(uid, name);
               storage.upsertMpUserCache(uid, name).catch(() => {});
             }
-            // Solo cachear hits — no guardar "" para no bloquear futuros fetches
           }
-        } catch (_) {}
+        } catch (e: any) {
+          console.log(`[mp-users] error en resolver:`, e.message);
+        }
+      } else {
+        console.log(`[mp-users] sin IDs a resolver (todos identificados o sin egresos)`);
       }
 
       const withCats = withCandidates.map((m: any) => {
