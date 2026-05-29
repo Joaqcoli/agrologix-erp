@@ -2049,12 +2049,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             ? match[1].trim()
             : (p.collector?.email && !p.collector.email.includes("noreply") ? p.collector.email : null);
         } else {
-          // Pagador: payer.email (first_name siempre null en este endpoint)
+          // Pagador: email > nombre (first_name/last_name) > descripción del banco
           const email: string = p.payer?.email ?? "";
-          // Si el email es del propio merchant → self-transfer, mostrar operación
-          displayName = (email && email !== "vegetalesargentinos.srl@gmail.com")
-            ? email
-            : null;
+          const payerFirstName = String(p.payer?.first_name ?? "").trim();
+          const payerLastName  = String(p.payer?.last_name  ?? "").trim();
+          const payerFullName  = [payerFirstName, payerLastName].filter(Boolean).join(" ");
+          const bankOwnerName  = String(p.transaction_details?.payer_bank_info?.owner_name ?? "").trim();
+          if (email && email !== "vegetalesargentinos.srl@gmail.com") {
+            displayName = email;
+          } else if (payerFullName) {
+            displayName = payerFullName;
+          } else if (bankOwnerName) {
+            displayName = bankOwnerName;
+          }
         }
 
         return {
@@ -2113,12 +2120,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (m.displayName) candidates.push((m.displayName as string).toLowerCase().trim());
         } else {
           // INGRESO: identificar al PAGADOR (quien nos transfirió)
-          // NO usar payer.identification.number: para transferencias CVU entrantes,
-          // MP almacena allí nuestro propio CUIT (titular del CVU destino), no el del pagador.
-          // El identificador único confiable es el MP user ID del pagador.
+          // 1. CBU del pagador vía transaction_details (transferencias bancarias CVU)
+          const payerCbu = String(
+            m.transaction_details?.payer_bank_info?.cbu ??
+            m.transaction_details?.payer_bank_info?.account_id ?? ""
+          ).replace(/[\s-]/g, "").toLowerCase();
+          if (payerCbu.length >= 10) candidates.push(payerCbu);
+          // 2. MP user ID del pagador (pagos MP a MP)
           const payId = String(m.payer_id ?? m.payer?.id ?? "");
           if (payId && payId !== "0" && payId !== merchantId) candidates.push(`mp:${payId}`);
-          if (m.displayName) candidates.push((m.displayName as string).toLowerCase().trim());
+          // 3. Email (si existe)
+          const payEmail = m.displayName && (m.displayName as string).includes("@")
+            ? (m.displayName as string).toLowerCase().trim() : null;
+          if (payEmail) candidates.push(payEmail);
         }
 
         const rawIdentifier: string | null = candidates[0] ?? null;
