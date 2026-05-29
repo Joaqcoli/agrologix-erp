@@ -1994,9 +1994,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
         const pagingTotal: number = body.paging?.total ?? 0;
         console.log(`[mp] página offset=${offset} → ${page.length} items, total MP=${pagingTotal}`);
-        if (page.length === 0) break;                              // sin resultados
-        if (page.length < LIMIT) break;                           // página parcial = última
-        if (pagingTotal > 0 && offset + LIMIT >= pagingTotal) break; // total confirmado
+        // Solo parar en página vacía o parcial — paging.total puede ser inexacto
+        if (page.length < LIMIT) break;
+        if (offset >= 10000) break;  // límite de seguridad
         offset += LIMIT;
       }
       console.log(`[mp] total fetcheado: ${rawPayments.length} movimientos (${effectiveFrom} → ${to ?? "hoy"})`);
@@ -2099,30 +2099,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         catMap = await storage.getMpMovementOverridesMap(mpIds);
       } catch (_) { /* tabla no existe todavía, continuar sin categorías */ }
 
-      // Compute candidate identifiers per movement — prioridad: CBU > ID MP > email
-      // CBU es el único identificador verdaderamente único (una cuenta bancaria = un CBU).
-      // El email/displayName puede coincidir entre personas distintas y NO debe ser el primario.
+      // Compute candidate identifiers — separados por dirección del pago
       const withCandidates = enriched.map((m: any) => {
         const candidates: string[] = [];
 
-        // 1. CBU/CVU — identificador único de cuenta bancaria (máxima confianza)
-        // Para INGRESOS: el pagador es la otra parte → payer.identification
-        // Para EGRESOS: el cobrador es la otra parte → collector.identification
-        // Nunca usar payer para egresos porque payer = nosotros mismos
-        const otherParty = m.isOutgoing ? m.collector : m.payer;
-        const cbu = String(otherParty?.identification?.number ?? "").replace(/[\s-]/g, "").toLowerCase();
-        if (cbu.length >= 10) candidates.push(cbu);
-
-        // 2. MP user ID — único dentro de la plataforma, estable entre pagos
-        const otherId = m.isOutgoing
-          ? String(m.collector_id ?? m.collector?.id ?? "")
-          : String(m.payer_id ?? m.payer?.id ?? "");
-        const otherIdValid = otherId && otherId !== "0" && otherId !== merchantId;
-        if (otherIdValid) candidates.push(`mp:${otherId}`);
-
-        // 3. Email — último recurso, puede no ser único entre personas distintas
-        const email = m.displayName as string | null;
-        if (email) candidates.push(email.toLowerCase().trim());
+        if (m.isOutgoing) {
+          // EGRESO: identificar al COBRADOR (a quien le pagamos)
+          // collector.identification.number = su CUIT/CBU → único y correcto
+          const collIdNum = String(m.collector?.identification?.number ?? "").replace(/[\s-]/g, "").toLowerCase();
+          if (collIdNum.length >= 10) candidates.push(collIdNum);
+          const collId = String(m.collector_id ?? m.collector?.id ?? "");
+          if (collId && collId !== "0" && collId !== merchantId) candidates.push(`mp:${collId}`);
+          if (m.displayName) candidates.push((m.displayName as string).toLowerCase().trim());
+        } else {
+          // INGRESO: identificar al PAGADOR (quien nos transfirió)
+          // NO usar payer.identification.number: para transferencias CVU entrantes,
+          // MP almacena allí nuestro propio CUIT (titular del CVU destino), no el del pagador.
+          // El identificador único confiable es el MP user ID del pagador.
+          const payId = String(m.payer_id ?? m.payer?.id ?? "");
+          if (payId && payId !== "0" && payId !== merchantId) candidates.push(`mp:${payId}`);
+          if (m.displayName) candidates.push((m.displayName as string).toLowerCase().trim());
+        }
 
         const rawIdentifier: string | null = candidates[0] ?? null;
         return { ...m, rawIdentifier, _candidates: candidates };
