@@ -54,18 +54,20 @@ async function fetchMpUserName(userId: string, token: string): Promise<string | 
   } catch { return null; }
 }
 
-/** Resolve MP user names for a list of userIds, rate-limited at ≤10/s */
+/** Resolve MP user names in batches of 5 parallel requests, 200ms between batches */
 async function resolveMpUserNames(
   userIds: string[],
   token: string,
 ): Promise<Map<string, string>> {
   const result = new Map<string, string>();
-  for (let i = 0; i < userIds.length; i++) {
-    const id = userIds[i];
-    const name = await fetchMpUserName(id, token);
-    if (name) result.set(id, name);
-    // 100ms delay = max 10/s
-    if (i < userIds.length - 1) await new Promise(r => setTimeout(r, 100));
+  const BATCH = 5;
+  for (let i = 0; i < userIds.length; i += BATCH) {
+    const batch = userIds.slice(i, i + BATCH);
+    const results = await Promise.all(batch.map(id => fetchMpUserName(id, token).then(name => ({ id, name }))));
+    for (const { id, name } of results) {
+      if (name) result.set(id, name);
+    }
+    if (i + BATCH < userIds.length) await new Promise(r => setTimeout(r, 200));
   }
   return result;
 }
@@ -2303,15 +2305,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               toFetch.push(uid);
             }
           }
-          // Fetch los que faltan (rate-limited, max 10)
+          // Fetch los que faltan — batches de 5 en paralelo
           if (toFetch.length > 0 && token) {
-            const fetched = await resolveMpUserNames(toFetch.slice(0, 10), token);
+            const fetched = await resolveMpUserNames(toFetch, token);
             for (const [uid, name] of fetched) {
               userNameMap.set(uid, name);
               storage.upsertMpUserCache(uid, name).catch(() => {});
             }
             // Cache miss con nombre vacío para no re-fetchear
-            for (const uid of toFetch.slice(0, 10)) {
+            for (const uid of toFetch) {
               if (!fetched.has(uid)) storage.upsertMpUserCache(uid, "").catch(() => {});
             }
           }

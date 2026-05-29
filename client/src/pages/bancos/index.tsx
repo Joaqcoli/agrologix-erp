@@ -769,7 +769,10 @@ export default function BancosPage() {
                             ) : (
                               /* ── Sin identificar ── */
                               <div className="flex items-center gap-2 flex-wrap">
-                                <p className="font-semibold text-sm leading-tight text-foreground">{subtitle}</p>
+                                {/* displayName del servidor (ej: nombre resuelto via /v1/users) tiene prioridad */}
+                                <p className="font-semibold text-sm leading-tight text-foreground">
+                                  {m.displayName || subtitle}
+                                </p>
                                 {fmtRawId(m.rawIdentifier) && (
                                   <span className="text-xs text-muted-foreground font-mono">
                                     {fmtRawId(m.rawIdentifier)}
