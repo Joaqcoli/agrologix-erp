@@ -187,11 +187,8 @@ export default function LoadListPage() {
               Consolidado por producto y unidad — stock y faltantes
             </p>
           </div>
-          <Button onClick={handleExportCompra} variant="outline" className="border-green-500 text-green-700 hover:bg-green-50">
+          <Button onClick={handleExportCompra} variant="outline" data-testid="button-export-load-list">
             <Download className="mr-2 h-4 w-4" /> Lista de Compra
-          </Button>
-          <Button onClick={handleExport} variant="outline" data-testid="button-export-load-list">
-            <Download className="mr-2 h-4 w-4" /> Exportar XLSX
           </Button>
         </div>
 
