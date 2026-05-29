@@ -14,9 +14,15 @@ import { apiRequest } from "@/lib/queryClient";
 
 const fmt = (v: number) => "$" + Math.round(Math.abs(v)).toLocaleString("es-AR");
 
-// Solo muestra emails o CBU, oculta IDs internos de MP
+// Formatea el identificador único para mostrar en UI
 function fmtRawId(id: string | null | undefined): string {
-  if (!id || id.startsWith("mp:")) return "";  // ocultar IDs de MP
+  if (!id) return "";
+  if (id.startsWith("mp:")) {
+    const num = id.slice(3);
+    return `ID MP: ${num}`;
+  }
+  // CBU/CVU: número largo, mostrar recortado
+  if (/^\d{15,}$/.test(id)) return `CBU: ${id.slice(0, 8)}…${id.slice(-4)}`;
   if (id.length > 30) return id.slice(0, 15) + "…" + id.slice(-8);
   return id;
 }
@@ -875,16 +881,31 @@ export default function BancosPage() {
           <div className="space-y-4 py-1">
             {!idEditMode && (
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">Identificador (email, CBU, alias)</label>
+                <label className="text-sm font-medium">
+                  {identifyMov?.rawIdentifier
+                    ? identifyMov.rawIdentifier.startsWith("mp:")
+                      ? "Identificador único (ID Mercado Pago)"
+                      : /^\d{15,}$/.test(identifyMov.rawIdentifier)
+                        ? "Identificador único (CBU/CVU)"
+                        : "Identificador"
+                    : "Identificador (CBU, email o alias)"}
+                </label>
                 {identifyMov?.rawIdentifier ? (
-                  <p className="text-xs text-muted-foreground font-mono bg-muted rounded px-2 py-1.5 break-all">
-                    {fmtRawId(identifyMov.rawIdentifier) || identifyMov.rawIdentifier}
-                  </p>
+                  <>
+                    <p className="text-xs text-muted-foreground font-mono bg-muted rounded px-2 py-1.5 break-all">
+                      {identifyMov.rawIdentifier}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      Todas las transferencias desde este{" "}
+                      {/^\d{15,}$/.test(identifyMov.rawIdentifier) ? "CBU" : "identificador"}{" "}
+                      quedarán vinculadas a este contacto.
+                    </p>
+                  </>
                 ) : (
                   <Input
                     value={idIdentifier}
                     onChange={e => { setIdIdentifier(e.target.value); setIdError(null); }}
-                    placeholder="Ej: juan@email.com · 0000003100..."
+                    placeholder="Ej: 0000003100099999999999 · juan@email.com"
                     autoFocus
                   />
                 )}

@@ -2094,24 +2094,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         catMap = await storage.getMpMovementOverridesMap(mpIds);
       } catch (_) { /* tabla no existe todavía, continuar sin categorías */ }
 
-      // Compute candidate identifiers per movement — múltiples fuentes para máximo match rate
+      // Compute candidate identifiers per movement — prioridad: CBU > ID MP > email
+      // CBU es el único identificador verdaderamente único (una cuenta bancaria = un CBU).
+      // El email/displayName puede coincidir entre personas distintas y NO debe ser el primario.
       const withCandidates = enriched.map((m: any) => {
         const candidates: string[] = [];
 
-        // 1. Email del pagador (para ingresos) o cobrador (para egresos)
-        const email = m.displayName as string | null;
-        if (email) candidates.push(email.toLowerCase().trim());
-
-        // 2. CBU/CVU del pagador (bank_transfer: payer.identification.number)
+        // 1. CBU/CVU — identificador único de cuenta bancaria (máxima confianza)
         const cbu = String(m.payer?.identification?.number ?? "").replace(/[\s-]/g, "").toLowerCase();
         if (cbu.length >= 10) candidates.push(cbu);
 
-        // 3. MP user ID ("mp:{id}") — fallback estable para account_money sin email
+        // 2. MP user ID — único dentro de la plataforma, estable entre pagos
         const otherId = m.isOutgoing
           ? String(m.collector_id ?? m.collector?.id ?? "")
           : String(m.payer_id ?? m.payer?.id ?? "");
         const otherIdValid = otherId && otherId !== "0" && otherId !== merchantId;
         if (otherIdValid) candidates.push(`mp:${otherId}`);
+
+        // 3. Email — último recurso, puede no ser único entre personas distintas
+        const email = m.displayName as string | null;
+        if (email) candidates.push(email.toLowerCase().trim());
 
         const rawIdentifier: string | null = candidates[0] ?? null;
         return { ...m, rawIdentifier, _candidates: candidates };
