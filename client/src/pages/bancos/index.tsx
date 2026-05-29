@@ -15,13 +15,13 @@ import { apiRequest } from "@/lib/queryClient";
 const fmt = (v: number) => "$" + Math.round(Math.abs(v)).toLocaleString("es-AR");
 
 // Formatea el identificador único para mostrar en UI
+const OWN_EMAIL = "vegetalesargentinos.srl@gmail.com";
+
 function fmtRawId(id: string | null | undefined): string {
   if (!id) return "";
-  if (id.startsWith("mp:")) {
-    const num = id.slice(3);
-    return `ID MP: ${num}`;
-  }
-  // CBU/CVU: número largo, mostrar recortado
+  if (id === OWN_EMAIL) return "";   // nunca mostrar el propio email
+  if (id.startsWith("bank_transfer:")) return "";  // no mostrar en pantalla, es interno
+  if (id.startsWith("mp:")) return `ID MP: ${id.slice(3)}`;
   if (/^\d{15,}$/.test(id)) return `CBU: ${id.slice(0, 8)}…${id.slice(-4)}`;
   if (id.length > 30) return id.slice(0, 15) + "…" + id.slice(-8);
   return id;
@@ -145,6 +145,7 @@ type MpMovement = {
   entityId?: number | null;
   contactId?: number | null;
   bankPaymentLinks?: BankPaymentLink[];
+  operation_type?: string | null;
 };
 
 type MpMovementsResponse = {
@@ -507,9 +508,11 @@ export default function BancosPage() {
       );
     } else {
       // Modo creación — POST /api/bank-contacts
-      if (!idIdentifier.trim()) return;
+      // Para bank_transfer usar el rawIdentifier directamente si el campo está vacío
+      const effectiveIdentifier = idIdentifier.trim() || (identifyMov?.rawIdentifier ?? "");
+      if (!effectiveIdentifier.trim()) return;
       createContactMut.mutate(
-        { identifier: idIdentifier.trim(), displayName: idName.trim(), type: idType, entityId: idEntityId },
+        { identifier: effectiveIdentifier.trim(), displayName: idName.trim(), type: idType, entityId: idEntityId },
         {
           onSuccess: (contact: BankContact) => {
             applyContactToCache(contact, movId);
@@ -908,38 +911,54 @@ export default function BancosPage() {
           </DialogHeader>
 
           <div className="space-y-4 py-1">
-            {!idEditMode && (
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">
-                  {identifyMov?.rawIdentifier
-                    ? identifyMov.rawIdentifier.startsWith("mp:")
-                      ? "Identificador único (ID Mercado Pago)"
-                      : /^\d{15,}$/.test(identifyMov.rawIdentifier)
-                        ? "Identificador único (CBU/CVU)"
-                        : "Identificador"
-                    : "Identificador (CBU, email o alias)"}
-                </label>
-                {identifyMov?.rawIdentifier ? (
-                  <>
-                    <p className="text-xs text-muted-foreground font-mono bg-muted rounded px-2 py-1.5 break-all">
-                      {identifyMov.rawIdentifier}
-                    </p>
+            {!idEditMode && (() => {
+              const raw = identifyMov?.rawIdentifier ?? null;
+              const isBankTransfer = raw?.startsWith("bank_transfer:");
+              const isUsable = raw && !isBankTransfer && raw !== OWN_EMAIL;
+
+              if (isBankTransfer) {
+                // Transferencia bancaria externa — identificador único no reutilizable
+                return (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] text-amber-800 space-y-1">
+                    <p className="font-medium">Transferencia desde banco externo</p>
+                    <p>MP no expone quién la envió. Podés guardarla manualmente con un nombre, pero no se vinculará automáticamente a futuras transferencias del mismo pagador.</p>
+                  </div>
+                );
+              }
+
+              if (isUsable) {
+                // Identificador reusable (email MP o mp:id)
+                const label = raw!.startsWith("mp:")
+                  ? "Identificador único (ID Mercado Pago)"
+                  : raw!.includes("@")
+                    ? "Identificador único (email MP)"
+                    : /^\d{15,}$/.test(raw!)
+                      ? "Identificador único (CBU/CVU)"
+                      : "Identificador";
+                return (
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">{label}</label>
+                    <p className="text-xs text-muted-foreground font-mono bg-muted rounded px-2 py-1.5 break-all">{raw}</p>
                     <p className="text-[11px] text-muted-foreground">
-                      Todas las transferencias desde este{" "}
-                      {/^\d{15,}$/.test(identifyMov.rawIdentifier) ? "CBU" : "identificador"}{" "}
-                      quedarán vinculadas a este contacto.
+                      Todas las transferencias desde este identificador quedarán vinculadas a este contacto.
                     </p>
-                  </>
-                ) : (
+                  </div>
+                );
+              }
+
+              // Sin identificador útil — ingreso manual
+              return (
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Identificador (CBU, email o alias)</label>
                   <Input
                     value={idIdentifier}
                     onChange={e => { setIdIdentifier(e.target.value); setIdError(null); }}
                     placeholder="Ej: 0000003100099999999999 · juan@email.com"
                     autoFocus
                   />
-                )}
-              </div>
-            )}
+                </div>
+              );
+            })()}
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Nombre a mostrar</label>
@@ -947,7 +966,7 @@ export default function BancosPage() {
                 value={idName}
                 onChange={e => setIdName(e.target.value)}
                 placeholder="Ej: Juan García"
-                autoFocus={idEditMode || !!identifyMov?.rawIdentifier}
+                autoFocus
               />
             </div>
 

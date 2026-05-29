@@ -2183,27 +2183,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (collId && collId !== "0" && collId !== merchantId) candidates.push(`mp:${collId}`);
           if (m.displayName) candidates.push((m.displayName as string).toLowerCase().trim());
         } else {
-          // INGRESO: identificar al PAGADOR (quien nos transfirió)
-          // 0. Identifier from settlement report sync (highest priority)
-          const stored = identifierMap.get(String(m.id));
-          if (stored?.payerIdentifier) candidates.push(stored.payerIdentifier.toLowerCase().trim());
-          // 1. CBU del pagador vía transaction_details (transferencias bancarias CVU)
-          const payerCbu = String(
-            m.transaction_details?.payer_bank_info?.cbu ??
-            m.transaction_details?.payer_bank_info?.account_id ?? ""
-          ).replace(/[\s-]/g, "").toLowerCase();
-          if (payerCbu.length >= 10) candidates.push(payerCbu);
-          // 2. MP user ID del pagador (pagos MP a MP)
-          const payId = String(m.payer_id ?? m.payer?.id ?? "");
-          if (payId && payId !== "0" && payId !== merchantId) candidates.push(`mp:${payId}`);
-          // 3. Email (si existe)
-          const payEmail = m.displayName && (m.displayName as string).includes("@")
-            ? (m.displayName as string).toLowerCase().trim() : null;
-          if (payEmail) candidates.push(payEmail);
+          // INGRESO: lógica según operation_type
+          const opType: string = String(m.operation_type ?? "").toLowerCase();
+
+          if (opType === "money_transfer") {
+            // MP-a-MP (QR, transferencia entre cuentas MP)
+            // payer.email es el email real del pagador (si ≠ propio)
+            const payEmail = String(m.payer?.email ?? "").toLowerCase().trim();
+            if (payEmail && payEmail.includes("@") && payEmail !== "vegetalesargentinos.srl@gmail.com" && !payEmail.includes("noreply")) {
+              candidates.push(payEmail);
+            } else {
+              // Fallback: mp:payer.id si es distinto al merchant
+              const payId = String(m.payer_id ?? m.payer?.id ?? "");
+              if (payId && payId !== "0" && payId !== merchantId) candidates.push(`mp:${payId}`);
+            }
+          } else if (opType === "account_fund") {
+            // Transferencia bancaria externa — payer.email es siempre el propio, inútil
+            // Usar bank_transfer_id como identificador único de la transacción (no reutilizable)
+            const btId = String(m.transaction_details?.bank_transfer_id ?? "").trim();
+            if (btId && btId !== "0") candidates.push(`bank_transfer:${btId}`);
+            // No agregar email ni payer.id (serían nuestros propios datos)
+          } else {
+            // Otros tipos: intentar por stored identifier o mp:payer.id
+            const stored = identifierMap.get(String(m.id));
+            if (stored?.payerIdentifier) candidates.push(stored.payerIdentifier.toLowerCase().trim());
+            const payId = String(m.payer_id ?? m.payer?.id ?? "");
+            if (payId && payId !== "0" && payId !== merchantId) candidates.push(`mp:${payId}`);
+          }
         }
 
-        const rawIdentifier: string | null = candidates[0] ?? null;
-        return { ...m, rawIdentifier, _candidates: candidates };
+        // Nunca usar el propio email como identificador
+        const filtered_ = candidates.filter(c => c !== "vegetalesargentinos.srl@gmail.com");
+        const rawIdentifier: string | null = filtered_[0] ?? null;
+        return { ...m, rawIdentifier, _candidates: filtered_ };
       });
 
       // Batch lookup — todos los candidatos de todos los movimientos
