@@ -39,19 +39,28 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-/** Fetch MP user display name, max 10 req/s via sequential delay */
+/** Fetch MP user display name from /v1/users/{id} */
 async function fetchMpUserName(userId: string, token: string): Promise<string | null> {
   try {
     const r = await fetch(`https://api.mercadopago.com/v1/users/${userId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      console.log(`[mp-users] GET /v1/users/${userId} → HTTP ${r.status}`);
+      return null;
+    }
     const body = await r.json();
     const first = String(body.first_name ?? "").trim();
     const last  = String(body.last_name  ?? "").trim();
+    const nick  = String(body.nickname   ?? "").trim();
     const full  = [first, last].filter(Boolean).join(" ");
-    return full || (body.nickname ? String(body.nickname) : null);
-  } catch { return null; }
+    const name  = full || nick || null;
+    console.log(`[mp-users] GET /v1/users/${userId} → "${name ?? "null"}"`);
+    return name;
+  } catch (e: any) {
+    console.log(`[mp-users] GET /v1/users/${userId} → error: ${e.message}`);
+    return null;
+  }
 }
 
 /** Resolve MP user names in batches of 5 parallel requests, 200ms between batches */
@@ -2131,14 +2140,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const netAmount: number = isOutgoing ? grossAmount + feeAmount : grossAmount - feeAmount;
 
         // ── Nombre de la otra parte ───────────────────────────────────────────
-        // MP no expone first_name/last_name en este endpoint → usar email
         let displayName: string | null = null;
         if (isOutgoing) {
-          // Destinatario: collector.email, o description "Transferencia a [Nombre]"
-          const match = (p.description ?? "").match(/transferencia a (.+)/i);
-          displayName = match
-            ? match[1].trim()
-            : (p.collector?.email && !p.collector.email.includes("noreply") ? p.collector.email : null);
+          // Destinatario: intentar todos los campos disponibles en orden
+          const collFirst    = String(p.collector?.first_name ?? "").trim();
+          const collLast     = String(p.collector?.last_name  ?? "").trim();
+          const collFullName = [collFirst, collLast].filter(Boolean).join(" ");
+          const collNick     = String(p.collector?.nickname   ?? "").trim();
+          const collEmail    = String(p.collector?.email      ?? "").toLowerCase().trim();
+          const stmtDesc     = String(p.statement_descriptor  ?? "").trim();
+          const descMatch    = (p.description ?? "").match(/transferencia a (.+)/i);
+
+          if (collFullName) {
+            displayName = collFullName;
+          } else if (collNick) {
+            displayName = collNick;
+          } else if (stmtDesc && stmtDesc.toLowerCase() !== "mercadopago") {
+            displayName = stmtDesc;
+          } else if (descMatch) {
+            displayName = descMatch[1].trim();
+          } else if (collEmail && !collEmail.includes("noreply")) {
+            displayName = collEmail;
+          }
         } else {
           // Pagador: email > nombre (first_name/last_name) > descripción del banco
           const email: string = p.payer?.email ?? "";
@@ -2278,6 +2301,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       } catch (_) {}
 
+      // ── DIAG: log primeros 3 egresos para ver campos collector ──────────────
+      let _egressDiag = 0;
+      for (const m of withCandidates) {
+        if (!m.isOutgoing || _egressDiag >= 3) continue;
+        console.log(`[mp-users DIAG egreso #${_egressDiag+1}] id=${m.id}` +
+          ` collector.id=${m.collector?.id ?? m.collector_id}` +
+          ` collector.first_name=${m.collector?.first_name}` +
+          ` collector.last_name=${m.collector?.last_name}` +
+          ` collector.nickname=${m.collector?.nickname}` +
+          ` collector.email=${m.collector?.email}` +
+          ` statement_descriptor=${m.statement_descriptor}` +
+          ` displayName=${m.displayName}`);
+        _egressDiag++;
+      }
+
       // ── Fix 2: resolver nombres de destinatarios en egresos via /v1/users ──
       // Colectar collector_ids únicos de egresos no identificados
       const unresolvedCollectorIds = new Set<string>();
@@ -2307,15 +2345,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
           // Fetch los que faltan — batches de 5 en paralelo
           if (toFetch.length > 0 && token) {
+            console.log(`[mp-users] fetching ${toFetch.length} IDs: ${toFetch.slice(0, 5).join(", ")}${toFetch.length > 5 ? "…" : ""}`);
             const fetched = await resolveMpUserNames(toFetch, token);
+            console.log(`[mp-users] resolved ${fetched.size}/${toFetch.length} names`);
             for (const [uid, name] of fetched) {
               userNameMap.set(uid, name);
               storage.upsertMpUserCache(uid, name).catch(() => {});
             }
-            // Cache miss con nombre vacío para no re-fetchear
-            for (const uid of toFetch) {
-              if (!fetched.has(uid)) storage.upsertMpUserCache(uid, "").catch(() => {});
-            }
+            // Solo cachear hits — no guardar "" para no bloquear futuros fetches
           }
         } catch (_) {}
       }
