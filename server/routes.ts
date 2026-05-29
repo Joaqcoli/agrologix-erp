@@ -1942,6 +1942,63 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // Diagnostic: returns raw fields of first 10 incoming payments + report list
+  app.get("/api/mp/income-diag", requireAuth, async (_req, res) => {
+    const token = process.env.MP_ACCESS_TOKEN;
+    if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });
+    try {
+      const now = new Date();
+      const from = new Date(now); from.setDate(now.getDate() - 60);
+      const pad2 = (n: number) => String(n).padStart(2, "0");
+      const isoFrom = `${from.getFullYear()}-${pad2(from.getMonth()+1)}-${pad2(from.getDate())}T00:00:00.000-03:00`;
+      const isoTo   = `${now.getFullYear()}-${pad2(now.getMonth()+1)}-${pad2(now.getDate())}T23:59:59.999-03:00`;
+      const url = `https://api.mercadopago.com/v1/payments/search?range=date_created&begin_date=${encodeURIComponent(isoFrom)}&end_date=${encodeURIComponent(isoTo)}&sort=date_created&criteria=desc&limit=50`;
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const body = await r.json();
+      const payments = body?.results ?? [];
+
+      // Detect merchantId
+      const freq = new Map<string, number>();
+      for (const p of payments) {
+        const cid = String(p.collector_id ?? p.collector?.id ?? "");
+        if (cid && cid !== "0") freq.set(cid, (freq.get(cid) ?? 0) + 1);
+      }
+      let merchantId = "";
+      let best = 0;
+      for (const [id, n] of freq) { if (n > best) { best = n; merchantId = id; } }
+
+      // Filter income (non-outgoing)
+      const income = payments.filter((p: any) => {
+        const cid = String(p.collector_id ?? p.collector?.id ?? "");
+        return cid === merchantId;
+      });
+
+      const diagData = income.slice(0, 10).map((p: any) => ({
+        id: p.id,
+        date_created: p.date_created,
+        operation_type: p.operation_type,
+        payment_type_id: p.payment_type_id,
+        status: p.status,
+        transaction_amount: p.transaction_amount,
+        collector_id: p.collector_id,
+        payer_id: p.payer_id,
+        payer: { id: p.payer?.id, email: p.payer?.email, first_name: p.payer?.first_name, last_name: p.payer?.last_name, identification: p.payer?.identification },
+        transaction_details: p.transaction_details,
+        description: p.description,
+        statement_descriptor: p.statement_descriptor,
+      }));
+
+      // Also check report list
+      let reportList: any = null;
+      try {
+        const rl = await fetch("https://api.mercadopago.com/v1/account/release_report/list", { headers: { Authorization: `Bearer ${token}` } });
+        reportList = await rl.json();
+      } catch (_) {}
+
+      return res.json({ merchantId, totalFetched: payments.length, incomeCount: income.length, diagData, reportList });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   app.get("/api/mp/movements", requireAuth, async (req, res) => {
     const token = process.env.MP_ACCESS_TOKEN;
     if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });

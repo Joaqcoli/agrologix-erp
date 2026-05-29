@@ -410,10 +410,13 @@ export default function BancosPage() {
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const syncReportMut = useMutation({
     mutationFn: () => apiRequest("POST", "/api/mp/sync-report").then(r => r.json()),
-    onSuccess: (data: { synced: number; skipped: number; reportFile: string | null }) => {
-      setSyncResult(`Sincronizado: ${data.synced} movimientos identificados`);
-      qc.invalidateQueries({ queryKey: ["/api/mp/movements"] });
-      setTimeout(() => setSyncResult(null), 8000);
+    onSuccess: (data: { synced: number; skipped: number; reportFile: string | null; details?: string }) => {
+      const msg = data.synced > 0
+        ? `${data.synced} movimientos identificados`
+        : `0 identificados — ${data.details ?? `skipped: ${data.skipped}`}`;
+      setSyncResult(msg);
+      if (data.synced > 0) qc.invalidateQueries({ queryKey: ["/api/mp/movements"] });
+      setTimeout(() => setSyncResult(null), 12000);
     },
     onError: (e: Error) => {
       setSyncResult(`Error: ${e.message}`);
@@ -569,14 +572,17 @@ export default function BancosPage() {
             <h2 className="text-lg font-semibold flex items-center gap-2">
               <Landmark className="h-5 w-5" /> Mercado Pago
             </h2>
-            <div className="flex items-center gap-2">
-              {syncResult && <span className="text-xs text-muted-foreground">{syncResult}</span>}
-              <Button variant="outline" size="sm" onClick={() => syncReportMut.mutate()} disabled={syncReportMut.isPending}>
-                <RefreshCw className={`h-4 w-4 mr-1 ${syncReportMut.isPending ? "animate-spin" : ""}`} />
-                {syncReportMut.isPending ? "Sincronizando…" : "Sincronizar reporte"}
-              </Button>
-            </div>
+            <Button variant="outline" size="sm" onClick={() => syncReportMut.mutate()} disabled={syncReportMut.isPending}>
+              <RefreshCw className={`h-4 w-4 mr-1 ${syncReportMut.isPending ? "animate-spin" : ""}`} />
+              {syncReportMut.isPending ? "Sincronizando…" : "Sincronizar"}
+            </Button>
           </div>
+
+          {syncResult && (
+            <div className="rounded-md border bg-muted/50 px-3 py-2 text-xs text-muted-foreground break-all">
+              {syncResult}
+            </div>
+          )}
 
           {mpError && (
             <div className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
