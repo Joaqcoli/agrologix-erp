@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { AlertCircle, Landmark, TrendingUp, Percent, ArrowDownLeft, ArrowUpRight, ChevronDown, Plus, User, Building2, UserCheck, Pencil } from "lucide-react";
+import { AlertCircle, Landmark, TrendingUp, Percent, ArrowDownLeft, ArrowUpRight, ChevronDown, Plus, User, Building2, UserCheck, Pencil, RefreshCw } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -407,6 +407,20 @@ export default function BancosPage() {
     onError: (e: Error) => setApplyPayError(e.message),
   });
 
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+  const syncReportMut = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/mp/sync-report").then(r => r.json()),
+    onSuccess: (data: { synced: number; skipped: number; reportFile: string | null }) => {
+      setSyncResult(`Sincronizado: ${data.synced} movimientos identificados`);
+      qc.invalidateQueries({ queryKey: ["/api/mp/movements"] });
+      setTimeout(() => setSyncResult(null), 8000);
+    },
+    onError: (e: Error) => {
+      setSyncResult(`Error: ${e.message}`);
+      setTimeout(() => setSyncResult(null), 8000);
+    },
+  });
+
   // ── handlers ─────────────────────────────────────────────────────────────────
 
   const handleAddNew = (movId: string | number) => {
@@ -551,9 +565,18 @@ export default function BancosPage() {
 
         {/* ── Mercado Pago ── */}
         <section className="space-y-4">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Landmark className="h-5 w-5" /> Mercado Pago
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <Landmark className="h-5 w-5" /> Mercado Pago
+            </h2>
+            <div className="flex items-center gap-2">
+              {syncResult && <span className="text-xs text-muted-foreground">{syncResult}</span>}
+              <Button variant="outline" size="sm" onClick={() => syncReportMut.mutate()} disabled={syncReportMut.isPending}>
+                <RefreshCw className={`h-4 w-4 mr-1 ${syncReportMut.isPending ? "animate-spin" : ""}`} />
+                {syncReportMut.isPending ? "Sincronizando…" : "Sincronizar reporte"}
+              </Button>
+            </div>
+          </div>
 
           {mpError && (
             <div className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">

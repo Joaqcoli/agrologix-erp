@@ -5,6 +5,7 @@ import {
   priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks,
   suppliers, supplierPayments, clientGroups, clientGroupMembers, priceListItems,
   invoices, cajaMovements, bankCategories, mpMovementOverrides, bankContacts, bankPaymentLinks,
+  mpMovementIdentifiers,
   creditNotes,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
@@ -17,6 +18,7 @@ import {
   type CajaMovement, type InsertCajaMovement,
   type BankCategory,
   type BankContact, type InsertBankContact,
+  type MpMovementIdentifier,
 } from "@shared/schema";
 import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
@@ -4507,6 +4509,34 @@ export const storage = {
 
   async deleteBankContact(id: number): Promise<void> {
     await db.delete(bankContacts).where(eq(bankContacts.id, id));
+  },
+
+  // ─── MP Movement Identifiers (settlement report) ──────────────────────────
+
+  async upsertMpMovementIdentifiers(rows: { movementId: string; payerIdentifier: string; payerName?: string | null; rawExternalId?: string | null }[]): Promise<void> {
+    if (rows.length === 0) return;
+    for (const row of rows) {
+      await db.execute(drizzleSql`
+        INSERT INTO mp_movement_identifiers (movement_id, payer_identifier, payer_name, raw_external_id, synced_at)
+        VALUES (${row.movementId}, ${row.payerIdentifier}, ${row.payerName ?? null}, ${row.rawExternalId ?? null}, NOW())
+        ON CONFLICT (movement_id) DO UPDATE
+          SET payer_identifier = EXCLUDED.payer_identifier,
+              payer_name = EXCLUDED.payer_name,
+              raw_external_id = EXCLUDED.raw_external_id,
+              synced_at = NOW()
+      `);
+    }
+  },
+
+  async getMpMovementIdentifierMap(movementIds: string[]): Promise<Map<string, MpMovementIdentifier>> {
+    if (movementIds.length === 0) return new Map();
+    const escaped = movementIds.map(id => `'${id.replace(/'/g, "''")}'`).join(",");
+    const rows = await db.execute(drizzleSql.raw(`
+      SELECT movement_id, payer_identifier, payer_name, raw_external_id
+      FROM mp_movement_identifiers
+      WHERE movement_id IN (${escaped})
+    `));
+    return new Map((rows.rows as any[]).map(r => [r.movement_id, { movementId: r.movement_id, payerIdentifier: r.payer_identifier, payerName: r.payer_name, rawExternalId: r.raw_external_id, syncedAt: r.synced_at }]));
   },
 
   // ─── Bank Payment Links ────────────────────────────────────────────────────

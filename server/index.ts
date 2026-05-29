@@ -9,6 +9,7 @@ import { createServer } from "http";
 import { runMigrations, runNcMigrations } from "./migrate";
 import { seedDatabase } from "./seed";
 import { pool, connectionString } from "./db";
+import { syncMpReport } from "./mp-report-sync";
 
 const app = express();
 const httpServer = createServer(app);
@@ -130,4 +131,24 @@ app.use((req, res, next) => {
   httpServer.listen({ port, host: "0.0.0.0" }, () => {
     log(`serving on port ${port}`);
   });
+
+  // Daily 6am Argentina (UTC-3) MP report sync
+  let _lastSyncDate = "";
+  setInterval(async () => {
+    const token = process.env.MP_ACCESS_TOKEN;
+    if (!token) return;
+    const now = new Date();
+    const argHour = (now.getUTCHours() - 3 + 24) % 24;
+    const argMin  = now.getUTCMinutes();
+    const today   = now.toISOString().slice(0, 10);
+    if (argHour === 6 && argMin <= 4 && _lastSyncDate !== today) {
+      _lastSyncDate = today;
+      try {
+        const r = await syncMpReport(token);
+        log(`[cron] MP report sync: ${r.synced} synced, ${r.skipped} skipped`);
+      } catch (e: any) {
+        log(`[cron] MP report sync error: ${e.message}`);
+      }
+    }
+  }, 5 * 60 * 1000);
 })();

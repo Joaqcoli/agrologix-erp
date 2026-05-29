@@ -439,6 +439,16 @@ export const bankContacts = pgTable("bank_contacts", {
 export type BankContact = typeof bankContacts.$inferSelect;
 export type InsertBankContact = typeof bankContacts.$inferInsert;
 
+// ─── MP Movement Identifiers (from settlement report sync) ────────────────────
+export const mpMovementIdentifiers = pgTable("mp_movement_identifiers", {
+  movementId: text("movement_id").primaryKey(),
+  payerIdentifier: text("payer_identifier").notNull(),
+  payerName: text("payer_name"),
+  rawExternalId: text("raw_external_id"),
+  syncedAt: timestamp("synced_at").notNull().default(sql`now()`),
+});
+export type MpMovementIdentifier = typeof mpMovementIdentifiers.$inferSelect;
+
 export const bankPaymentLinks = pgTable("bank_payment_links", {
   id: serial("id").primaryKey(),
   movementId: text("movement_id").notNull(),

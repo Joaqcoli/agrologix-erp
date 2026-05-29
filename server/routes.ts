@@ -10,6 +10,7 @@ import { z } from "zod";
 import { canonicalizeUnit } from "@shared/units";
 import { getHistoricalMonthStats } from "./historical-stats";
 import { getLastVoucher, createVoucher } from "./arca";
+import { syncMpReport } from "./mp-report-sync";
 
 // IVA helpers
 const IVA_HUEVO = 0.21;
@@ -2106,27 +2107,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         catMap = await storage.getMpMovementOverridesMap(mpIds);
       } catch (_) { /* tabla no existe todavía, continuar sin categorías */ }
 
-      // ── DIAGNÓSTICO TEMPORAL — borrar después de analizar los logs ──────────
-      let _diagCount = 0;
-      for (const m of enriched) {
-        if (!m.isOutgoing && _diagCount < 5) {
-          console.log("INGRESO:", JSON.stringify({
-            id: m.id,
-            operation_type: m.operation_type,
-            payment_type_id: m.payment_type_id,
-            payer_id: m.payer?.id ?? m.payer_id,
-            payer_email: m.payer?.email,
-            payer_first_name: m.payer?.first_name,
-            payer_last_name: m.payer?.last_name,
-            payer_identification: m.payer?.identification,
-            description: m.description,
-            statement_descriptor: m.statement_descriptor,
-            transaction_details: m.transaction_details,
-          }));
-          _diagCount++;
-        }
-      }
-      // ── FIN DIAGNÓSTICO ───────────────────────────────────────────────────
+      // Fetch stored payer identifiers from settlement report sync
+      let identifierMap: Map<string, any> = new Map();
+      try {
+        identifierMap = await storage.getMpMovementIdentifierMap(mpIds);
+      } catch (_) {}
 
       // Compute candidate identifiers — separados por dirección del pago
       const withCandidates = enriched.map((m: any) => {
@@ -2142,6 +2127,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (m.displayName) candidates.push((m.displayName as string).toLowerCase().trim());
         } else {
           // INGRESO: identificar al PAGADOR (quien nos transfirió)
+          // 0. Identifier from settlement report sync (highest priority)
+          const stored = identifierMap.get(String(m.id));
+          if (stored?.payerIdentifier) candidates.push(stored.payerIdentifier.toLowerCase().trim());
           // 1. CBU del pagador vía transaction_details (transferencias bancarias CVU)
           const payerCbu = String(
             m.transaction_details?.payer_bank_info?.cbu ??
@@ -2332,6 +2320,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const id = parseInt(req.params.id);
       await storage.deleteBankContact(id);
       return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── MP Report Sync ───────────────────────────────────────────────────────
+  app.post("/api/mp/sync-report", requireAuth, async (_req, res) => {
+    try {
+      const token = process.env.MP_ACCESS_TOKEN;
+      if (!token) return res.status(500).json({ error: "MP_ACCESS_TOKEN no configurado" });
+      const result = await syncMpReport(token);
+      return res.json(result);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
