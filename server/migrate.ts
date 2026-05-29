@@ -796,6 +796,14 @@ export async function runMigrations() {
   `);
 
   await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS mp_user_cache (
+      mp_user_id BIGINT PRIMARY KEY,
+      display_name TEXT,
+      fetched_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await db.execute(sql`
     CREATE TABLE IF NOT EXISTS mp_movement_identifiers (
       movement_id TEXT PRIMARY KEY,
       payer_identifier TEXT NOT NULL,

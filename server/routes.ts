@@ -39,6 +39,37 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+/** Fetch MP user display name, max 10 req/s via sequential delay */
+async function fetchMpUserName(userId: string, token: string): Promise<string | null> {
+  try {
+    const r = await fetch(`https://api.mercadopago.com/v1/users/${userId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) return null;
+    const body = await r.json();
+    const first = String(body.first_name ?? "").trim();
+    const last  = String(body.last_name  ?? "").trim();
+    const full  = [first, last].filter(Boolean).join(" ");
+    return full || (body.nickname ? String(body.nickname) : null);
+  } catch { return null; }
+}
+
+/** Resolve MP user names for a list of userIds, rate-limited at ≤10/s */
+async function resolveMpUserNames(
+  userIds: string[],
+  token: string,
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  for (let i = 0; i < userIds.length; i++) {
+    const id = userIds[i];
+    const name = await fetchMpUserName(id, token);
+    if (name) result.set(id, name);
+    // 100ms delay = max 10/s
+    if (i < userIds.length - 1) await new Promise(r => setTimeout(r, 100));
+  }
+  return result;
+}
+
 function requireVendedor(req: Request, res: Response, next: NextFunction) {
   if (!req.session.userId) return res.status(401).json({ error: "Not authenticated" });
   if (req.session.userRole !== "vendedor" && req.session.userRole !== "admin") {
@@ -2235,16 +2266,92 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         paymentLinksMap = await storage.getBankPaymentLinksByMovements(mpIds);
       } catch (_) {}
 
+      // ── Fix 1: asegurar contacto Pago Debin en bank_contacts ────────────────
+      const PAGO_DEBIN_ID = "pago_debin_propio";
+      const PAGO_DEBIN_NAME = "Vegetales Argentinos Galicia";
+      try {
+        const existing = await storage.getBankContactsByIdentifiers([PAGO_DEBIN_ID]);
+        if (!existing.has(PAGO_DEBIN_ID)) {
+          await storage.createBankContact({ identifier: PAGO_DEBIN_ID, displayName: PAGO_DEBIN_NAME, type: "banco", entityId: null });
+        }
+      } catch (_) {}
+
+      // ── Fix 2: resolver nombres de destinatarios en egresos via /v1/users ──
+      // Colectar collector_ids únicos de egresos no identificados
+      const unresolvedCollectorIds = new Set<string>();
+      for (const m of withCandidates) {
+        if (!m.isOutgoing) continue;
+        const candidates = m._candidates as string[];
+        const alreadyMatched = candidates.some(c => contactsMap.has(c.toLowerCase().trim()));
+        if (alreadyMatched) continue;
+        const collId = String(m.collector_id ?? m.collector?.id ?? "");
+        if (collId && collId !== "0" && collId !== merchantId) unresolvedCollectorIds.add(collId);
+      }
+
+      // Lookup cache para ids no resueltos
+      let userNameMap = new Map<string, string>();
+      if (unresolvedCollectorIds.size > 0) {
+        try {
+          const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+          const cached = await storage.getMpUserCache([...unresolvedCollectorIds]);
+          const toFetch: string[] = [];
+          for (const uid of unresolvedCollectorIds) {
+            const entry = cached.get(uid);
+            if (entry && entry.fetchedAt > sevenDaysAgo) {
+              if (entry.displayName) userNameMap.set(uid, entry.displayName);
+            } else {
+              toFetch.push(uid);
+            }
+          }
+          // Fetch los que faltan (rate-limited, max 10)
+          if (toFetch.length > 0 && token) {
+            const fetched = await resolveMpUserNames(toFetch.slice(0, 10), token);
+            for (const [uid, name] of fetched) {
+              userNameMap.set(uid, name);
+              storage.upsertMpUserCache(uid, name).catch(() => {});
+            }
+            // Cache miss con nombre vacío para no re-fetchear
+            for (const uid of toFetch.slice(0, 10)) {
+              if (!fetched.has(uid)) storage.upsertMpUserCache(uid, "").catch(() => {});
+            }
+          }
+        } catch (_) {}
+      }
+
       const withCats = withCandidates.map((m: any) => {
         const candidates = m._candidates as string[];
         // Primer candidato que matchee en bank_contacts
         const contact = candidates.map(c => contactsMap.get(c.toLowerCase().trim())).find(Boolean);
         const { _candidates: _, ...cleanM } = m;
+
+        // Fix 1: Pago Debin → siempre Vegetales Argentinos Galicia
+        const isPayoDebin = !m.isOutgoing && String(m.description ?? "").trim() === "Pago Debin";
+        if (isPayoDebin) {
+          const debinContact = contactsMap.get(PAGO_DEBIN_ID) ?? { displayName: PAGO_DEBIN_NAME, type: "banco", entityId: null, id: null };
+          return {
+            ...cleanM,
+            categoryId: catMap.get(String(m.id)) ?? null,
+            identified: true,
+            displayName: PAGO_DEBIN_NAME,
+            contactType: debinContact.type ?? "banco",
+            entityId: debinContact.entityId ?? null,
+            contactId: (debinContact as any).id ?? null,
+            bankPaymentLinks: paymentLinksMap.get(String(m.id)) ?? [],
+          };
+        }
+
+        // Fix 2: egreso sin identificar → usar nombre resuelto de /v1/users
+        let resolvedName: string | null = null;
+        if (m.isOutgoing && !contact) {
+          const collId = String(m.collector_id ?? m.collector?.id ?? "");
+          resolvedName = userNameMap.get(collId) ?? null;
+        }
+
         return {
           ...cleanM,
           categoryId: catMap.get(String(m.id)) ?? null,
           identified: !!contact,
-          displayName: contact ? contact.displayName : (m.displayName ?? null),
+          displayName: contact ? contact.displayName : (resolvedName ?? m.displayName ?? null),
           contactType: contact?.type ?? null,
           entityId: contact?.entityId ?? null,
           contactId: contact?.id ?? null,
