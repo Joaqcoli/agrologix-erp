@@ -4223,7 +4223,6 @@ export const storage = {
     payments: { id: number; date: string; amount: string; method: string; notes: string | null; customerName: string }[];
     supplierPayments: { id: number; date: string; amount: string; method: string; notes: string | null; supplierName: string }[];
     manualMovements: CajaMovement[];
-    approvedOrders: { id: number; folio: string; approvedAt: string; total: string; customerName: string }[];
   }> {
     const pmts = await db
       .select({
@@ -4259,55 +4258,13 @@ export const storage = {
       .where(and(drizzleSql`${cajaMovements.date} >= ${from}`, drizzleSql`${cajaMovements.date} <= ${to}`))
       .orderBy(desc(cajaMovements.date));
 
-    // Pedidos aprobados en el período (ventas efectivizadas)
-    const approvedOrdersQ = await db
-      .select({
-        id: orders.id,
-        folio: orders.folio,
-        approvedAt: orders.approvedAt,
-        total: orders.total,
-        customerName: customers.name,
-      })
-      .from(orders)
-      .innerJoin(customers, eq(orders.customerId, customers.id))
-      .where(and(
-        eq(orders.status, "approved"),
-        drizzleSql`${orders.approvedAt}::date >= ${from}::date`,
-        drizzleSql`${orders.approvedAt}::date <= ${to}::date`,
-      ))
-      .orderBy(desc(orders.approvedAt));
-
     const sumPayments = pmts.reduce((acc, p) => acc + parseFloat(p.amount ?? "0"), 0);
-    const sumApprovedOrders = approvedOrdersQ.reduce((acc, o) => acc + parseFloat(o.total ?? "0"), 0);
     const sumManualIn = manualMovements.filter(m => m.type === "ingreso").reduce((acc, m) => acc + parseFloat(m.amount ?? "0"), 0);
     const sumSupplier = spmts.reduce((acc, p) => acc + parseFloat(p.amount ?? "0"), 0);
     const sumManualOut = manualMovements.filter(m => m.type === "egreso").reduce((acc, m) => acc + parseFloat(m.amount ?? "0"), 0);
 
-    const totalIngresos = sumPayments + sumApprovedOrders + sumManualIn;
+    const totalIngresos = sumPayments + sumManualIn;
     const totalEgresos = sumSupplier + sumManualOut;
-
-    // Method breakdown (payments + supplier payments only, they carry method)
-    const methodMap: Record<string, { ingresos: number; egresos: number }> = {};
-    const addToMethod = (method: string, amount: number, isIngreso: boolean) => {
-      const k = (method || "otro").toLowerCase();
-      if (!methodMap[k]) methodMap[k] = { ingresos: 0, egresos: 0 };
-      if (isIngreso) methodMap[k].ingresos += amount;
-      else methodMap[k].egresos += amount;
-    };
-    pmts.forEach(p => addToMethod(p.method, parseFloat(p.amount ?? "0"), true));
-    spmts.forEach(p => addToMethod(p.method, parseFloat(p.amount ?? "0"), false));
-    const byMethod = Object.entries(methodMap).map(([method, v]) => ({ method, ...v }));
-
-    // Category breakdown (manual movements)
-    const catMap: Record<string, { ingresos: number; egresos: number }> = {};
-    manualMovements.forEach(m => {
-      const k = m.category || "Sin categoría";
-      if (!catMap[k]) catMap[k] = { ingresos: 0, egresos: 0 };
-      const amt = parseFloat(m.amount ?? "0");
-      if (m.type === "ingreso") catMap[k].ingresos += amt;
-      else catMap[k].egresos += amt;
-    });
-    const byCategory = Object.entries(catMap).map(([category, v]) => ({ category, ...v }));
 
     return {
       totalIngresos,
@@ -4316,16 +4273,44 @@ export const storage = {
       payments: pmts.map(p => ({ ...p, amount: p.amount ?? "0" })),
       supplierPayments: spmts.map(p => ({ ...p, amount: p.amount ?? "0" })),
       manualMovements,
-      approvedOrders: approvedOrdersQ.map(o => ({
-        id: o.id,
-        folio: o.folio,
-        approvedAt: o.approvedAt ? new Date(o.approvedAt).toISOString().slice(0, 10) : from,
-        total: o.total ?? "0",
-        customerName: o.customerName,
-      })),
-      byMethod,
-      byCategory,
     };
+  },
+
+  async getCajaBalance(): Promise<{ efectivo: number; transferencia: number; cheque: number; otro: number }> {
+    const normalizeMethod = (m: string | null): "efectivo" | "transferencia" | "cheque" | "otro" => {
+      const k = (m || "").toLowerCase();
+      if (k === "efectivo") return "efectivo";
+      if (k === "transferencia" || k === "banco" || k === "transferencia bancaria") return "transferencia";
+      if (k === "cheque") return "cheque";
+      return "otro";
+    };
+
+    const bal = { efectivo: 0, transferencia: 0, cheque: 0, otro: 0 };
+
+    const pmtRows = await db.select({ amount: payments.amount, method: payments.method }).from(payments);
+    for (const p of pmtRows) {
+      const k = normalizeMethod(p.method);
+      bal[k] += parseFloat(p.amount ?? "0");
+    }
+
+    const spRows = await db.select({ amount: supplierPayments.amount, method: supplierPayments.method }).from(supplierPayments);
+    for (const p of spRows) {
+      const k = normalizeMethod(p.method);
+      bal[k] -= parseFloat(p.amount ?? "0");
+    }
+
+    const manRows = await db
+      .select({ amount: cajaMovements.amount, method: cajaMovements.method, type: cajaMovements.type })
+      .from(cajaMovements)
+      .where(drizzleSql`${cajaMovements.method} IS NOT NULL`);
+    for (const m of manRows) {
+      const k = normalizeMethod(m.method);
+      const amt = parseFloat(m.amount ?? "0");
+      if (m.type === "ingreso") bal[k] += amt;
+      else bal[k] -= amt;
+    }
+
+    return bal;
   },
 
   async getCajaTrend(months = 6): Promise<Array<{ month: string; label: string; ingresos: number; egresos: number }>> {

@@ -1847,6 +1847,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  app.get("/api/caja/balance", requireAuth, async (_req, res) => {
+    try {
+      return res.json(await storage.getCajaBalance());
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Mercado Pago (proxy) ────────────────────────────────────────────────────
   // Cache del merchant user ID (se resuelve una vez, luego se reutiliza)
   let _mpMerchantId: string | null = null;

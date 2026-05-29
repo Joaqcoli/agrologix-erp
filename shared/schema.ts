@@ -400,6 +400,7 @@ export const cajaMovements = pgTable("caja_movements", {
   description: text("description").notNull(),
   amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
   category: text("category"),
+  method: text("method"),                                // "EFECTIVO" | "TRANSFERENCIA" | "CHEQUE" | etc.
   createdBy: integer("created_by").references(() => users.id),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });

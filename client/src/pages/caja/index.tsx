@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,10 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  TrendingUp, TrendingDown, DollarSign, Plus, Trash2, ShoppingBag,
+  TrendingUp, TrendingDown, DollarSign, Plus, Trash2,
   ChevronLeft, ChevronRight, Wallet, Building2, CreditCard,
 } from "lucide-react";
-import { useLocation } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
@@ -44,7 +43,6 @@ function getRange(
     sun.setDate(mon.getDate() + 6);
     return { from: iso(mon), to: iso(sun), label: "Esta semana" };
   }
-  // month
   const d = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1);
   const year = d.getFullYear();
   const month = d.getMonth() + 1;
@@ -62,24 +60,40 @@ function fmtDate(d: string) {
   return `${day}/${m}`;
 }
 
-type MethodData = { method: string; ingresos: number; egresos: number };
-type CategoryData = { category: string; ingresos: number; egresos: number };
-
 type CajaSummary = {
   totalIngresos: number;
   totalEgresos: number;
   saldo: number;
   payments: { id: number; date: string; amount: string; method: string; notes: string | null; customerName: string }[];
   supplierPayments: { id: number; date: string; amount: string; method: string; notes: string | null; supplierName: string }[];
-  manualMovements: { id: number; date: string; type: string; description: string; amount: string; category: string | null }[];
-  approvedOrders: { id: number; folio: string; approvedAt: string; total: string; customerName: string }[];
-  byMethod: MethodData[];
-  byCategory: CategoryData[];
+  manualMovements: { id: number; date: string; type: string; description: string; amount: string; category: string | null; method: string | null }[];
 };
 
+type CajaBalance = { efectivo: number; transferencia: number; cheque: number; otro: number };
 type TrendItem = { month: string; label: string; ingresos: number; egresos: number };
 type BankCategory = { id: number; name: string };
-type MovForm = { date: string; type: "ingreso" | "egreso"; description: string; amount: string; category: string };
+
+type FeedItem = {
+  id: string;
+  date: string;
+  description: string;
+  counterpart: string;
+  method: string;
+  category: string;
+  type: "ingreso" | "egreso";
+  amount: number;
+  sourceType: "payment" | "supplierPayment" | "manual";
+  sourceId: number;
+};
+
+type MovForm = {
+  date: string;
+  type: "ingreso" | "egreso";
+  description: string;
+  amount: string;
+  category: string;
+  method: string;
+};
 
 const emptyForm = (): MovForm => ({
   date: new Date().toISOString().slice(0, 10),
@@ -87,20 +101,32 @@ const emptyForm = (): MovForm => ({
   description: "",
   amount: "",
   category: "",
+  method: "",
 });
 
-const METHOD_CONFIG: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
-  efectivo:      { label: "Efectivo",       icon: <Wallet className="h-4 w-4 text-green-600" />,  color: "text-green-700" },
-  transferencia: { label: "Banco/Transf.",  icon: <Building2 className="h-4 w-4 text-blue-600" />, color: "text-blue-700" },
-  cheque:        { label: "Cheques",        icon: <CreditCard className="h-4 w-4 text-purple-600" />, color: "text-purple-700" },
+const METHOD_LABEL: Record<string, string> = {
+  EFECTIVO: "Efectivo",
+  TRANSFERENCIA: "Transferencia",
+  CHEQUE: "Cheque",
+  CUENTA_CORRIENTE: "Cta. Cte.",
+  MP: "Mercado Pago",
+  OTRO: "Otro",
+  RETENCION: "Retención",
 };
 
+const BALANCE_CONFIG = [
+  { key: "efectivo" as const, label: "Efectivo", icon: <Wallet className="h-4 w-4 text-green-600" />, color: "text-green-700" },
+  { key: "transferencia" as const, label: "Banco/Transf.", icon: <Building2 className="h-4 w-4 text-blue-600" />, color: "text-blue-700" },
+  { key: "cheque" as const, label: "Cheques", icon: <CreditCard className="h-4 w-4 text-purple-600" />, color: "text-purple-700" },
+];
+
 export default function CajaPage() {
-  const [, navigate] = useLocation();
   const [viewMode, setViewMode] = useState<"day" | "week" | "month">("month");
   const [monthOffset, setMonthOffset] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<MovForm>(emptyForm());
+  const [filterCat, setFilterCat] = useState("_all");
+  const [filterType, setFilterType] = useState("_all");
 
   const { from, to, label } = getRange(viewMode, monthOffset);
 
@@ -108,6 +134,11 @@ export default function CajaPage() {
     queryKey: ["/api/caja/summary", from, to],
     queryFn: () =>
       fetch(`/api/caja/summary?from=${from}&to=${to}`, { credentials: "include" }).then(r => r.json()),
+  });
+
+  const { data: balance } = useQuery<CajaBalance>({
+    queryKey: ["/api/caja/balance"],
+    queryFn: () => fetch("/api/caja/balance", { credentials: "include" }).then(r => r.json()),
   });
 
   const { data: trend } = useQuery<TrendItem[]>({
@@ -124,6 +155,7 @@ export default function CajaPage() {
     mutationFn: (body: MovForm) => apiRequest("POST", "/api/caja/movements", body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/caja/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/balance"] });
       queryClient.invalidateQueries({ queryKey: ["/api/caja/trend"] });
       setDialogOpen(false);
       setForm(emptyForm());
@@ -134,33 +166,93 @@ export default function CajaPage() {
     mutationFn: (id: number) => apiRequest("DELETE", `/api/caja/movements/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/caja/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/balance"] });
       queryClient.invalidateQueries({ queryKey: ["/api/caja/trend"] });
     },
   });
 
   const handleAdd = () => {
-    if (!form.description || !form.amount || !form.date) return;
+    if (!form.description || !form.amount || !form.date || !form.method) return;
     addMutation.mutate(form);
   };
 
-  // Pie chart: egresos by category, sorted desc
-  const pieData = (data?.byCategory ?? [])
-    .filter(c => c.egresos > 0)
-    .sort((a, b) => b.egresos - a.egresos)
-    .map(c => ({ name: c.category, value: Math.round(c.egresos) }));
+  // Build unified feed
+  const feed = useMemo((): FeedItem[] => {
+    const items: FeedItem[] = [];
+    for (const p of data?.payments ?? []) {
+      items.push({
+        id: `pmt-${p.id}`,
+        date: p.date,
+        description: "Cobro",
+        counterpart: p.customerName,
+        method: p.method,
+        category: "Cobros clientes",
+        type: "ingreso",
+        amount: parseFloat(p.amount),
+        sourceType: "payment",
+        sourceId: p.id,
+      });
+    }
+    for (const p of data?.supplierPayments ?? []) {
+      items.push({
+        id: `sp-${p.id}`,
+        date: p.date,
+        description: p.notes || "Pago",
+        counterpart: p.supplierName,
+        method: p.method,
+        category: "Pagos proveedores",
+        type: "egreso",
+        amount: parseFloat(p.amount),
+        sourceType: "supplierPayment",
+        sourceId: p.id,
+      });
+    }
+    for (const m of data?.manualMovements ?? []) {
+      items.push({
+        id: `man-${m.id}`,
+        date: m.date,
+        description: m.description,
+        counterpart: "",
+        method: m.method || "—",
+        category: m.category || "Sin categoría",
+        type: m.type as "ingreso" | "egreso",
+        amount: parseFloat(m.amount),
+        sourceType: "manual",
+        sourceId: m.id,
+      });
+    }
+    return items.sort((a, b) => b.date.localeCompare(a.date));
+  }, [data]);
 
-  // Category options from bank_categories + any already used in movements
-  const bankCatNames = (bankCats ?? []).map(c => c.name);
-  const existingCatNames = (data?.byCategory ?? []).map(c => c.category).filter(Boolean);
-  const catOptions = Array.from(new Set([...bankCatNames, ...existingCatNames]));
+  // Filter feed
+  const filteredFeed = useMemo(() => {
+    return feed.filter(item => {
+      if (filterCat !== "_all" && item.category !== filterCat) return false;
+      if (filterType !== "_all" && item.type !== filterType) return false;
+      return true;
+    });
+  }, [feed, filterCat, filterType]);
 
-  // Methods that have data
-  const methodKeys = ["efectivo", "transferencia", "cheque"];
-  const activeMethodData = methodKeys
-    .map(k => ({ key: k, data: (data?.byMethod ?? []).find(m => m.method.toLowerCase() === k) }))
-    .filter(x => x.data);
+  // Category options for filter (from feed)
+  const feedCategories = useMemo(() => {
+    const set = new Set(feed.map(i => i.category));
+    return Array.from(set).sort();
+  }, [feed]);
+
+  // Category breakdown for pie (egresos only, from feed)
+  const pieData = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const item of feed) {
+      if (item.type !== "egreso") continue;
+      map[item.category] = (map[item.category] ?? 0) + item.amount;
+    }
+    return Object.entries(map)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, value]) => ({ name, value: Math.round(value) }));
+  }, [feed]);
 
   const hasTrendData = (trend ?? []).some(t => t.ingresos > 0 || t.egresos > 0);
+  const bankCatNames = (bankCats ?? []).map(c => c.name);
 
   return (
     <Layout>
@@ -202,15 +294,43 @@ export default function CajaPage() {
                 )}
               </div>
             )}
+            <Button size="sm" onClick={() => setDialogOpen(true)}>
+              <Plus className="h-4 w-4 mr-1" /> Agregar
+            </Button>
           </div>
         </div>
 
-        {/* Summary cards */}
+        {/* Balance cards (historical, always visible) */}
+        <section>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+            Saldo acumulado histórico por método
+          </p>
+          <div className="grid grid-cols-3 gap-4">
+            {BALANCE_CONFIG.map(cfg => {
+              const val = balance?.[cfg.key] ?? 0;
+              return (
+                <Card key={cfg.key}>
+                  <CardContent className="px-4 pt-4 pb-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      {cfg.icon}
+                      <span className="text-sm font-medium">{cfg.label}</span>
+                    </div>
+                    <p className={`text-2xl font-bold ${val >= 0 ? cfg.color : "text-red-700"}`}>
+                      {balance ? fmt(val) : "..."}
+                    </p>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Period summary */}
         <div className="grid grid-cols-3 gap-4">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <TrendingUp className="h-4 w-4 text-green-600" /> Ingresos
+                <TrendingUp className="h-4 w-4 text-green-600" /> Ingresos — {label}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -220,7 +340,7 @@ export default function CajaPage() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <TrendingDown className="h-4 w-4 text-red-600" /> Egresos
+                <TrendingDown className="h-4 w-4 text-red-600" /> Egresos — {label}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -230,7 +350,7 @@ export default function CajaPage() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <DollarSign className="h-4 w-4 text-blue-600" /> Saldo
+                <DollarSign className="h-4 w-4 text-blue-600" /> Neto — {label}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -240,37 +360,6 @@ export default function CajaPage() {
             </CardContent>
           </Card>
         </div>
-
-        {/* Method breakdown (liquidity by payment method) */}
-        {activeMethodData.length > 0 && (
-          <section>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-              Movimientos por método — {label}
-            </p>
-            <div className="grid grid-cols-3 gap-3">
-              {activeMethodData.map(({ key, data: md }) => {
-                if (!md) return null;
-                const net = md.ingresos - md.egresos;
-                const cfg = METHOD_CONFIG[key] ?? { label: key, icon: null, color: "text-foreground" };
-                return (
-                  <Card key={key}>
-                    <CardContent className="px-4 pt-4 pb-3">
-                      <div className="flex items-center gap-2 mb-1">
-                        {cfg.icon}
-                        <span className="text-sm font-medium">{cfg.label}</span>
-                      </div>
-                      <p className={`text-xl font-bold ${net >= 0 ? "text-green-700" : "text-red-700"}`}>{fmt(net)}</p>
-                      <div className="flex gap-3 mt-1 text-xs text-muted-foreground">
-                        <span className="text-green-600">↑ {fmt(md.ingresos)}</span>
-                        <span className="text-red-600">↓ {fmt(md.egresos)}</span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-          </section>
-        )}
 
         {/* Charts row */}
         {(hasTrendData || pieData.length > 0) && (
@@ -332,129 +421,38 @@ export default function CajaPage() {
           </div>
         )}
 
-        {/* Cobros de clientes */}
+        {/* Unified feed */}
         <section>
-          <div className="flex items-center gap-2 mb-3">
-            <h2 className="font-semibold text-base">Cobros de clientes</h2>
-            <Badge variant="secondary">{data?.payments?.length ?? 0}</Badge>
-          </div>
-          {(data?.payments?.length ?? 0) === 0 ? (
-            <p className="text-sm text-muted-foreground">Sin cobros en este período.</p>
-          ) : (
-            <div className="border rounded-lg overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="text-left px-3 py-2 font-medium">Fecha</th>
-                    <th className="text-left px-3 py-2 font-medium">Cliente</th>
-                    <th className="text-left px-3 py-2 font-medium">Método</th>
-                    <th className="text-right px-3 py-2 font-medium">Monto</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(data?.payments ?? []).map(p => (
-                    <tr key={p.id} className="border-t hover:bg-muted/30">
-                      <td className="px-3 py-2 text-muted-foreground">{fmtDate(p.date)}</td>
-                      <td className="px-3 py-2">{p.customerName}</td>
-                      <td className="px-3 py-2">
-                        <Badge variant="outline" className="text-xs">{p.method}</Badge>
-                      </td>
-                      <td className="px-3 py-2 text-right font-medium text-green-700">{fmt(parseFloat(p.amount))}</td>
-                    </tr>
+          <div className="flex items-center gap-3 mb-3 flex-wrap">
+            <h2 className="font-semibold text-base">Movimientos — {label}</h2>
+            <Badge variant="secondary">{filteredFeed.length}</Badge>
+            <div className="ml-auto flex items-center gap-2">
+              <Select value={filterType} onValueChange={setFilterType}>
+                <SelectTrigger className="h-8 text-xs w-32">
+                  <SelectValue placeholder="Tipo" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_all">Todos</SelectItem>
+                  <SelectItem value="ingreso">Ingresos</SelectItem>
+                  <SelectItem value="egreso">Egresos</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={filterCat} onValueChange={setFilterCat}>
+                <SelectTrigger className="h-8 text-xs w-44">
+                  <SelectValue placeholder="Categoría" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_all">Todas las categorías</SelectItem>
+                  {feedCategories.map(cat => (
+                    <SelectItem key={cat} value={cat}>{cat}</SelectItem>
                   ))}
-                </tbody>
-              </table>
+                </SelectContent>
+              </Select>
             </div>
-          )}
-        </section>
-
-        {/* Pedidos aprobados */}
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <h2 className="font-semibold text-base flex items-center gap-1">
-              <ShoppingBag className="h-4 w-4 text-green-600" /> Pedidos aprobados
-            </h2>
-            <Badge variant="secondary">{data?.approvedOrders?.length ?? 0}</Badge>
           </div>
-          {(data?.approvedOrders?.length ?? 0) === 0 ? (
-            <p className="text-sm text-muted-foreground">Sin pedidos aprobados en este período.</p>
-          ) : (
-            <div className="border rounded-lg overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="text-left px-3 py-2 font-medium">Fecha</th>
-                    <th className="text-left px-3 py-2 font-medium">Folio</th>
-                    <th className="text-left px-3 py-2 font-medium">Cliente</th>
-                    <th className="text-right px-3 py-2 font-medium">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(data?.approvedOrders ?? []).map(o => (
-                    <tr
-                      key={o.id}
-                      className="border-t hover:bg-muted/30 cursor-pointer"
-                      onClick={() => navigate(`/orders/${o.id}`)}
-                    >
-                      <td className="px-3 py-2 text-muted-foreground">{fmtDate(o.approvedAt)}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{o.folio}</td>
-                      <td className="px-3 py-2">{o.customerName}</td>
-                      <td className="px-3 py-2 text-right font-medium text-green-700">{fmt(parseFloat(o.total))}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
 
-        {/* Pagos a proveedores */}
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <h2 className="font-semibold text-base">Pagos a proveedores</h2>
-            <Badge variant="secondary">{data?.supplierPayments?.length ?? 0}</Badge>
-          </div>
-          {(data?.supplierPayments?.length ?? 0) === 0 ? (
-            <p className="text-sm text-muted-foreground">Sin pagos en este período.</p>
-          ) : (
-            <div className="border rounded-lg overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="text-left px-3 py-2 font-medium">Fecha</th>
-                    <th className="text-left px-3 py-2 font-medium">Proveedor</th>
-                    <th className="text-left px-3 py-2 font-medium">Método</th>
-                    <th className="text-right px-3 py-2 font-medium">Monto</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(data?.supplierPayments ?? []).map(p => (
-                    <tr key={p.id} className="border-t hover:bg-muted/30">
-                      <td className="px-3 py-2 text-muted-foreground">{fmtDate(p.date)}</td>
-                      <td className="px-3 py-2">{p.supplierName}</td>
-                      <td className="px-3 py-2">
-                        <Badge variant="outline" className="text-xs">{p.method}</Badge>
-                      </td>
-                      <td className="px-3 py-2 text-right font-medium text-red-700">{fmt(parseFloat(p.amount))}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-
-        {/* Movimientos manuales */}
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <h2 className="font-semibold text-base">Movimientos manuales</h2>
-            <Badge variant="secondary">{data?.manualMovements?.length ?? 0}</Badge>
-            <Button size="sm" variant="outline" className="ml-auto" onClick={() => setDialogOpen(true)}>
-              <Plus className="h-4 w-4 mr-1" /> Agregar
-            </Button>
-          </div>
-          {(data?.manualMovements?.length ?? 0) === 0 ? (
-            <p className="text-sm text-muted-foreground">Sin movimientos manuales en este período.</p>
+          {filteredFeed.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Sin movimientos en este período.</p>
           ) : (
             <div className="border rounded-lg overflow-hidden">
               <table className="w-full text-sm">
@@ -462,28 +460,38 @@ export default function CajaPage() {
                   <tr>
                     <th className="text-left px-3 py-2 font-medium">Fecha</th>
                     <th className="text-left px-3 py-2 font-medium">Descripción</th>
+                    <th className="text-left px-3 py-2 font-medium">Parte</th>
+                    <th className="text-left px-3 py-2 font-medium">Método</th>
                     <th className="text-left px-3 py-2 font-medium">Categoría</th>
                     <th className="text-right px-3 py-2 font-medium">Monto</th>
                     <th className="px-3 py-2" />
                   </tr>
                 </thead>
                 <tbody>
-                  {(data?.manualMovements ?? []).map(m => (
-                    <tr key={m.id} className="border-t hover:bg-muted/30">
-                      <td className="px-3 py-2 text-muted-foreground">{fmtDate(m.date)}</td>
-                      <td className="px-3 py-2">{m.description}</td>
-                      <td className="px-3 py-2 text-muted-foreground text-xs">{m.category ?? "—"}</td>
-                      <td className={`px-3 py-2 text-right font-medium ${m.type === "ingreso" ? "text-green-700" : "text-red-700"}`}>
-                        {m.type === "egreso" ? "-" : ""}{fmt(parseFloat(m.amount))}
+                  {filteredFeed.map(item => (
+                    <tr key={item.id} className="border-t hover:bg-muted/30">
+                      <td className="px-3 py-2 text-muted-foreground tabular-nums">{fmtDate(item.date)}</td>
+                      <td className="px-3 py-2 max-w-[180px] truncate">{item.description}</td>
+                      <td className="px-3 py-2 text-muted-foreground max-w-[120px] truncate">{item.counterpart || "—"}</td>
+                      <td className="px-3 py-2">
+                        <Badge variant="outline" className="text-xs">
+                          {METHOD_LABEL[item.method.toUpperCase()] ?? item.method}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">{item.category}</td>
+                      <td className={`px-3 py-2 text-right font-medium ${item.type === "ingreso" ? "text-green-700" : "text-red-700"}`}>
+                        {item.type === "egreso" ? "-" : "+"}{fmt(item.amount)}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <Button
-                          size="icon" variant="ghost" className="h-7 w-7"
-                          onClick={() => delMutation.mutate(m.id)}
-                          disabled={delMutation.isPending}
-                        >
-                          <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                        </Button>
+                        {item.sourceType === "manual" && (
+                          <Button
+                            size="icon" variant="ghost" className="h-7 w-7"
+                            onClick={() => delMutation.mutate(item.sourceId)}
+                            disabled={delMutation.isPending}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                          </Button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -498,7 +506,7 @@ export default function CajaPage() {
       <Dialog open={dialogOpen} onOpenChange={v => { setDialogOpen(v); if (!v) setForm(emptyForm()); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Agregar movimiento manual</DialogTitle>
+            <DialogTitle>Agregar movimiento</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="grid grid-cols-2 gap-3">
@@ -518,11 +526,24 @@ export default function CajaPage() {
               </div>
             </div>
             <div className="space-y-1">
+              <Label>Método <span className="text-red-500">*</span></Label>
+              <Select value={form.method || "_none"} onValueChange={v => setForm(f => ({ ...f, method: v === "_none" ? "" : v }))}>
+                <SelectTrigger><SelectValue placeholder="Seleccionar método" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="EFECTIVO">Efectivo</SelectItem>
+                  <SelectItem value="TRANSFERENCIA">Transferencia</SelectItem>
+                  <SelectItem value="CHEQUE">Cheque</SelectItem>
+                  <SelectItem value="MP">Mercado Pago</SelectItem>
+                  <SelectItem value="OTRO">Otro</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
               <Label>Descripción</Label>
               <Input
                 value={form.description}
                 onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                placeholder="Ej: Compra de materiales"
+                placeholder="Ej: Nafta, Sueldo chofer..."
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -537,7 +558,7 @@ export default function CajaPage() {
               </div>
               <div className="space-y-1">
                 <Label>Categoría</Label>
-                {catOptions.length > 0 ? (
+                {bankCatNames.length > 0 ? (
                   <Select
                     value={form.category || "_none"}
                     onValueChange={v => setForm(f => ({ ...f, category: v === "_none" ? "" : v }))}
@@ -545,7 +566,7 @@ export default function CajaPage() {
                     <SelectTrigger><SelectValue placeholder="Sin categoría" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="_none">Sin categoría</SelectItem>
-                      {catOptions.map(cat => (
+                      {bankCatNames.map(cat => (
                         <SelectItem key={cat} value={cat}>{cat}</SelectItem>
                       ))}
                     </SelectContent>
@@ -562,7 +583,10 @@ export default function CajaPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>
-            <Button onClick={handleAdd} disabled={addMutation.isPending || !form.description || !form.amount}>
+            <Button
+              onClick={handleAdd}
+              disabled={addMutation.isPending || !form.description || !form.amount || !form.method}
+            >
               {addMutation.isPending ? "Guardando..." : "Guardar"}
             </Button>
           </DialogFooter>
