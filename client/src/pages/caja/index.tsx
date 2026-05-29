@@ -13,10 +13,7 @@ import {
   ChevronLeft, ChevronRight, Wallet, Building2, CreditCard,
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
-  PieChart, Pie, Cell,
-} from "recharts";
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
 const fmt = (v: number) => "$" + Math.round(v).toLocaleString("es-AR");
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -69,8 +66,6 @@ type CajaSummary = {
   manualMovements: { id: number; date: string; type: string; description: string; amount: string; category: string | null; method: string | null }[];
 };
 
-type CajaBalance = { efectivo: number; transferencia: number; cheque: number; otro: number };
-type TrendItem = { month: string; label: string; ingresos: number; egresos: number };
 type BankCategory = { id: number; name: string };
 
 type FeedItem = {
@@ -114,11 +109,21 @@ const METHOD_LABEL: Record<string, string> = {
   RETENCION: "Retención",
 };
 
-const BALANCE_CONFIG = [
-  { key: "efectivo" as const, label: "Efectivo", icon: <Wallet className="h-4 w-4 text-green-600" />, color: "text-green-700" },
-  { key: "transferencia" as const, label: "Banco/Transf.", icon: <Building2 className="h-4 w-4 text-blue-600" />, color: "text-blue-700" },
-  { key: "cheque" as const, label: "Cheques", icon: <CreditCard className="h-4 w-4 text-purple-600" />, color: "text-purple-700" },
-];
+type MethodKey = "EFECTIVO" | "TRANSFERENCIA" | "CHEQUE";
+
+function normalizeMethod(m: string): MethodKey | null {
+  const k = (m || "").toUpperCase();
+  if (k === "EFECTIVO") return "EFECTIVO";
+  if (k === "TRANSFERENCIA" || k === "BANCO" || k === "MP") return "TRANSFERENCIA";
+  if (k === "CHEQUE") return "CHEQUE";
+  return null;
+}
+
+const METHOD_CONFIG: Record<MethodKey, { label: string; icon: React.ReactNode; color: string; mutedColor: string }> = {
+  EFECTIVO:      { label: "Efectivo",      icon: <Wallet className="h-4 w-4 text-green-600" />,  color: "text-green-700",  mutedColor: "text-green-600" },
+  TRANSFERENCIA: { label: "Banco/Transf.", icon: <Building2 className="h-4 w-4 text-blue-600" />, color: "text-blue-700",  mutedColor: "text-blue-600" },
+  CHEQUE:        { label: "Cheques",       icon: <CreditCard className="h-4 w-4 text-purple-600" />, color: "text-purple-700", mutedColor: "text-purple-600" },
+};
 
 export default function CajaPage() {
   const [viewMode, setViewMode] = useState<"day" | "week" | "month">("month");
@@ -136,16 +141,6 @@ export default function CajaPage() {
       fetch(`/api/caja/summary?from=${from}&to=${to}`, { credentials: "include" }).then(r => r.json()),
   });
 
-  const { data: balance } = useQuery<CajaBalance>({
-    queryKey: ["/api/caja/balance"],
-    queryFn: () => fetch("/api/caja/balance", { credentials: "include" }).then(r => r.json()),
-  });
-
-  const { data: trend } = useQuery<TrendItem[]>({
-    queryKey: ["/api/caja/trend"],
-    queryFn: () => fetch("/api/caja/trend?months=6", { credentials: "include" }).then(r => r.json()),
-  });
-
   const { data: bankCats } = useQuery<BankCategory[]>({
     queryKey: ["/api/bank-categories"],
     queryFn: () => fetch("/api/bank-categories", { credentials: "include" }).then(r => r.json()),
@@ -155,8 +150,6 @@ export default function CajaPage() {
     mutationFn: (body: MovForm) => apiRequest("POST", "/api/caja/movements", body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/caja/summary"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/caja/balance"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/caja/trend"] });
       setDialogOpen(false);
       setForm(emptyForm());
     },
@@ -166,8 +159,6 @@ export default function CajaPage() {
     mutationFn: (id: number) => apiRequest("DELETE", `/api/caja/movements/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/caja/summary"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/caja/balance"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/caja/trend"] });
     },
   });
 
@@ -224,6 +215,22 @@ export default function CajaPage() {
     return items.sort((a, b) => b.date.localeCompare(a.date));
   }, [data]);
 
+  // Method breakdown for the selected period (from feed)
+  const methodBreakdown = useMemo(() => {
+    const result: Record<MethodKey, { ingresos: number; egresos: number }> = {
+      EFECTIVO:      { ingresos: 0, egresos: 0 },
+      TRANSFERENCIA: { ingresos: 0, egresos: 0 },
+      CHEQUE:        { ingresos: 0, egresos: 0 },
+    };
+    for (const item of feed) {
+      const k = normalizeMethod(item.method);
+      if (!k) continue;
+      if (item.type === "ingreso") result[k].ingresos += item.amount;
+      else result[k].egresos += item.amount;
+    }
+    return result;
+  }, [feed]);
+
   // Filter feed
   const filteredFeed = useMemo(() => {
     return feed.filter(item => {
@@ -239,7 +246,7 @@ export default function CajaPage() {
     return Array.from(set).sort();
   }, [feed]);
 
-  // Category breakdown for pie (egresos only, from feed)
+  // Pie: egresos by category for the selected period
   const pieData = useMemo(() => {
     const map: Record<string, number> = {};
     for (const item of feed) {
@@ -251,7 +258,6 @@ export default function CajaPage() {
       .map(([name, value]) => ({ name, value: Math.round(value) }));
   }, [feed]);
 
-  const hasTrendData = (trend ?? []).some(t => t.ingresos > 0 || t.egresos > 0);
   const bankCatNames = (bankCats ?? []).map(c => c.name);
 
   return (
@@ -300,37 +306,12 @@ export default function CajaPage() {
           </div>
         </div>
 
-        {/* Balance cards (historical, always visible) */}
-        <section>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-            Saldo acumulado histórico por método
-          </p>
-          <div className="grid grid-cols-3 gap-4">
-            {BALANCE_CONFIG.map(cfg => {
-              const val = balance?.[cfg.key] ?? 0;
-              return (
-                <Card key={cfg.key}>
-                  <CardContent className="px-4 pt-4 pb-3">
-                    <div className="flex items-center gap-2 mb-1">
-                      {cfg.icon}
-                      <span className="text-sm font-medium">{cfg.label}</span>
-                    </div>
-                    <p className={`text-2xl font-bold ${val >= 0 ? cfg.color : "text-red-700"}`}>
-                      {balance ? fmt(val) : "..."}
-                    </p>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* Period summary */}
+        {/* Totals row */}
         <div className="grid grid-cols-3 gap-4">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <TrendingUp className="h-4 w-4 text-green-600" /> Ingresos — {label}
+                <TrendingUp className="h-4 w-4 text-green-600" /> Ingresos
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -340,7 +321,7 @@ export default function CajaPage() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <TrendingDown className="h-4 w-4 text-red-600" /> Egresos — {label}
+                <TrendingDown className="h-4 w-4 text-red-600" /> Egresos
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -350,7 +331,7 @@ export default function CajaPage() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <DollarSign className="h-4 w-4 text-blue-600" /> Neto — {label}
+                <DollarSign className="h-4 w-4 text-blue-600" /> Neto
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -361,64 +342,75 @@ export default function CajaPage() {
           </Card>
         </div>
 
-        {/* Charts row */}
-        {(hasTrendData || pieData.length > 0) && (
-          <div className="grid grid-cols-2 gap-6">
-            {hasTrendData && (
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium">Evolución mensual (6 meses)</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <ResponsiveContainer width="100%" height={190}>
-                    <BarChart data={trend ?? []} margin={{ top: 0, right: 4, left: -16, bottom: 0 }}>
-                      <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `$${Math.round(v / 1000)}k`} />
-                      <Tooltip
-                        formatter={(v: number, name: string) => [fmt(v), name === "ingresos" ? "Ingresos" : "Egresos"]}
-                        labelStyle={{ fontWeight: 600 }}
-                      />
-                      <Legend wrapperStyle={{ fontSize: 12 }} />
-                      <Bar dataKey="ingresos" name="Ingresos" fill="#4ade80" radius={[3, 3, 0, 0]} />
-                      <Bar dataKey="egresos" name="Egresos" fill="#f87171" radius={[3, 3, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </CardContent>
-              </Card>
-            )}
-
-            {pieData.length > 0 && (
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium">Egresos por categoría — {label}</CardTitle>
-                </CardHeader>
-                <CardContent className="flex gap-4 items-center">
-                  <ResponsiveContainer width="45%" height={190}>
-                    <PieChart>
-                      <Pie data={pieData} dataKey="value" cx="50%" cy="50%" outerRadius={72} innerRadius={30}>
-                        {pieData.map((_, i) => (
-                          <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(v: number) => fmt(v)} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <div className="flex-1 space-y-1.5 text-xs overflow-hidden">
-                    {pieData.slice(0, 8).map((d, i) => (
-                      <div key={i} className="flex items-center gap-1.5">
-                        <span
-                          className="h-2.5 w-2.5 rounded-full flex-shrink-0"
-                          style={{ background: PIE_COLORS[i % PIE_COLORS.length] }}
-                        />
-                        <span className="truncate text-muted-foreground flex-1">{d.name}</span>
-                        <span className="font-semibold tabular-nums ml-1">{fmt(d.value)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+        {/* Method breakdown for period */}
+        <section>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+            Por método de pago — {label}
+          </p>
+          <div className="grid grid-cols-3 gap-4">
+            {(["EFECTIVO", "TRANSFERENCIA", "CHEQUE"] as MethodKey[]).map(k => {
+              const cfg = METHOD_CONFIG[k];
+              const mb = methodBreakdown[k];
+              const neto = mb.ingresos - mb.egresos;
+              return (
+                <Card key={k}>
+                  <CardContent className="px-4 pt-4 pb-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      {cfg.icon}
+                      <span className="text-sm font-semibold">{cfg.label}</span>
+                    </div>
+                    <p className={`text-2xl font-bold mb-2 ${neto >= 0 ? cfg.color : "text-red-700"}`}>
+                      {isLoading ? "..." : fmt(neto)}
+                    </p>
+                    <div className="flex gap-3 text-xs text-muted-foreground">
+                      <span className="text-green-600">↑ {fmt(mb.ingresos)}</span>
+                      <span className="text-red-600">↓ {fmt(mb.egresos)}</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
+        </section>
+
+        {/* Pie: egresos por categoría */}
+        {pieData.length > 0 && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium">Egresos por categoría — {label}</CardTitle>
+            </CardHeader>
+            <CardContent className="flex gap-6 items-center">
+              <div className="w-48 h-48 flex-shrink-0">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={pieData} dataKey="value" cx="50%" cy="50%" outerRadius={80} innerRadius={32}>
+                      {pieData.map((_, i) => (
+                        <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(v: number) => fmt(v)} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="flex-1 space-y-2 text-sm overflow-hidden">
+                {pieData.map((d, i) => {
+                  const total = pieData.reduce((acc, x) => acc + x.value, 0);
+                  const pct = total > 0 ? Math.round((d.value / total) * 100) : 0;
+                  return (
+                    <div key={i} className="flex items-center gap-2">
+                      <span
+                        className="h-3 w-3 rounded-full flex-shrink-0"
+                        style={{ background: PIE_COLORS[i % PIE_COLORS.length] }}
+                      />
+                      <span className="truncate text-muted-foreground flex-1">{d.name}</span>
+                      <span className="text-xs text-muted-foreground w-8 text-right">{pct}%</span>
+                      <span className="font-semibold tabular-nums w-24 text-right">{fmt(d.value)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Unified feed */}
