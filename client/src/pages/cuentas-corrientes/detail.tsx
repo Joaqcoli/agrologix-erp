@@ -1377,6 +1377,30 @@ export default function CCCustomerDetailPage({
     await generateResumenCCPDF({ customerName: data.customer.name, isParent: data.isParent ?? false, orders: selectedOrdersData });
   };
 
+  const handleExportBlackPot = async () => {
+    if (selectedOrderIds.size === 0) return;
+    try {
+      const res = await fetch("/api/orders/export-blackpot-excel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ orderIds: Array.from(selectedOrderIds) }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `BLACK_POT_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      toast({ title: "Error exportando Excel", description: e.message, variant: "destructive" });
+    }
+  };
+
   const handleWaSendResumen = async () => {
     const rawPhone = data?.customer?.phone ?? "";
     const waPhone = fmtWaPhone(rawPhone);
@@ -1541,6 +1565,11 @@ export default function CCCustomerDetailPage({
           {selectedOrderIds.size > 0 && (
             <Button size="sm" variant="outline" onClick={handleDownloadResumen} data-testid="button-download-resumen">
               <FileText className="mr-1 h-3.5 w-3.5" /> Bajar Resumen ({selectedOrderIds.size})
+            </Button>
+          )}
+          {selectedOrderIds.size > 0 && (data?.customer as any)?.blackPot && (
+            <Button size="sm" variant="outline" className="border-orange-400 text-orange-600 hover:bg-orange-50" onClick={handleExportBlackPot}>
+              <Download className="mr-1 h-3.5 w-3.5" /> Excel Black Pot ({selectedOrderIds.size})
             </Button>
           )}
           <Button

@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Plus, Search, Pencil, Trash2, Users, Building2, Phone, Mail } from "lucide-react";
 import type { Customer } from "@shared/schema";
 
-const EMPTY: Partial<Customer> = { name: "", rfc: "", cuit: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ccType: "por_saldo", bolsaFv: false, salespersonName: "", commissionPct: "0", parentCustomerId: null };
+const EMPTY: Partial<Customer> = { name: "", rfc: "", cuit: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ccType: "por_saldo", bolsaFv: false, blackPot: false, salespersonName: "", commissionPct: "0", parentCustomerId: null };
 
 export default function CustomersPage() {
   const { toast } = useToast();
@@ -155,6 +155,9 @@ export default function CustomersPage() {
                             {c.bolsaFv && (
                               <Badge variant="outline" className="text-[10px] text-green-600 border-green-300">Bolsa FV</Badge>
                             )}
+                            {c.blackPot && (
+                              <Badge variant="outline" className="text-[10px] text-orange-600 border-orange-300">Black Pot</Badge>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -272,6 +275,19 @@ export default function CustomersPage() {
                     checked={!!form.bolsaFv}
                     onCheckedChange={(v) => setForm({ ...form, bolsaFv: v })}
                     data-testid="switch-bolsa-fv"
+                  />
+                </div>
+              </div>
+              <div className="sm:col-span-2">
+                <div className="flex items-center justify-between rounded-md border border-border p-3">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Black Pot</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Habilita exportación Excel multi-hoja por colegio</p>
+                  </div>
+                  <Switch
+                    checked={!!form.blackPot}
+                    onCheckedChange={(v) => setForm({ ...form, blackPot: v })}
+                    data-testid="switch-black-pot"
                   />
                 </div>
               </div>

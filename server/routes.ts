@@ -1,6 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { storage } from "./storage";
 import { db } from "./db";
 import { sql as drizzleSql } from "drizzle-orm";
@@ -744,6 +745,134 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.setHeader("Content-Disposition", `attachment; filename="Pedido-${fullOrder.folio}.xlsx"`);
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     return res.send(buf);
+  });
+
+  // ─── Black Pot Excel Export ────────────────────────────────────────────────
+  app.post("/api/orders/export-blackpot-excel", requireAuth, async (req, res) => {
+    try {
+      const { orderIds } = z.object({ orderIds: z.array(z.number()).min(1) }).parse(req.body);
+      const MONTHS_ES = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+
+      const wb = new ExcelJS.Workbook();
+      wb.creator = "AgroLogix ERP";
+
+      for (const id of orderIds) {
+        const order = await storage.getOrder(id);
+        if (!order) continue;
+
+        const customer = order.customer;
+        const schoolName = customer.name;
+        const address = [customer.address, customer.city].filter(Boolean).join(", ");
+        const remitoStr = order.remitoNum != null ? String(order.remitoNum).padStart(6, "0") : "";
+        const d = new Date(order.orderDate);
+        const dateStr = `${d.getDate()}-${MONTHS_ES[d.getMonth()]}`;
+
+        const sheetName = schoolName.replace(/[\\\/\?\*\[\]:]/g, "").slice(0, 31) || `Pedido-${id}`;
+        const ws = wb.addWorksheet(sheetName);
+
+        ws.columns = [
+          { width: 10 },  // A CANTIDAD
+          { width: 10 },  // B UNIDAD
+          { width: 32 },  // C PRODUCTO
+          { width: 14 },  // D PRECIO
+          { width: 14 },  // E TOTAL
+          { width: 16 },  // F TOTAL + IVA
+        ];
+
+        // Row 1 — school header
+        ws.mergeCells("A1:D1");
+        const r1 = ws.getRow(1);
+        r1.getCell("A").value = `COLEGIO ${schoolName}${address ? ` - ${address}` : ""}`;
+        r1.getCell("A").font = { name: "Arial", bold: true, size: 11 };
+        r1.getCell("A").alignment = { vertical: "middle" };
+        r1.getCell("E").value = remitoStr ? `rto: ${remitoStr}` : "";
+        r1.getCell("E").font = { name: "Arial", size: 10 };
+        r1.getCell("F").value = dateStr;
+        r1.getCell("F").font = { name: "Arial", size: 10 };
+        r1.height = 18;
+        r1.commit();
+
+        // Row 2 — invoice
+        ws.mergeCells("A2:D2");
+        const r2 = ws.getRow(2);
+        r2.getCell("A").value = "";
+        r2.getCell("E").value = "Factura Nro:";
+        r2.getCell("E").font = { name: "Arial", size: 10 };
+        r2.getCell("F").value = order.invoiceNumber ?? "";
+        r2.getCell("F").font = { name: "Arial", size: 10 };
+        r2.commit();
+
+        // Row 3 — column headers
+        const r3 = ws.getRow(3);
+        ["CANTIDAD","UNIDAD","PRODUCTO","PRECIO","TOTAL","TOTAL + IVA"].forEach((h, i) => {
+          const cell = r3.getCell(i + 1);
+          cell.value = h;
+          cell.font = { name: "Arial", bold: true, size: 10 };
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9D9D9" } };
+          cell.alignment = { horizontal: i >= 3 ? "right" : "left" };
+        });
+        r3.commit();
+
+        // Item rows
+        const startRow = 4;
+        let rowIdx = startRow;
+        for (const item of order.items) {
+          if ((item as any).bolsaType) continue;
+          const productName = (item.product?.name ?? (item as any).rawProductName ?? "") as string;
+          const pCat = ((item.product as any)?.category ?? "").toUpperCase() as string;
+          const isHuevo = productName.toUpperCase().includes("HUEVO") || productName.toUpperCase().includes("MAPLE") || pCat.includes("HUEVO");
+          const ivaRate = isHuevo ? 0.21 : 0.105;
+          const subtotal = parseFloat(String(item.subtotal ?? "0"));
+          const totalConIva = parseFloat((subtotal * (1 + ivaRate)).toFixed(2));
+
+          const row = ws.getRow(rowIdx);
+          row.getCell(1).value = parseFloat(String(item.quantity));
+          row.getCell(1).font = { name: "Arial", size: 10 };
+          row.getCell(2).value = item.unit as string;
+          row.getCell(2).font = { name: "Arial", size: 10 };
+          row.getCell(3).value = productName;
+          row.getCell(3).font = { name: "Arial", size: 10 };
+          row.getCell(4).value = parseFloat(String(item.pricePerUnit ?? "0"));
+          row.getCell(4).numFmt = '"$"#,##0.00';
+          row.getCell(4).font = { name: "Arial", size: 10 };
+          row.getCell(4).alignment = { horizontal: "right" };
+          row.getCell(5).value = subtotal;
+          row.getCell(5).numFmt = '"$"#,##0.00';
+          row.getCell(5).font = { name: "Arial", size: 10 };
+          row.getCell(5).alignment = { horizontal: "right" };
+          row.getCell(6).value = totalConIva;
+          row.getCell(6).numFmt = '"$"#,##0.00';
+          row.getCell(6).font = { name: "Arial", size: 10 };
+          row.getCell(6).alignment = { horizontal: "right" };
+          row.commit();
+          rowIdx++;
+        }
+
+        const endRow = rowIdx - 1;
+
+        // Total row
+        const tr = ws.getRow(rowIdx);
+        tr.getCell(3).value = "TOTAL";
+        tr.getCell(3).font = { name: "Arial", bold: true, size: 10 };
+        tr.getCell(5).value = endRow >= startRow ? { formula: `SUM(E${startRow}:E${endRow})` } : 0;
+        tr.getCell(5).numFmt = '"$"#,##0.00';
+        tr.getCell(5).font = { name: "Arial", bold: true, size: 10 };
+        tr.getCell(5).alignment = { horizontal: "right" };
+        tr.getCell(6).value = endRow >= startRow ? { formula: `SUM(F${startRow}:F${endRow})` } : 0;
+        tr.getCell(6).numFmt = '"$"#,##0.00';
+        tr.getCell(6).font = { name: "Arial", bold: true, size: 10 };
+        tr.getCell(6).alignment = { horizontal: "right" };
+        tr.commit();
+      }
+
+      const buf = Buffer.from(await wb.xlsx.writeBuffer());
+      const today = new Date().toISOString().slice(0, 10);
+      res.setHeader("Content-Disposition", `attachment; filename="BLACK_POT_${today}.xlsx"`);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      return res.send(buf);
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
   });
 
   // ─── Remitos ───────────────────────────────────────────────────────────────

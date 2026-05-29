@@ -34,6 +34,7 @@ export const customers = pgTable("customers", {
   hasIva: boolean("has_iva").notNull().default(false),
   ccType: text("cc_type").default("por_saldo"),
   bolsaFv: boolean("bolsa_fv").default(false),
+  blackPot: boolean("black_pot").default(false),
   salespersonName: text("salesperson_name"),
   commissionPct: numeric("commission_pct", { precision: 5, scale: 2 }).default("0"),
   openingBalance: numeric("opening_balance", { precision: 12, scale: 2 }).notNull().default("0"),
