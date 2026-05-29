@@ -4511,50 +4511,6 @@ export const storage = {
     await db.delete(bankContacts).where(eq(bankContacts.id, id));
   },
 
-  // ─── MP User Cache ────────────────────────────────────────────────────────
-
-  async cleanMpUserCache(): Promise<void> {
-    await db.execute(drizzleSql`
-      CREATE TABLE IF NOT EXISTS mp_user_cache (
-        mp_user_id BIGINT PRIMARY KEY,
-        display_name TEXT,
-        fetched_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-    await db.execute(drizzleSql`DELETE FROM mp_user_cache WHERE display_name IS NULL OR display_name = ''`);
-  },
-
-  async getMpUserCache(mpUserIds: string[]): Promise<Map<string, { displayName: string; fetchedAt: Date }>> {
-    if (mpUserIds.length === 0) return new Map();
-    await db.execute(drizzleSql`
-      CREATE TABLE IF NOT EXISTS mp_user_cache (
-        mp_user_id BIGINT PRIMARY KEY,
-        display_name TEXT,
-        fetched_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-    const escaped = mpUserIds.map(id => `'${id.replace(/'/g, "''")}'`).join(",");
-    const rows = await db.execute(drizzleSql.raw(`
-      SELECT mp_user_id::text AS mp_user_id, display_name, fetched_at
-      FROM mp_user_cache
-      WHERE mp_user_id::text IN (${escaped})
-    `));
-    return new Map((rows.rows as any[]).map(r => [
-      String(r.mp_user_id),
-      { displayName: r.display_name ?? "", fetchedAt: new Date(r.fetched_at) },
-    ]));
-  },
-
-  async upsertMpUserCache(mpUserId: string, displayName: string): Promise<void> {
-    await db.execute(drizzleSql`
-      INSERT INTO mp_user_cache (mp_user_id, display_name, fetched_at)
-      VALUES (${mpUserId}::bigint, ${displayName}, NOW())
-      ON CONFLICT (mp_user_id) DO UPDATE
-        SET display_name = EXCLUDED.display_name,
-            fetched_at = NOW()
-    `);
-  },
-
   // ─── MP Movement Identifiers (settlement report) ──────────────────────────
 
   async upsertMpMovementIdentifiers(rows: { movementId: string; payerIdentifier: string; payerName?: string | null; rawExternalId?: string | null }[]): Promise<void> {

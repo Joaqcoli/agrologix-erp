@@ -39,47 +39,6 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-/** Fetch MP user display name from /v1/users/{id} */
-async function fetchMpUserName(userId: string, token: string): Promise<string | null> {
-  try {
-    const r = await fetch(`https://api.mercadopago.com/v1/users/${userId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!r.ok) {
-      console.log(`[mp-users] GET /v1/users/${userId} → HTTP ${r.status}`);
-      return null;
-    }
-    const body = await r.json();
-    const first = String(body.first_name ?? "").trim();
-    const last  = String(body.last_name  ?? "").trim();
-    const nick  = String(body.nickname   ?? "").trim();
-    const full  = [first, last].filter(Boolean).join(" ");
-    const name  = full || nick || null;
-    console.log(`[mp-users] GET /v1/users/${userId} → "${name ?? "null"}"`);
-    return name;
-  } catch (e: any) {
-    console.log(`[mp-users] GET /v1/users/${userId} → error: ${e.message}`);
-    return null;
-  }
-}
-
-/** Resolve MP user names in batches of 5 parallel requests, 200ms between batches */
-async function resolveMpUserNames(
-  userIds: string[],
-  token: string,
-): Promise<Map<string, string>> {
-  const result = new Map<string, string>();
-  const BATCH = 5;
-  for (let i = 0; i < userIds.length; i += BATCH) {
-    const batch = userIds.slice(i, i + BATCH);
-    const results = await Promise.all(batch.map(id => fetchMpUserName(id, token).then(name => ({ id, name }))));
-    for (const { id, name } of results) {
-      if (name) result.set(id, name);
-    }
-    if (i + BATCH < userIds.length) await new Promise(r => setTimeout(r, 200));
-  }
-  return result;
-}
 
 function requireVendedor(req: Request, res: Response, next: NextFunction) {
   if (!req.session.userId) return res.status(401).json({ error: "Not authenticated" });
@@ -2301,73 +2260,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       } catch (_) {}
 
-      // ── DIAG: log primeros 3 egresos para ver campos collector ──────────────
-      let _egressDiag = 0;
-      for (const m of withCandidates) {
-        if (!m.isOutgoing || _egressDiag >= 3) continue;
-        console.log(`[mp-users DIAG egreso #${_egressDiag+1}] id=${m.id}` +
-          ` collector.id=${m.collector?.id ?? m.collector_id}` +
-          ` collector.first_name=${m.collector?.first_name}` +
-          ` collector.last_name=${m.collector?.last_name}` +
-          ` collector.nickname=${m.collector?.nickname}` +
-          ` collector.email=${m.collector?.email}` +
-          ` statement_descriptor=${m.statement_descriptor}` +
-          ` displayName=${m.displayName}`);
-        _egressDiag++;
-      }
-
-      // ── Fix 2: resolver nombres de destinatarios en egresos via /v1/users ──
-      // Colectar collector_ids únicos de egresos no identificados
-      const unresolvedCollectorIds = new Set<string>();
-      for (const m of withCandidates) {
-        if (!m.isOutgoing) continue;
-        const candidates = m._candidates as string[];
-        const alreadyMatched = candidates.some(c => contactsMap.has(c.toLowerCase().trim()));
-        if (alreadyMatched) continue;
-        const collId = String(m.collector_id ?? m.collector?.id ?? "");
-        if (collId && collId !== "0" && collId !== merchantId) unresolvedCollectorIds.add(collId);
-      }
-
-      // Log: IDs a resolver (incluye los 3 que el usuario quiere ver)
-      console.log(`[mp-users] intentando resolver IDs (${unresolvedCollectorIds.size}):`, [...unresolvedCollectorIds].join(", "));
-
-      // Lookup cache para ids no resueltos
-      let userNameMap = new Map<string, string>();
-      if (unresolvedCollectorIds.size > 0) {
-        try {
-          // Limpiar entradas vacías del caché antes de lookup
-          try {
-            await storage.cleanMpUserCache();
-          } catch (_) {}
-
-          const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-          const cached = await storage.getMpUserCache([...unresolvedCollectorIds]);
-          console.log(`[mp-users] en cache: ${cached.size} de ${unresolvedCollectorIds.size}`);
-          const toFetch: string[] = [];
-          for (const uid of unresolvedCollectorIds) {
-            const entry = cached.get(uid);
-            if (entry && entry.fetchedAt > sevenDaysAgo) {
-              if (entry.displayName) userNameMap.set(uid, entry.displayName);
-            } else {
-              toFetch.push(uid);
-            }
-          }
-          // Fetch los que faltan — batches de 5 en paralelo
-          if (toFetch.length > 0 && token) {
-            console.log(`[mp-users] fetching ${toFetch.length} IDs: ${toFetch.join(", ")}`);
-            const fetched = await resolveMpUserNames(toFetch, token);
-            console.log(`[mp-users] resolved ${fetched.size}/${toFetch.length} names:`, [...fetched.entries()].map(([k,v]) => `${k}="${v}"`).join(", "));
-            for (const [uid, name] of fetched) {
-              userNameMap.set(uid, name);
-              storage.upsertMpUserCache(uid, name).catch(() => {});
-            }
-          }
-        } catch (e: any) {
-          console.log(`[mp-users] error en resolver:`, e.message);
-        }
-      } else {
-        console.log(`[mp-users] sin IDs a resolver (todos identificados o sin egresos)`);
-      }
 
       const withCats = withCandidates.map((m: any) => {
         const candidates = m._candidates as string[];
@@ -2391,18 +2283,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           };
         }
 
-        // Fix 2: egreso sin identificar → usar nombre resuelto de /v1/users
-        let resolvedName: string | null = null;
-        if (m.isOutgoing && !contact) {
-          const collId = String(m.collector_id ?? m.collector?.id ?? "");
-          resolvedName = userNameMap.get(collId) ?? null;
-        }
-
         return {
           ...cleanM,
           categoryId: catMap.get(String(m.id)) ?? null,
           identified: !!contact,
-          displayName: contact ? contact.displayName : (resolvedName ?? m.displayName ?? null),
+          displayName: contact ? contact.displayName : (m.displayName ?? null),
           contactType: contact?.type ?? null,
           entityId: contact?.entityId ?? null,
           contactId: contact?.id ?? null,
