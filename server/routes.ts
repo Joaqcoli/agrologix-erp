@@ -1994,7 +1994,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
         const pagingTotal: number = body.paging?.total ?? 0;
         console.log(`[mp] página offset=${offset} → ${page.length} items, total MP=${pagingTotal}`);
-        if (page.length === 0 || offset + LIMIT >= pagingTotal) break;
+        if (page.length === 0) break;                              // sin resultados
+        if (page.length < LIMIT) break;                           // página parcial = última
+        if (pagingTotal > 0 && offset + LIMIT >= pagingTotal) break; // total confirmado
         offset += LIMIT;
       }
       console.log(`[mp] total fetcheado: ${rawPayments.length} movimientos (${effectiveFrom} → ${to ?? "hoy"})`);
