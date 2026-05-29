@@ -927,23 +927,25 @@ export async function runNcMigrations() {
       WHERE invoice_type IN ('B','C') AND condicion_iva_receptor_id IS NULL
     `);
   } catch {}
-  await db.execute(sql`
-    CREATE TABLE IF NOT EXISTS credit_notes (
-      id SERIAL PRIMARY KEY,
-      invoice_id INTEGER NOT NULL REFERENCES invoices(id),
-      customer_id INTEGER NOT NULL REFERENCES customers(id),
-      credit_note_type TEXT NOT NULL,
-      credit_note_number TEXT NOT NULL,
-      point_of_sale INTEGER NOT NULL DEFAULT 4,
-      cae TEXT NOT NULL,
-      cae_expiry TEXT NOT NULL,
-      total NUMERIC(12,2) NOT NULL,
-      iva_amount NUMERIC(12,2) NOT NULL,
-      condicion_iva_receptor_id INTEGER,
-      description TEXT,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    )
-  `);
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS credit_notes (
+        id SERIAL PRIMARY KEY,
+        invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+        customer_id INTEGER NOT NULL REFERENCES customers(id),
+        credit_note_type TEXT NOT NULL,
+        credit_note_number TEXT NOT NULL,
+        point_of_sale INTEGER NOT NULL DEFAULT 4,
+        cae TEXT NOT NULL,
+        cae_expiry TEXT NOT NULL,
+        total NUMERIC(12,2) NOT NULL,
+        iva_amount NUMERIC(12,2) NOT NULL,
+        condicion_iva_receptor_id INTEGER,
+        description TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+  } catch {}
   try { await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS black_pot BOOLEAN DEFAULT FALSE`); } catch {}
   console.log("NC migrations complete.");
 }

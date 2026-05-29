@@ -262,6 +262,7 @@ type CCDetail = {
     phone?: string;
     email?: string;
     city?: string;
+    blackPot?: boolean | null;
   };
   month: number;
   year: number;
@@ -1567,7 +1568,7 @@ export default function CCCustomerDetailPage({
               <FileText className="mr-1 h-3.5 w-3.5" /> Bajar Resumen ({selectedOrderIds.size})
             </Button>
           )}
-          {selectedOrderIds.size > 0 && (data?.customer as any)?.blackPot && (
+          {selectedOrderIds.size > 0 && data?.customer?.blackPot && (
             <Button size="sm" variant="outline" className="border-orange-400 text-orange-600 hover:bg-orange-50" onClick={handleExportBlackPot}>
               <Download className="mr-1 h-3.5 w-3.5" /> Excel Black Pot ({selectedOrderIds.size})
             </Button>
