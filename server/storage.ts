@@ -4286,6 +4286,29 @@ export const storage = {
     const totalIngresos = sumPayments + sumApprovedOrders + sumManualIn;
     const totalEgresos = sumSupplier + sumManualOut;
 
+    // Method breakdown (payments + supplier payments only, they carry method)
+    const methodMap: Record<string, { ingresos: number; egresos: number }> = {};
+    const addToMethod = (method: string, amount: number, isIngreso: boolean) => {
+      const k = (method || "otro").toLowerCase();
+      if (!methodMap[k]) methodMap[k] = { ingresos: 0, egresos: 0 };
+      if (isIngreso) methodMap[k].ingresos += amount;
+      else methodMap[k].egresos += amount;
+    };
+    pmts.forEach(p => addToMethod(p.method, parseFloat(p.amount ?? "0"), true));
+    spmts.forEach(p => addToMethod(p.method, parseFloat(p.amount ?? "0"), false));
+    const byMethod = Object.entries(methodMap).map(([method, v]) => ({ method, ...v }));
+
+    // Category breakdown (manual movements)
+    const catMap: Record<string, { ingresos: number; egresos: number }> = {};
+    manualMovements.forEach(m => {
+      const k = m.category || "Sin categoría";
+      if (!catMap[k]) catMap[k] = { ingresos: 0, egresos: 0 };
+      const amt = parseFloat(m.amount ?? "0");
+      if (m.type === "ingreso") catMap[k].ingresos += amt;
+      else catMap[k].egresos += amt;
+    });
+    const byCategory = Object.entries(catMap).map(([category, v]) => ({ category, ...v }));
+
     return {
       totalIngresos,
       totalEgresos,
@@ -4300,7 +4323,74 @@ export const storage = {
         total: o.total ?? "0",
         customerName: o.customerName,
       })),
+      byMethod,
+      byCategory,
     };
+  },
+
+  async getCajaTrend(months = 6): Promise<Array<{ month: string; label: string; ingresos: number; egresos: number }>> {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const startD = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
+    const endD = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const fromStr = `${startD.getFullYear()}-${pad(startD.getMonth() + 1)}-01`;
+    const toStr = `${endD.getFullYear()}-${pad(endD.getMonth() + 1)}-${pad(endD.getDate())}`;
+
+    const [pmtRows, orderRows, manInRows, supplierRows, manOutRows] = await Promise.all([
+      db.select({
+        month: drizzleSql<string>`to_char(${payments.date}::date, 'YYYY-MM')`,
+        total: drizzleSql<string>`sum(${payments.amount}::numeric)`,
+      }).from(payments)
+        .where(and(drizzleSql`${payments.date} >= ${fromStr}`, drizzleSql`${payments.date} <= ${toStr}`))
+        .groupBy(drizzleSql`to_char(${payments.date}::date, 'YYYY-MM')`),
+
+      db.select({
+        month: drizzleSql<string>`to_char(${orders.approvedAt}::date, 'YYYY-MM')`,
+        total: drizzleSql<string>`sum(${orders.total}::numeric)`,
+      }).from(orders)
+        .where(and(eq(orders.status, "approved"),
+          drizzleSql`${orders.approvedAt}::date >= ${fromStr}::date`,
+          drizzleSql`${orders.approvedAt}::date <= ${toStr}::date`))
+        .groupBy(drizzleSql`to_char(${orders.approvedAt}::date, 'YYYY-MM')`),
+
+      db.select({
+        month: drizzleSql<string>`to_char(${cajaMovements.date}::date, 'YYYY-MM')`,
+        total: drizzleSql<string>`sum(${cajaMovements.amount}::numeric)`,
+      }).from(cajaMovements)
+        .where(and(eq(cajaMovements.type, "ingreso"),
+          drizzleSql`${cajaMovements.date} >= ${fromStr}`, drizzleSql`${cajaMovements.date} <= ${toStr}`))
+        .groupBy(drizzleSql`to_char(${cajaMovements.date}::date, 'YYYY-MM')`),
+
+      db.select({
+        month: drizzleSql<string>`to_char(${supplierPayments.date}::date, 'YYYY-MM')`,
+        total: drizzleSql<string>`sum(${supplierPayments.amount}::numeric)`,
+      }).from(supplierPayments)
+        .where(and(drizzleSql`${supplierPayments.date} >= ${fromStr}`, drizzleSql`${supplierPayments.date} <= ${toStr}`))
+        .groupBy(drizzleSql`to_char(${supplierPayments.date}::date, 'YYYY-MM')`),
+
+      db.select({
+        month: drizzleSql<string>`to_char(${cajaMovements.date}::date, 'YYYY-MM')`,
+        total: drizzleSql<string>`sum(${cajaMovements.amount}::numeric)`,
+      }).from(cajaMovements)
+        .where(and(eq(cajaMovements.type, "egreso"),
+          drizzleSql`${cajaMovements.date} >= ${fromStr}`, drizzleSql`${cajaMovements.date} <= ${toStr}`))
+        .groupBy(drizzleSql`to_char(${cajaMovements.date}::date, 'YYYY-MM')`),
+    ]);
+
+    const get = (rows: { month: string; total: string }[], key: string) =>
+      parseFloat(rows.find(r => r.month === key)?.total ?? "0");
+
+    const MONTHS_ES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+    const result = [];
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+      const label = `${MONTHS_ES[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`;
+      const ingresos = get(pmtRows, key) + get(orderRows, key) + get(manInRows, key);
+      const egresos = get(supplierRows, key) + get(manOutRows, key);
+      result.push({ month: key, label, ingresos, egresos });
+    }
+    return result;
   },
 
   async createCajaMovement(data: InsertCajaMovement, userId: number): Promise<CajaMovement> {

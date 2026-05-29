@@ -1840,6 +1840,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  app.get("/api/caja/trend", requireAuth, async (req, res) => {
+    try {
+      const months = Math.min(24, Math.max(2, parseInt(req.query.months as string) || 6));
+      return res.json(await storage.getCajaTrend(months));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Mercado Pago (proxy) ────────────────────────────────────────────────────
   // Cache del merchant user ID (se resuelve una vez, luego se reutiliza)
   let _mpMerchantId: string | null = null;
