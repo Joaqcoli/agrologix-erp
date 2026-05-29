@@ -2106,6 +2106,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         catMap = await storage.getMpMovementOverridesMap(mpIds);
       } catch (_) { /* tabla no existe todavía, continuar sin categorías */ }
 
+      // ── DIAGNÓSTICO TEMPORAL — borrar después de analizar los logs ──────────
+      let _diagCount = 0;
+      for (const m of enriched) {
+        if (!m.isOutgoing && _diagCount < 5) {
+          console.log("INGRESO:", JSON.stringify({
+            id: m.id,
+            operation_type: m.operation_type,
+            payment_type_id: m.payment_type_id,
+            payer_id: m.payer?.id ?? m.payer_id,
+            payer_email: m.payer?.email,
+            payer_first_name: m.payer?.first_name,
+            payer_last_name: m.payer?.last_name,
+            payer_identification: m.payer?.identification,
+            description: m.description,
+            statement_descriptor: m.statement_descriptor,
+            transaction_details: m.transaction_details,
+          }));
+          _diagCount++;
+        }
+      }
+      // ── FIN DIAGNÓSTICO ───────────────────────────────────────────────────
+
       // Compute candidate identifiers — separados por dirección del pago
       const withCandidates = enriched.map((m: any) => {
         const candidates: string[] = [];
