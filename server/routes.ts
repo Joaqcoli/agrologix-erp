@@ -2000,86 +2000,108 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
-  // ── DIAGNÓSTICO TEMPORAL: comparar /v1/payments/search vs /v1/activity/search ──
+  // ── DIAGNÓSTICO TEMPORAL: buscar movimiento faltante + probar endpoints alternativos ──
   app.get("/api/mp/diag-endpoints", requireAuth, async (_req, res) => {
     const token = process.env.MP_ACCESS_TOKEN;
     if (!token) return res.status(500).json({ error: "MP_ACCESS_TOKEN not set" });
     const auth = { Authorization: `Bearer ${token}` };
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const from = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01T00:00:00.000-03:00`;
-    const endDate = now.toISOString();
-
     const result: any = {};
 
-    // ── 1. /v1/payments/search (actual) ──────────────────────────────────────
+    // ── 1. payments/search ventana estrecha 07:00–08:00 ART del 29/05 (10:00–11:00 UTC) ──
+    // Buscamos el movimiento de Carlos Daniel Coronel ($60.360 a las 07:23 ART)
     try {
-      const url = `https://api.mercadopago.com/v1/payments/search?range=date_created&begin_date=${encodeURIComponent(from)}&end_date=${encodeURIComponent(endDate)}&sort=date_created&criteria=desc&limit=10&offset=0`;
+      const url = `https://api.mercadopago.com/v1/payments/search?range=date_created&begin_date=2026-05-29T10:00:00Z&end_date=2026-05-29T11:40:00Z&limit=50&offset=0`;
       const r = await fetch(url, { headers: auth });
       const body = await r.json();
       const items: any[] = body.results ?? body.elements ?? [];
-      result.payments_search = {
+      result.payments_search_29may_0700_0800 = {
         http_status: r.status,
         paging: body.paging,
-        first10: items.map((p: any) => ({
+        items: items.map((p: any) => ({
           id: p.id,
           date_created: p.date_created,
           operation_type: p.operation_type,
           payment_type_id: p.payment_type_id,
+          status: p.status,
+          transaction_amount: p.transaction_amount,
           description: p.description,
-          net_amount: p.transaction_amount,
-          status: p.status,
+          payer_email: p.payer?.email,
+          payer_name: [p.payer?.first_name, p.payer?.last_name].filter(Boolean).join(" ") || null,
         })),
       };
     } catch (e: any) {
-      result.payments_search = { error: e.message };
+      result.payments_search_29may_0700_0800 = { error: e.message };
     }
 
-    // ── 2. /v1/activity/search ────────────────────────────────────────────────
-    try {
-      const url = `https://api.mercadopago.com/v1/activity/search?limit=10&offset=0&begin_date=${encodeURIComponent(from)}&end_date=${encodeURIComponent(endDate)}&sort=date_created&criteria=desc`;
-      const r = await fetch(url, { headers: auth });
-      const body = await r.json();
-      const items: any[] = body.results ?? body.elements ?? body.data ?? [];
-      result.activity_search = {
-        http_status: r.status,
-        paging: body.paging ?? body.meta,
-        raw_keys: Object.keys(body),
-        first10: items.map((p: any) => ({
-          id: p.id,
-          date_created: p.date_created ?? p.created_at ?? p.date,
-          operation_type: p.operation_type ?? p.type,
-          payment_type_id: p.payment_type_id,
-          description: p.description ?? p.reason,
-          net_amount: p.net_amount ?? p.transaction_amount ?? p.amount,
-          status: p.status,
-        })),
-      };
-    } catch (e: any) {
-      result.activity_search = { error: e.message };
-    }
-
-    // ── 3. /v1/account/movements/search (alternativa) ─────────────────────────
+    // ── 2. /v1/account/movements/search ───────────────────────────────────────
     try {
       const url = `https://api.mercadopago.com/v1/account/movements/search?limit=10&offset=0`;
       const r = await fetch(url, { headers: auth });
       const body = await r.json();
       const items: any[] = body.results ?? body.elements ?? body.data ?? [];
-      result.account_movements = {
+      result.account_movements_search = {
         http_status: r.status,
-        paging: body.paging ?? body.meta,
         raw_keys: Object.keys(body),
-        first10: items.map((p: any) => ({
+        paging: body.paging ?? body.meta,
+        items: items.map((p: any) => ({
           id: p.id,
-          date_created: p.date_created ?? p.created_at ?? p.date,
+          date: p.date_created ?? p.created_at ?? p.date,
           operation_type: p.operation_type ?? p.type,
           description: p.description ?? p.reason,
-          net_amount: p.net_amount ?? p.transaction_amount ?? p.amount,
+          amount: p.net_amount ?? p.transaction_amount ?? p.amount,
           status: p.status,
         })),
       };
     } catch (e: any) {
-      result.account_movements = { error: e.message };
+      result.account_movements_search = { error: e.message };
+    }
+
+    // ── 3. /v1/money_transfers ────────────────────────────────────────────────
+    try {
+      const url = `https://api.mercadopago.com/v1/money_transfers?limit=10`;
+      const r = await fetch(url, { headers: auth });
+      const body = await r.json();
+      const items: any[] = body.results ?? body.elements ?? body.data ?? [];
+      result.money_transfers = {
+        http_status: r.status,
+        raw_keys: Object.keys(body),
+        paging: body.paging ?? body.meta,
+        items: items.map((p: any) => ({
+          id: p.id,
+          date: p.date_created ?? p.created_at ?? p.date,
+          operation_type: p.operation_type ?? p.type,
+          description: p.description ?? p.reason,
+          amount: p.net_amount ?? p.transaction_amount ?? p.amount,
+          status: p.status,
+        })),
+      };
+    } catch (e: any) {
+      result.money_transfers = { error: e.message };
+    }
+
+    // ── 4. payments/search ventana completa 29/05 — ver total y todos los tipos ──
+    try {
+      const url = `https://api.mercadopago.com/v1/payments/search?range=date_created&begin_date=2026-05-29T03:00:00Z&end_date=2026-05-30T02:59:59Z&sort=date_created&criteria=asc&limit=50&offset=0`;
+      const r = await fetch(url, { headers: auth });
+      const body = await r.json();
+      const items: any[] = body.results ?? body.elements ?? [];
+      result.payments_search_29may_all = {
+        http_status: r.status,
+        paging: body.paging,
+        items: items.map((p: any) => ({
+          id: p.id,
+          date_created: p.date_created,
+          operation_type: p.operation_type,
+          payment_type_id: p.payment_type_id,
+          status: p.status,
+          transaction_amount: p.transaction_amount,
+          description: p.description,
+          payer_email: p.payer?.email,
+          payer_name: [p.payer?.first_name, p.payer?.last_name].filter(Boolean).join(" ") || null,
+        })),
+      };
+    } catch (e: any) {
+      result.payments_search_29may_all = { error: e.message };
     }
 
     return res.json(result);
