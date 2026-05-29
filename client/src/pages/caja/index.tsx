@@ -16,6 +16,14 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
 const fmt = (v: number) => "$" + Math.round(v).toLocaleString("es-AR");
+
+// Normaliza variaciones de nombres de categoría al mismo label canónico
+function normalizeCategory(cat: string): string {
+  const lower = cat.toLowerCase().trim();
+  if (lower.includes("pago") && lower.includes("proveedor")) return "Pagos proveedores";
+  if (lower.includes("cobro") && lower.includes("client")) return "Cobros clientes";
+  return cat;
+}
 const pad = (n: number) => String(n).padStart(2, "0");
 const MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 const PIE_COLORS = ["#f87171","#fb923c","#fbbf24","#a3e635","#34d399","#38bdf8","#818cf8","#c084fc","#f472b6","#94a3b8"];
@@ -209,7 +217,7 @@ export default function CajaPage() {
         description: m.description,
         counterpart: isBankSync ? "Banco MP" : "",
         method: m.method || "—",
-        category: m.category || "Sin categoría",
+        category: normalizeCategory(m.category || "Sin categoría"),
         type: m.type as "ingreso" | "egreso",
         amount: parseFloat(m.amount),
         sourceType: "manual",
