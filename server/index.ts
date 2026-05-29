@@ -6,7 +6,7 @@ import connectPgSimple from "connect-pg-simple";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
-import { runMigrations } from "./migrate";
+import { runMigrations, runNcMigrations } from "./migrate";
 import { seedDatabase } from "./seed";
 import { pool, connectionString } from "./db";
 
@@ -100,6 +100,13 @@ app.use((req, res, next) => {
     await seedDatabase();
   } catch (err) {
     console.error("Startup error:", err);
+  }
+
+  // NC migrations run independently so they succeed even if runMigrations() threw
+  try {
+    await runNcMigrations();
+  } catch (err) {
+    console.error("NC migration error:", err);
   }
 
   await registerRoutes(httpServer, app);

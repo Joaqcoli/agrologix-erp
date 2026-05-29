@@ -910,3 +910,39 @@ export async function runMigrations() {
 
   console.log("Migrations complete.");
 }
+
+/** Corre las migraciones de Notas de Crédito de forma independiente.
+ *  Se llama por separado para garantizar que corran aunque runMigrations() falle. */
+export async function runNcMigrations() {
+  try { await db.execute(sql`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS condicion_iva_receptor_id INTEGER`); } catch {}
+  try {
+    await db.execute(sql`
+      UPDATE invoices SET condicion_iva_receptor_id = 1
+      WHERE invoice_type = 'A' AND condicion_iva_receptor_id IS NULL
+    `);
+  } catch {}
+  try {
+    await db.execute(sql`
+      UPDATE invoices SET condicion_iva_receptor_id = 5
+      WHERE invoice_type IN ('B','C') AND condicion_iva_receptor_id IS NULL
+    `);
+  } catch {}
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS credit_notes (
+      id SERIAL PRIMARY KEY,
+      invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+      customer_id INTEGER NOT NULL REFERENCES customers(id),
+      credit_note_type TEXT NOT NULL,
+      credit_note_number TEXT NOT NULL,
+      point_of_sale INTEGER NOT NULL DEFAULT 4,
+      cae TEXT NOT NULL,
+      cae_expiry TEXT NOT NULL,
+      total NUMERIC(12,2) NOT NULL,
+      iva_amount NUMERIC(12,2) NOT NULL,
+      condicion_iva_receptor_id INTEGER,
+      description TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+  console.log("NC migrations complete.");
+}
