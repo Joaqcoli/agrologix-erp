@@ -2151,6 +2151,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         };
       });
 
+      // Backfill: sync movimientos ya categorizados que aún no están en caja_movements
+      try {
+        const needBackfill = (withCats as any[]).filter(
+          (m: any) => m.categoryId != null && (m.netAmount ?? 0) > 0
+        );
+        if (needBackfill.length > 0) {
+          const allCats = await storage.getBankCategories();
+          const catNameMap = new Map(allCats.map(c => [c.id, c.name]));
+          const backfillData = needBackfill.map((m: any) => ({
+            sourceId: `mp:${String(m.id)}`,
+            date: (m.date_created ?? "").slice(0, 10),
+            type: (m.isOutgoing ? "egreso" : "ingreso") as "egreso" | "ingreso",
+            description: String(m.displayName || m.description || (m.isOutgoing ? "Pago banco" : "Cobro banco")),
+            amount: parseFloat(String(m.netAmount ?? 0)).toFixed(2),
+            category: catNameMap.get(m.categoryId as number) ?? "Sin categoría",
+            method: "TRANSFERENCIA",
+          }));
+          const synced = await storage.backfillBankMovementsToCaja(backfillData);
+          if (synced > 0) console.log(`[caja backfill] sincronizados ${synced} movimientos banco→caja`);
+        }
+      } catch (backfillErr: any) {
+        console.warn("[caja backfill] error:", backfillErr.message);
+      }
+
       return res.json({ ...mpData, results: withCats });
     } catch (e: any) {
       const msg = (e as any)?.name === "AbortError" ? "Timeout al conectar con Mercado Pago" : e.message;

@@ -4412,6 +4412,38 @@ export const storage = {
     await db.delete(cajaMovements).where(drizzleSql`${cajaMovements.sourceId} = ${sourceId}`);
   },
 
+  // Backfill: inserta entradas de banco que ya tenían categoría pero aún no están en caja_movements
+  async backfillBankMovementsToCaja(movements: Array<{
+    sourceId: string;
+    date: string;
+    type: "ingreso" | "egreso";
+    description: string;
+    amount: string;
+    category: string;
+    method: string;
+  }>): Promise<number> {
+    if (movements.length === 0) return 0;
+    const sourceIds = movements.map(m => m.sourceId);
+    const existing = await db
+      .select({ sid: cajaMovements.sourceId })
+      .from(cajaMovements)
+      .where(inArray(cajaMovements.sourceId, sourceIds));
+    const existingSet = new Set(existing.map(r => r.sid));
+    const toSync = movements.filter(m => !existingSet.has(m.sourceId));
+    for (const m of toSync) {
+      await db.insert(cajaMovements).values({
+        sourceId: m.sourceId,
+        date: m.date,
+        type: m.type,
+        description: m.description,
+        amount: m.amount,
+        category: m.category,
+        method: m.method,
+      });
+    }
+    return toSync.length;
+  },
+
   // ─── Bank Categories ─────────────────────────────────────────────────────────
   async getBankCategories(): Promise<BankCategory[]> {
     return db.select().from(bankCategories).orderBy(asc(bankCategories.id));
