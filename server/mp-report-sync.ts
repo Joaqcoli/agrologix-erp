@@ -1,15 +1,12 @@
 import { storage } from "./storage";
 
-/**
- * Syncs MP payment identifiers from the Payments API directly.
- * Extracts payer identifiers (CBU, CUIT, MP user ID) from:
- *   - transaction_details.payer_bank_info.cbu  (CVU bank transfers)
- *   - payer.identification.number              (for outgoing: collector's CUIT)
- *   - payer.id                                 (MP user ID for app-to-app)
- *   - payer.email                              (fallback)
- *
- * Also tries the settlement report CSV as a secondary source (EXTERNAL_ID).
- */
+const OWN_COLLECTOR_ID = "1852295299";
+const OWN_EMAIL = "vegetalesargentinos.srl@gmail.com";
+
+function isSelf(value: string): boolean {
+  const v = value.toLowerCase().trim();
+  return v === OWN_COLLECTOR_ID || v === `mp:${OWN_COLLECTOR_ID}` || v === OWN_EMAIL;
+}
 
 function classifyCbu(value: string): string | null {
   const v = value.replace(/[\s-]/g, "");
@@ -19,7 +16,7 @@ function classifyCbu(value: string): string | null {
 
 function classifyMpId(value: string, merchantId: string): string | null {
   const v = value.replace(/[\s-]/g, "");
-  if (!v || v === "0" || v === merchantId) return null;
+  if (!v || v === "0" || v === merchantId || v === OWN_COLLECTOR_ID) return null;
   if (/^\d{4,}$/.test(v)) return `mp:${v}`;
   return null;
 }
@@ -58,7 +55,7 @@ export async function syncMpReport(token: string): Promise<{
   let skipped = 0;
   const details: string[] = [];
 
-  // ── 1. Sync from Payments API (primary) ───────────────────────────────────
+  // ── 1. Sync from Payments API ─────────────────────────────────────────────
   try {
     const now = new Date();
     const from = new Date(now); from.setMonth(now.getMonth() - 3);
@@ -90,10 +87,25 @@ export async function syncMpReport(token: string): Promise<{
       const cid = String(p.collector_id ?? p.collector?.id ?? "");
       if (cid && cid !== "0") freq.set(cid, (freq.get(cid) ?? 0) + 1);
     }
-    let merchantId = "";
+    let merchantId = OWN_COLLECTOR_ID;
     let best = 0;
     for (const [id, n] of freq) { if (n > best) { best = n; merchantId = id; } }
     details.push(`merchantId: ${merchantId}`);
+
+    // Log first 3 incoming payments raw fields for diagnosis
+    let diagCount = 0;
+    for (const p of allPayments) {
+      if (diagCount >= 3) break;
+      const collId = String(p.collector_id ?? p.collector?.id ?? "");
+      if (collId !== merchantId) continue; // skip outgoing
+      const pbi = p.transaction_details?.payer_bank_info;
+      console.log(`[mp-sync PAYMENTS DIAG ingreso #${diagCount+1}] id=${p.id} op=${p.operation_type} payment_type=${p.payment_type_id}` +
+        ` payer_id=${p.payer_id} payer.id=${p.payer?.id} payer.email=${p.payer?.email}` +
+        ` payer.identification=${JSON.stringify(p.payer?.identification)}` +
+        ` pbi.cbu=${pbi?.cbu} pbi.account_id=${pbi?.account_id} pbi.owner_name=${pbi?.owner_name}` +
+        ` description=${p.description}`);
+      diagCount++;
+    }
 
     for (const p of allPayments) {
       const movId = String(p.id ?? "");
@@ -106,47 +118,36 @@ export async function syncMpReport(token: string): Promise<{
         // CVU/bank transfer: payer_bank_info.cbu
         const pbi = p.transaction_details?.payer_bank_info;
         const cbu = String(pbi?.cbu ?? pbi?.account_id ?? "").replace(/[\s-]/g, "");
-        if (cbu.length >= 11) {
-          toUpsert.push({
-            movementId: movId,
-            payerIdentifier: cbu,
-            payerName: String(pbi?.owner_name ?? "").trim() || null,
-            rawExternalId: `payer_bank_info.cbu`,
-          });
+        if (cbu.length >= 11 && !isSelf(cbu)) {
+          toUpsert.push({ movementId: movId, payerIdentifier: cbu, payerName: String(pbi?.owner_name ?? "").trim() || null, rawExternalId: `payer_bank_info.cbu` });
           continue;
         }
 
         // MP user ID (app-to-app payments, QR)
         const payerId = String(p.payer_id ?? p.payer?.id ?? "");
         const mpId = classifyMpId(payerId, merchantId);
-        if (mpId) {
+        if (mpId && !isSelf(mpId)) {
           const firstName = String(p.payer?.first_name ?? "").trim();
           const lastName  = String(p.payer?.last_name  ?? "").trim();
           const payerName = [firstName, lastName].filter(Boolean).join(" ") || null;
-          toUpsert.push({
-            movementId: movId,
-            payerIdentifier: mpId,
-            payerName,
-            rawExternalId: `payer.id`,
-          });
+          toUpsert.push({ movementId: movId, payerIdentifier: mpId, payerName, rawExternalId: `payer.id` });
           continue;
         }
 
         // Email fallback
         const email = String(p.payer?.email ?? "").toLowerCase().trim();
-        if (email && email.includes("@") && !email.includes("noreply")) {
+        if (email && email.includes("@") && !email.includes("noreply") && !isSelf(email)) {
           toUpsert.push({ movementId: movId, payerIdentifier: email, payerName: null, rawExternalId: "payer.email" });
           continue;
         }
       }
-      // Outgoing: skip (egreso identifies collector via other means)
       skipped++;
     }
   } catch (e: any) {
     details.push(`payments sync error: ${e.message}`);
   }
 
-  // ── 2. Settlement report CSV (secondary — EXTERNAL_ID might have CBU) ──────
+  // ── 2. Settlement report CSV (log raw rows + secondary sync) ──────────────
   let reportFile: string | null = null;
   try {
     const listRes = await fetch(`${BASE}/v1/account/release_report/list`, { headers: authHeaders });
@@ -161,6 +162,7 @@ export async function syncMpReport(token: string): Promise<{
         );
         const latest = sorted[0];
         reportFile = latest.file_name ?? latest.id ?? null;
+        details.push(`report file: ${reportFile}`);
 
         if (reportFile) {
           const csvUrl = `${BASE}/v1/account/release_report/${encodeURIComponent(reportFile)}`;
@@ -168,19 +170,38 @@ export async function syncMpReport(token: string): Promise<{
           if (csvRes.ok) {
             const csvText = await csvRes.text();
             const { headers: cols, rows } = parseCsv(csvText);
+
+            // ── LOG COMPLETO DEL CSV (primeras 5 filas) ──────────────────────
+            console.log(`[mp-sync CSV] ====== INICIO DIAGNÓSTICO CSV ======`);
+            console.log(`[mp-sync CSV] Columnas (${cols.length}): ${cols.join(" | ")}`);
+            console.log(`[mp-sync CSV] Total filas: ${rows.length}`);
+            for (let i = 0; i < Math.min(5, rows.length); i++) {
+              const row = rows[i];
+              const rowObj: Record<string, string> = {};
+              cols.forEach((col, idx) => { rowObj[col] = row[idx] ?? ""; });
+              console.log(`[mp-sync CSV] Fila ${i+1}:`, JSON.stringify(rowObj));
+            }
+            console.log(`[mp-sync CSV] ====== FIN DIAGNÓSTICO CSV ======`);
+
             details.push(`CSV columns: ${cols.join(", ")}`);
             details.push(`CSV rows: ${rows.length}`);
 
-            const idxSourceId   = cols.findIndex(h => h.includes("SOURCE_ID"));
-            const idxExternalId = cols.findIndex(h => h.includes("EXTERNAL_ID") || h.includes("EXTERNAL"));
-            const idxRecordType = cols.findIndex(h => h.includes("RECORD_TYPE") || h.includes("TYPE"));
+            // Find any column that looks like a payer identifier (not collector)
+            const idxSourceId    = cols.findIndex(h => h === "SOURCE_ID");
+            const idxExternalId  = cols.findIndex(h => h === "EXTERNAL_ID");
+            const idxNetCredit   = cols.findIndex(h => h.includes("NET_CREDIT"));
+            const idxNetDebit    = cols.findIndex(h => h.includes("NET_DEBIT"));
+            const idxRecordType  = cols.findIndex(h => h.includes("RECORD_TYPE") || h === "TYPE");
 
-            // Sample first row values for debugging
-            if (rows.length > 0 && rows[0]) {
-              details.push(`CSV first row sample: ${rows[0].slice(0, 5).join(" | ")}`);
+            // Extra payer-like columns
+            const idxPayerId     = cols.findIndex(h => h === "PAYER_ID" || h === "PAYER_ACCOUNT_ID" || h === "COUNTERPART_ID");
+            const idxPayerColName = idxPayerId >= 0 ? cols[idxPayerId] : null;
+
+            if (idxPayerId >= 0) {
+              details.push(`Found payer column: ${idxPayerColName} at index ${idxPayerId}`);
             }
 
-            if (idxSourceId >= 0 && idxExternalId >= 0) {
+            if (idxSourceId >= 0) {
               const csvIds = new Set(toUpsert.map(r => r.movementId));
               for (const row of rows) {
                 const sourceId = (row[idxSourceId] ?? "").trim();
@@ -189,12 +210,33 @@ export async function syncMpReport(token: string): Promise<{
                 const recordType = idxRecordType >= 0 ? (row[idxRecordType] ?? "").toUpperCase() : "";
                 if (["CLEARING", "TAX", "FEE", "ADJUSTMENT", "PAYOUT"].some(t => recordType.includes(t))) continue;
 
-                const rawExtId = (row[idxExternalId] ?? "").trim();
-                if (!rawExtId) continue;
+                // Only ingresos (NET_CREDIT > 0)
+                if (idxNetCredit >= 0) {
+                  const credit = parseFloat((row[idxNetCredit] ?? "0").replace(",", "."));
+                  if (credit <= 0) continue;
+                }
 
-                const cbu = classifyCbu(rawExtId);
-                if (cbu) {
-                  toUpsert.push({ movementId: sourceId, payerIdentifier: cbu, rawExternalId: rawExtId });
+                // Prefer PAYER_ID column if available
+                if (idxPayerId >= 0) {
+                  const payerVal = (row[idxPayerId] ?? "").trim();
+                  if (payerVal && !isSelf(payerVal)) {
+                    const classified = classifyCbu(payerVal) ?? (`mp:${payerVal}`.match(/^\d+$/) ? `mp:${payerVal}` : null);
+                    if (classified) {
+                      toUpsert.push({ movementId: sourceId, payerIdentifier: classified, rawExternalId: `${idxPayerColName}:${payerVal}` });
+                      continue;
+                    }
+                  }
+                }
+
+                // Fallback: EXTERNAL_ID
+                if (idxExternalId >= 0) {
+                  const rawExtId = (row[idxExternalId] ?? "").trim();
+                  if (rawExtId && !isSelf(rawExtId)) {
+                    const cbu = classifyCbu(rawExtId);
+                    if (cbu) {
+                      toUpsert.push({ movementId: sourceId, payerIdentifier: cbu, rawExternalId: rawExtId });
+                    }
+                  }
                 }
               }
             }
@@ -215,7 +257,7 @@ export async function syncMpReport(token: string): Promise<{
     await storage.upsertMpMovementIdentifiers(toUpsert);
   }
 
-  const msg = `payments: ${toUpsert.length} upserted, ${skipped} skipped | ${details.join(" | ")}`;
-  console.log(`[mp-report] sync done: ${msg}`);
+  const msg = `${toUpsert.length} upserted, ${skipped} skipped | ${details.join(" | ")}`;
+  console.log(`[mp-sync] done: ${msg}`);
   return { synced: toUpsert.length, skipped, reportFile, details: msg };
 }
