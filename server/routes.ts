@@ -2012,10 +2012,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const firstOfMonth = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-01`;
       const effectiveFrom = from ?? firstOfMonth;
 
+      // end_date: explicit `to` param → midnight of that day (ART); no `to` → exact current moment so today's payments are included
+      const endDateIso = to ? `${to}T23:59:59.999-03:00` : new Date().toISOString();
+
       const baseParams = new URLSearchParams();
       baseParams.set("range", "date_created");
       baseParams.set("begin_date", `${effectiveFrom}T00:00:00.000-03:00`);
-      if (to)     baseParams.set("end_date", `${to}T23:59:59.999-03:00`);
+      baseParams.set("end_date", endDateIso);
       if (status) baseParams.set("status", status);
       baseParams.set("sort", "date_created");
       baseParams.set("criteria", "desc");
@@ -2052,7 +2055,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         rawPayments.push(...page);
 
         const pagingTotal: number = body.paging?.total ?? 0;
-        console.log(`[mp] página offset=${offset} → ${page.length} items, total MP=${pagingTotal}`);
+        const firstDate = page[0]?.date_created ?? "-";
+        const lastDate  = page[page.length - 1]?.date_created ?? "-";
+        console.log(`[mp] página offset=${offset} → ${page.length} items, total MP=${pagingTotal} | rango: ${lastDate} → ${firstDate}`);
         // Solo parar en página vacía o parcial — paging.total puede ser inexacto
         if (page.length < LIMIT) break;
         if (offset >= 10000) break;  // límite de seguridad
