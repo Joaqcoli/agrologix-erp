@@ -1946,33 +1946,56 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });
     try {
       const { from, to, type, status } = req.query as Record<string, string | undefined>;
-      const params = new URLSearchParams();
-      params.set("range", "date_created");
-      if (from)   params.set("begin_date", `${from}T00:00:00.000-03:00`);
-      if (to)     params.set("end_date",   `${to}T23:59:59.999-03:00`);
-      if (status) params.set("status", status);
-      params.set("sort", "date_created");
-      params.set("criteria", "desc");
-      params.set("limit", "100");
-      const url = `https://api.mercadopago.com/v1/payments/search?${params.toString()}`;
 
-      // Timeout de 12 segundos para no colgar el servidor
-      const abort = new AbortController();
-      const timer = setTimeout(() => abort.abort(), 12000);
-      let r: Response;
-      try {
-        r = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: abort.signal });
-      } finally {
-        clearTimeout(timer);
-      }
+      // Default: primer día del mes actual
+      const now = new Date();
+      const pad2 = (n: number) => String(n).padStart(2, "0");
+      const firstOfMonth = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-01`;
+      const effectiveFrom = from ?? firstOfMonth;
 
-      const body = await r.json();
-      if (!r.ok) {
-        console.error("[MP movements] error", r.status, JSON.stringify(body));
-        return res.status(r.status).json({ error: `MP error ${r.status}`, detail: body });
+      const baseParams = new URLSearchParams();
+      baseParams.set("range", "date_created");
+      baseParams.set("begin_date", `${effectiveFrom}T00:00:00.000-03:00`);
+      if (to)     baseParams.set("end_date", `${to}T23:59:59.999-03:00`);
+      if (status) baseParams.set("status", status);
+      baseParams.set("sort", "date_created");
+      baseParams.set("criteria", "desc");
+
+      // Paginación completa — MP devuelve máx 50 por request
+      const LIMIT = 50;
+      const rawPayments: any[] = [];
+      let offset = 0;
+      let mpData: any = {};
+
+      while (true) {
+        const pageParams = new URLSearchParams(baseParams);
+        pageParams.set("limit", String(LIMIT));
+        pageParams.set("offset", String(offset));
+        const url = `https://api.mercadopago.com/v1/payments/search?${pageParams.toString()}`;
+
+        const abort = new AbortController();
+        const timer = setTimeout(() => abort.abort(), 15000);
+        let r: Response;
+        try {
+          r = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: abort.signal });
+        } finally {
+          clearTimeout(timer);
+        }
+
+        const body = await r.json();
+        if (!r.ok) {
+          console.error("[MP movements] error", r.status, JSON.stringify(body));
+          return res.status(r.status).json({ error: `MP error ${r.status}`, detail: body });
+        }
+
+        mpData = body;
+        const page: any[] = body.results ?? body.elements ?? [];
+        rawPayments.push(...page);
+
+        const pagingTotal: number = body.paging?.total ?? 0;
+        if (page.length === 0 || offset + LIMIT >= pagingTotal) break;
+        offset += LIMIT;
       }
-      const mpData: any = body;
-      const rawPayments: any[] = mpData.results ?? mpData.elements ?? [];
 
       // ── Detectar merchant ID desde los propios datos (más fiable que /users/me) ──
       // El merchant es el collector_id que aparece con más frecuencia
@@ -2044,7 +2067,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
 
       // Fetch órdenes del período UNA sola vez con query liviana y linkear en memoria (evita N+1)
-      const rangeFrom = from ?? (movements[movements.length - 1]?.date_created ?? "").slice(0, 10);
+      const rangeFrom = effectiveFrom;
       const rangeTo   = to ?? (movements[0]?.date_created ?? "").slice(0, 10);
       let periodOrders: { id: number; folio: string; total: string }[] = [];
       if (rangeFrom && rangeTo) {

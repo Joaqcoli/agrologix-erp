@@ -41,11 +41,10 @@ function fmtTime(s: string) {
   }) + " hs";
 }
 
-function getLast30() {
-  const to = new Date();
-  const from = new Date();
-  from.setDate(to.getDate() - 29);
-  return { from: isoDate(from), to: isoDate(to) };
+function getDefaultRange() {
+  const now = new Date();
+  const from = new Date(now.getFullYear(), now.getMonth(), 1);
+  return { from: isoDate(from), to: isoDate(now) };
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -223,7 +222,7 @@ function CategoryPicker({
 
 export default function BancosPage() {
   const qc = useQueryClient();
-  const { from: defaultFrom, to: defaultTo } = getLast30();
+  const { from: defaultFrom, to: defaultTo } = getDefaultRange();
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
   const [filterStatus, setFilterStatus] = useState("all");
