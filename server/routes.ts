@@ -2107,128 +2107,73 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(result);
   });
 
-  // ── DIAGNÓSTICO CSV: verificar que el reporte incluye egresos CVU faltantes ──
+  // ── DIAGNÓSTICO XLSX: verificar columnas y primeras filas del reporte de MP ──
   app.get("/api/mp/diag-csv", requireAuth, async (_req, res) => {
     const token = process.env.MP_ACCESS_TOKEN;
     if (!token) return res.status(500).json({ error: "MP_ACCESS_TOKEN not set" });
     const BASE = "https://api.mercadopago.com";
     const auth = { Authorization: `Bearer ${token}` };
 
-    // parseCsv inline (misma lógica que mp-report-sync)
-    function parseCsvLocal(text: string): { headers: string[]; rows: string[][] } {
-      const firstLine = text.split("\n")[0] ?? "";
-      const sep = firstLine.includes(";") ? ";" : ",";
-      const lines = text.split("\n").filter(l => l.trim().length > 0);
-      const headers = lines[0].split(sep).map(h => h.trim().replace(/^"|"$/g, "").toUpperCase());
-      const rows = lines.slice(1).map(line => {
-        const result: string[] = [];
-        let current = "";
-        let inQuotes = false;
-        for (let i = 0; i < line.length; i++) {
-          const ch = line[i];
-          if (ch === '"') { inQuotes = !inQuotes; }
-          else if (ch === sep && !inQuotes) { result.push(current.trim()); current = ""; }
-          else { current += ch; }
-        }
-        result.push(current.trim());
-        return result;
-      });
-      return { headers, rows };
-    }
-
     try {
-      // Listar reportes disponibles
+      // Listar reportes
       const listRes = await fetch(`${BASE}/v1/account/release_report/list`, { headers: auth });
       if (!listRes.ok) return res.json({ error: `list HTTP ${listRes.status}`, body: await listRes.text() });
       const reports: any[] = await listRes.json();
 
-      // Tomar el más reciente
       const sorted = [...reports].sort((a, b) =>
         new Date(b.created_from ?? b.date_created ?? 0).getTime() -
         new Date(a.created_from ?? a.date_created ?? 0).getTime()
       );
       const latest = sorted[0];
       const reportFile: string = latest?.file_name ?? latest?.id ?? "";
-      const reportMeta = { file_name: latest?.file_name, date_from: latest?.date_from ?? latest?.created_from, date_to: latest?.date_to, id: latest?.id };
+      const reportMeta = {
+        file_name: latest?.file_name,
+        date_from: latest?.date_from ?? latest?.created_from,
+        date_to: latest?.date_to,
+        id: latest?.id,
+      };
 
       if (!reportFile) return res.json({ error: "no report file found", reports: sorted.slice(0, 3) });
 
-      // Descargar CSV
-      const csvRes = await fetch(`${BASE}/v1/account/release_report/${encodeURIComponent(reportFile)}`, { headers: auth });
-      if (!csvRes.ok) return res.json({ error: `csv HTTP ${csvRes.status}` });
-      const csvText = await csvRes.text();
-      const { headers: cols, rows } = parseCsvLocal(csvText);
+      // Descargar como buffer (es XLSX, no texto)
+      const fileRes = await fetch(`${BASE}/v1/account/release_report/${encodeURIComponent(reportFile)}`, { headers: auth });
+      if (!fileRes.ok) return res.json({ error: `file HTTP ${fileRes.status}` });
+      const buffer = Buffer.from(await fileRes.arrayBuffer());
 
-      // Índices de columnas clave
-      const idx = (name: string) => cols.findIndex(h => h === name || h.includes(name));
-      const iSourceId   = idx("SOURCE_ID");
-      const iDate       = idx("DATE");
-      const iNetCredit  = cols.findIndex(h => h.includes("NET_CREDIT"));
-      const iNetDebit   = cols.findIndex(h => h.includes("NET_DEBIT"));
-      const iRecordType = cols.findIndex(h => h.includes("RECORD_TYPE") || h === "TYPE");
-      const iDesc       = idx("DESCRIPTION");
-      const iExtId      = idx("EXTERNAL_ID");
-      const iGross      = cols.findIndex(h => h.includes("GROSS_AMOUNT") || h.includes("TRANSACTION_AMOUNT"));
+      // Parsear XLSX
+      const workbook = XLSX.read(buffer, { type: "buffer" });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const allRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
-      // Clasificar filas
-      const debits: any[] = [];    // egresos (NET_DEBIT > 0)
-      const credits: any[] = [];   // ingresos (NET_CREDIT > 0)
-      const others: any[] = [];    // fees, taxes, clearings
+      const headers: string[] = (allRows[0] ?? []).map((h: any) => String(h ?? "").toUpperCase().trim());
+      const dataRows: any[][] = allRows.slice(1).filter(r => r.some((v: any) => v !== ""));
 
-      for (const row of rows) {
-        const get = (i: number) => (i >= 0 ? (row[i] ?? "") : "");
-        const recordType = get(iRecordType).toUpperCase();
-        const isFeeOrTax = ["CLEARING", "TAX", "FEE", "ADJUSTMENT"].some(t => recordType.includes(t));
-        const credit = parseFloat(get(iNetCredit).replace(",", ".") || "0");
-        const debit  = parseFloat(get(iNetDebit).replace(",", ".") || "0");
-        const gross  = parseFloat(get(iGross).replace(",", ".") || "0");
-
-        const entry = {
-          source_id: get(iSourceId),
-          date: get(iDate),
-          record_type: get(iRecordType),
-          description: get(iDesc),
-          external_id: get(iExtId),
-          net_credit: credit || undefined,
-          net_debit: debit || undefined,
-          gross: gross || undefined,
-        };
-        if (isFeeOrTax) others.push(entry);
-        else if (debit > 0) debits.push(entry);
-        else if (credit > 0) credits.push(entry);
-        else others.push(entry);
+      console.log(`[mp diag-xlsx] Columnas (${headers.length}): ${headers.join(" | ")}`);
+      console.log(`[mp diag-xlsx] Total filas de datos: ${dataRows.length}`);
+      for (let i = 0; i < Math.min(3, dataRows.length); i++) {
+        const obj: Record<string, any> = {};
+        headers.forEach((h, idx) => { obj[h] = dataRows[i][idx] ?? ""; });
+        console.log(`[mp diag-xlsx] Fila ${i + 1}:`, JSON.stringify(obj));
       }
 
-      // Buscar los pagos del 29/05 via payments/search para cruzar
-      const payRes = await fetch(
-        `${BASE}/v1/payments/search?range=date_created&begin_date=2026-05-29T03:00:00Z&end_date=2026-05-30T02:59:59Z&limit=50&offset=0`,
-        { headers: auth }
-      );
-      const payBody = await payRes.json();
-      const payIds = new Set<string>((payBody.results ?? []).map((p: any) => String(p.id)));
-
-      // Egresos del CSV que NO están en payments/search (esos son los "faltantes")
-      const debitsNotInPayments = debits.filter(d => d.source_id && !payIds.has(d.source_id));
+      // Primeras 10 filas como objetos para el JSON de respuesta
+      const sample = dataRows.slice(0, 10).map(row => {
+        const obj: Record<string, any> = {};
+        headers.forEach((h, idx) => { obj[h] = row[idx] ?? ""; });
+        return obj;
+      });
 
       return res.json({
         report_meta: reportMeta,
-        columns: cols,
-        total_rows: rows.length,
-        totals: { credits: credits.length, debits: debits.length, other: others.length },
-        payments_29may_count: payIds.size,
-        // Todos los egresos del CSV (sin filtro de fecha — el reporte es del período completo)
-        all_debits: debits,
-        // Egresos que NO aparecen en payments/search del día 29
-        debits_not_in_payments_29may: debitsNotInPayments,
-        // Primeras 20 filas del CSV para ver estructura
-        sample_rows: rows.slice(0, 20).map(row => {
-          const obj: Record<string, string> = {};
-          cols.forEach((c, i) => { obj[c] = row[i] ?? ""; });
-          return obj;
-        }),
+        sheet_name: sheetName,
+        all_sheets: workbook.SheetNames,
+        columns: headers,
+        total_data_rows: dataRows.length,
+        sample_rows: sample,
       });
     } catch (e: any) {
-      return res.status(500).json({ error: e.message });
+      return res.status(500).json({ error: e.message, stack: e.stack?.split("\n").slice(0, 5) });
     }
   });
 
