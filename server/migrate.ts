@@ -948,5 +948,7 @@ export async function runNcMigrations() {
   } catch {}
   try { await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS black_pot BOOLEAN DEFAULT FALSE`); } catch {}
   try { await db.execute(sql`ALTER TABLE caja_movements ADD COLUMN IF NOT EXISTS method TEXT`); } catch {}
+  try { await db.execute(sql`ALTER TABLE caja_movements ADD COLUMN IF NOT EXISTS source_id TEXT`); } catch {}
+  try { await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS caja_movements_source_id_idx ON caja_movements(source_id) WHERE source_id IS NOT NULL`); } catch {}
   console.log("NC migrations complete.");
 }

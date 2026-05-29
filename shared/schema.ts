@@ -401,6 +401,7 @@ export const cajaMovements = pgTable("caja_movements", {
   amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
   category: text("category"),
   method: text("method"),                                // "EFECTIVO" | "TRANSFERENCIA" | "CHEQUE" | etc.
+  sourceId: text("source_id"),                           // "mp:{mpId}" para movimientos sincronizados desde Bancos
   createdBy: integer("created_by").references(() => users.id),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });

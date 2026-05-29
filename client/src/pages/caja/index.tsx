@@ -63,7 +63,7 @@ type CajaSummary = {
   saldo: number;
   payments: { id: number; date: string; amount: string; method: string; notes: string | null; customerName: string }[];
   supplierPayments: { id: number; date: string; amount: string; method: string; notes: string | null; supplierName: string }[];
-  manualMovements: { id: number; date: string; type: string; description: string; amount: string; category: string | null; method: string | null }[];
+  manualMovements: { id: number; date: string; type: string; description: string; amount: string; category: string | null; method: string | null; sourceId?: string | null }[];
 };
 
 type BankCategory = { id: number; name: string };
@@ -79,6 +79,7 @@ type FeedItem = {
   amount: number;
   sourceType: "payment" | "supplierPayment" | "manual";
   sourceId: number;
+  isBankSync: boolean;
 };
 
 type MovForm = {
@@ -182,6 +183,7 @@ export default function CajaPage() {
         amount: parseFloat(p.amount),
         sourceType: "payment",
         sourceId: p.id,
+        isBankSync: false,
       });
     }
     for (const p of data?.supplierPayments ?? []) {
@@ -196,20 +198,23 @@ export default function CajaPage() {
         amount: parseFloat(p.amount),
         sourceType: "supplierPayment",
         sourceId: p.id,
+        isBankSync: false,
       });
     }
     for (const m of data?.manualMovements ?? []) {
+      const isBankSync = !!m.sourceId?.startsWith("mp:");
       items.push({
         id: `man-${m.id}`,
         date: m.date,
         description: m.description,
-        counterpart: "",
+        counterpart: isBankSync ? "Banco MP" : "",
         method: m.method || "—",
         category: m.category || "Sin categoría",
         type: m.type as "ingreso" | "egreso",
         amount: parseFloat(m.amount),
         sourceType: "manual",
         sourceId: m.id,
+        isBankSync,
       });
     }
     return items.sort((a, b) => b.date.localeCompare(a.date));
@@ -475,7 +480,7 @@ export default function CajaPage() {
                         {item.type === "egreso" ? "-" : "+"}{fmt(item.amount)}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        {item.sourceType === "manual" && (
+                        {item.sourceType === "manual" && !item.isBankSync && (
                           <Button
                             size="icon" variant="ghost" className="h-7 w-7"
                             onClick={() => delMutation.mutate(item.sourceId)}
@@ -483,6 +488,9 @@ export default function CajaPage() {
                           >
                             <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
                           </Button>
+                        )}
+                        {item.isBankSync && (
+                          <span className="text-[10px] text-muted-foreground bg-muted rounded px-1.5 py-0.5">Banco</span>
                         )}
                       </td>
                     </tr>

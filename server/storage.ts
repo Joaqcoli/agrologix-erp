@@ -4387,6 +4387,31 @@ export const storage = {
     await db.delete(cajaMovements).where(eq(cajaMovements.id, id));
   },
 
+  async syncBankMovementToCaja(data: {
+    sourceId: string;
+    date: string;
+    type: "ingreso" | "egreso";
+    description: string;
+    amount: string;
+    category: string;
+    method: string;
+  }): Promise<void> {
+    await db.delete(cajaMovements).where(drizzleSql`${cajaMovements.sourceId} = ${data.sourceId}`);
+    await db.insert(cajaMovements).values({
+      sourceId: data.sourceId,
+      date: data.date,
+      type: data.type,
+      description: data.description,
+      amount: data.amount,
+      category: data.category,
+      method: data.method,
+    });
+  },
+
+  async deleteBankMovementFromCaja(sourceId: string): Promise<void> {
+    await db.delete(cajaMovements).where(drizzleSql`${cajaMovements.sourceId} = ${sourceId}`);
+  },
+
   // ─── Bank Categories ─────────────────────────────────────────────────────────
   async getBankCategories(): Promise<BankCategory[]> {
     return db.select().from(bankCategories).orderBy(asc(bankCategories.id));

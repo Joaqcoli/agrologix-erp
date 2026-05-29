@@ -2188,8 +2188,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.put("/api/mp/movements/:mpId/category", requireAuth, async (req, res) => {
     try {
       const { mpId } = req.params;
-      const { categoryId } = req.body as { categoryId: number | null };
+      const { categoryId, amount, date, isOutgoing, description } = req.body as {
+        categoryId: number | null;
+        amount?: number;
+        date?: string;
+        isOutgoing?: boolean;
+        description?: string;
+      };
       await storage.setMpMovementCategory(mpId, categoryId ?? null);
+
+      const sourceId = `mp:${mpId}`;
+      if (categoryId != null && amount != null && amount > 0) {
+        const cats = await storage.getBankCategories();
+        const catName = cats.find(c => c.id === categoryId)?.name ?? "Sin categoría";
+        await storage.syncBankMovementToCaja({
+          sourceId,
+          date: date ?? new Date().toISOString().slice(0, 10),
+          type: isOutgoing ? "egreso" : "ingreso",
+          description: description || (isOutgoing ? "Pago banco" : "Cobro banco"),
+          amount: String(parseFloat(String(amount)).toFixed(2)),
+          category: catName,
+          method: "TRANSFERENCIA",
+        });
+      } else {
+        await storage.deleteBankMovementFromCaja(sourceId);
+      }
+
       return res.json({ ok: true });
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });

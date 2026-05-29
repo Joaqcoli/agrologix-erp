@@ -302,9 +302,18 @@ export default function BancosPage() {
   // ── mutations ─────────────────────────────────────────────────────────────────
 
   const setCategoryMut = useMutation({
-    mutationFn: ({ mpId, categoryId }: { mpId: string | number; categoryId: number | null }) =>
-      apiRequest("PUT", `/api/mp/movements/${mpId}/category`, { categoryId }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/mp/movements"] }),
+    mutationFn: ({ mpId, categoryId, amount, date, isOutgoing, description }: {
+      mpId: string | number;
+      categoryId: number | null;
+      amount?: number;
+      date?: string;
+      isOutgoing?: boolean;
+      description?: string;
+    }) => apiRequest("PUT", `/api/mp/movements/${mpId}/category`, { categoryId, amount, date, isOutgoing, description }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/mp/movements"] });
+      qc.invalidateQueries({ queryKey: ["/api/caja/summary"] });
+    },
   });
 
   const createCategoryMut = useMutation({
@@ -705,7 +714,14 @@ export default function BancosPage() {
                                 movId={m.id}
                                 categoryId={m.categoryId}
                                 categories={categories}
-                                onSelect={(id, catId) => setCategoryMut.mutate({ mpId: id, categoryId: catId })}
+                                onSelect={(id, catId) => setCategoryMut.mutate({
+                                  mpId: id,
+                                  categoryId: catId,
+                                  amount: m.netAmount,
+                                  date: (m.date_created ?? "").slice(0, 10),
+                                  isOutgoing: m.isOutgoing,
+                                  description: m.displayName || m.description || "",
+                                })}
                                 onAddNew={() => handleAddNew(m.id)}
                               />
                               {/* Aplicar pago — solo para ingresos de clientes identificados */}
