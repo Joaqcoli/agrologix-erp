@@ -4515,6 +4515,15 @@ export const storage = {
 
   async upsertMpMovementIdentifiers(rows: { movementId: string; payerIdentifier: string; payerName?: string | null; rawExternalId?: string | null }[]): Promise<void> {
     if (rows.length === 0) return;
+    await db.execute(drizzleSql`
+      CREATE TABLE IF NOT EXISTS mp_movement_identifiers (
+        movement_id TEXT PRIMARY KEY,
+        payer_identifier TEXT NOT NULL,
+        payer_name TEXT,
+        raw_external_id TEXT,
+        synced_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
     for (const row of rows) {
       await db.execute(drizzleSql`
         INSERT INTO mp_movement_identifiers (movement_id, payer_identifier, payer_name, raw_external_id, synced_at)
@@ -4530,6 +4539,15 @@ export const storage = {
 
   async getMpMovementIdentifierMap(movementIds: string[]): Promise<Map<string, MpMovementIdentifier>> {
     if (movementIds.length === 0) return new Map();
+    await db.execute(drizzleSql`
+      CREATE TABLE IF NOT EXISTS mp_movement_identifiers (
+        movement_id TEXT PRIMARY KEY,
+        payer_identifier TEXT NOT NULL,
+        payer_name TEXT,
+        raw_external_id TEXT,
+        synced_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
     const escaped = movementIds.map(id => `'${id.replace(/'/g, "''")}'`).join(",");
     const rows = await db.execute(drizzleSql.raw(`
       SELECT movement_id, payer_identifier, payer_name, raw_external_id
