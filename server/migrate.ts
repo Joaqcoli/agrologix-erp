@@ -806,6 +806,19 @@ export async function runMigrations() {
   `);
 
   await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS mp_xlsx_movements (
+      mp_id TEXT PRIMARY KEY,
+      fecha TEXT,
+      descripcion TEXT,
+      monto_bruto NUMERIC(12,2),
+      monto_neto_debitado NUMERIC(12,2),
+      monto_neto_acreditado NUMERIC(12,2),
+      comision NUMERIC(12,2),
+      synced_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await db.execute(sql`
     CREATE TABLE IF NOT EXISTS bank_payment_links (
       id SERIAL PRIMARY KEY,
       movement_id TEXT NOT NULL,

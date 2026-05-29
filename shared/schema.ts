@@ -449,6 +449,18 @@ export const mpMovementIdentifiers = pgTable("mp_movement_identifiers", {
 });
 export type MpMovementIdentifier = typeof mpMovementIdentifiers.$inferSelect;
 
+export const mpXlsxMovements = pgTable("mp_xlsx_movements", {
+  mpId: text("mp_id").primaryKey(),
+  fecha: text("fecha"),
+  descripcion: text("descripcion"),
+  montoBruto: numeric("monto_bruto", { precision: 12, scale: 2 }),
+  montoNetoDebitado: numeric("monto_neto_debitado", { precision: 12, scale: 2 }),
+  montoNetoAcreditado: numeric("monto_neto_acreditado", { precision: 12, scale: 2 }),
+  comision: numeric("comision", { precision: 12, scale: 2 }),
+  syncedAt: timestamp("synced_at").notNull().default(sql`now()`),
+});
+export type MpXlsxMovement = typeof mpXlsxMovements.$inferSelect;
+
 export const bankPaymentLinks = pgTable("bank_payment_links", {
   id: serial("id").primaryKey(),
   movementId: text("movement_id").notNull(),

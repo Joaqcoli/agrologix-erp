@@ -132,7 +132,7 @@ app.use((req, res, next) => {
     log(`serving on port ${port}`);
   });
 
-  // Daily 6am Argentina (UTC-3) MP report sync
+  // Daily 3am Argentina (UTC-3 = 6am UTC) MP report sync — report is generated at 1am ART
   let _lastSyncDate = "";
   setInterval(async () => {
     const token = process.env.MP_ACCESS_TOKEN;
@@ -141,7 +141,7 @@ app.use((req, res, next) => {
     const argHour = (now.getUTCHours() - 3 + 24) % 24;
     const argMin  = now.getUTCMinutes();
     const today   = now.toISOString().slice(0, 10);
-    if (argHour === 6 && argMin <= 4 && _lastSyncDate !== today) {
+    if (argHour === 3 && argMin <= 4 && _lastSyncDate !== today) {
       _lastSyncDate = today;
       try {
         const r = await syncMpReport(token);

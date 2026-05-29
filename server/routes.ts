@@ -2000,183 +2000,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
-  // ── DIAGNÓSTICO TEMPORAL: buscar movimiento faltante + probar endpoints alternativos ──
-  app.get("/api/mp/diag-endpoints", requireAuth, async (_req, res) => {
-    const token = process.env.MP_ACCESS_TOKEN;
-    if (!token) return res.status(500).json({ error: "MP_ACCESS_TOKEN not set" });
-    const auth = { Authorization: `Bearer ${token}` };
-    const result: any = {};
-
-    // ── 1. payments/search ventana estrecha 07:00–08:00 ART del 29/05 (10:00–11:00 UTC) ──
-    // Buscamos el movimiento de Carlos Daniel Coronel ($60.360 a las 07:23 ART)
-    try {
-      const url = `https://api.mercadopago.com/v1/payments/search?range=date_created&begin_date=2026-05-29T10:00:00Z&end_date=2026-05-29T11:40:00Z&limit=50&offset=0`;
-      const r = await fetch(url, { headers: auth });
-      const body = await r.json();
-      const items: any[] = body.results ?? body.elements ?? [];
-      result.payments_search_29may_0700_0800 = {
-        http_status: r.status,
-        paging: body.paging,
-        items: items.map((p: any) => ({
-          id: p.id,
-          date_created: p.date_created,
-          operation_type: p.operation_type,
-          payment_type_id: p.payment_type_id,
-          status: p.status,
-          transaction_amount: p.transaction_amount,
-          description: p.description,
-          payer_email: p.payer?.email,
-          payer_name: [p.payer?.first_name, p.payer?.last_name].filter(Boolean).join(" ") || null,
-        })),
-      };
-    } catch (e: any) {
-      result.payments_search_29may_0700_0800 = { error: e.message };
-    }
-
-    // ── 2. /v1/account/movements/search ───────────────────────────────────────
-    try {
-      const url = `https://api.mercadopago.com/v1/account/movements/search?limit=10&offset=0`;
-      const r = await fetch(url, { headers: auth });
-      const body = await r.json();
-      const items: any[] = body.results ?? body.elements ?? body.data ?? [];
-      result.account_movements_search = {
-        http_status: r.status,
-        raw_keys: Object.keys(body),
-        paging: body.paging ?? body.meta,
-        items: items.map((p: any) => ({
-          id: p.id,
-          date: p.date_created ?? p.created_at ?? p.date,
-          operation_type: p.operation_type ?? p.type,
-          description: p.description ?? p.reason,
-          amount: p.net_amount ?? p.transaction_amount ?? p.amount,
-          status: p.status,
-        })),
-      };
-    } catch (e: any) {
-      result.account_movements_search = { error: e.message };
-    }
-
-    // ── 3. /v1/money_transfers ────────────────────────────────────────────────
-    try {
-      const url = `https://api.mercadopago.com/v1/money_transfers?limit=10`;
-      const r = await fetch(url, { headers: auth });
-      const body = await r.json();
-      const items: any[] = body.results ?? body.elements ?? body.data ?? [];
-      result.money_transfers = {
-        http_status: r.status,
-        raw_keys: Object.keys(body),
-        paging: body.paging ?? body.meta,
-        items: items.map((p: any) => ({
-          id: p.id,
-          date: p.date_created ?? p.created_at ?? p.date,
-          operation_type: p.operation_type ?? p.type,
-          description: p.description ?? p.reason,
-          amount: p.net_amount ?? p.transaction_amount ?? p.amount,
-          status: p.status,
-        })),
-      };
-    } catch (e: any) {
-      result.money_transfers = { error: e.message };
-    }
-
-    // ── 4. payments/search ventana completa 29/05 — ver total y todos los tipos ──
-    try {
-      const url = `https://api.mercadopago.com/v1/payments/search?range=date_created&begin_date=2026-05-29T03:00:00Z&end_date=2026-05-30T02:59:59Z&sort=date_created&criteria=asc&limit=50&offset=0`;
-      const r = await fetch(url, { headers: auth });
-      const body = await r.json();
-      const items: any[] = body.results ?? body.elements ?? [];
-      result.payments_search_29may_all = {
-        http_status: r.status,
-        paging: body.paging,
-        items: items.map((p: any) => ({
-          id: p.id,
-          date_created: p.date_created,
-          operation_type: p.operation_type,
-          payment_type_id: p.payment_type_id,
-          status: p.status,
-          transaction_amount: p.transaction_amount,
-          description: p.description,
-          payer_email: p.payer?.email,
-          payer_name: [p.payer?.first_name, p.payer?.last_name].filter(Boolean).join(" ") || null,
-        })),
-      };
-    } catch (e: any) {
-      result.payments_search_29may_all = { error: e.message };
-    }
-
-    return res.json(result);
-  });
-
-  // ── DIAGNÓSTICO XLSX: verificar columnas y primeras filas del reporte de MP ──
-  app.get("/api/mp/diag-csv", requireAuth, async (_req, res) => {
-    const token = process.env.MP_ACCESS_TOKEN;
-    if (!token) return res.status(500).json({ error: "MP_ACCESS_TOKEN not set" });
-    const BASE = "https://api.mercadopago.com";
-    const auth = { Authorization: `Bearer ${token}` };
-
-    try {
-      // Listar reportes
-      const listRes = await fetch(`${BASE}/v1/account/release_report/list`, { headers: auth });
-      if (!listRes.ok) return res.json({ error: `list HTTP ${listRes.status}`, body: await listRes.text() });
-      const reports: any[] = await listRes.json();
-
-      const sorted = [...reports].sort((a, b) =>
-        new Date(b.created_from ?? b.date_created ?? 0).getTime() -
-        new Date(a.created_from ?? a.date_created ?? 0).getTime()
-      );
-      const latest = sorted[0];
-      const reportFile: string = latest?.file_name ?? latest?.id ?? "";
-      const reportMeta = {
-        file_name: latest?.file_name,
-        date_from: latest?.date_from ?? latest?.created_from,
-        date_to: latest?.date_to,
-        id: latest?.id,
-      };
-
-      if (!reportFile) return res.json({ error: "no report file found", reports: sorted.slice(0, 3) });
-
-      // Descargar como buffer (es XLSX, no texto)
-      const fileRes = await fetch(`${BASE}/v1/account/release_report/${encodeURIComponent(reportFile)}`, { headers: auth });
-      if (!fileRes.ok) return res.json({ error: `file HTTP ${fileRes.status}` });
-      const buffer = Buffer.from(await fileRes.arrayBuffer());
-
-      // Parsear XLSX
-      const workbook = XLSX.read(buffer, { type: "buffer" });
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      const allRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-
-      const headers: string[] = (allRows[0] ?? []).map((h: any) => String(h ?? "").toUpperCase().trim());
-      const dataRows: any[][] = allRows.slice(1).filter(r => r.some((v: any) => v !== ""));
-
-      console.log(`[mp diag-xlsx] Columnas (${headers.length}): ${headers.join(" | ")}`);
-      console.log(`[mp diag-xlsx] Total filas de datos: ${dataRows.length}`);
-      for (let i = 0; i < Math.min(3, dataRows.length); i++) {
-        const obj: Record<string, any> = {};
-        headers.forEach((h, idx) => { obj[h] = dataRows[i][idx] ?? ""; });
-        console.log(`[mp diag-xlsx] Fila ${i + 1}:`, JSON.stringify(obj));
-      }
-
-      // Primeras 10 filas como objetos para el JSON de respuesta
-      const sample = dataRows.slice(0, 10).map(row => {
-        const obj: Record<string, any> = {};
-        headers.forEach((h, idx) => { obj[h] = row[idx] ?? ""; });
-        return obj;
-      });
-
-      return res.json({
-        report_meta: reportMeta,
-        sheet_name: sheetName,
-        all_sheets: workbook.SheetNames,
-        columns: headers,
-        total_data_rows: dataRows.length,
-        sample_rows: sample,
-      });
-    } catch (e: any) {
-      return res.status(500).json({ error: e.message, stack: e.stack?.split("\n").slice(0, 5) });
-    }
-  });
-
   app.get("/api/mp/movements", requireAuth, async (req, res) => {
     const token = process.env.MP_ACCESS_TOKEN;
     if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });
@@ -2501,7 +2324,61 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         console.warn("[caja backfill] error:", backfillErr.message);
       }
 
-      return res.json({ ...mpData, results: withCats });
+      // ── Merge XLSX movements (missing from payments API) ─────────────────────
+      let xlsxMovements: any[] = [];
+      try {
+        const xlsxRaw = await storage.getMpXlsxMovements(effectiveFrom, to ?? undefined);
+        const existingIds = new Set(rawPayments.map((p: any) => String(p.id)));
+        const xlsxFiltered = xlsxRaw.filter(r => !existingIds.has(String(r.mp_id)));
+
+        if (xlsxFiltered.length > 0) {
+          const xlsxIds = xlsxFiltered.map(r => `xlsx_${r.mp_id}`);
+          let xlsxCatMap = new Map<string, number | null>();
+          let xlsxPayLinksMap = new Map<string, any[]>();
+          try { xlsxCatMap = await storage.getMpMovementOverridesMap(xlsxIds); } catch (_) {}
+          try { xlsxPayLinksMap = await storage.getBankPaymentLinksByMovements(xlsxIds); } catch (_) {}
+
+          xlsxMovements = xlsxFiltered.map(r => {
+            const id = `xlsx_${r.mp_id}`;
+            const isOutgoing = (r.monto_neto_debitado ?? 0) > 0;
+            const gross = Math.abs(isOutgoing ? r.monto_neto_debitado : r.monto_neto_acreditado) || 0;
+            const fee = Math.abs(r.comision ?? 0);
+            // xlsx already reports net amounts in each column
+            const net = gross;
+            return {
+              id,
+              date_created: r.fecha ? `${r.fecha}T12:00:00.000-03:00` : "",
+              type: "bank_transfer",
+              description: r.descripcion,
+              status: "approved",
+              isOutgoing,
+              grossAmount: gross,
+              feeAmount: fee,
+              netAmount: net,
+              displayName: null,
+              rawIdentifier: null,
+              identified: false,
+              categoryId: xlsxCatMap.get(id) ?? null,
+              contactType: null,
+              entityId: null,
+              contactId: null,
+              bankPaymentLinks: xlsxPayLinksMap.get(id) ?? [],
+              source: "xlsx" as const,
+              operation_type: isOutgoing ? "money_transfer" : "account_fund",
+            };
+          });
+        }
+      } catch (xlsxErr: any) {
+        console.warn("[mp-xlsx] fetch error:", xlsxErr.message);
+      }
+
+      // Merge payments + xlsx, sorted by date desc
+      const allMovements: any[] = [...withCats, ...xlsxMovements];
+      allMovements.sort((a, b) =>
+        new Date(b.date_created ?? 0).getTime() - new Date(a.date_created ?? 0).getTime()
+      );
+
+      return res.json({ ...mpData, results: allMovements });
     } catch (e: any) {
       const msg = (e as any)?.name === "AbortError" ? "Timeout al conectar con Mercado Pago" : e.message;
       return res.status(500).json({ error: msg });
@@ -2622,6 +2499,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const token = process.env.MP_ACCESS_TOKEN;
       if (!token) return res.status(500).json({ error: "MP_ACCESS_TOKEN no configurado" });
+
+      // Ensure MP generates daily reports at 1am ART
+      try {
+        await fetch("https://api.mercadopago.com/v1/account/release_report/config", {
+          method: "PUT",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ frequency: { hour: 1, type: "daily" } }),
+        });
+      } catch (_) {}
+
       const result = await syncMpReport(token);
       return res.json(result);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }

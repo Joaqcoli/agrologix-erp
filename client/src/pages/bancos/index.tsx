@@ -146,6 +146,7 @@ type MpMovement = {
   contactId?: number | null;
   bankPaymentLinks?: BankPaymentLink[];
   operation_type?: string | null;
+  source?: "xlsx" | string | null;
 };
 
 type MpMovementsResponse = {
@@ -787,6 +788,11 @@ export default function BancosPage() {
                               </div>
                             )}
                             <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+                              {m.source === "xlsx" && (
+                                <span className="text-[10px] bg-orange-100 text-orange-700 rounded px-1.5 py-0.5 font-medium">
+                                  Reporte
+                                </span>
+                              )}
                               <CategoryPicker
                                 movId={m.id}
                                 categoryId={m.categoryId}

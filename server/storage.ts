@@ -4511,6 +4511,76 @@ export const storage = {
     await db.delete(bankContacts).where(eq(bankContacts.id, id));
   },
 
+  // ─── MP XLSX Movements (reporte de liquidaciones) ─────────────────────────
+
+  async upsertMpXlsxMovements(rows: {
+    mpId: string; fecha: string; descripcion: string;
+    montoBruto: number; montoNetoDebitado: number;
+    montoNetoAcreditado: number; comision: number;
+  }[]): Promise<void> {
+    if (rows.length === 0) return;
+    await db.execute(drizzleSql`
+      CREATE TABLE IF NOT EXISTS mp_xlsx_movements (
+        mp_id TEXT PRIMARY KEY,
+        fecha TEXT,
+        descripcion TEXT,
+        monto_bruto NUMERIC(12,2),
+        monto_neto_debitado NUMERIC(12,2),
+        monto_neto_acreditado NUMERIC(12,2),
+        comision NUMERIC(12,2),
+        synced_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    for (const r of rows) {
+      await db.execute(drizzleSql`
+        INSERT INTO mp_xlsx_movements (mp_id, fecha, descripcion, monto_bruto, monto_neto_debitado, monto_neto_acreditado, comision, synced_at)
+        VALUES (${r.mpId}, ${r.fecha}, ${r.descripcion}, ${r.montoBruto}, ${r.montoNetoDebitado}, ${r.montoNetoAcreditado}, ${r.comision}, NOW())
+        ON CONFLICT (mp_id) DO UPDATE
+          SET fecha                = EXCLUDED.fecha,
+              descripcion          = EXCLUDED.descripcion,
+              monto_bruto          = EXCLUDED.monto_bruto,
+              monto_neto_debitado  = EXCLUDED.monto_neto_debitado,
+              monto_neto_acreditado = EXCLUDED.monto_neto_acreditado,
+              comision             = EXCLUDED.comision,
+              synced_at            = NOW()
+      `);
+    }
+  },
+
+  async getMpXlsxMovements(from?: string, to?: string): Promise<any[]> {
+    await db.execute(drizzleSql`
+      CREATE TABLE IF NOT EXISTS mp_xlsx_movements (
+        mp_id TEXT PRIMARY KEY,
+        fecha TEXT,
+        descripcion TEXT,
+        monto_bruto NUMERIC(12,2),
+        monto_neto_debitado NUMERIC(12,2),
+        monto_neto_acreditado NUMERIC(12,2),
+        comision NUMERIC(12,2),
+        synced_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    // Safe: from/to are always YYYY-MM-DD from our own route handler
+    const safeFrom = from ? from.replace(/[^0-9\-]/g, "").slice(0, 10) : null;
+    const safeTo   = to   ? to.replace(/[^0-9\-]/g, "").slice(0, 10)   : null;
+    let where = "";
+    if (safeFrom && safeTo) where = `WHERE fecha >= '${safeFrom}' AND fecha <= '${safeTo}'`;
+    else if (safeFrom)      where = `WHERE fecha >= '${safeFrom}'`;
+    else if (safeTo)        where = `WHERE fecha <= '${safeTo}'`;
+    const rows = await db.execute(drizzleSql.raw(`
+      SELECT mp_id, fecha, descripcion,
+             monto_bruto::float,
+             monto_neto_debitado::float,
+             monto_neto_acreditado::float,
+             comision::float,
+             synced_at
+      FROM mp_xlsx_movements
+      ${where}
+      ORDER BY fecha DESC
+    `));
+    return rows.rows as any[];
+  },
+
   // ─── MP Movement Identifiers (settlement report) ──────────────────────────
 
   async upsertMpMovementIdentifiers(rows: { movementId: string; payerIdentifier: string; payerName?: string | null; rawExternalId?: string | null }[]): Promise<void> {

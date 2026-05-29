@@ -1,3 +1,4 @@
+import * as XLSX from "xlsx";
 import { storage } from "./storage";
 
 const OWN_COLLECTOR_ID = "1852295299";
@@ -21,30 +22,37 @@ function classifyMpId(value: string, merchantId: string): string | null {
   return null;
 }
 
-function parseCsv(text: string): { headers: string[]; rows: string[][] } {
-  const firstLine = text.split("\n")[0] ?? "";
-  const sep = firstLine.includes(";") ? ";" : ",";
-  const lines = text.split("\n").filter(l => l.trim().length > 0);
-  const headers = lines[0].split(sep).map(h => h.trim().replace(/^"|"$/g, "").toUpperCase());
-  const rows = lines.slice(1).map(line => {
-    const result: string[] = [];
-    let current = "";
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') { inQuotes = !inQuotes; }
-      else if (ch === sep && !inQuotes) { result.push(current.trim()); current = ""; }
-      else { current += ch; }
-    }
-    result.push(current.trim());
-    return result;
-  });
-  return { headers, rows };
+/** Normalize header string: uppercase, remove accents, trim */
+function normHeader(s: string): string {
+  return String(s ?? "").toUpperCase().trim()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+/** Parse date from XLSX cell value to YYYY-MM-DD */
+function parseXlsxDate(val: any): string {
+  if (!val) return "";
+  if (val instanceof Date) {
+    // Use UTC date to avoid TZ shift — the report dates are calendar dates
+    return val.toISOString().slice(0, 10);
+  }
+  const s = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  // DD/MM/YYYY
+  const dm = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (dm) return `${dm[3]}-${String(dm[2]).padStart(2, "0")}-${String(dm[1]).padStart(2, "0")}`;
+  return s.slice(0, 10);
+}
+
+/** Parse numeric value from XLSX cell (may be number or string with comma decimal) */
+function parseNum(val: any): number {
+  if (typeof val === "number") return val;
+  return parseFloat(String(val ?? "0").replace(",", ".")) || 0;
 }
 
 export async function syncMpReport(token: string): Promise<{
   synced: number;
   skipped: number;
+  xlsxSynced: number;
   reportFile: string | null;
   details: string;
 }> {
@@ -55,7 +63,7 @@ export async function syncMpReport(token: string): Promise<{
   let skipped = 0;
   const details: string[] = [];
 
-  // ── 1. Sync from Payments API ─────────────────────────────────────────────
+  // ── 1. Sync payer identifiers from Payments API ───────────────────────────
   try {
     const now = new Date();
     const from = new Date(now); from.setMonth(now.getMonth() - 3);
@@ -81,7 +89,7 @@ export async function syncMpReport(token: string): Promise<{
 
     details.push(`payments fetched: ${allPayments.length}`);
 
-    // Detect merchantId — most frequent collector_id
+    // Detect merchantId
     const freq = new Map<string, number>();
     for (const p of allPayments) {
       const cid = String(p.collector_id ?? p.collector?.id ?? "");
@@ -92,21 +100,6 @@ export async function syncMpReport(token: string): Promise<{
     for (const [id, n] of freq) { if (n > best) { best = n; merchantId = id; } }
     details.push(`merchantId: ${merchantId}`);
 
-    // Log first 3 incoming payments raw fields for diagnosis
-    let diagCount = 0;
-    for (const p of allPayments) {
-      if (diagCount >= 3) break;
-      const collId = String(p.collector_id ?? p.collector?.id ?? "");
-      if (collId !== merchantId) continue; // skip outgoing
-      const pbi = p.transaction_details?.payer_bank_info;
-      console.log(`[mp-sync PAYMENTS DIAG ingreso #${diagCount+1}] id=${p.id} op=${p.operation_type} payment_type=${p.payment_type_id}` +
-        ` payer_id=${p.payer_id} payer.id=${p.payer?.id} payer.email=${p.payer?.email}` +
-        ` payer.identification=${JSON.stringify(p.payer?.identification)}` +
-        ` pbi.cbu=${pbi?.cbu} pbi.account_id=${pbi?.account_id} pbi.owner_name=${pbi?.owner_name}` +
-        ` description=${p.description}`);
-      diagCount++;
-    }
-
     for (const p of allPayments) {
       const movId = String(p.id ?? "");
       if (!movId || movId === "0") { skipped++; continue; }
@@ -115,7 +108,6 @@ export async function syncMpReport(token: string): Promise<{
       const isIncoming = collId === merchantId;
 
       if (isIncoming) {
-        // CVU/bank transfer: payer_bank_info.cbu
         const pbi = p.transaction_details?.payer_bank_info;
         const cbu = String(pbi?.cbu ?? pbi?.account_id ?? "").replace(/[\s-]/g, "");
         if (cbu.length >= 11 && !isSelf(cbu)) {
@@ -123,7 +115,6 @@ export async function syncMpReport(token: string): Promise<{
           continue;
         }
 
-        // MP user ID (app-to-app payments, QR)
         const payerId = String(p.payer_id ?? p.payer?.id ?? "");
         const mpId = classifyMpId(payerId, merchantId);
         if (mpId && !isSelf(mpId)) {
@@ -134,7 +125,6 @@ export async function syncMpReport(token: string): Promise<{
           continue;
         }
 
-        // Email fallback
         const email = String(p.payer?.email ?? "").toLowerCase().trim();
         if (email && email.includes("@") && !email.includes("noreply") && !isSelf(email)) {
           toUpsert.push({ movementId: movId, payerIdentifier: email, payerName: null, rawExternalId: "payer.email" });
@@ -147,8 +137,9 @@ export async function syncMpReport(token: string): Promise<{
     details.push(`payments sync error: ${e.message}`);
   }
 
-  // ── 2. Settlement report CSV (log raw rows + secondary sync) ──────────────
+  // ── 2. XLSX report — extract movements missing from payments API ──────────
   let reportFile: string | null = null;
+  let xlsxSynced = 0;
   try {
     const listRes = await fetch(`${BASE}/v1/account/release_report/list`, { headers: authHeaders });
     if (listRes.ok) {
@@ -165,83 +156,92 @@ export async function syncMpReport(token: string): Promise<{
         details.push(`report file: ${reportFile}`);
 
         if (reportFile) {
-          const csvUrl = `${BASE}/v1/account/release_report/${encodeURIComponent(reportFile)}`;
-          const csvRes = await fetch(csvUrl, { headers: authHeaders });
-          if (csvRes.ok) {
-            const csvText = await csvRes.text();
-            const { headers: cols, rows } = parseCsv(csvText);
+          const fileRes = await fetch(`${BASE}/v1/account/release_report/${encodeURIComponent(reportFile)}`, { headers: authHeaders });
+          if (fileRes.ok) {
+            const buffer = Buffer.from(await fileRes.arrayBuffer());
 
-            // ── LOG COMPLETO DEL CSV (primeras 5 filas) ──────────────────────
-            console.log(`[mp-sync CSV] ====== INICIO DIAGNÓSTICO CSV ======`);
-            console.log(`[mp-sync CSV] Columnas (${cols.length}): ${cols.join(" | ")}`);
-            console.log(`[mp-sync CSV] Total filas: ${rows.length}`);
-            for (let i = 0; i < Math.min(5, rows.length); i++) {
-              const row = rows[i];
-              const rowObj: Record<string, string> = {};
-              cols.forEach((col, idx) => { rowObj[col] = row[idx] ?? ""; });
-              console.log(`[mp-sync CSV] Fila ${i+1}:`, JSON.stringify(rowObj));
-            }
-            console.log(`[mp-sync CSV] ====== FIN DIAGNÓSTICO CSV ======`);
+            // Parse XLSX
+            const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
+            const sheetName = workbook.SheetNames[0];
+            const sheet = workbook.Sheets[sheetName];
+            const allRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
-            details.push(`CSV columns: ${cols.join(", ")}`);
-            details.push(`CSV rows: ${rows.length}`);
+            const headers: string[] = (allRows[0] ?? []).map((h: any) => normHeader(h));
+            const dataRows = allRows.slice(1).filter(r => r.some((v: any) => v !== ""));
 
-            // Find any column that looks like a payer identifier (not collector)
-            const idxSourceId    = cols.findIndex(h => h === "SOURCE_ID");
-            const idxExternalId  = cols.findIndex(h => h === "EXTERNAL_ID");
-            const idxNetCredit   = cols.findIndex(h => h.includes("NET_CREDIT"));
-            const idxNetDebit    = cols.findIndex(h => h.includes("NET_DEBIT"));
-            const idxRecordType  = cols.findIndex(h => h.includes("RECORD_TYPE") || h === "TYPE");
-
-            // Extra payer-like columns
-            const idxPayerId     = cols.findIndex(h => h === "PAYER_ID" || h === "PAYER_ACCOUNT_ID" || h === "COUNTERPART_ID");
-            const idxPayerColName = idxPayerId >= 0 ? cols[idxPayerId] : null;
-
-            if (idxPayerId >= 0) {
-              details.push(`Found payer column: ${idxPayerColName} at index ${idxPayerId}`);
+            console.log(`[mp-sync XLSX] Columnas (${headers.length}): ${headers.join(" | ")}`);
+            console.log(`[mp-sync XLSX] Total filas: ${dataRows.length}`);
+            for (let i = 0; i < Math.min(3, dataRows.length); i++) {
+              const obj: Record<string, any> = {};
+              headers.forEach((h, idx) => { obj[h] = dataRows[i][idx] ?? ""; });
+              console.log(`[mp-sync XLSX] Fila ${i + 1}:`, JSON.stringify(obj));
             }
 
-            if (idxSourceId >= 0) {
-              const csvIds = new Set(toUpsert.map(r => r.movementId));
-              for (const row of rows) {
-                const sourceId = (row[idxSourceId] ?? "").trim();
-                if (!sourceId || sourceId === "0" || csvIds.has(sourceId)) continue;
+            details.push(`XLSX columnas: ${headers.join(", ")}`);
+            details.push(`XLSX filas: ${dataRows.length}`);
 
-                const recordType = idxRecordType >= 0 ? (row[idxRecordType] ?? "").toUpperCase() : "";
-                if (["CLEARING", "TAX", "FEE", "ADJUSTMENT", "PAYOUT"].some(t => recordType.includes(t))) continue;
+            // Map column indices (normalized, using includes for robustness)
+            const col = (exact: string, fallback?: string) => {
+              let i = headers.findIndex(h => h === exact);
+              if (i < 0 && fallback) i = headers.findIndex(h => h.includes(fallback));
+              return i;
+            };
+            const iMpId    = col("ID DE OPERACION EN MERCADO PAGO", "OPERACION EN MERCADO");
+            const iFecha   = col("FECHA");
+            const iDesc    = col("DESCRIPCION");
+            const iGross   = col("MONTO BRUTO", "BRUTO");
+            const iDebit   = col("MONTO NETO DEBITADO", "DEBITADO");
+            const iCredit  = col("MONTO NETO ACREDITADO", "ACREDITADO");
+            const iFee     = col("COMISION");
 
-                // Only ingresos (NET_CREDIT > 0)
-                if (idxNetCredit >= 0) {
-                  const credit = parseFloat((row[idxNetCredit] ?? "0").replace(",", "."));
-                  if (credit <= 0) continue;
-                }
+            details.push(`Índices: mpId=${iMpId} fecha=${iFecha} desc=${iDesc} gross=${iGross} debit=${iDebit} credit=${iCredit} fee=${iFee}`);
 
-                // Prefer PAYER_ID column if available
-                if (idxPayerId >= 0) {
-                  const payerVal = (row[idxPayerId] ?? "").trim();
-                  if (payerVal && !isSelf(payerVal)) {
-                    const classified = classifyCbu(payerVal) ?? (`mp:${payerVal}`.match(/^\d+$/) ? `mp:${payerVal}` : null);
-                    if (classified) {
-                      toUpsert.push({ movementId: sourceId, payerIdentifier: classified, rawExternalId: `${idxPayerColName}:${payerVal}` });
-                      continue;
-                    }
-                  }
-                }
+            if (iMpId < 0) {
+              details.push("XLSX: columna ID DE OPERACION no encontrada — revisar headers");
+            } else {
+              const xlsxRows: {
+                mpId: string; fecha: string; descripcion: string;
+                montoBruto: number; montoNetoDebitado: number;
+                montoNetoAcreditado: number; comision: number;
+              }[] = [];
 
-                // Fallback: EXTERNAL_ID
-                if (idxExternalId >= 0) {
-                  const rawExtId = (row[idxExternalId] ?? "").trim();
-                  if (rawExtId && !isSelf(rawExtId)) {
-                    const cbu = classifyCbu(rawExtId);
-                    if (cbu) {
-                      toUpsert.push({ movementId: sourceId, payerIdentifier: cbu, rawExternalId: rawExtId });
-                    }
-                  }
-                }
+              for (const row of dataRows) {
+                const get = (i: number) => i >= 0 ? row[i] : "";
+                const mpId = String(get(iMpId) ?? "").trim();
+                if (!mpId || mpId === "0") continue;
+
+                const rawDesc = String(get(iDesc) ?? "").trim();
+                const debit   = parseNum(get(iDebit));
+                const credit  = parseNum(get(iCredit));
+
+                // Keep: egresos CVU (Extracción de efectivo) + ingresos que no sean reservas/rendimientos
+                const isEgresoCvu = rawDesc === "Extracción de efectivo" || rawDesc === "Extraccion de efectivo";
+                const isIngreso   = credit > 0
+                  && !rawDesc.toLowerCase().includes("reserva")
+                  && !rawDesc.toLowerCase().includes("rendimiento");
+                if (!isEgresoCvu && !isIngreso) continue;
+
+                const fecha = parseXlsxDate(get(iFecha));
+
+                xlsxRows.push({
+                  mpId,
+                  fecha,
+                  descripcion: rawDesc,
+                  montoBruto: parseNum(get(iGross)),
+                  montoNetoDebitado: debit,
+                  montoNetoAcreditado: credit,
+                  comision: parseNum(get(iFee)),
+                });
+              }
+
+              details.push(`XLSX filas útiles: ${xlsxRows.length}`);
+              if (xlsxRows.length > 0) {
+                await storage.upsertMpXlsxMovements(xlsxRows);
+                xlsxSynced = xlsxRows.length;
               }
             }
           } else {
-            details.push(`CSV download error: ${csvRes.status}`);
+            details.push(`XLSX download error: ${fileRes.status}`);
           }
         }
       }
@@ -249,15 +249,15 @@ export async function syncMpReport(token: string): Promise<{
       details.push(`report list error: ${listRes.status}`);
     }
   } catch (e: any) {
-    details.push(`report sync error: ${e.message}`);
+    details.push(`xlsx sync error: ${e.message}`);
   }
 
-  // ── 3. Persist ────────────────────────────────────────────────────────────
+  // ── 3. Persist payer identifiers ──────────────────────────────────────────
   if (toUpsert.length > 0) {
     await storage.upsertMpMovementIdentifiers(toUpsert);
   }
 
-  const msg = `${toUpsert.length} upserted, ${skipped} skipped | ${details.join(" | ")}`;
+  const msg = `${toUpsert.length} identifiers upserted, ${skipped} skipped, ${xlsxSynced} xlsx rows | ${details.join(" | ")}`;
   console.log(`[mp-sync] done: ${msg}`);
-  return { synced: toUpsert.length, skipped, reportFile, details: msg };
+  return { synced: toUpsert.length, skipped, xlsxSynced, reportFile, details: msg };
 }
