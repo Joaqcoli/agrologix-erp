@@ -1993,9 +1993,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         rawPayments.push(...page);
 
         const pagingTotal: number = body.paging?.total ?? 0;
+        console.log(`[mp] página offset=${offset} → ${page.length} items, total MP=${pagingTotal}`);
         if (page.length === 0 || offset + LIMIT >= pagingTotal) break;
         offset += LIMIT;
       }
+      console.log(`[mp] total fetcheado: ${rawPayments.length} movimientos (${effectiveFrom} → ${to ?? "hoy"})`);
+
 
       // ── Detectar merchant ID desde los propios datos (más fiable que /users/me) ──
       // El merchant es el collector_id que aparece con más frecuencia
@@ -2101,7 +2104,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const candidates: string[] = [];
 
         // 1. CBU/CVU — identificador único de cuenta bancaria (máxima confianza)
-        const cbu = String(m.payer?.identification?.number ?? "").replace(/[\s-]/g, "").toLowerCase();
+        // Para INGRESOS: el pagador es la otra parte → payer.identification
+        // Para EGRESOS: el cobrador es la otra parte → collector.identification
+        // Nunca usar payer para egresos porque payer = nosotros mismos
+        const otherParty = m.isOutgoing ? m.collector : m.payer;
+        const cbu = String(otherParty?.identification?.number ?? "").replace(/[\s-]/g, "").toLowerCase();
         if (cbu.length >= 10) candidates.push(cbu);
 
         // 2. MP user ID — único dentro de la plataforma, estable entre pagos
