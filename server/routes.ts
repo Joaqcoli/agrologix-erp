@@ -915,6 +915,126 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // Export "lista de compra" — solo faltantes, agrupados por categoría, listo para imprimir
+  app.get("/api/load-list/export-compra", requireAuth, async (req, res) => {
+    try {
+      const date = req.query.date as string;
+      if (!date) return res.status(400).json({ error: "date query param required" });
+      const data = await storage.getLoadListByDate(date, true);
+
+      // Solo filas con faltante real (diffQty < 0)
+      const shortages = data.rows.filter((r) => r.diffQty < 0);
+
+      const CATEGORY_ORDER = [
+        "Fruta", "Verdura", "Hortaliza Liviana", "Hortaliza Pesada", "Hongos/Hierbas", "Huevos",
+      ];
+      // Agrupar por categoría
+      const byCategory = new Map<string, typeof shortages>();
+      for (const cat of CATEGORY_ORDER) byCategory.set(cat, []);
+      for (const row of shortages) {
+        const cat = CATEGORY_ORDER.includes(row.category) ? row.category : "Verdura";
+        byCategory.get(cat)!.push(row);
+      }
+
+      const [d, m, y] = date.split("-").reverse();
+      const dateLabel = `${d}/${m}/${y}`;
+
+      const wb = new ExcelJS.Workbook();
+      wb.creator = "AgroLogix ERP";
+      const ws = wb.addWorksheet("Lista de Compra");
+
+      ws.columns = [
+        { width: 30 },  // PRODUCTO
+        { width: 10 },  // UNIDAD
+        { width: 12 },  // CANTIDAD
+      ];
+
+      // Fila título
+      const titleRow = ws.addRow([`LISTA DE COMPRA — ${dateLabel}`, "", ""]);
+      ws.mergeCells(`A${titleRow.number}:C${titleRow.number}`);
+      titleRow.getCell(1).font = { name: "Arial", bold: true, size: 13 };
+      titleRow.getCell(1).alignment = { horizontal: "center" };
+      titleRow.height = 22;
+      titleRow.commit();
+
+      // Fila vacía
+      ws.addRow([]).commit();
+
+      // Colores por categoría
+      const CAT_COLORS: Record<string, string> = {
+        "Fruta":              "FFFCE4EC",
+        "Verdura":            "FFE8F5E9",
+        "Hortaliza Liviana":  "FFE3F2FD",
+        "Hortaliza Pesada":   "FFEDE7F6",
+        "Hongos/Hierbas":     "FFFFF8E1",
+        "Huevos":             "FFFFF3E0",
+      };
+      const CAT_TEXT: Record<string, string> = {
+        "Fruta":              "FF880E4F",
+        "Verdura":            "FF1B5E20",
+        "Hortaliza Liviana":  "FF0D47A1",
+        "Hortaliza Pesada":   "FF4A148C",
+        "Hongos/Hierbas":     "FFF57F17",
+        "Huevos":             "FFE65100",
+      };
+
+      for (const cat of CATEGORY_ORDER) {
+        const rows = byCategory.get(cat) ?? [];
+        if (rows.length === 0) continue;
+
+        // Encabezado de categoría
+        const catRow = ws.addRow([cat.toUpperCase(), "", ""]);
+        ws.mergeCells(`A${catRow.number}:C${catRow.number}`);
+        catRow.getCell(1).font = { name: "Arial", bold: true, size: 10, color: { argb: CAT_TEXT[cat] ?? "FF000000" } };
+        catRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: CAT_COLORS[cat] ?? "FFF5F5F5" } };
+        catRow.getCell(1).alignment = { horizontal: "left", indent: 1 };
+        catRow.height = 16;
+        catRow.commit();
+
+        // Encabezados de columna
+        const hRow = ws.addRow(["PRODUCTO", "UNIDAD", "CANTIDAD"]);
+        hRow.eachCell((cell) => {
+          cell.font = { name: "Arial", bold: true, size: 9 };
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE0E0E0" } };
+          cell.alignment = { horizontal: "center" };
+          cell.border = { bottom: { style: "thin", color: { argb: "FFBDBDBD" } } };
+        });
+        hRow.height = 14;
+        hRow.commit();
+
+        // Items
+        for (const row of rows.sort((a, b) => a.productName.localeCompare(b.productName))) {
+          const toBuy = Math.abs(row.diffQty);
+          const qtyValue = row.unit.toUpperCase() === "KG"
+            ? parseFloat(toBuy.toFixed(2))
+            : Math.ceil(toBuy);
+
+          const itemRow = ws.addRow([row.productName, row.unit, qtyValue]);
+          itemRow.getCell(1).font = { name: "Arial", size: 10 };
+          itemRow.getCell(2).font = { name: "Arial", size: 10 };
+          itemRow.getCell(2).alignment = { horizontal: "center" };
+          itemRow.getCell(3).font = { name: "Arial", bold: true, size: 10 };
+          itemRow.getCell(3).alignment = { horizontal: "right" };
+          if (row.unit.toUpperCase() === "KG") {
+            itemRow.getCell(3).numFmt = '#,##0.00" KG"';
+          } else {
+            itemRow.getCell(3).numFmt = `#,##0" ${row.unit}"`;
+          }
+          itemRow.height = 15;
+          itemRow.commit();
+        }
+
+        // Separador
+        ws.addRow([]).commit();
+      }
+
+      const buf = Buffer.from(await wb.xlsx.writeBuffer());
+      res.setHeader("Content-Disposition", `attachment; filename="lista-compra-${date}.xlsx"`);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      return res.send(buf);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   app.get("/api/load-list", requireAuth, async (req, res) => {
     try {
       const date = req.query.date as string;

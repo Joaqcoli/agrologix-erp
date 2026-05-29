@@ -72,10 +72,22 @@ function fmtDiff(diff: number, unit: string) {
   return Math.round(diff).toString();
 }
 
-// Un faltante es "duda" si hay stock en OTRA unidad del mismo producto
+const PACKAGED_UNITS = new Set(["CAJON", "BOLSA", "BANDEJA"]);
+const BASE_UNITS     = new Set(["KG", "UNIDAD", "ATADO", "MAPLE"]);
+
+// Un faltante es "duda" si hay stock REAL en OTRA unidad del mismo producto.
+// Excepción: cuando el pedido es en CAJON/BOLSA/BANDEJA, el stock en unidades base
+// ya está contabilizado en stockQty (vía conversión base/weightPerPackage), por lo
+// que NO representa stock adicional y no debe marcar duda.
 function isDudaRow(row: LoadListRow): boolean {
   if (row.diffQty >= 0) return false;
-  return row.allProductStock.some((s) => s.unit !== row.unit);
+  const isPackaged = PACKAGED_UNITS.has(row.unit.toUpperCase());
+  return row.allProductStock.some((s) => {
+    if (s.unit === row.unit) return false;
+    if ((s.qty ?? 0) <= 0) return false;
+    if (isPackaged && BASE_UNITS.has(s.unit.toUpperCase())) return false;
+    return true;
+  });
 }
 
 export default function LoadListPage() {
@@ -147,6 +159,10 @@ export default function LoadListPage() {
     );
   };
 
+  const handleExportCompra = () => {
+    window.open(`/api/load-list/export-compra?date=${date}`, "_blank");
+  };
+
   const formattedDate = date
     ? new Date(date + "T12:00:00").toLocaleDateString("es-AR", { day: "2-digit", month: "long", year: "numeric" })
     : "";
@@ -171,6 +187,9 @@ export default function LoadListPage() {
               Consolidado por producto y unidad — stock y faltantes
             </p>
           </div>
+          <Button onClick={handleExportCompra} variant="outline" className="border-green-500 text-green-700 hover:bg-green-50">
+            <Download className="mr-2 h-4 w-4" /> Lista de Compra
+          </Button>
           <Button onClick={handleExport} variant="outline" data-testid="button-export-load-list">
             <Download className="mr-2 h-4 w-4" /> Exportar XLSX
           </Button>
