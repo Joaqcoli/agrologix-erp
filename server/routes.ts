@@ -2334,6 +2334,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const xlsxFiltered = xlsxRaw.filter(r => !existingIds.has(String(r.mp_id)));
         xlsxDebug.filtered = xlsxFiltered.length;
         console.log(`[mp-xlsx merge] from=${effectiveFrom} to=${to ?? "null"} raw=${xlsxRaw.length} filtered=${xlsxFiltered.length} existingPayments=${existingIds.size}`);
+        // Log fecha_ts for first 3 rows to confirm it's populated after sync
+        if (xlsxRaw.length > 0) {
+          const sample = xlsxRaw.slice(0, 3).map((r: any) => `${r.mp_id}:${r.fecha_ts ?? "NULL"}`);
+          console.log(`[mp-xlsx merge] sample fecha_ts: ${sample.join(" | ")}`);
+        }
 
         if (xlsxFiltered.length > 0) {
           const xlsxIds = xlsxFiltered.map(r => `xlsx_${r.mp_id}`);
@@ -2821,26 +2826,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (dm2) return `${dm2[1]}T${dm2[2]}-03:00`;
         return parseXDate(val);
       }
+      // Process ALL relevant rows: extracciones (debit > 0) + ingresos (credit > 0, not reserva/rendimiento)
+      // This mirrors the mp-report-sync.ts filter so ingresos also get fecha_ts updated
       const toInsert: { mpId: string; fecha: string; fechaTs?: string | null; descripcion: string; montoBruto: number; montoNetoDebitado: number; montoNetoAcreditado: number; comision: number }[] = [];
-      for (const row of extraccionRows) {
+      for (const row of dataRows) {
         const mpId = String(row[iMpId] ?? "").trim();
         if (!mpId || mpId === "0") continue;
         if (paymentIds.has(mpId)) continue;  // ya en payments API
-        const debit = parseNum(row[iDebit]);
-        if (debit <= 0) continue;
+
+        const rawDesc = String(row[iDesc] ?? "").trim();
+        const normDesc = normH(rawDesc);
+        const debit  = parseNum(row[iDebit]);
+        const credit = parseNum(row[iCredit]);
+
+        const isEgresoCvu = normDesc === "EXTRACCION DE EFECTIVO";
+        const isIngreso   = credit > 0
+          && !normDesc.includes("RESERVA")
+          && !normDesc.includes("RENDIMIENTO");
+        if (!isEgresoCvu && !isIngreso) continue;
+
         const approvalRaw = iAprobacion >= 0 ? row[iAprobacion] : "";
         const fechaTs = approvalRaw ? parseXTimestamp(approvalRaw) : null;
         toInsert.push({
           mpId,
           fecha: parseXDate(row[iFecha]),
           fechaTs: fechaTs || null,
-          descripcion: String(row[iDesc] ?? "").trim(),
+          descripcion: rawDesc,
           montoBruto: parseNum(row[iGross]),
           montoNetoDebitado: debit,
           montoNetoAcreditado: parseNum(row[iCredit]),
           comision: parseNum(row[iFee]),
         });
       }
+
+      // Log first row to verify fechaTs is populated
+      if (toInsert.length > 0) {
+        console.log(`[SYNC-UPSERT] sample row[0]: mpId=${toInsert[0].mpId} fecha=${toInsert[0].fecha} fechaTs=${toInsert[0].fechaTs ?? "null"}`);
+      }
+      diag.sample_fecha_ts = toInsert.slice(0, 3).map(r => ({ mpId: r.mpId, fechaTs: r.fechaTs ?? null }));
 
       if (toInsert.length > 0 && tablaExiste) {
         await storage.upsertMpXlsxMovements(toInsert);
