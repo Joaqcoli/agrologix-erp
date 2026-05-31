@@ -36,6 +36,27 @@ function parseXlsxDate(val: any): string {
   return s.slice(0, 10);
 }
 
+/** Parse full timestamp from XLSX cell — returns ISO string with time if available, else YYYY-MM-DD */
+function parseXlsxTimestamp(val: any): string {
+  if (!val) return "";
+  if (val instanceof Date) {
+    // XLSX parsed with cellDates:true — UTC internally, but sheet values are ART (UTC-3)
+    // Adjust: subtract 0 hours (store as UTC ISO) — sorting/display will show the right relative time
+    return val.toISOString();
+  }
+  const s = String(val).trim();
+  // Already ISO with time: 2026-05-30T08:38:00 or 2026-05-30T08:38:00-03:00
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) return s;
+  // DD/MM/YYYY HH:MM or DD/MM/YYYY HH:MM:SS
+  const dm = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{2}:\d{2}(?::\d{2})?)/);
+  if (dm) return `${dm[3]}-${String(dm[2]).padStart(2, "0")}-${String(dm[1]).padStart(2, "0")}T${dm[4]}-03:00`;
+  // YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS
+  const dm2 = s.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}(?::\d{2})?)/);
+  if (dm2) return `${dm2[1]}T${dm2[2]}-03:00`;
+  // No time component — fallback to date only
+  return parseXlsxDate(val);
+}
+
 /** Parse numeric value from XLSX cell (may be number or string with comma decimal) */
 function parseNum(val: any): number {
   if (typeof val === "number") return val;
@@ -276,23 +297,28 @@ export async function syncMpReport(token: string): Promise<{
             if (i < 0 && fallback) i = headers.findIndex(h => h.includes(fallback));
             return i;
           };
-          const iMpId   = col("ID DE OPERACION EN MERCADO PAGO", "OPERACION EN MERCADO") >= 0
+          const iMpId      = col("ID DE OPERACION EN MERCADO PAGO", "OPERACION EN MERCADO") >= 0
             ? col("ID DE OPERACION EN MERCADO PAGO", "OPERACION EN MERCADO")
             : col("SOURCE_ID");
-          const iFecha  = col("FECHA DE LIBERACION", "LIBERACION") >= 0
+          const iFecha     = col("FECHA DE LIBERACION", "LIBERACION") >= 0
             ? col("FECHA DE LIBERACION", "LIBERACION")
             : col("FECHA") >= 0 ? col("FECHA") : col("DATE");
+          const iAprobacion = col("FECHA DE APROBACION", "APROBACION") >= 0
+            ? col("FECHA DE APROBACION", "APROBACION")
+            : col("TRANSACTION_APPROVAL_DATE");
           const iDesc   = col("DESCRIPCION") >= 0 ? col("DESCRIPCION") : col("DESCRIPTION");
           const iGross  = col("MONTO BRUTO", "BRUTO") >= 0 ? col("MONTO BRUTO", "BRUTO") : col("GROSS_AMOUNT");
           const iDebit  = col("MONTO NETO DEBITADO", "DEBITADO") >= 0 ? col("MONTO NETO DEBITADO", "DEBITADO") : col("NET_DEBIT_AMOUNT");
           const iCredit = col("MONTO NETO ACREDITADO", "ACREDITADO") >= 0 ? col("MONTO NETO ACREDITADO", "ACREDITADO") : col("NET_CREDIT_AMOUNT");
           const iFee    = col("COMISION") >= 0 ? col("COMISION") : col("MP_FEE_AMOUNT");
 
+          details.push(`cols: mpId=${iMpId} fecha=${iFecha} aprobacion=${iAprobacion}`);
+
           if (iMpId < 0) {
             details.push("column ID not found — skipping parse");
           } else {
             const xlsxRows: {
-              mpId: string; fecha: string; descripcion: string;
+              mpId: string; fecha: string; fechaTs?: string | null; descripcion: string;
               montoBruto: number; montoNetoDebitado: number;
               montoNetoAcreditado: number; comision: number;
             }[] = [];
@@ -314,9 +340,19 @@ export async function syncMpReport(token: string): Promise<{
                 && !normDesc.includes("RENDIMIENTO");
               if (!isEgresoCvu && !isIngreso) continue;
 
+              // Timestamp: prefer FECHA DE APROBACION (has real time), fallback to FECHA DE LIBERACION (date only)
+              const approvalRaw = iAprobacion >= 0 ? get(iAprobacion) : "";
+              const fechaTs = approvalRaw ? parseXlsxTimestamp(approvalRaw) : null;
+
+              // Diagnostic log for first 3 Extracción de efectivo rows
+              if (isEgresoCvu && xlsxRows.filter(r => normHeader(r.descripcion) === "EXTRACCION DE EFECTIVO").length < 3) {
+                console.log(`[mp-sync DATES] mpId=${mpId} desc="${rawDesc}" fecha_liberacion=${String(get(iFecha))} fecha_aprobacion=${String(approvalRaw)} → fechaTs=${fechaTs ?? "null"}`);
+              }
+
               xlsxRows.push({
                 mpId,
                 fecha: parseXlsxDate(get(iFecha)),
+                fechaTs: fechaTs || null,
                 descripcion: rawDesc,
                 montoBruto:          parseNum(get(iGross)),
                 montoNetoDebitado:   debit,

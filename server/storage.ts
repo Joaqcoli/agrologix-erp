@@ -4514,7 +4514,7 @@ export const storage = {
   // ─── MP XLSX Movements (reporte de liquidaciones) ─────────────────────────
 
   async upsertMpXlsxMovements(rows: {
-    mpId: string; fecha: string; descripcion: string;
+    mpId: string; fecha: string; fechaTs?: string | null; descripcion: string;
     montoBruto: number; montoNetoDebitado: number;
     montoNetoAcreditado: number; comision: number;
   }[]): Promise<void> {
@@ -4531,12 +4531,14 @@ export const storage = {
         synced_at TIMESTAMP NOT NULL DEFAULT NOW()
       )
     `);
+    try { await db.execute(drizzleSql`ALTER TABLE mp_xlsx_movements ADD COLUMN IF NOT EXISTS fecha_ts TEXT`); } catch (_) {}
     for (const r of rows) {
       await db.execute(drizzleSql`
-        INSERT INTO mp_xlsx_movements (mp_id, fecha, descripcion, monto_bruto, monto_neto_debitado, monto_neto_acreditado, comision, synced_at)
-        VALUES (${r.mpId}, ${r.fecha}, ${r.descripcion}, ${r.montoBruto}, ${r.montoNetoDebitado}, ${r.montoNetoAcreditado}, ${r.comision}, NOW())
+        INSERT INTO mp_xlsx_movements (mp_id, fecha, fecha_ts, descripcion, monto_bruto, monto_neto_debitado, monto_neto_acreditado, comision, synced_at)
+        VALUES (${r.mpId}, ${r.fecha}, ${r.fechaTs ?? null}, ${r.descripcion}, ${r.montoBruto}, ${r.montoNetoDebitado}, ${r.montoNetoAcreditado}, ${r.comision}, NOW())
         ON CONFLICT (mp_id) DO UPDATE
           SET fecha                = EXCLUDED.fecha,
+              fecha_ts             = EXCLUDED.fecha_ts,
               descripcion          = EXCLUDED.descripcion,
               monto_bruto          = EXCLUDED.monto_bruto,
               monto_neto_debitado  = EXCLUDED.monto_neto_debitado,
@@ -4568,7 +4570,7 @@ export const storage = {
     else if (safeFrom)      where = `WHERE fecha >= '${safeFrom}'`;
     else if (safeTo)        where = `WHERE fecha <= '${safeTo}'`;
     const rows = await db.execute(drizzleSql.raw(`
-      SELECT mp_id, fecha, descripcion,
+      SELECT mp_id, fecha, fecha_ts, descripcion,
              monto_bruto::float,
              monto_neto_debitado::float,
              monto_neto_acreditado::float,
@@ -4576,7 +4578,7 @@ export const storage = {
              synced_at
       FROM mp_xlsx_movements
       ${where}
-      ORDER BY fecha DESC
+      ORDER BY COALESCE(fecha_ts, fecha || 'T12:00:00') DESC
     `));
     return rows.rows as any[];
   },

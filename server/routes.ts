@@ -2348,9 +2348,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             const gross = Math.abs(isOutgoing ? r.monto_neto_debitado : r.monto_neto_acreditado) || 0;
             const fee = Math.abs(r.comision ?? 0);
             const net = gross;
+            // TEMA 1: use full timestamp from fecha_ts if available, fallback to date + 12:00
+            const dateCreated = r.fecha_ts
+              ? r.fecha_ts
+              : r.fecha ? `${r.fecha}T12:00:00.000-03:00` : "";
             return {
               id,
-              date_created: r.fecha ? `${r.fecha}T12:00:00.000-03:00` : "",
+              date_created: dateCreated,
               type: "bank_transfer",
               description: r.descripcion,
               status: "approved",
@@ -2371,6 +2375,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             };
           });
           xlsxDebug.merged = xlsxMovements.length;
+
+          // TEMA 2: batch-lookup bank_contacts for xlsx movements using rawIdentifier
+          if (xlsxMovements.length > 0) {
+            const xlsxRawIds = xlsxMovements.map((m: any) => m.rawIdentifier as string).filter(Boolean);
+            try {
+              const xlsxContactsMap = await storage.getBankContactsByIdentifiers(xlsxRawIds);
+              console.log(`[xlsx-contacts] ${xlsxRawIds.length} ids → ${xlsxContactsMap.size} matches`);
+              xlsxMovements = xlsxMovements.map((m: any) => {
+                const contact = xlsxContactsMap.get((m.rawIdentifier ?? "").toLowerCase().trim());
+                if (!contact) return m;
+                return {
+                  ...m,
+                  identified: true,
+                  displayName: contact.displayName,
+                  contactType: contact.type,
+                  entityId: contact.entityId ?? null,
+                  contactId: contact.id,
+                };
+              });
+            } catch (e: any) {
+              console.warn("[xlsx-contacts] lookup failed:", e.message);
+            }
+          }
         }
       } catch (xlsxErr: any) {
         xlsxDebug.error = xlsxErr.message;
@@ -2682,12 +2709,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (i < 0 && fallback) i = headers.findIndex(h => h.includes(fallback));
         return i;
       };
-      const iMpId   = col("ID DE OPERACION EN MERCADO PAGO", "OPERACION EN MERCADO") >= 0
+      const iMpId      = col("ID DE OPERACION EN MERCADO PAGO", "OPERACION EN MERCADO") >= 0
         ? col("ID DE OPERACION EN MERCADO PAGO", "OPERACION EN MERCADO")
         : col("SOURCE_ID");
-      const iFecha  = col("FECHA DE LIBERACION", "LIBERACION") >= 0
+      const iFecha     = col("FECHA DE LIBERACION", "LIBERACION") >= 0
         ? col("FECHA DE LIBERACION", "LIBERACION")
         : col("FECHA") >= 0 ? col("FECHA") : col("DATE");
+      const iAprobacion = col("FECHA DE APROBACION", "APROBACION") >= 0
+        ? col("FECHA DE APROBACION", "APROBACION")
+        : col("TRANSACTION_APPROVAL_DATE");
       const iDesc   = col("DESCRIPCION") >= 0 ? col("DESCRIPCION") : col("DESCRIPTION");
       const iGross  = col("MONTO BRUTO", "BRUTO") >= 0
         ? col("MONTO BRUTO", "BRUTO") : col("GROSS_AMOUNT");
@@ -2697,7 +2727,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ? col("MONTO NETO ACREDITADO", "ACREDITADO") : col("NET_CREDIT_AMOUNT");
       const iFee    = col("COMISION") >= 0 ? col("COMISION") : col("MP_FEE_AMOUNT");
 
-      diag.indices_columnas = { iMpId, iFecha, iDesc, iGross, iDebit, iCredit, iFee };
+      diag.indices_columnas = { iMpId, iFecha, iAprobacion, iDesc, iGross, iDebit, iCredit, iFee };
 
       // Rango de fechas en el reporte
       const fechas = dataRows
@@ -2772,17 +2802,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         diag.filas_en_tabla_actual = (countRes.rows[0] as any)?.n ?? 0;
       } catch (_) { diag.filas_en_tabla_actual = "error leyendo tabla"; }
 
+      // Diagnostic: log FECHA DE APROBACION vs FECHA DE LIBERACION for first 3 Extracción rows
+      for (let i = 0; i < Math.min(3, extraccionRows.length); i++) {
+        const r = extraccionRows[i];
+        console.log(`[SYNC-DIAG-DATES] row ${i}: mpId=${String(r[iMpId] ?? "")} fecha_liberacion=${String(r[iFecha] ?? "")} fecha_aprobacion=${iAprobacion >= 0 ? String(r[iAprobacion] ?? "") : "N/A(col not found)"}`);
+      }
+      diag.sample_aprobacion_col = iAprobacion >= 0 ? extraccionRows.slice(0, 3).map(r => String(r[iAprobacion] ?? "")) : "col not found";
+
       // Filtrar y upsert
-      const toInsert: { mpId: string; fecha: string; descripcion: string; montoBruto: number; montoNetoDebitado: number; montoNetoAcreditado: number; comision: number }[] = [];
+      function parseXTimestamp(val: any): string {
+        if (!val) return "";
+        if (val instanceof Date) return val.toISOString();
+        const s = String(val).trim();
+        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) return s;
+        const dm = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{2}:\d{2}(?::\d{2})?)/);
+        if (dm) return `${dm[3]}-${String(dm[2]).padStart(2,"0")}-${String(dm[1]).padStart(2,"0")}T${dm[4]}-03:00`;
+        const dm2 = s.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}(?::\d{2})?)/);
+        if (dm2) return `${dm2[1]}T${dm2[2]}-03:00`;
+        return parseXDate(val);
+      }
+      const toInsert: { mpId: string; fecha: string; fechaTs?: string | null; descripcion: string; montoBruto: number; montoNetoDebitado: number; montoNetoAcreditado: number; comision: number }[] = [];
       for (const row of extraccionRows) {
         const mpId = String(row[iMpId] ?? "").trim();
         if (!mpId || mpId === "0") continue;
         if (paymentIds.has(mpId)) continue;  // ya en payments API
         const debit = parseNum(row[iDebit]);
         if (debit <= 0) continue;
+        const approvalRaw = iAprobacion >= 0 ? row[iAprobacion] : "";
+        const fechaTs = approvalRaw ? parseXTimestamp(approvalRaw) : null;
         toInsert.push({
           mpId,
           fecha: parseXDate(row[iFecha]),
+          fechaTs: fechaTs || null,
           descripcion: String(row[iDesc] ?? "").trim(),
           montoBruto: parseNum(row[iGross]),
           montoNetoDebitado: debit,
