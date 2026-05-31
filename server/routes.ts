@@ -2326,10 +2326,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // ── Merge XLSX movements (missing from payments API) ─────────────────────
       let xlsxMovements: any[] = [];
+      let xlsxDebug = { raw: 0, filtered: 0, merged: 0, error: "" };
       try {
         const xlsxRaw = await storage.getMpXlsxMovements(effectiveFrom, to ?? undefined);
+        xlsxDebug.raw = xlsxRaw.length;
         const existingIds = new Set(rawPayments.map((p: any) => String(p.id)));
         const xlsxFiltered = xlsxRaw.filter(r => !existingIds.has(String(r.mp_id)));
+        xlsxDebug.filtered = xlsxFiltered.length;
+        console.log(`[mp-xlsx merge] from=${effectiveFrom} to=${to ?? "null"} raw=${xlsxRaw.length} filtered=${xlsxFiltered.length} existingPayments=${existingIds.size}`);
 
         if (xlsxFiltered.length > 0) {
           const xlsxIds = xlsxFiltered.map(r => `xlsx_${r.mp_id}`);
@@ -2343,7 +2347,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             const isOutgoing = (r.monto_neto_debitado ?? 0) > 0;
             const gross = Math.abs(isOutgoing ? r.monto_neto_debitado : r.monto_neto_acreditado) || 0;
             const fee = Math.abs(r.comision ?? 0);
-            // xlsx already reports net amounts in each column
             const net = gross;
             return {
               id,
@@ -2356,7 +2359,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               feeAmount: fee,
               netAmount: net,
               displayName: null,
-              rawIdentifier: null,
+              rawIdentifier: `xlsx:${r.mp_id}`,
               identified: false,
               categoryId: xlsxCatMap.get(id) ?? null,
               contactType: null,
@@ -2367,8 +2370,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               operation_type: isOutgoing ? "money_transfer" : "account_fund",
             };
           });
+          xlsxDebug.merged = xlsxMovements.length;
         }
       } catch (xlsxErr: any) {
+        xlsxDebug.error = xlsxErr.message;
         console.warn("[mp-xlsx] fetch error:", xlsxErr.message);
       }
 
@@ -2378,7 +2383,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         new Date(b.date_created ?? 0).getTime() - new Date(a.date_created ?? 0).getTime()
       );
 
-      return res.json({ ...mpData, results: allMovements });
+      return res.json({ ...mpData, results: allMovements, _debug_xlsx_merged: xlsxDebug });
     } catch (e: any) {
       const msg = (e as any)?.name === "AbortError" ? "Timeout al conectar con Mercado Pago" : e.message;
       return res.status(500).json({ error: msg });
