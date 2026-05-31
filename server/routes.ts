@@ -2496,22 +2496,237 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ─── MP Report Sync ───────────────────────────────────────────────────────
   app.post("/api/mp/sync-report", requireAuth, async (_req, res) => {
-    try {
-      const token = process.env.MP_ACCESS_TOKEN;
-      if (!token) return res.status(500).json({ error: "MP_ACCESS_TOKEN no configurado" });
+    const token = process.env.MP_ACCESS_TOKEN;
+    if (!token) return res.status(500).json({ error: "MP_ACCESS_TOKEN no configurado" });
+    const auth = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    const BASE = "https://api.mercadopago.com";
+    const diag: any = {};
 
-      // Ensure MP generates daily reports at 1am ART
+    try {
+      // ── 1. GET config actual ────────────────────────────────────────────────
       try {
-        await fetch("https://api.mercadopago.com/v1/account/release_report/config", {
-          method: "PUT",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ frequency: { hour: 1, type: "daily" } }),
+        const cr = await fetch(`${BASE}/v1/account/release_report/config`, { headers: auth });
+        diag.config_actual = await cr.json();
+      } catch (e: any) { diag.config_actual = { error: e.message }; }
+
+      // ── 2. Capturar lista de reportes ANTES de generar ──────────────────────
+      const listBefore: any[] = [];
+      try {
+        const lr = await fetch(`${BASE}/v1/account/release_report/list`, { headers: auth });
+        const raw: any[] = lr.ok ? await lr.json() : [];
+        listBefore.push(...(raw ?? []));
+        diag.reportes_disponibles = raw.map((r: any) => ({
+          id: r.id, file_name: r.file_name,
+          date_from: r.date_from ?? r.created_from, date_to: r.date_to,
+        }));
+      } catch (e: any) { diag.reportes_disponibles = { error: e.message }; }
+
+      const existingIds = new Set(listBefore.map((r: any) => String(r.id ?? r.file_name ?? "")));
+
+      // ── 3. POST: generar reporte on-demand (últimos 35 días) ────────────────
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      // begin = 35 días atrás a las 00:00 ART
+      const begin = new Date(now); begin.setDate(begin.getDate() - 35);
+      const beginStr = `${begin.getFullYear()}-${pad(begin.getMonth()+1)}-${pad(begin.getDate())}T00:00:00.000-03:00`;
+      // end = hoy a las 23:59:59 ART
+      const endStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T23:59:59.000-03:00`;
+
+      let postStatus = 0;
+      let postBody: any = {};
+      try {
+        const pr = await fetch(`${BASE}/v1/account/release_report`, {
+          method: "POST",
+          headers: auth,
+          body: JSON.stringify({ begin_date: beginStr, end_date: endStr }),
         });
+        postStatus = pr.status;
+        postBody = await pr.json();
+      } catch (e: any) { postBody = { error: e.message }; }
+      diag.generar_reporte = { http_status: postStatus, begin_date: beginStr, end_date: endStr, response: postBody };
+
+      // ── 4. Pollear hasta que aparezca el reporte nuevo (max 90s) ───────────
+      let newReport: any = null;
+      const deadline = Date.now() + 90_000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 6000));
+        try {
+          const lr = await fetch(`${BASE}/v1/account/release_report/list`, { headers: auth });
+          if (!lr.ok) continue;
+          const list: any[] = await lr.json() ?? [];
+          newReport = list.find((r: any) => !existingIds.has(String(r.id ?? r.file_name ?? "")));
+          if (newReport) break;
+        } catch (_) {}
+      }
+      diag.reporte_nuevo_encontrado = !!newReport;
+      diag.reporte_usado = newReport
+        ? { id: newReport.id, file_name: newReport.file_name, date_from: newReport.date_from ?? newReport.created_from, date_to: newReport.date_to }
+        : null;
+
+      if (!newReport) {
+        return res.json({ ...diag, error: "Timeout esperando reporte nuevo (90s). El POST puede haber fallado." });
+      }
+
+      // ── 5. Descargar XLSX ───────────────────────────────────────────────────
+      const reportFile: string = newReport.file_name ?? newReport.id ?? "";
+      const fileRes = await fetch(`${BASE}/v1/account/release_report/${encodeURIComponent(reportFile)}`, { headers: auth });
+      if (!fileRes.ok) {
+        return res.json({ ...diag, error: `Descarga XLSX falló: HTTP ${fileRes.status}` });
+      }
+      const buffer = Buffer.from(await fileRes.arrayBuffer());
+
+      // ── 6. Parsear XLSX ─────────────────────────────────────────────────────
+      function normH(s: string) {
+        return String(s ?? "").toUpperCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      }
+      function parseNum(v: any) {
+        if (typeof v === "number") return v;
+        return parseFloat(String(v ?? "0").replace(",", ".")) || 0;
+      }
+      function parseXDate(val: any): string {
+        if (!val) return "";
+        if (val instanceof Date) return val.toISOString().slice(0, 10);
+        const s = String(val).trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+        const dm = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (dm) return `${dm[3]}-${String(dm[2]).padStart(2,"0")}-${String(dm[1]).padStart(2,"0")}`;
+        return s.slice(0, 10);
+      }
+
+      const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
+      const sheetName = workbook.SheetNames[0];
+      const allRows: any[][] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "" });
+      const headers: string[] = (allRows[0] ?? []).map((h: any) => normH(h));
+      const dataRows = allRows.slice(1).filter(r => r.some((v: any) => v !== ""));
+
+      diag.filas_totales = dataRows.length;
+      diag.columnas_xlsx = headers;
+
+      // Column indices
+      const col = (exact: string, fallback?: string) => {
+        let i = headers.findIndex(h => h === exact);
+        if (i < 0 && fallback) i = headers.findIndex(h => h.includes(fallback));
+        return i;
+      };
+      const iMpId   = col("ID DE OPERACION EN MERCADO PAGO", "OPERACION EN MERCADO");
+      const iFecha  = col("FECHA DE LIBERACION", "LIBERACION") >= 0
+        ? col("FECHA DE LIBERACION", "LIBERACION")
+        : col("FECHA");
+      const iDesc   = col("DESCRIPCION");
+      const iGross  = col("MONTO BRUTO", "BRUTO");
+      const iDebit  = col("MONTO NETO DEBITADO", "DEBITADO");
+      const iCredit = col("MONTO NETO ACREDITADO", "ACREDITADO");
+      const iFee    = col("COMISION");
+
+      diag.indices_columnas = { iMpId, iFecha, iDesc, iGross, iDebit, iCredit, iFee };
+
+      // Rango de fechas en el reporte
+      const fechas = dataRows
+        .map(r => parseXDate(iMpId >= 0 ? r[iFecha] : ""))
+        .filter(f => f.length === 10)
+        .sort();
+      diag.rango_fechas_filas = { min: fechas[0] ?? null, max: fechas[fechas.length - 1] ?? null };
+
+      // Filas "Extracción de efectivo"
+      const extraccionRows = dataRows.filter(r => {
+        const d = normH(String(r[iDesc] ?? ""));
+        return d === "EXTRACCION DE EFECTIVO";
+      });
+      diag.filas_extraccion_efectivo = extraccionRows.length;
+
+      // Movimientos del 30/05
+      diag.movimientos_30_may_en_reporte = dataRows
+        .filter(r => parseXDate(r[iFecha])?.startsWith("2026-05-30"))
+        .map(r => ({
+          id_operacion: String(r[iMpId] ?? ""),
+          descripcion: String(r[iDesc] ?? ""),
+          monto_neto_debitado: parseNum(r[iDebit]),
+          monto_neto_acreditado: parseNum(r[iCredit]),
+          fecha: parseXDate(r[iFecha]),
+        }));
+
+      // ── 7. Fetch payments del período para deduplicar ─────────────────────
+      const paymentIds = new Set<string>();
+      try {
+        const pUrl = `${BASE}/v1/payments/search?range=date_created&begin_date=${encodeURIComponent(beginStr)}&end_date=${encodeURIComponent(endStr)}&sort=date_created&criteria=desc&limit=100&offset=0`;
+        const pr = await fetch(pUrl, { headers: auth });
+        if (pr.ok) {
+          const pb = await pr.json();
+          for (const p of pb.results ?? []) paymentIds.add(String(p.id));
+          // paginate if needed
+          let off = 100;
+          while ((pb.results?.length ?? 0) >= 100) {
+            const pr2 = await fetch(`${pUrl.replace("offset=0", `offset=${off}`)}`, { headers: auth });
+            if (!pr2.ok) break;
+            const pb2 = await pr2.json();
+            for (const p of pb2.results ?? []) paymentIds.add(String(p.id));
+            if ((pb2.results?.length ?? 0) < 100) break;
+            off += 100;
+          }
+        }
+      } catch (_) {}
+      diag.ids_ya_en_payments = paymentIds.size;
+
+      // ── 8. Insertar filas nuevas en mp_xlsx_movements ─────────────────────
+      // Verificar que la tabla existe
+      let tablaExiste = false;
+      try {
+        await db.execute(drizzleSql`
+          CREATE TABLE IF NOT EXISTS mp_xlsx_movements (
+            mp_id TEXT PRIMARY KEY,
+            fecha TEXT,
+            descripcion TEXT,
+            monto_bruto NUMERIC(12,2),
+            monto_neto_debitado NUMERIC(12,2),
+            monto_neto_acreditado NUMERIC(12,2),
+            comision NUMERIC(12,2),
+            synced_at TIMESTAMP NOT NULL DEFAULT NOW()
+          )
+        `);
+        tablaExiste = true;
+      } catch (_) {}
+      diag.tabla_mp_xlsx_movements_existe = tablaExiste;
+
+      // Contar filas actuales
+      try {
+        const countRes = await db.execute(drizzleSql.raw(`SELECT COUNT(*)::int AS n FROM mp_xlsx_movements`));
+        diag.filas_en_tabla_actual = (countRes.rows[0] as any)?.n ?? 0;
+      } catch (_) { diag.filas_en_tabla_actual = "error leyendo tabla"; }
+
+      // Filtrar y upsert
+      const toInsert: { mpId: string; fecha: string; descripcion: string; montoBruto: number; montoNetoDebitado: number; montoNetoAcreditado: number; comision: number }[] = [];
+      for (const row of extraccionRows) {
+        const mpId = String(row[iMpId] ?? "").trim();
+        if (!mpId || mpId === "0") continue;
+        if (paymentIds.has(mpId)) continue;  // ya en payments API
+        const debit = parseNum(row[iDebit]);
+        if (debit <= 0) continue;
+        toInsert.push({
+          mpId,
+          fecha: parseXDate(row[iFecha]),
+          descripcion: String(row[iDesc] ?? "").trim(),
+          montoBruto: parseNum(row[iGross]),
+          montoNetoDebitado: debit,
+          montoNetoAcreditado: parseNum(row[iCredit]),
+          comision: parseNum(row[iFee]),
+        });
+      }
+
+      if (toInsert.length > 0 && tablaExiste) {
+        await storage.upsertMpXlsxMovements(toInsert);
+      }
+      diag.ids_nuevos_insertados = toInsert.length;
+
+      // Contar filas después de insertar
+      try {
+        const countRes2 = await db.execute(drizzleSql.raw(`SELECT COUNT(*)::int AS n FROM mp_xlsx_movements`));
+        diag.filas_en_tabla_despues = (countRes2.rows[0] as any)?.n ?? 0;
       } catch (_) {}
 
-      const result = await syncMpReport(token);
-      return res.json(result);
-    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+      return res.json(diag);
+    } catch (e: any) {
+      return res.status(500).json({ ...diag, error: e.message, stack: e.stack?.split("\n").slice(0, 6) });
+    }
   });
 
   // ─── Pedidos pendientes por cliente (para vincular pagos MP) ──────────────
