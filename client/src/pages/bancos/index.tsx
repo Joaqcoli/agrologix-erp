@@ -274,6 +274,7 @@ export default function BancosPage() {
   const [entitySearch, setEntitySearch] = useState("");
   const [idError, setIdError] = useState<string | null>(null);
   const [idEditMode, setIdEditMode] = useState(false); // true = editar contacto existente
+  const [contactPickSearch, setContactPickSearch] = useState("");
 
   // ── queries ──────────────────────────────────────────────────────────────────
 
@@ -317,6 +318,12 @@ export default function BancosPage() {
     queryKey: ["/api/suppliers"],
     queryFn: () => fetch("/api/suppliers", { credentials: "include" }).then(r => r.json()),
     enabled: identifyOpen && (idType === "proveedor"),
+  });
+
+  const { data: allBankContacts = [] } = useQuery<BankContact[]>({
+    queryKey: ["/api/bank-contacts"],
+    queryFn: () => fetch("/api/bank-contacts", { credentials: "include" }).then(r => r.json()),
+    enabled: identifyOpen && !idEditMode,
   });
 
   // ── mutations ─────────────────────────────────────────────────────────────────
@@ -442,6 +449,7 @@ export default function BancosPage() {
     setEntitySearch("");
     setIdError(null);
     setIdEditMode(false);
+    setContactPickSearch("");
     setIdentifyOpen(true);
   };
 
@@ -467,6 +475,7 @@ export default function BancosPage() {
     setEntitySearch("");
     setIdError(null);
     setIdEditMode(false);
+    setContactPickSearch("");
   };
 
   const applyContactToCache = (contact: BankContact, movId?: string | number) => {
@@ -968,6 +977,42 @@ export default function BancosPage() {
                 </div>
               );
             })()}
+
+            {!idEditMode && allBankContacts.length > 0 && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-muted-foreground">Contacto existente (opcional)</label>
+                <Input
+                  value={contactPickSearch}
+                  onChange={e => setContactPickSearch(e.target.value)}
+                  placeholder="Buscar contacto guardado..."
+                />
+                {contactPickSearch.trim() && (() => {
+                  const q = contactPickSearch.toLowerCase();
+                  const matches = allBankContacts.filter(c => c.displayName.toLowerCase().includes(q));
+                  if (matches.length === 0) return null;
+                  return (
+                    <div className="border rounded-md overflow-hidden max-h-36 overflow-y-auto">
+                      {matches.slice(0, 6).map(c => (
+                        <button
+                          key={c.id}
+                          onClick={() => {
+                            setIdName(c.displayName);
+                            setIdType(c.type);
+                            setIdEntityId(c.entityId ?? null);
+                            if (c.entityId) setEntitySearch(c.displayName);
+                            setContactPickSearch("");
+                          }}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors border-b last:border-b-0 flex items-center justify-between"
+                        >
+                          <span>{c.displayName}</span>
+                          <span className="text-[10px] text-muted-foreground capitalize ml-2">{c.type}</span>
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Nombre a mostrar</label>
