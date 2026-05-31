@@ -2526,14 +2526,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // ── 3. POST: generar reporte on-demand (últimos 35 días) ────────────────
       const now = new Date();
       const pad = (n: number) => String(n).padStart(2, "0");
-      // begin = 35 días atrás a las 00:00 ART
       const begin = new Date(now); begin.setDate(begin.getDate() - 35);
-      const beginStr = `${begin.getFullYear()}-${pad(begin.getMonth()+1)}-${pad(begin.getDate())}T00:00:00.000-03:00`;
-      // end = hoy a las 23:59:59 ART
-      const endStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T23:59:59.000-03:00`;
+      // Formato Z (UTC) sin milisegundos — requerido por MP
+      const beginStr = `${begin.getFullYear()}-${pad(begin.getMonth()+1)}-${pad(begin.getDate())}T00:00:00Z`;
+      const endStr   = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T23:59:59Z`;
 
       let postStatus = 0;
       let postBody: any = {};
+      // Intento 1: body JSON
       try {
         const pr = await fetch(`${BASE}/v1/account/release_report`, {
           method: "POST",
@@ -2542,21 +2542,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
         postStatus = pr.status;
         postBody = await pr.json();
+        console.log(`[mp-sync] POST body JSON → HTTP ${postStatus}:`, JSON.stringify(postBody));
       } catch (e: any) { postBody = { error: e.message }; }
-      diag.generar_reporte = { http_status: postStatus, begin_date: beginStr, end_date: endStr, response: postBody };
 
-      // ── 4. Pollear hasta que aparezca el reporte nuevo (max 90s) ───────────
-      let newReport: any = null;
-      const deadline = Date.now() + 90_000;
-      while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 6000));
+      // Intento 2: query params (si el body falla)
+      let postStatus2 = 0;
+      let postBody2: any = null;
+      if (postStatus !== 200 && postStatus !== 201 && postStatus !== 202) {
         try {
-          const lr = await fetch(`${BASE}/v1/account/release_report/list`, { headers: auth });
-          if (!lr.ok) continue;
-          const list: any[] = await lr.json() ?? [];
-          newReport = list.find((r: any) => !existingIds.has(String(r.id ?? r.file_name ?? "")));
-          if (newReport) break;
-        } catch (_) {}
+          const url2 = `${BASE}/v1/account/release_report?begin_date=${encodeURIComponent(beginStr)}&end_date=${encodeURIComponent(endStr)}`;
+          const pr2 = await fetch(url2, { method: "POST", headers: auth });
+          postStatus2 = pr2.status;
+          postBody2 = await pr2.json();
+          console.log(`[mp-sync] POST query params → HTTP ${postStatus2}:`, JSON.stringify(postBody2));
+        } catch (e: any) { postBody2 = { error: e.message }; }
+      }
+
+      const postOk = [200, 201, 202].includes(postStatus) || [200, 201, 202].includes(postStatus2);
+      diag.generar_reporte = {
+        begin_date: beginStr, end_date: endStr,
+        intento_body: { http_status: postStatus, response: postBody },
+        intento_query_params: postBody2 !== null ? { http_status: postStatus2, response: postBody2 } : "no intentado",
+        exitoso: postOk,
+      };
+
+      // ── 4. Pollear hasta 25s (5 intentos cada 5s) ──────────────────────────
+      let newReport: any = null;
+      if (postOk) {
+        for (let i = 0; i < 5; i++) {
+          await new Promise(r => setTimeout(r, 5000));
+          try {
+            const lr = await fetch(`${BASE}/v1/account/release_report/list`, { headers: auth });
+            if (!lr.ok) continue;
+            const list: any[] = await lr.json() ?? [];
+            newReport = list.find((r: any) => !existingIds.has(String(r.id ?? r.file_name ?? "")));
+            if (newReport) break;
+          } catch (_) {}
+        }
       }
       diag.reporte_nuevo_encontrado = !!newReport;
       diag.reporte_usado = newReport
@@ -2564,7 +2586,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         : null;
 
       if (!newReport) {
-        return res.json({ ...diag, error: "Timeout esperando reporte nuevo (90s). El POST puede haber fallado." });
+        return res.json({ ...diag, mensaje: postOk
+          ? "Reporte solicitado a MP. Puede tardar 1-2 minutos en generarse. Volvé a sincronizar en un momento."
+          : "POST para generar reporte falló — revisar generar_reporte en este JSON." });
       }
 
       // ── 5. Descargar XLSX ───────────────────────────────────────────────────
