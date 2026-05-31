@@ -2533,12 +2533,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       let postStatus = 0;
       let postBody: any = {};
-      // Intento 1: body JSON
+      // Intento 1: body JSON con format XLSX explícito
       try {
         const pr = await fetch(`${BASE}/v1/account/release_report`, {
           method: "POST",
           headers: auth,
-          body: JSON.stringify({ begin_date: beginStr, end_date: endStr }),
+          body: JSON.stringify({ begin_date: beginStr, end_date: endStr, format: "XLSX" }),
         });
         postStatus = pr.status;
         postBody = await pr.json();
@@ -2591,15 +2591,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           : "POST para generar reporte falló — revisar generar_reporte en este JSON." });
       }
 
-      // ── 5. Descargar XLSX ───────────────────────────────────────────────────
+      // ── 5. Descargar reporte ────────────────────────────────────────────────
       const reportFile: string = newReport.file_name ?? newReport.id ?? "";
       const fileRes = await fetch(`${BASE}/v1/account/release_report/${encodeURIComponent(reportFile)}`, { headers: auth });
       if (!fileRes.ok) {
-        return res.json({ ...diag, error: `Descarga XLSX falló: HTTP ${fileRes.status}` });
+        return res.json({ ...diag, error: `Descarga reporte falló: HTTP ${fileRes.status}` });
       }
       const buffer = Buffer.from(await fileRes.arrayBuffer());
 
-      // ── 6. Parsear XLSX ─────────────────────────────────────────────────────
+      // ── 6. Parsear — detectar CSV o XLSX por magic bytes ──────────────────
       function normH(s: string) {
         return String(s ?? "").toUpperCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       }
@@ -2617,30 +2617,64 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return s.slice(0, 10);
       }
 
-      const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
-      const sheetName = workbook.SheetNames[0];
-      const allRows: any[][] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: "" });
-      const headers: string[] = (allRows[0] ?? []).map((h: any) => normH(h));
-      const dataRows = allRows.slice(1).filter(r => r.some((v: any) => v !== ""));
+      // PK (504b) = ZIP = XLSX; anything else = CSV
+      const isXlsx = buffer.slice(0, 2).toString("hex") === "504b"
+        || (reportFile ?? "").toLowerCase().endsWith(".xlsx");
+      diag.formato_detectado = isXlsx ? "xlsx" : "csv";
+
+      let headers: string[] = [];
+      let dataRows: any[][] = [];
+
+      if (isXlsx) {
+        const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const allRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+        headers = (allRows[0] ?? []).map((h: any) => normH(h));
+        dataRows = allRows.slice(1).filter(r => r.some((v: any) => v !== ""));
+      } else {
+        // CSV — separador ";" o ","
+        const text = buffer.toString("utf-8");
+        const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+        const sep = lines[0]?.includes(";") ? ";" : ",";
+        headers = lines[0].split(sep).map(h => normH(h.replace(/^"|"$/g, "")));
+        dataRows = lines.slice(1).map(line => {
+          const cells: string[] = [];
+          let cur = "", inQ = false;
+          for (const ch of line) {
+            if (ch === '"') { inQ = !inQ; }
+            else if (ch === sep && !inQ) { cells.push(cur.trim()); cur = ""; }
+            else { cur += ch; }
+          }
+          cells.push(cur.trim());
+          return cells;
+        });
+      }
+
+      console.log(`[SYNC-DIAG] formato_detectado=${diag.formato_detectado} filas_totales=${dataRows.length} columnas_detectadas=${headers.join("|")}`);
 
       diag.filas_totales = dataRows.length;
-      diag.columnas_xlsx = headers;
+      diag.columnas_detectadas = headers;
 
-      // Column indices
+      // Column indices — Spanish names (XLSX manual) + English technical names (CSV)
       const col = (exact: string, fallback?: string) => {
         let i = headers.findIndex(h => h === exact);
         if (i < 0 && fallback) i = headers.findIndex(h => h.includes(fallback));
         return i;
       };
-      const iMpId   = col("ID DE OPERACION EN MERCADO PAGO", "OPERACION EN MERCADO");
+      const iMpId   = col("ID DE OPERACION EN MERCADO PAGO", "OPERACION EN MERCADO") >= 0
+        ? col("ID DE OPERACION EN MERCADO PAGO", "OPERACION EN MERCADO")
+        : col("SOURCE_ID");
       const iFecha  = col("FECHA DE LIBERACION", "LIBERACION") >= 0
         ? col("FECHA DE LIBERACION", "LIBERACION")
-        : col("FECHA");
-      const iDesc   = col("DESCRIPCION");
-      const iGross  = col("MONTO BRUTO", "BRUTO");
-      const iDebit  = col("MONTO NETO DEBITADO", "DEBITADO");
-      const iCredit = col("MONTO NETO ACREDITADO", "ACREDITADO");
-      const iFee    = col("COMISION");
+        : col("FECHA") >= 0 ? col("FECHA") : col("DATE");
+      const iDesc   = col("DESCRIPCION") >= 0 ? col("DESCRIPCION") : col("DESCRIPTION");
+      const iGross  = col("MONTO BRUTO", "BRUTO") >= 0
+        ? col("MONTO BRUTO", "BRUTO") : col("GROSS_AMOUNT");
+      const iDebit  = col("MONTO NETO DEBITADO", "DEBITADO") >= 0
+        ? col("MONTO NETO DEBITADO", "DEBITADO") : col("NET_DEBIT_AMOUNT");
+      const iCredit = col("MONTO NETO ACREDITADO", "ACREDITADO") >= 0
+        ? col("MONTO NETO ACREDITADO", "ACREDITADO") : col("NET_CREDIT_AMOUNT");
+      const iFee    = col("COMISION") >= 0 ? col("COMISION") : col("MP_FEE_AMOUNT");
 
       diag.indices_columnas = { iMpId, iFecha, iDesc, iGross, iDebit, iCredit, iFee };
 
