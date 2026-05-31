@@ -2566,7 +2566,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         exitoso: postOk,
       };
 
-      // ── 4. Pollear hasta 25s (5 intentos cada 5s) ──────────────────────────
+      // ── 4. Pollear hasta 25s — buscar el reporte MÁS RECIENTE creado después del POST ──
+      // No usamos el job_id del POST (es distinto al id de archivo en la lista).
+      // Tomamos el reporte cuya fecha de creación sea posterior a postTime.
+      const postTime = Date.now();
       let newReport: any = null;
       if (postOk) {
         for (let i = 0; i < 5; i++) {
@@ -2575,8 +2578,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             const lr = await fetch(`${BASE}/v1/account/release_report/list`, { headers: auth });
             if (!lr.ok) continue;
             const list: any[] = await lr.json() ?? [];
-            newReport = list.find((r: any) => !existingIds.has(String(r.id ?? r.file_name ?? "")));
-            if (newReport) break;
+            // Ordenar por fecha descendente y tomar el más reciente creado después del POST
+            const sorted = [...list].sort((a, b) => {
+              const ta = new Date(a.date_created ?? a.created_at ?? a.created_from ?? 0).getTime();
+              const tb = new Date(b.date_created ?? b.created_at ?? b.created_from ?? 0).getTime();
+              return tb - ta;
+            });
+            const candidate = sorted[0];
+            if (candidate) {
+              const createdAt = new Date(candidate.date_created ?? candidate.created_at ?? candidate.created_from ?? 0).getTime();
+              // Aceptar si fue creado después del POST, o si es nuevo en la lista
+              if (createdAt >= postTime - 5000 || !existingIds.has(String(candidate.id ?? candidate.file_name ?? ""))) {
+                newReport = candidate;
+                break;
+              }
+            }
           } catch (_) {}
         }
       }
@@ -2617,9 +2633,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return s.slice(0, 10);
       }
 
-      // PK (504b) = ZIP = XLSX; anything else = CSV
-      const isXlsx = buffer.slice(0, 2).toString("hex") === "504b"
-        || (reportFile ?? "").toLowerCase().endsWith(".xlsx");
+      // Detectar formato: primero por file_name, luego por magic bytes (PK = ZIP = XLSX)
+      const isXlsx = (reportFile ?? "").toLowerCase().endsWith(".xlsx")
+        || buffer.slice(0, 2).toString("hex") === "504b";
       diag.formato_detectado = isXlsx ? "xlsx" : "csv";
 
       let headers: string[] = [];
