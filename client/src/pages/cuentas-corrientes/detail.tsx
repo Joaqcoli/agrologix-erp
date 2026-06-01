@@ -146,13 +146,14 @@ function SubsidiaryDetailModal({
     return dt.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
   };
 
-  const stripParentName = (name: string) => {
-    const base = parentName.replace(/^colegio\s+/i, "").trim().toUpperCase();
-    if (!base) return name;
-    const cleaned = name.replace(/^colegio\s+/i, "").trim();
-    const idx = cleaned.toUpperCase().indexOf(base);
-    if (idx < 0) return cleaned;
-    return cleaned.slice(idx + base.length).replace(/^\s*[-–—]\s*/, "").trim() || cleaned;
+  const sedeDisplayName = (name: string) => {
+    const prefix = parentName.replace(/^colegio\s+/i, "").trim();
+    if (!prefix) return name;
+    if (name.toUpperCase().startsWith(prefix.toUpperCase())) {
+      const after = name.slice(prefix.length).trim();
+      return after || name;
+    }
+    return name;
   };
 
   const subOrders = useMemo(
@@ -165,7 +166,7 @@ function SubsidiaryDetailModal({
     const fmtD = (d: string) =>
       new Date(d.replace(/\s.+$/, "T00:00:00")).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
     const doc = await generateCCPDF({
-      clientLabel: `Sede: ${stripParentName(subsidiary.customerName)}`,
+      clientLabel: `Sede: ${sedeDisplayName(subsidiary.customerName)}`,
       saldoAnterior: 0,
       orderRows: subOrders.map((o) => ({
         fecha: fmtD(o.orderDate),
@@ -185,7 +186,7 @@ function SubsidiaryDetailModal({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Building2 className="h-4 w-4" />
-            {subsidiary ? stripParentName(subsidiary.customerName) : ""} — {periodLabel}
+            {subsidiary ? sedeDisplayName(subsidiary.customerName) : ""} — {periodLabel}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
@@ -1415,19 +1416,22 @@ export default function CCCustomerDetailPage({
   const selectedOrdersData = useMemo(() => {
     const subMap = new Map((data?.subsidiaries ?? []).map((s) => [String(s.customerId), s.customerName]));
     const mainName = data?.customer?.name ?? "";
-    const parentBase = mainName.replace(/^colegio\s+/i, "").trim();
-    const stripSede = (raw: string) => {
-      if (!parentBase) return raw;
-      const cleaned = raw.replace(/^colegio\s+/i, "").trim();
-      const idx = cleaned.toUpperCase().indexOf(parentBase.toUpperCase());
-      if (idx < 0) return cleaned;
-      return cleaned.slice(idx + parentBase.length).replace(/^\s*\s*/, "").trim() || cleaned;
+    // Prefix to strip: parent name without leading "COLEGIO " (e.g. "BARTOLOME MITRE")
+    const parentPrefix = mainName.replace(/^colegio\s+/i, "").trim();
+    const sedeDisplayName = (raw: string): string => {
+      if (!parentPrefix) return raw;
+      const prefix = parentPrefix.toUpperCase();
+      if (raw.toUpperCase().startsWith(prefix)) {
+        const after = raw.slice(parentPrefix.length).trim();
+        return after || raw;
+      }
+      return raw;
     };
     const periodOrders = (data?.orders ?? []).map((o) => ({
       id: o.id, orderDate: o.orderDate, remitoNum: o.remitoNum ?? null,
       folio: o.folio, invoiceNumber: o.invoiceNumber ?? null, total: o.total,
       schoolName: data?.isParent && o.customerId && String(o.customerId) !== String(customerId)
-        ? stripSede(subMap.get(String(o.customerId)) ?? mainName)
+        ? sedeDisplayName(subMap.get(String(o.customerId)) ?? mainName)
         : mainName,
     }));
     const prevOrders = prevPendingOrders.map((o) => ({
