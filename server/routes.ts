@@ -127,19 +127,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const { from, to } = req.query as { from?: string; to?: string };
       if (!from || !to) return res.status(400).json({ error: "from and to are required" });
+      // Unidad base del movimiento vía subconsulta LATERAL (una sola fila): la quantity del rinde
+      // está en unidad base. Un producto puede tener varias filas base (ej. KG y UNIDAD); un JOIN
+      // directo a product_units multiplicaría el movimiento. Elegimos la fila base no-envase real:
+      // preferir la que tiene costo > 0, luego mayor stock. Garantiza UNA fila por movimiento.
       const rows = await db.execute(drizzleSql`
         SELECT
           sm.id,
           sm.created_at,
           p.name AS product_name,
           sm.quantity::float AS quantity,
-          pu.unit,
+          base_pu.unit,
           sm.unit_cost::float AS unit_cost,
           (sm.quantity::numeric * COALESCE(sm.unit_cost::numeric, 0))::float AS total,
           sm.notes
         FROM stock_movements sm
         JOIN products p ON p.id = sm.product_id
-        LEFT JOIN product_units pu ON pu.product_id = sm.product_id AND pu.base_unit IS NOT NULL
+        LEFT JOIN LATERAL (
+          SELECT pu.unit
+          FROM product_units pu
+          WHERE pu.product_id = sm.product_id
+            AND pu.base_unit IS NOT NULL
+            AND pu.unit NOT IN ('CAJON','BOLSA','BANDEJA')
+          ORDER BY (pu.avg_cost::numeric > 0) DESC, pu.stock_qty::numeric DESC
+          LIMIT 1
+        ) base_pu ON true
         WHERE sm.created_at >= ${from}::timestamp
           AND sm.created_at < ${to}::timestamp
           AND sm.notes ILIKE '%Rinde%'

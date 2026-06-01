@@ -1672,6 +1672,10 @@ export const storage = {
 
         // Determinar cantidad a descontar en unidad base
         let deductQty = qty;
+        // wpuForBase: cuántas unidades base entran en 1 unidad de pedido (1 si el pedido ya está en unidad base).
+        // Sirve para convertir el costo por unidad de pedido → costo por unidad base, porque las cantidades
+        // de los movimientos de rinde/prorrateo se guardan en unidad base.
+        let wpuForBase = 1;
         let puToUpdate: typeof baseUnitPu | null = baseUnitPu ?? null;
 
         if (baseUnitPu) {
@@ -1703,7 +1707,8 @@ export const storage = {
             }
             // Huevos: 1 CAJON = 12 MAPLES siempre (constante universal)
             if (wpu === 0 && baseUnitPu.unit === "MAPLE") wpu = 12;
-            deductQty = qty * (wpu > 0 ? wpu : 1);
+            wpuForBase = wpu > 0 ? wpu : 1;
+            deductQty = qty * wpuForBase;
           }
         } else {
           // Modelo antiguo: buscar por unidad canónica directa
@@ -1736,40 +1741,53 @@ export const storage = {
           continue;
         }
 
+        // effectiveCostStr: costo por unidad de PEDIDO → guardado en order_items.cost_per_unit y usado para el margen.
+        // movementCostStr: costo por la MISMA unidad en que va la quantity del movimiento de stock.
+        //   - Flujo normal: quantity en unidad de pedido → costo por unidad de pedido (= effectiveCostStr).
+        //   - Rinde/prorrateo: quantity en unidad BASE → costo por unidad base (= effectiveCostStr ÷ wpuForBase),
+        //     porque deductFromStock/excessQty están en unidad base. Sin esta división, un pedido en CAJON
+        //     multiplicaría kg_base × costo_por_cajón (rinde inflado).
         let effectiveCostStr: string;
+        let movementCostStr: string;
         let deductFromStock: number;
         let outQty: string;
 
         if (decision === "rinde") {
           // Para rinde: usar costo histórico aunque no haya stock (la mercadería "apareció")
           effectiveCostStr = await this._getCostForUnit(item.productId, oiCanonical, tx, true);
+          movementCostStr = (parseFloat(effectiveCostStr) / wpuForBase).toFixed(4);
           deductFromStock = Math.max(0, availableQtyBase);
           outQty = (deductFromStock).toFixed(4);
 
           const excessQty = deductQty - deductFromStock;
           if (excessQty > 0) {
-            // Movimiento de Rinde: representa la mercadería que "apareció" para cubrir el faltante
+            // Movimiento de Rinde: representa la mercadería que "apareció" para cubrir el faltante.
+            // quantity en unidad base → unitCost por unidad base.
             await tx.insert(stockMovements).values({
               productId: item.productId,
               movementType: "in",
               quantity: excessQty.toFixed(4),
-              unitCost: effectiveCostStr,
+              unitCost: movementCostStr,
               referenceId: id,
               referenceType: "order",
               notes: `Rinde — Pedido ${order.folio}`,
             });
           }
         } else if (decision === "prorate") {
-          // Prorratear el costo del stock disponible entre toda la cantidad pedida
+          // Prorratear el costo del stock disponible entre toda la cantidad pedida.
+          // freshCost es por unidad de pedido; lo paso a unidad base para operar con cantidades base.
+          const baseFreshCost = freshCost / wpuForBase;
           const proratedCost = deductQty > 0 && freshCost > 0
             ? (availableQtyBase * freshCost) / deductQty
             : 0;
-          effectiveCostStr = proratedCost.toFixed(4);
+          effectiveCostStr = proratedCost.toFixed(4); // por unidad de pedido (order_items + margen)
+          movementCostStr = baseFreshCost.toFixed(4); // por unidad base (la quantity OUT va en base)
           deductFromStock = Math.max(0, availableQtyBase);
           outQty = (deductFromStock).toFixed(4);
         } else {
-          // Flujo normal (sin decisión = stock suficiente)
+          // Flujo normal (sin decisión = stock suficiente): quantity OUT en unidad de pedido
           effectiveCostStr = baseCostStr;
+          movementCostStr = baseCostStr;
           deductFromStock = deductQty;
           outQty = item.quantity as string;
         }
@@ -1787,13 +1805,13 @@ export const storage = {
         if (newMargin !== null) itemUpdate.margin = newMargin;
         await tx.update(orderItems).set(itemUpdate).where(eq(orderItems.id, item.id));
 
-        // Stock OUT movement
+        // Stock OUT movement — unitCost en la misma unidad que outQty (ver movementCostStr arriba)
         if (parseFloat(outQty) > 0) {
           await tx.insert(stockMovements).values({
             productId: item.productId,
             movementType: "out",
             quantity: outQty,
-            unitCost: effectiveCostStr,
+            unitCost: movementCostStr,
             referenceId: id,
             referenceType: "order",
             notes: movementNotes,

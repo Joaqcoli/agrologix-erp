@@ -1216,5 +1216,47 @@ export async function runNcMigrations() {
       AND ABS(sm.unit_cost::numeric / NULLIF(pu.avg_cost::numeric, 0) - pu.weight_per_unit::numeric) < 0.5
   `); } catch (e) { console.error("Step 6 rinde fix failed:", e); }
 
+  // Step 7: Fix rinde movements donde unit_cost quedó por unidad de ENVASE (cajón/bolsa/bandeja)
+  // mientras que la quantity está en unidad BASE → total inflado (qty_base × costo_por_envase).
+  // Recalcula desde una fuente estable: order_items.cost_per_unit (costo por envase) ÷ wpu = costo por unidad base.
+  // Idempotente: SET al valor recalculado solo cuando difiere (ABS > 0.01); re-correr no cambia nada.
+  // Atrapa casos que Step 5/6 (detección por ratios) no cubren (costos blended o avg_cost desfasado).
+  try { await db.execute(sql`
+    UPDATE stock_movements sm
+    SET unit_cost = t.new_cost
+    FROM (
+      SELECT DISTINCT ON (sm2.id) sm2.id AS sm_id,
+        ROUND(oi.cost_per_unit::numeric / w.wpu, 4) AS new_cost
+      FROM stock_movements sm2
+      JOIN order_items oi ON oi.order_id = sm2.reference_id AND oi.product_id = sm2.product_id
+      CROSS JOIN LATERAL (
+        SELECT COALESCE(
+          (SELECT pi.weight_per_package::numeric FROM purchase_items pi
+             WHERE pi.product_id = sm2.product_id
+               AND pi.purchase_unit::text = UPPER(oi.unit)
+               AND pi.weight_per_package::numeric > 0
+             ORDER BY pi.id DESC LIMIT 1),
+          (SELECT pu.weight_per_unit::numeric FROM product_units pu
+             WHERE pu.product_id = sm2.product_id
+               AND pu.base_unit IS NOT NULL
+               AND pu.unit NOT IN ('CAJON','BOLSA','BANDEJA')
+               AND pu.weight_per_unit::numeric > 0
+             ORDER BY pu.stock_qty::numeric DESC LIMIT 1)
+        ) AS wpu
+      ) w
+      WHERE sm2.notes ILIKE '%Rinde%'
+        AND sm2.movement_type = 'in'
+        AND sm2.reference_type = 'order'
+        AND UPPER(oi.unit) IN ('CAJON','BOLSA','BANDEJA')
+        AND oi.cost_per_unit::numeric > 0
+        AND sm2.unit_cost IS NOT NULL
+        AND sm2.unit_cost::numeric > 0
+        AND w.wpu > 1
+      ORDER BY sm2.id, oi.cost_per_unit::numeric DESC
+    ) t
+    WHERE sm.id = t.sm_id
+      AND ABS(sm.unit_cost::numeric - t.new_cost) > 0.01
+  `); } catch (e) { console.error("Step 7 rinde envase fix failed:", e); }
+
   console.log("NC migrations complete.");
 }
