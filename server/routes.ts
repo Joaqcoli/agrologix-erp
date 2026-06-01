@@ -2543,6 +2543,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return { ...m, rawIdentifier, _candidates: filtered_ };
       });
 
+      // ── DIAGNÓSTICO BUG ─────────────────────────────────────────────────────
+      console.log(`[BUG-DIAG] merchantId="${merchantId}"`);
+      const sampleMov = withCandidates.slice(0, 8);
+      for (const m of sampleMov) {
+        console.log(`[BUG-DIAG] id=${m.id} op=${m.operation_type} isOutgoing=${m.isOutgoing} net=${m.netAmount} rawId="${m.rawIdentifier}" payer_id=${m.payer_id} collector_id=${m.collector_id} desc="${m.description}"`);
+      }
+      // ── FIN DIAGNÓSTICO ──────────────────────────────────────────────────────
+
       // Batch lookup — todos los candidatos de todos los movimientos
       const allCandidates = [...new Set(withCandidates.flatMap((m: any) => m._candidates as string[]))];
       let contactsMap: Map<string, any> = new Map();
