@@ -554,7 +554,7 @@ export default function BancosPage() {
     let comisionesMes = 0;
     for (const m of filtered) {
       const raw = parseFloat(String(m.total ?? m.amount ?? 0));
-      const fee = Math.abs(parseFloat(String(m.fee?.amount ?? 0)));
+      const fee = m.feeAmount ?? Math.abs(parseFloat(String(m.fee?.amount ?? 0)));
       if (raw > 0) cobradoMes += raw;
       comisionesMes += fee;
     }
