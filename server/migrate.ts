@@ -976,6 +976,27 @@ export async function runNcMigrations() {
   try { await db.execute(sql`ALTER TABLE mp_xlsx_movements ADD COLUMN IF NOT EXISTS fecha_ts TEXT`); } catch {}
   try { await db.execute(sql`ALTER TABLE mp_xlsx_movements ADD COLUMN IF NOT EXISTS fee_amount NUMERIC(12,2)`); } catch {}
 
+  // Movimientos de cuenta (libro de ajustes por cuenta)
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS movimientos_cuenta (
+      id SERIAL PRIMARY KEY,
+      cuenta_id INTEGER NOT NULL REFERENCES cuentas_financieras(id),
+      fecha TIMESTAMP NOT NULL DEFAULT NOW(),
+      signo TEXT NOT NULL,
+      monto NUMERIC(14,2) NOT NULL,
+      comision NUMERIC(14,2) NOT NULL DEFAULT 0,
+      concepto TEXT NOT NULL,
+      origen_tipo TEXT NOT NULL,
+      origen_id TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+  try { await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS mc_origen_idx
+    ON movimientos_cuenta(origen_tipo, origen_id)
+    WHERE origen_id IS NOT NULL
+  `); } catch {}
+
   // Cuentas financieras
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS cuentas_financieras (

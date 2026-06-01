@@ -482,6 +482,21 @@ export const cuentasFinancieras = pgTable("cuentas_financieras", {
 });
 export type CuentaFinanciera = typeof cuentasFinancieras.$inferSelect;
 
+// ─── Movimientos de cuenta ────────────────────────────────────────────────────
+export const movimientosCuenta = pgTable("movimientos_cuenta", {
+  id: serial("id").primaryKey(),
+  cuentaId: integer("cuenta_id").notNull().references(() => cuentasFinancieras.id),
+  fecha: timestamp("fecha").notNull().default(sql`now()`),
+  signo: text("signo").notNull(), // ingreso | egreso
+  monto: numeric("monto", { precision: 14, scale: 2 }).notNull(),
+  comision: numeric("comision", { precision: 14, scale: 2 }).notNull().default("0"),
+  concepto: text("concepto").notNull(),
+  origenTipo: text("origen_tipo").notNull(), // cobro | pago | manual | cheque | deposito | obligacion
+  origenId: text("origen_id"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type MovimientoCuenta = typeof movimientosCuenta.$inferSelect;
+
 // ─── Socios ───────────────────────────────────────────────────────────────────
 export const socios = pgTable("socios", {
   id: serial("id").primaryKey(),

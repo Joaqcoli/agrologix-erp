@@ -4707,11 +4707,28 @@ export const storage = {
   // ─── Cuentas Financieras ──────────────────────────────────────────────────
 
   async getCuentasFinancieras(): Promise<any[]> {
-    const rows = await db.execute(drizzleSql.raw(
-      `SELECT id, nombre, tipo, saldo_base::float AS saldo_base, saldo_base_fecha, orden, updated_at
-       FROM cuentas_financieras ORDER BY orden`
-    ));
-    return rows.rows as any[];
+    const rows = await db.execute(drizzleSql.raw(`
+      SELECT
+        cf.id, cf.nombre, cf.tipo,
+        cf.saldo_base::float AS saldo_base,
+        cf.saldo_base_fecha, cf.orden, cf.updated_at,
+        COALESCE(SUM(CASE
+          WHEN mc.signo = 'ingreso'
+           AND (cf.saldo_base_fecha IS NULL OR mc.fecha > cf.saldo_base_fecha)
+          THEN mc.monto::float ELSE 0 END), 0) AS ajuste_ingresos,
+        COALESCE(SUM(CASE
+          WHEN mc.signo = 'egreso'
+           AND (cf.saldo_base_fecha IS NULL OR mc.fecha > cf.saldo_base_fecha)
+          THEN mc.monto::float ELSE 0 END), 0) AS ajuste_egresos
+      FROM cuentas_financieras cf
+      LEFT JOIN movimientos_cuenta mc ON mc.cuenta_id = cf.id
+      GROUP BY cf.id
+      ORDER BY cf.orden
+    `));
+    return (rows.rows as any[]).map(r => ({
+      ...r,
+      ajuste: (r.ajuste_ingresos ?? 0) - (r.ajuste_egresos ?? 0),
+    }));
   },
 
   async updateCuentaFinanciera(id: number, saldoBase: number): Promise<void> {
@@ -4719,6 +4736,27 @@ export const storage = {
       UPDATE cuentas_financieras
       SET saldo_base = ${saldoBase}, saldo_base_fecha = NOW(), updated_at = NOW()
       WHERE id = ${id}
+    `);
+  },
+
+  async createMovimientoCuenta(data: {
+    cuentaId: number; signo: string; monto: number; comision?: number;
+    concepto: string; origenTipo: string; origenId?: string | null; fecha?: Date;
+  }): Promise<void> {
+    const fecha = data.fecha ?? new Date();
+    await db.execute(drizzleSql`
+      INSERT INTO movimientos_cuenta
+        (cuenta_id, fecha, signo, monto, comision, concepto, origen_tipo, origen_id)
+      VALUES
+        (${data.cuentaId}, ${fecha.toISOString()}, ${data.signo}, ${data.monto},
+         ${data.comision ?? 0}, ${data.concepto}, ${data.origenTipo}, ${data.origenId ?? null})
+      ON CONFLICT (origen_tipo, origen_id) WHERE origen_id IS NOT NULL DO NOTHING
+    `);
+  },
+
+  async deleteMovimientoCuentaByOrigen(origenTipo: string, origenId: string): Promise<void> {
+    await db.execute(drizzleSql`
+      DELETE FROM movimientos_cuenta WHERE origen_tipo = ${origenTipo} AND origen_id = ${origenId}
     `);
   },
 };

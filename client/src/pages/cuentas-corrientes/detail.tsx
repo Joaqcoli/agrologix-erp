@@ -681,6 +681,11 @@ function PaymentModal({
   const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([]);
   const [retentionAmount, setRetentionAmount] = useState("");
   const [retentionType, setRetentionType] = useState("IIBB");
+  const [cuentaId, setCuentaId] = useState<number | null>(null);
+  const { data: cuentas } = useQuery<any[]>({
+    queryKey: ["/api/caja/cuentas"],
+    queryFn: () => fetch("/api/caja/cuentas", { credentials: "include" }).then(r => r.json()),
+  });
 
   const toggleOrder = (id: number) => {
     setSelectedOrderIds((prev) =>
@@ -709,6 +714,7 @@ function PaymentModal({
         method,
         notes: notes || null,
         orderIds: selectedOrderIds,
+        cuentaId: (method === "EFECTIVO" || method === "TRANSFERENCIA") ? cuentaId : null,
       });
       if (!isNaN(retAmt) && retAmt > 0) {
         await apiRequest("POST", "/api/payments", {
@@ -726,9 +732,10 @@ function PaymentModal({
       queryClient.invalidateQueries({ queryKey: ["/api/ar/cc/customer", customerId] });
       queryClient.invalidateQueries({ queryKey: ["/api/ar/cc/summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ar/pending-orders", customerId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
       toast({ title: "Pago registrado" });
       setAmount(""); setNotes(""); setMethod("EFECTIVO"); setSelectedOrderIds([]);
-      setRetentionAmount(""); setRetentionType("IIBB");
+      setRetentionAmount(""); setRetentionType("IIBB"); setCuentaId(null);
       onClose();
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -772,7 +779,15 @@ function PaymentModal({
           </div>
           <div>
             <Label className="text-xs">Método</Label>
-            <Select value={method} onValueChange={setMethod}>
+            <Select value={method} onValueChange={v => {
+              setMethod(v);
+              if (v === "EFECTIVO") {
+                const ef = cuentas?.find((c: any) => c.tipo === "efectivo");
+                setCuentaId(ef?.id ?? null);
+              } else if (v !== "TRANSFERENCIA") {
+                setCuentaId(null);
+              }
+            }}>
               <SelectTrigger className="mt-1" data-testid="select-payment-method">
                 <SelectValue />
               </SelectTrigger>
@@ -783,6 +798,31 @@ function PaymentModal({
               </SelectContent>
             </Select>
           </div>
+
+          {/* Cuenta a ajustar */}
+          {(method === "EFECTIVO" || method === "TRANSFERENCIA") && cuentas && (
+            <div>
+              <Label className="text-xs text-muted-foreground">Ajustar cuenta</Label>
+              {method === "EFECTIVO" ? (
+                <p className="text-xs text-muted-foreground mt-1">
+                  → {cuentas.find((c: any) => c.tipo === "efectivo")?.nombre ?? "Efectivo"}
+                </p>
+              ) : (
+                <Select
+                  value={cuentaId != null ? String(cuentaId) : "none"}
+                  onValueChange={v => setCuentaId(v === "none" ? null : Number(v))}
+                >
+                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="No ajustar saldo" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Mercado Pago (no ajusta)</SelectItem>
+                    {cuentas.filter((c: any) => c.tipo === "banco").map((c: any) => (
+                      <SelectItem key={c.id} value={String(c.id)}>{c.nombre}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+          )}
 
           {/* Multi-select order checkboxes */}
           <div>

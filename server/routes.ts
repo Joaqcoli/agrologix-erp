@@ -1152,6 +1152,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // Auto-aplicar: vincular al pedido más viejo primero hasta cubrir el monto
         await storage.autoApplyPaymentToOrders(payment.id, data.customerId, parseFloat(String(data.amount)), pendingSnapshot);
       }
+      // Ajustar saldo de cuenta si cuentaId fue indicado (solo banco/efectivo, nunca MP)
+      const cuentaId = req.body.cuentaId ? Number(req.body.cuentaId) : null;
+      if (cuentaId) {
+        await storage.createMovimientoCuenta({
+          cuentaId, signo: "ingreso", monto: parseFloat(String(data.amount)),
+          concepto: `Cobro cliente`, origenTipo: "cobro", origenId: String(payment.id),
+        });
+      }
       return res.json(payment);
     } catch (e: any) {
       return res.status(400).json({ error: e.message });
@@ -1173,6 +1181,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // DELETE /api/payments/:id
   app.delete("/api/payments/:id", requireAuth, async (req, res) => {
     try {
+      await storage.deleteMovimientoCuentaByOrigen("cobro", req.params.id);
       await storage.deletePayment(Number(req.params.id));
       return res.json({ ok: true });
     } catch (e: any) {
@@ -1322,12 +1331,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const data = insertSupplierPaymentSchema.parse(req.body);
       const payment = await storage.createSupplierPayment(data, req.session.userId!);
+      const cuentaId = req.body.cuentaId ? Number(req.body.cuentaId) : null;
+      if (cuentaId) {
+        await storage.createMovimientoCuenta({
+          cuentaId, signo: "egreso", monto: parseFloat(String(data.amount)),
+          concepto: `Pago proveedor`, origenTipo: "pago", origenId: String(payment.id),
+        });
+      }
       return res.json(payment);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   app.delete("/api/ap/payments/:id", requireAuth, async (req, res) => {
     try {
+      await storage.deleteMovimientoCuentaByOrigen("pago", req.params.id);
       await storage.deleteSupplierPayment(Number(req.params.id));
       return res.json({ ok: true });
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
@@ -1849,12 +1866,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const parsed = insertCajaMovementSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
       const m = await storage.createCajaMovement(parsed.data as any, req.user?.id ?? 0);
+      const cuentaId = req.body.cuentaId ? Number(req.body.cuentaId) : null;
+      if (cuentaId) {
+        await storage.createMovimientoCuenta({
+          cuentaId, signo: parsed.data.type, monto: parseFloat(String(parsed.data.amount)),
+          concepto: parsed.data.description ?? "", origenTipo: "manual", origenId: String(m.id),
+        });
+      }
       return res.json(m);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   app.delete("/api/caja/movements/:id", requireAuth, async (req, res) => {
     try {
+      await storage.deleteMovimientoCuentaByOrigen("manual", req.params.id);
       await storage.deleteCajaMovement(Number(req.params.id));
       return res.json({ ok: true });
     } catch (e: any) { return res.status(500).json({ error: e.message }); }

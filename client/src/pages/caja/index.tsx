@@ -84,6 +84,7 @@ type CuentaFinanciera = {
   saldo_base: number;
   saldo_base_fecha: string | null;
   orden: number;
+  ajuste: number;
 };
 
 const CUENTA_ICONS: Record<string, React.ReactNode> = {
@@ -114,6 +115,7 @@ type MovForm = {
   amount: string;
   category: string;
   method: string;
+  cuentaId: number | null;
 };
 
 const emptyForm = (): MovForm => ({
@@ -123,6 +125,7 @@ const emptyForm = (): MovForm => ({
   amount: "",
   category: "",
   method: "",
+  cuentaId: null,
 });
 
 const METHOD_LABEL: Record<string, string> = {
@@ -205,8 +208,9 @@ export default function CajaPage() {
 
   function getSaldoActual(c: CuentaFinanciera): number {
     const base = parseFloat(String(c.saldo_base ?? 0));
-    if (c.tipo === "mp") return base + mpDelta;
-    return base;
+    const ajuste = c.ajuste ?? 0;
+    if (c.tipo === "mp") return base + ajuste + mpDelta;
+    return base + ajuste;
   }
 
   const updateCuentaMut = useMutation({
@@ -223,6 +227,7 @@ export default function CajaPage() {
     mutationFn: (body: MovForm) => apiRequest("POST", "/api/caja/movements", body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/caja/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
       setDialogOpen(false);
       setForm(emptyForm());
     },
@@ -232,6 +237,7 @@ export default function CajaPage() {
     mutationFn: (id: number) => apiRequest("DELETE", `/api/caja/movements/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/caja/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
     },
   });
 
@@ -683,7 +689,12 @@ export default function CajaPage() {
             </div>
             <div className="space-y-1">
               <Label>Método <span className="text-red-500">*</span></Label>
-              <Select value={form.method || "_none"} onValueChange={v => setForm(f => ({ ...f, method: v === "_none" ? "" : v }))}>
+              <Select value={form.method || "_none"} onValueChange={v => {
+                const m = v === "_none" ? "" : v;
+                const ef = cuentas?.find(c => c.tipo === "efectivo");
+                const autoCuenta = m === "EFECTIVO" ? (ef?.id ?? null) : null;
+                setForm(f => ({ ...f, method: m, cuentaId: autoCuenta }));
+              }}>
                 <SelectTrigger><SelectValue placeholder="Seleccionar método" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="EFECTIVO">Efectivo</SelectItem>
@@ -694,6 +705,30 @@ export default function CajaPage() {
                 </SelectContent>
               </Select>
             </div>
+            {/* Cuenta a ajustar (excluye MP) */}
+            {(form.method === "EFECTIVO" || form.method === "TRANSFERENCIA") && cuentas && (
+              <div className="space-y-1">
+                <Label className="text-xs">Ajusta saldo de cuenta</Label>
+                {form.method === "EFECTIVO" ? (
+                  <p className="text-xs text-muted-foreground py-1">
+                    → {cuentas.find(c => c.tipo === "efectivo")?.nombre ?? "Efectivo"}
+                  </p>
+                ) : (
+                  <Select
+                    value={form.cuentaId != null ? String(form.cuentaId) : "none"}
+                    onValueChange={v => setForm(f => ({ ...f, cuentaId: v === "none" ? null : Number(v) }))}
+                  >
+                    <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="No ajustar" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No ajustar saldo</SelectItem>
+                      {cuentas.filter(c => c.tipo === "banco").map(c => (
+                        <SelectItem key={c.id} value={String(c.id)}>{c.nombre}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            )}
             <div className="space-y-1">
               <Label>Descripción</Label>
               <Input
