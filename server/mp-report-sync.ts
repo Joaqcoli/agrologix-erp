@@ -310,7 +310,10 @@ export async function syncMpReport(token: string): Promise<{
           const iGross  = col("MONTO BRUTO", "BRUTO") >= 0 ? col("MONTO BRUTO", "BRUTO") : col("GROSS_AMOUNT");
           const iDebit  = col("MONTO NETO DEBITADO", "DEBITADO") >= 0 ? col("MONTO NETO DEBITADO", "DEBITADO") : col("NET_DEBIT_AMOUNT");
           const iCredit = col("MONTO NETO ACREDITADO", "ACREDITADO") >= 0 ? col("MONTO NETO ACREDITADO", "ACREDITADO") : col("NET_CREDIT_AMOUNT");
-          const iFee    = col("COMISION") >= 0 ? col("COMISION") : col("MP_FEE_AMOUNT");
+          const iComision = col("COMISION DE MERCADO PAGO O MERCADO LIBRE (INCLUYE IVA)", "COMISION DE MERCADO") >= 0
+            ? col("COMISION DE MERCADO PAGO O MERCADO LIBRE (INCLUYE IVA)", "COMISION DE MERCADO")
+            : col("MP_FEE_AMOUNT");
+          const iIibb = col("IMPUESTOS COBRADOS POR RETENCIONES IIBB", "RETENCIONES IIBB");
 
           details.push(`cols: mpId=${iMpId} fecha=${iFecha} aprobacion=${iAprobacion}`);
 
@@ -320,7 +323,7 @@ export async function syncMpReport(token: string): Promise<{
             const xlsxRows: {
               mpId: string; fecha: string; fechaTs?: string | null; descripcion: string;
               montoBruto: number; montoNetoDebitado: number;
-              montoNetoAcreditado: number; comision: number;
+              montoNetoAcreditado: number; comision: number; feeAmount: number;
             }[] = [];
 
             for (const row of dataRows) {
@@ -349,6 +352,8 @@ export async function syncMpReport(token: string): Promise<{
                 console.log(`[mp-sync DATES] mpId=${mpId} desc="${rawDesc}" fecha_liberacion=${String(get(iFecha))} fecha_aprobacion=${String(approvalRaw)} → fechaTs=${fechaTs ?? "null"}`);
               }
 
+              const comisionRaw = parseNum(get(iComision));
+              const iibbRaw = iIibb >= 0 ? parseNum(get(iIibb)) : 0;
               xlsxRows.push({
                 mpId,
                 fecha: parseXlsxDate(get(iFecha)),
@@ -357,7 +362,8 @@ export async function syncMpReport(token: string): Promise<{
                 montoBruto:          parseNum(get(iGross)),
                 montoNetoDebitado:   debit,
                 montoNetoAcreditado: credit,
-                comision:            parseNum(get(iFee)),
+                comision:            comisionRaw,
+                feeAmount:           Math.abs(comisionRaw) + Math.abs(iibbRaw),
               });
             }
 

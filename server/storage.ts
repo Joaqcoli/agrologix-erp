@@ -4516,7 +4516,7 @@ export const storage = {
   async upsertMpXlsxMovements(rows: {
     mpId: string; fecha: string; fechaTs?: string | null; descripcion: string;
     montoBruto: number; montoNetoDebitado: number;
-    montoNetoAcreditado: number; comision: number;
+    montoNetoAcreditado: number; comision: number; feeAmount?: number | null;
   }[]): Promise<void> {
     if (rows.length === 0) return;
     await db.execute(drizzleSql`
@@ -4532,10 +4532,11 @@ export const storage = {
       )
     `);
     try { await db.execute(drizzleSql`ALTER TABLE mp_xlsx_movements ADD COLUMN IF NOT EXISTS fecha_ts TEXT`); } catch (_) {}
+    try { await db.execute(drizzleSql`ALTER TABLE mp_xlsx_movements ADD COLUMN IF NOT EXISTS fee_amount NUMERIC(12,2)`); } catch (_) {}
     for (const r of rows) {
       await db.execute(drizzleSql`
-        INSERT INTO mp_xlsx_movements (mp_id, fecha, fecha_ts, descripcion, monto_bruto, monto_neto_debitado, monto_neto_acreditado, comision, synced_at)
-        VALUES (${r.mpId}, ${r.fecha}, ${r.fechaTs ?? null}, ${r.descripcion}, ${r.montoBruto}, ${r.montoNetoDebitado}, ${r.montoNetoAcreditado}, ${r.comision}, NOW())
+        INSERT INTO mp_xlsx_movements (mp_id, fecha, fecha_ts, descripcion, monto_bruto, monto_neto_debitado, monto_neto_acreditado, comision, fee_amount, synced_at)
+        VALUES (${r.mpId}, ${r.fecha}, ${r.fechaTs ?? null}, ${r.descripcion}, ${r.montoBruto}, ${r.montoNetoDebitado}, ${r.montoNetoAcreditado}, ${r.comision}, ${r.feeAmount ?? null}, NOW())
         ON CONFLICT (mp_id) DO UPDATE
           SET fecha                = EXCLUDED.fecha,
               fecha_ts             = EXCLUDED.fecha_ts,
@@ -4544,6 +4545,7 @@ export const storage = {
               monto_neto_debitado  = EXCLUDED.monto_neto_debitado,
               monto_neto_acreditado = EXCLUDED.monto_neto_acreditado,
               comision             = EXCLUDED.comision,
+              fee_amount           = EXCLUDED.fee_amount,
               synced_at            = NOW()
       `);
     }
@@ -4575,6 +4577,7 @@ export const storage = {
              monto_neto_debitado::float,
              monto_neto_acreditado::float,
              comision::float,
+             fee_amount::float,
              synced_at
       FROM mp_xlsx_movements
       ${where}

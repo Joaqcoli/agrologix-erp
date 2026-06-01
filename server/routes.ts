@@ -2350,9 +2350,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           xlsxMovements = xlsxFiltered.map(r => {
             const id = `xlsx_${r.mp_id}`;
             const isOutgoing = (r.monto_neto_debitado ?? 0) > 0;
-            const gross = Math.abs(isOutgoing ? r.monto_neto_debitado : r.monto_neto_acreditado) || 0;
-            const fee = Math.abs(r.comision ?? 0);
-            const net = gross;
+            const gross = Math.abs(r.monto_bruto ?? (isOutgoing ? r.monto_neto_debitado : r.monto_neto_acreditado)) || 0;
+            const fee = r.fee_amount ?? 0;
+            const net = isOutgoing ? Math.abs(r.monto_neto_debitado ?? 0) : Math.abs(r.monto_neto_acreditado ?? 0);
             // TEMA 1: use full timestamp from fecha_ts if available, fallback to date + 12:00
             const dateCreated = r.fecha_ts
               ? r.fecha_ts
@@ -2730,9 +2730,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ? col("MONTO NETO DEBITADO", "DEBITADO") : col("NET_DEBIT_AMOUNT");
       const iCredit = col("MONTO NETO ACREDITADO", "ACREDITADO") >= 0
         ? col("MONTO NETO ACREDITADO", "ACREDITADO") : col("NET_CREDIT_AMOUNT");
-      const iFee    = col("COMISION") >= 0 ? col("COMISION") : col("MP_FEE_AMOUNT");
+      const iComision = col("COMISION DE MERCADO PAGO O MERCADO LIBRE (INCLUYE IVA)", "COMISION DE MERCADO") >= 0
+        ? col("COMISION DE MERCADO PAGO O MERCADO LIBRE (INCLUYE IVA)", "COMISION DE MERCADO")
+        : col("MP_FEE_AMOUNT");
+      const iIibb = col("IMPUESTOS COBRADOS POR RETENCIONES IIBB", "RETENCIONES IIBB");
 
-      diag.indices_columnas = { iMpId, iFecha, iAprobacion, iDesc, iGross, iDebit, iCredit, iFee };
+      diag.indices_columnas = { iMpId, iFecha, iAprobacion, iDesc, iGross, iDebit, iCredit, iComision, iIibb };
 
       // Rango de fechas en el reporte
       const fechas = dataRows
@@ -2828,7 +2831,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       // Process ALL relevant rows: extracciones (debit > 0) + ingresos (credit > 0, not reserva/rendimiento)
       // This mirrors the mp-report-sync.ts filter so ingresos also get fecha_ts updated
-      const toInsert: { mpId: string; fecha: string; fechaTs?: string | null; descripcion: string; montoBruto: number; montoNetoDebitado: number; montoNetoAcreditado: number; comision: number }[] = [];
+      const toInsert: { mpId: string; fecha: string; fechaTs?: string | null; descripcion: string; montoBruto: number; montoNetoDebitado: number; montoNetoAcreditado: number; comision: number; feeAmount: number }[] = [];
       for (const row of dataRows) {
         const mpId = String(row[iMpId] ?? "").trim();
         if (!mpId || mpId === "0") continue;
@@ -2847,6 +2850,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
         const approvalRaw = iAprobacion >= 0 ? row[iAprobacion] : "";
         const fechaTs = approvalRaw ? parseXTimestamp(approvalRaw) : null;
+        const comisionRaw = parseNum(row[iComision]);
+        const iibbRaw = iIibb >= 0 ? parseNum(row[iIibb]) : 0;
         toInsert.push({
           mpId,
           fecha: parseXDate(row[iFecha]),
@@ -2855,7 +2860,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           montoBruto: parseNum(row[iGross]),
           montoNetoDebitado: debit,
           montoNetoAcreditado: parseNum(row[iCredit]),
-          comision: parseNum(row[iFee]),
+          comision: comisionRaw,
+          feeAmount: Math.abs(comisionRaw) + Math.abs(iibbRaw),
         });
       }
 

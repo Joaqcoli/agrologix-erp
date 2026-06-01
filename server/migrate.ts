@@ -974,5 +974,6 @@ export async function runNcMigrations() {
   try { await db.execute(sql`ALTER TABLE caja_movements ADD COLUMN IF NOT EXISTS source_id TEXT`); } catch {}
   try { await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS caja_movements_source_id_idx ON caja_movements(source_id) WHERE source_id IS NOT NULL`); } catch {}
   try { await db.execute(sql`ALTER TABLE mp_xlsx_movements ADD COLUMN IF NOT EXISTS fecha_ts TEXT`); } catch {}
+  try { await db.execute(sql`ALTER TABLE mp_xlsx_movements ADD COLUMN IF NOT EXISTS fee_amount NUMERIC(12,2)`); } catch {}
   console.log("NC migrations complete.");
 }
