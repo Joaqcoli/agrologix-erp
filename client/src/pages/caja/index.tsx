@@ -1044,7 +1044,8 @@ export default function CajaPage() {
         {socioDetailId !== null && (() => {
           const socio = (socios ?? []).find((s: any) => s.id === socioDetailId);
           const mensual = retirosMensuales[socioDetailId] ?? {};
-          const meses = Object.entries(mensual).sort((a, b) => b[0].localeCompare(a[0]));
+          const meses = Object.entries(mensual).sort((a, b) => a[0].localeCompare(b[0]));
+          const totalSocio = meses.reduce((s, [, v]) => s + (v as number), 0);
           return (
             <Dialog open onOpenChange={v => { if (!v) setSocioDetailId(null); }}>
               <DialogContent className="max-w-sm">
@@ -1058,11 +1059,17 @@ export default function CajaPage() {
                     return (
                       <div key={mes} className="flex items-center justify-between px-1 py-1.5 border-b last:border-0">
                         <span className="text-sm text-muted-foreground">{label2}</span>
-                        <span className="text-sm font-semibold text-orange-700">{fmt(total)}</span>
+                        <span className="text-sm font-semibold text-orange-700">{fmt(total as number)}</span>
                       </div>
                     );
                   })}
                 </div>
+                {meses.length > 0 && (
+                  <div className="flex items-center justify-between px-1 pt-2 border-t">
+                    <span className="text-sm font-bold">Total acumulado</span>
+                    <span className="text-sm font-bold text-orange-700">{fmt(totalSocio)}</span>
+                  </div>
+                )}
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setSocioDetailId(null)}>Cerrar</Button>
                 </DialogFooter>
