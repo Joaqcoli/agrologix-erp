@@ -648,13 +648,7 @@ async function generateResumenCCPDF(opts: {
     const ry = y + RH / 2 + 3;
     doc.text(fmtD(o.orderDate), fechaX  + fechaW  / 2, ry, { align: "center" });
     if (isParent) {
-      const parentBase = customerName.replace(/^colegio\s+/i, "").trim().toUpperCase();
-      const cleaned = o.schoolName.replace(/^colegio\s+/i, "").trim();
-      const idx = cleaned.toUpperCase().indexOf(parentBase);
-      const shortName = idx >= 0
-        ? cleaned.slice(idx + parentBase.length).replace(/^\s*[-–—/\\|]\s*/, "").trim() || cleaned
-        : cleaned;
-      doc.text(doc.splitTextToSize(shortName, sedeW - 4)[0], sedeX + 2, ry);
+      doc.text(doc.splitTextToSize(o.schoolName, sedeW - 4)[0], sedeX + 2, ry);
     }
     doc.text(formatRemito(o),              remitoX + remitoW / 2, ry, { align: "center" });
     doc.text(fmtFacturaSeq(o.invoiceNumber), factX + factW / 2,   ry, { align: "center" });
@@ -1419,13 +1413,21 @@ export default function CCCustomerDetailPage({
 
   // Orders data for resumen PDF (both sections merged)
   const selectedOrdersData = useMemo(() => {
-    const subMap = new Map((data?.subsidiaries ?? []).map((s) => [s.customerId, s.customerName]));
+    const subMap = new Map((data?.subsidiaries ?? []).map((s) => [String(s.customerId), s.customerName]));
     const mainName = data?.customer?.name ?? "";
+    const parentBase = mainName.replace(/^colegio\s+/i, "").trim();
+    const stripSede = (raw: string) => {
+      if (!parentBase) return raw;
+      const cleaned = raw.replace(/^colegio\s+/i, "").trim();
+      const idx = cleaned.toUpperCase().indexOf(parentBase.toUpperCase());
+      if (idx < 0) return cleaned;
+      return cleaned.slice(idx + parentBase.length).replace(/^\s*\s*/, "").trim() || cleaned;
+    };
     const periodOrders = (data?.orders ?? []).map((o) => ({
       id: o.id, orderDate: o.orderDate, remitoNum: o.remitoNum ?? null,
       folio: o.folio, invoiceNumber: o.invoiceNumber ?? null, total: o.total,
-      schoolName: data?.isParent && o.customerId && o.customerId !== customerId
-        ? (subMap.get(o.customerId) ?? mainName)
+      schoolName: data?.isParent && o.customerId && String(o.customerId) !== String(customerId)
+        ? stripSede(subMap.get(String(o.customerId)) ?? mainName)
         : mainName,
     }));
     const prevOrders = prevPendingOrders.map((o) => ({
