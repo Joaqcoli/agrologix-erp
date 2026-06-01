@@ -419,12 +419,17 @@ export default function BancosPage() {
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const syncReportMut = useMutation({
     mutationFn: () => apiRequest("POST", "/api/mp/sync-report").then(r => r.json()),
-    onSuccess: (data: { synced: number; skipped: number; reportFile: string | null; details?: string }) => {
-      const msg = data.synced > 0
-        ? `${data.synced} movimientos identificados`
-        : `0 identificados — ${data.details ?? `skipped: ${data.skipped}`}`;
+    onSuccess: (data: { synced: number; skipped: number; xlsxSynced?: number; reportFile: string | null; details?: string }) => {
+      const xlsxSynced = data.xlsxSynced ?? 0;
+      const identSynced = data.synced ?? 0;
+      const parts: string[] = [];
+      if (xlsxSynced > 0) parts.push(`${xlsxSynced} mov. reporte actualizados`);
+      if (identSynced > 0) parts.push(`${identSynced} identificadores`);
+      const msg = parts.length > 0
+        ? parts.join(", ")
+        : `Sin novedades — ${data.details ?? `skipped: ${data.skipped}`}`;
       setSyncResult(msg);
-      if (data.synced > 0) qc.invalidateQueries({ queryKey: ["/api/mp/movements"] });
+      if (xlsxSynced > 0 || identSynced > 0) qc.invalidateQueries({ queryKey: ["/api/mp/movements"] });
       setTimeout(() => setSyncResult(null), 12000);
     },
     onError: (e: Error) => {

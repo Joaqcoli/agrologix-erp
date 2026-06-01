@@ -4549,6 +4549,15 @@ export const storage = {
               synced_at            = NOW()
       `);
     }
+    // Verify fee_amount was written for first row
+    try {
+      const first = rows[0];
+      const check = await db.execute(drizzleSql.raw(
+        `SELECT mp_id, monto_bruto::float, fee_amount::float FROM mp_xlsx_movements WHERE mp_id = '${first.mpId}' LIMIT 1`
+      ));
+      const v = check.rows[0] as any;
+      console.log(`[upsert-verify] mpId=${first.mpId} monto_bruto=${v?.monto_bruto ?? "NULL"} fee_amount=${v?.fee_amount ?? "NULL"} (input feeAmount=${first.feeAmount ?? "null"})`);
+    } catch (_) {}
   },
 
   async getMpXlsxMovements(from?: string, to?: string): Promise<any[]> {
