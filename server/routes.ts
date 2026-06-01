@@ -1817,6 +1817,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ─── Cuentas Financieras ──────────────────────────────────────────────────
+  app.get("/api/caja/cuentas", requireAuth, async (_req, res) => {
+    try {
+      return res.json(await storage.getCuentasFinancieras());
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.put("/api/caja/cuentas/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const saldoBase = parseFloat(req.body.saldo_base);
+      if (isNaN(id) || isNaN(saldoBase)) return res.status(400).json({ error: "Datos inválidos" });
+      await storage.updateCuentaFinanciera(id, saldoBase);
+      const cuentas = await storage.getCuentasFinancieras();
+      return res.json(cuentas.find(c => c.id === id) ?? {});
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Caja ───────────────────────────────────────────────────────────────────
   app.get("/api/caja/summary", requireAuth, async (req, res) => {
     try {

@@ -7,6 +7,7 @@ import {
   invoices, cajaMovements, bankCategories, mpMovementOverrides, bankContacts, bankPaymentLinks,
   mpMovementIdentifiers,
   creditNotes,
+  cuentasFinancieras,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type StockMovement, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
@@ -4701,5 +4702,23 @@ export const storage = {
 
       return { paymentId: payment.id, bankLinks };
     });
+  },
+
+  // ─── Cuentas Financieras ──────────────────────────────────────────────────
+
+  async getCuentasFinancieras(): Promise<any[]> {
+    const rows = await db.execute(drizzleSql.raw(
+      `SELECT id, nombre, tipo, saldo_base::float AS saldo_base, saldo_base_fecha, orden, updated_at
+       FROM cuentas_financieras ORDER BY orden`
+    ));
+    return rows.rows as any[];
+  },
+
+  async updateCuentaFinanciera(id: number, saldoBase: number): Promise<void> {
+    await db.execute(drizzleSql`
+      UPDATE cuentas_financieras
+      SET saldo_base = ${saldoBase}, saldo_base_fecha = NOW(), updated_at = NOW()
+      WHERE id = ${id}
+    `);
   },
 };

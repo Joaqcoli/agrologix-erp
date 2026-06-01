@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   TrendingUp, TrendingDown, DollarSign, Plus, Trash2,
   ChevronLeft, ChevronRight, Wallet, Building2, CreditCard,
+  Landmark, Pencil,
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
@@ -75,6 +76,22 @@ type CajaSummary = {
 };
 
 type BankCategory = { id: number; name: string };
+
+type CuentaFinanciera = {
+  id: number;
+  nombre: string;
+  tipo: string;
+  saldo_base: number;
+  saldo_base_fecha: string | null;
+  orden: number;
+};
+
+const CUENTA_ICONS: Record<string, React.ReactNode> = {
+  mp:       <Landmark  className="h-4 w-4 text-sky-600" />,
+  banco:    <Building2 className="h-4 w-4 text-blue-600" />,
+  efectivo: <Wallet    className="h-4 w-4 text-green-600" />,
+  cheque:   <CreditCard className="h-4 w-4 text-purple-600" />,
+};
 
 type FeedItem = {
   id: string;
@@ -141,6 +158,9 @@ export default function CajaPage() {
   const [form, setForm] = useState<MovForm>(emptyForm());
   const [filterCat, setFilterCat] = useState("_all");
   const [filterType, setFilterType] = useState("_all");
+  const [editCuentaOpen, setEditCuentaOpen] = useState(false);
+  const [editCuenta, setEditCuenta] = useState<CuentaFinanciera | null>(null);
+  const [editSaldo, setEditSaldo] = useState("");
 
   const { from, to, label } = getRange(viewMode, monthOffset);
 
@@ -153,6 +173,50 @@ export default function CajaPage() {
   const { data: bankCats } = useQuery<BankCategory[]>({
     queryKey: ["/api/bank-categories"],
     queryFn: () => fetch("/api/bank-categories", { credentials: "include" }).then(r => r.json()),
+  });
+
+  const { data: cuentas } = useQuery<CuentaFinanciera[]>({
+    queryKey: ["/api/caja/cuentas"],
+    queryFn: () => fetch("/api/caja/cuentas", { credentials: "include" }).then(r => r.json()),
+  });
+
+  const mpCuenta = cuentas?.find(c => c.tipo === "mp");
+  const mpBaseFecha = mpCuenta?.saldo_base_fecha ? mpCuenta.saldo_base_fecha.slice(0, 10) : null;
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  const { data: mpMovData } = useQuery<{ results?: any[] }>({
+    queryKey: ["/api/mp/movements/cuentas", mpBaseFecha, todayIso],
+    queryFn: () =>
+      fetch(`/api/mp/movements?from=${mpBaseFecha}&to=${todayIso}`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!mpBaseFecha,
+    staleTime: 3 * 60 * 1000,
+  });
+
+  const mpDelta = useMemo(() => {
+    if (!mpBaseFecha || !mpMovData?.results) return 0;
+    let delta = 0;
+    for (const m of mpMovData.results) {
+      const net = m.netAmount ?? 0;
+      if (m.isOutgoing) delta -= net;
+      else delta += net;
+    }
+    return delta;
+  }, [mpBaseFecha, mpMovData]);
+
+  function getSaldoActual(c: CuentaFinanciera): number {
+    const base = parseFloat(String(c.saldo_base ?? 0));
+    if (c.tipo === "mp") return base + mpDelta;
+    return base;
+  }
+
+  const updateCuentaMut = useMutation({
+    mutationFn: (vars: { id: number; saldo_base: number }) =>
+      apiRequest("PUT", `/api/caja/cuentas/${vars.id}`, { saldo_base: vars.saldo_base }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/mp/movements/cuentas"] });
+      setEditCuentaOpen(false);
+    },
   });
 
   const addMutation = useMutation({
@@ -276,6 +340,90 @@ export default function CajaPage() {
   return (
     <Layout>
       <div className="p-6 space-y-6">
+        {/* ── Posición financiera ─────────────────────────────────────────── */}
+        <section className="space-y-3">
+          <h2 className="text-base font-semibold">¿Dónde está mi plata hoy?</h2>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+            {(cuentas ?? []).map(cuenta => {
+              const saldo = getSaldoActual(cuenta);
+              return (
+                <Card
+                  key={cuenta.id}
+                  className="cursor-pointer hover:border-primary/40 transition-colors"
+                  onClick={() => { setEditCuenta(cuenta); setEditSaldo(String(cuenta.saldo_base ?? 0)); setEditCuentaOpen(true); }}
+                >
+                  <CardContent className="pt-4 pb-3 px-4">
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      {CUENTA_ICONS[cuenta.tipo]}
+                      <span className="text-xs font-medium text-muted-foreground truncate flex-1">{cuenta.nombre}</span>
+                      <Pencil className="h-3 w-3 text-muted-foreground/40 flex-shrink-0" />
+                    </div>
+                    <p className={`text-xl font-bold ${saldo >= 0 ? "text-foreground" : "text-red-600"}`}>{fmt(saldo)}</p>
+                    {cuenta.saldo_base_fecha && (
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        base {new Date(cuenta.saldo_base_fecha).toLocaleDateString("es-AR", { day: "numeric", month: "short" })}
+                        {cuenta.tipo === "mp" && mpDelta !== 0 && (
+                          <span className={mpDelta > 0 ? " text-green-600" : " text-red-600"}>
+                            {" "}{mpDelta > 0 ? "+" : ""}{fmt(mpDelta)}
+                          </span>
+                        )}
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+            {/* Total */}
+            <Card className="bg-primary/5 border-primary/20">
+              <CardContent className="pt-4 pb-3 px-4">
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <DollarSign className="h-4 w-4 text-primary" />
+                  <span className="text-xs font-semibold text-primary">Disponible total</span>
+                </div>
+                <p className="text-xl font-bold text-primary">
+                  {cuentas ? fmt((cuentas).reduce((s, c) => s + getSaldoActual(c), 0)) : "…"}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        </section>
+
+        {/* ── Edit saldo base ──────────────────────────────────────────────── */}
+        <Dialog open={editCuentaOpen} onOpenChange={setEditCuentaOpen}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Ajustar saldo — {editCuenta?.nombre}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3 py-2">
+              <Label>Saldo actual</Label>
+              <Input
+                type="number"
+                value={editSaldo}
+                onChange={e => setEditSaldo(e.target.value)}
+                placeholder="0"
+                autoFocus
+              />
+              {editCuenta?.tipo === "mp" && (
+                <p className="text-xs text-muted-foreground">
+                  Ingresá el saldo exacto de MP ahora. A partir de esta fecha los movimientos del feed se suman automáticamente.
+                </p>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditCuentaOpen(false)}>Cancelar</Button>
+              <Button
+                onClick={() => {
+                  if (!editCuenta) return;
+                  updateCuentaMut.mutate({ id: editCuenta.id, saldo_base: parseFloat(editSaldo) || 0 });
+                }}
+                disabled={updateCuentaMut.isPending}
+              >
+                Guardar
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <h1 className="text-2xl font-bold">Caja</h1>

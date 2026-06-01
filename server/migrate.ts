@@ -975,5 +975,46 @@ export async function runNcMigrations() {
   try { await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS caja_movements_source_id_idx ON caja_movements(source_id) WHERE source_id IS NOT NULL`); } catch {}
   try { await db.execute(sql`ALTER TABLE mp_xlsx_movements ADD COLUMN IF NOT EXISTS fecha_ts TEXT`); } catch {}
   try { await db.execute(sql`ALTER TABLE mp_xlsx_movements ADD COLUMN IF NOT EXISTS fee_amount NUMERIC(12,2)`); } catch {}
+
+  // Cuentas financieras
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS cuentas_financieras (
+      id SERIAL PRIMARY KEY,
+      nombre TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      saldo_base NUMERIC(14,2) NOT NULL DEFAULT 0,
+      saldo_base_fecha TIMESTAMP,
+      orden INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+  try {
+    const cfCount = await db.execute(sql`SELECT COUNT(*)::int AS n FROM cuentas_financieras`);
+    if (((cfCount.rows[0] as any)?.n ?? 0) === 0) {
+      await db.execute(sql`
+        INSERT INTO cuentas_financieras (nombre, tipo, orden) VALUES
+          ('Mercado Pago', 'mp', 1),
+          ('Galicia', 'banco', 2),
+          ('Efectivo', 'efectivo', 3),
+          ('Cheques en cartera', 'cheque', 4)
+      `);
+    }
+  } catch {}
+
+  // Socios
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS socios (
+      id SERIAL PRIMARY KEY,
+      nombre TEXT NOT NULL,
+      activo BOOLEAN NOT NULL DEFAULT TRUE
+    )
+  `);
+  try {
+    const socCount = await db.execute(sql`SELECT COUNT(*)::int AS n FROM socios`);
+    if (((socCount.rows[0] as any)?.n ?? 0) === 0) {
+      await db.execute(sql`INSERT INTO socios (nombre) VALUES ('Joaquín'), ('Federico')`);
+    }
+  } catch {}
+
   console.log("NC migrations complete.");
 }

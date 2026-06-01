@@ -469,3 +469,23 @@ export const bankPaymentLinks = pgTable("bank_payment_links", {
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 export type BankPaymentLink = typeof bankPaymentLinks.$inferSelect;
+
+// ─── Cuentas Financieras ──────────────────────────────────────────────────────
+export const cuentasFinancieras = pgTable("cuentas_financieras", {
+  id: serial("id").primaryKey(),
+  nombre: text("nombre").notNull(),
+  tipo: text("tipo").notNull(), // mp | banco | efectivo | cheque
+  saldoBase: numeric("saldo_base", { precision: 14, scale: 2 }).notNull().default("0"),
+  saldoBaseFecha: timestamp("saldo_base_fecha"),
+  orden: integer("orden").notNull().default(0),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+});
+export type CuentaFinanciera = typeof cuentasFinancieras.$inferSelect;
+
+// ─── Socios ───────────────────────────────────────────────────────────────────
+export const socios = pgTable("socios", {
+  id: serial("id").primaryKey(),
+  nombre: text("nombre").notNull(),
+  activo: boolean("activo").notNull().default(true),
+});
+export type Socio = typeof socios.$inferSelect;
