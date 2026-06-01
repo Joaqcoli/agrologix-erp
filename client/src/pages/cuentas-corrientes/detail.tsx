@@ -132,16 +132,27 @@ function SubsidiaryDetailModal({
   subsidiary,
   orders,
   periodLabel,
+  parentName = "",
 }: {
   open: boolean;
   onClose: () => void;
   subsidiary: { customerId: number; customerName: string; facturacion: number; cobranza: number; saldo: number } | null;
   orders: OrderRow[];
   periodLabel: string;
+  parentName?: string;
 }) {
   const fmtDate = (d: string) => {
     const dt = new Date(d.replace(/\s.+$/, "T00:00:00"));
     return dt.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
+  };
+
+  const stripParentName = (name: string) => {
+    const base = parentName.replace(/^colegio\s+/i, "").trim().toUpperCase();
+    if (!base) return name;
+    const cleaned = name.replace(/^colegio\s+/i, "").trim();
+    const idx = cleaned.toUpperCase().indexOf(base);
+    if (idx < 0) return cleaned;
+    return cleaned.slice(idx + base.length).replace(/^\s*[-–—]\s*/, "").trim() || cleaned;
   };
 
   const subOrders = useMemo(
@@ -154,7 +165,7 @@ function SubsidiaryDetailModal({
     const fmtD = (d: string) =>
       new Date(d.replace(/\s.+$/, "T00:00:00")).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" });
     const doc = await generateCCPDF({
-      clientLabel: `Sede: ${subsidiary.customerName}`,
+      clientLabel: `Sede: ${stripParentName(subsidiary.customerName)}`,
       saldoAnterior: 0,
       orderRows: subOrders.map((o) => ({
         fecha: fmtD(o.orderDate),
@@ -174,7 +185,7 @@ function SubsidiaryDetailModal({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Building2 className="h-4 w-4" />
-            {subsidiary?.customerName} — {periodLabel}
+            {subsidiary ? stripParentName(subsidiary.customerName) : ""} — {periodLabel}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
@@ -2001,6 +2012,7 @@ export default function CCCustomerDetailPage({
         subsidiary={selectedSubsidiary as any}
         orders={data?.orders ?? []}
         periodLabel={periodLabel}
+        parentName={data?.customer?.name ?? ""}
       />
 
       <PaymentModal
