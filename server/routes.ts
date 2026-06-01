@@ -2372,11 +2372,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
 
       // ── Detectar merchant ID desde los propios datos (más fiable que /users/me) ──
-      // El merchant es el collector_id que aparece con más frecuencia
+      // El merchant aparece como payer_id en sus egresos Y como collector_id en sus ingresos.
+      // NO usar collector.id anidado (es el ID del cobrador externo, ej. Uber).
+      // Solo usar campos top-level: payer_id + collector_id.
       if (!_mpMerchantId) {
         const freq = new Map<string, number>();
         for (const p of rawPayments) {
-          const cid = String(p.collector_id ?? p.collector?.id ?? "");
+          const pid = String(p.payer_id ?? "");
+          if (pid && pid !== "0") freq.set(pid, (freq.get(pid) ?? 0) + 1);
+          const cid = String(p.collector_id ?? "");
           if (cid && cid !== "0") freq.set(cid, (freq.get(cid) ?? 0) + 1);
         }
         let best = 0;
@@ -2542,14 +2546,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const rawIdentifier: string | null = filtered_[0] ?? null;
         return { ...m, rawIdentifier, _candidates: filtered_ };
       });
-
-      // ── DIAGNÓSTICO BUG ─────────────────────────────────────────────────────
-      console.log(`[BUG-DIAG] merchantId="${merchantId}"`);
-      const sampleMov = withCandidates.slice(0, 8);
-      for (const m of sampleMov) {
-        console.log(`[BUG-DIAG] id=${m.id} op=${m.operation_type} isOutgoing=${m.isOutgoing} net=${m.netAmount} rawId="${m.rawIdentifier}" payer_id=${m.payer_id} collector_id=${m.collector_id} desc="${m.description}"`);
-      }
-      // ── FIN DIAGNÓSTICO ──────────────────────────────────────────────────────
 
       // Batch lookup — todos los candidatos de todos los movimientos
       const allCandidates = [...new Set(withCandidates.flatMap((m: any) => m._candidates as string[]))];
