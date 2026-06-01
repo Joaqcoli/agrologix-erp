@@ -1095,5 +1095,106 @@ export async function runNcMigrations() {
   try { await db.execute(sql`ALTER TABLE obligaciones ADD COLUMN IF NOT EXISTS moneda TEXT NOT NULL DEFAULT 'ARS'`); } catch {}
   try { await db.execute(sql`ALTER TABLE obligaciones ADD COLUMN IF NOT EXISTS pago_parcial BOOLEAN NOT NULL DEFAULT FALSE`); } catch {}
 
+  // ── Fix: CAJÓN purchases where cost_per_unit was stored as per-cajón instead of per-KG ──
+  // Detectable when: cost_per_unit ≈ cost_per_purchase_unit AND weight_per_package > 1
+  // Step 1: Fix purchase_items.cost_per_unit
+  try { await db.execute(sql`
+    UPDATE purchase_items
+    SET cost_per_unit = (cost_per_purchase_unit::numeric / weight_per_package::numeric)::text
+    WHERE purchase_unit = 'CAJON'
+      AND weight_per_package IS NOT NULL
+      AND weight_per_package::numeric > 1
+      AND cost_per_purchase_unit IS NOT NULL
+      AND cost_per_purchase_unit::numeric > 0
+      AND cost_per_unit IS NOT NULL
+      AND ABS(cost_per_unit::numeric - cost_per_purchase_unit::numeric) < 0.01
+  `); } catch {}
+
+  // Step 2: Fix stock_movements (purchases) that used the wrong per-cajón unit_cost
+  try { await db.execute(sql`
+    UPDATE stock_movements sm
+    SET unit_cost = pi.cost_per_unit
+    FROM purchase_items pi
+    WHERE sm.reference_type = 'purchase'
+      AND sm.reference_id = pi.purchase_id
+      AND sm.product_id = pi.product_id
+      AND pi.purchase_unit = 'CAJON'
+      AND pi.weight_per_package IS NOT NULL
+      AND pi.weight_per_package::numeric > 1
+      AND pi.cost_per_purchase_unit IS NOT NULL
+      AND pi.cost_per_purchase_unit::numeric > 0
+      AND ABS(sm.unit_cost::numeric - pi.cost_per_purchase_unit::numeric) < 1
+  `); } catch {}
+
+  // Step 3: Recalc product_units.avg_cost for affected products (WA over all purchase movements)
+  try { await db.execute(sql`
+    WITH aff AS (
+      SELECT DISTINCT pi.product_id FROM purchase_items pi
+      WHERE pi.purchase_unit = 'CAJON' AND pi.weight_per_package::numeric > 1
+    ),
+    wma AS (
+      SELECT sm.product_id,
+        SUM(sm.quantity::numeric * sm.unit_cost::numeric) / NULLIF(SUM(sm.quantity::numeric), 0) AS avg_cost
+      FROM stock_movements sm
+      JOIN aff a ON a.product_id = sm.product_id
+      WHERE sm.movement_type = 'in' AND sm.reference_type = 'purchase'
+        AND sm.unit_cost IS NOT NULL AND sm.unit_cost::numeric > 0
+      GROUP BY sm.product_id
+    )
+    UPDATE product_units pu SET avg_cost = wma.avg_cost::text
+    FROM wma
+    WHERE pu.product_id = wma.product_id
+      AND pu.base_unit IS NOT NULL
+      AND pu.unit NOT IN ('CAJON','BOLSA','BANDEJA')
+      AND wma.avg_cost IS NOT NULL AND wma.avg_cost > 0
+  `); } catch {}
+
+  // Step 4: Sync products.average_cost
+  try { await db.execute(sql`
+    WITH aff AS (
+      SELECT DISTINCT pi.product_id FROM purchase_items pi
+      WHERE pi.purchase_unit = 'CAJON' AND pi.weight_per_package::numeric > 1
+    ),
+    totals AS (
+      SELECT pu.product_id,
+        CASE WHEN SUM(pu.stock_qty::numeric) > 0
+          THEN SUM(pu.stock_qty::numeric * pu.avg_cost::numeric) / SUM(pu.stock_qty::numeric)
+          ELSE MAX(pu.avg_cost::numeric)
+        END AS avg_cost
+      FROM product_units pu
+      JOIN aff a ON a.product_id = pu.product_id
+      WHERE pu.base_unit IS NOT NULL AND pu.unit NOT IN ('CAJON','BOLSA','BANDEJA')
+      GROUP BY pu.product_id
+    )
+    UPDATE products p SET average_cost = totals.avg_cost::text
+    FROM totals
+    WHERE p.id = totals.product_id AND totals.avg_cost IS NOT NULL AND totals.avg_cost > 0
+  `); } catch {}
+
+  // Step 5: Fix rinde stock_movements that used the wrong per-cajón unit_cost
+  try { await db.execute(sql`
+    UPDATE stock_movements sm
+    SET unit_cost = (
+      SELECT (pi.cost_per_purchase_unit::numeric / pi.weight_per_package::numeric)::text
+      FROM purchase_items pi
+      WHERE pi.product_id = sm.product_id
+        AND pi.purchase_unit = 'CAJON'
+        AND pi.weight_per_package::numeric > 1
+        AND pi.cost_per_purchase_unit IS NOT NULL
+        AND ABS(sm.unit_cost::numeric - pi.cost_per_purchase_unit::numeric) < 1
+      ORDER BY pi.id DESC LIMIT 1
+    )
+    WHERE sm.notes ILIKE '%Rinde%'
+      AND sm.movement_type = 'in'
+      AND EXISTS (
+        SELECT 1 FROM purchase_items pi
+        WHERE pi.product_id = sm.product_id
+          AND pi.purchase_unit = 'CAJON'
+          AND pi.weight_per_package::numeric > 1
+          AND pi.cost_per_purchase_unit IS NOT NULL
+          AND ABS(sm.unit_cost::numeric - pi.cost_per_purchase_unit::numeric) < 1
+      )
+  `); } catch {}
+
   console.log("NC migrations complete.");
 }
