@@ -2065,7 +2065,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/caja/obligaciones", requireAuth, async (req, res) => {
     try {
-      const { concepto, tipo, monto, moneda, fechaVencimiento, notas, cuotas, mensual } = req.body;
+      const { concepto, tipo, monto, moneda, fechaVencimiento, notas, cuotas, cuotaInicial, mensual } = req.body;
       if (!concepto || !tipo || !monto || !fechaVencimiento)
         return res.status(400).json({ error: "Campos requeridos: concepto, tipo, monto, fechaVencimiento" });
 
@@ -2076,17 +2076,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.json(created[0]);
       }
 
+      const startAt = Math.max(1, Math.min(parseInt(cuotaInicial) || 1, n));
       const grupoCuota = `gc-${Date.now()}`;
       const items = [];
       let base = new Date(fechaVencimiento + "T12:00:00Z");
-      for (let i = 1; i <= n; i++) {
-        // mensual=true → each occurrence is the full monto (recurring expense)
-        // mensual=false (cuotas) → total divided by n (installment debt)
-        const montoI = mensual
-          ? parseFloat(monto)
-          : Math.round((parseFloat(monto) / n) * 100) / 100;
+      for (let i = startAt; i <= n; i++) {
+        // mensual=true → same monto every month (recurring expense like rent/salary)
+        // mensual=false (cuotas) → same amount per installment (user enters the per-cuota amount)
+        const montoI = parseFloat(monto);
         const vencimiento = `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2,"0")}-${String(base.getUTCDate()).padStart(2,"0")}`;
-        const label = mensual ? concepto : `${concepto} — cuota ${i} de ${n}`;
+        const label = mensual ? concepto : `${concepto} ${i} de ${n}`;
         items.push({ concepto: label, tipo, monto: montoI, moneda: currency,
           fechaVencimiento: vencimiento, grupoCuota, numeroCuota: i, totalCuotas: n, notas });
         base.setUTCMonth(base.getUTCMonth() + 1);

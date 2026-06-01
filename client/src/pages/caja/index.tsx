@@ -209,12 +209,12 @@ function oblSemaforoClass(fechaVenc: string): "vencido" | "semana" | "futuro" {
 
 type OblForm = {
   concepto: string; tipo: string; moneda: "ARS" | "USD"; monto: string;
-  fechaVencimiento: string; notas: string; cuotas: string; mensual: boolean;
+  fechaVencimiento: string; notas: string; cuotas: string; cuotaInicial: string; mensual: boolean;
 };
 const emptyOblForm = (): OblForm => ({
   concepto: "", tipo: "otro", moneda: "ARS", monto: "",
   fechaVencimiento: new Date().toISOString().slice(0, 10),
-  notas: "", cuotas: "1", mensual: false,
+  notas: "", cuotas: "1", cuotaInicial: "1", mensual: false,
 });
 
 type EditOblForm = {
@@ -763,7 +763,6 @@ export default function CajaPage() {
                     const sem = oblSemaforoClass(ob.fecha_vencimiento);
                     const rowColor = sem === "vencido" ? "bg-red-50/60" : sem === "semana" ? "bg-yellow-50/40" : "";
                     const dotColor = sem === "vencido" ? "bg-red-500" : sem === "semana" ? "bg-yellow-400" : "bg-gray-300";
-                    const pendingCount = ob.grupo_cuota ? (grupoCounts[ob.grupo_cuota] ?? 1) : 1;
                     const isUSD = (ob.moneda ?? "ARS") === "USD";
                     return (
                       <tr key={ob.id} className={`border-t hover:bg-muted/20 ${rowColor}`}>
@@ -774,10 +773,7 @@ export default function CajaPage() {
                           {ob.fecha_vencimiento.slice(5).split("-").reverse().join("/")}
                         </td>
                         <td className="px-3 py-2 font-medium">
-                          <span className="truncate max-w-[180px] inline-block align-middle">{ob.concepto}</span>
-                          {pendingCount > 1 && (
-                            <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5 py-0 h-4">+{pendingCount - 1} más</Badge>
-                          )}
+                          <span className="truncate max-w-[200px] inline-block align-middle">{ob.concepto}</span>
                         </td>
                         <td className="px-3 py-2">
                           <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${TIPO_BADGE[ob.tipo] ?? TIPO_BADGE.otro}`}>
@@ -886,7 +882,7 @@ export default function CajaPage() {
                   <Input type="date" value={oblForm.fechaVencimiento} onChange={e => setOblForm(f => ({ ...f, fechaVencimiento: e.target.value }))} />
                 </div>
                 <div className="space-y-1">
-                  <Label>Cuotas</Label>
+                  <Label>Total de cuotas</Label>
                   <Input
                     type="number" min="1" max="60" step="1"
                     value={oblForm.mensual ? "12" : oblForm.cuotas}
@@ -894,9 +890,23 @@ export default function CajaPage() {
                     onChange={e => setOblForm(f => ({ ...f, cuotas: e.target.value }))}
                     placeholder="1"
                   />
-                  <p className="text-[10px] text-muted-foreground">1 = sin cuotas. Fechas mensuales consecutivas.</p>
                 </div>
               </div>
+              {!oblForm.mensual && parseInt(oblForm.cuotas) > 1 && (
+                <div className="space-y-1">
+                  <Label>Cuota inicial <span className="text-xs text-muted-foreground font-normal">(si ya pagaste algunas)</span></Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number" min="1" max={oblForm.cuotas} step="1"
+                      value={oblForm.cuotaInicial}
+                      onChange={e => setOblForm(f => ({ ...f, cuotaInicial: e.target.value }))}
+                      className="w-24"
+                      placeholder="1"
+                    />
+                    <span className="text-sm text-muted-foreground">de {oblForm.cuotas} — vencimiento del {oblForm.fechaVencimiento.slice(5).split("-").reverse().join("/")} en adelante</span>
+                  </div>
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <input
                   id="obl-mensual"
@@ -920,7 +930,7 @@ export default function CajaPage() {
                 onClick={() => addOblMutation.mutate({ ...oblForm, cuotas: oblForm.mensual ? "12" : oblForm.cuotas, mensual: oblForm.mensual })}
                 disabled={addOblMutation.isPending || !oblForm.concepto || !oblForm.monto || !oblForm.fechaVencimiento || !oblForm.tipo}
               >
-                {addOblMutation.isPending ? "Guardando..." : oblForm.mensual ? "Crear 12 meses" : (parseInt(oblForm.cuotas) > 1 ? `Crear ${oblForm.cuotas} cuotas` : "Guardar")}
+                {addOblMutation.isPending ? "Guardando..." : oblForm.mensual ? "Crear 12 meses" : (parseInt(oblForm.cuotas) > 1 ? `Crear cuotas ${oblForm.cuotaInicial || 1} a ${oblForm.cuotas}` : "Guardar")}
               </Button>
             </DialogFooter>
           </DialogContent>
