@@ -2103,7 +2103,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Revert mode (marcar como pendiente)
       if (estado === "pendiente") {
         await storage.deleteMovimientoCuentaByOrigen("obligacion", String(id));
-        const updated = await storage.patchObligacion(id, { estado: "pendiente", pagadoAt: null, cuentaPagoId: null });
+        const updated = await storage.patchObligacion(id, { estado: "pendiente", pagadoAt: null, cuentaPagoId: null, pagoParcial: false });
         return res.json(updated);
       }
 
@@ -2129,10 +2129,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (isFullPayment) {
           patch.estado = "pagado";
           patch.pagadoAt = new Date().toISOString();
+          patch.pagoParcial = false;
         } else {
           // Partial: reduce monto in the obligation's currency, keep pendiente
           patch.estado = "pendiente";
           patch.monto = String(Math.round((montoOriginal - montoNum) * 100) / 100);
+          patch.pagoParcial = true;
         }
 
         const cuentas = await storage.getCuentasFinancieras();

@@ -1091,8 +1091,9 @@ export async function runNcMigrations() {
     ON retiros(movimiento_ref) WHERE movimiento_ref IS NOT NULL
   `); } catch {}
 
-  // Obligaciones: moneda
+  // Obligaciones: moneda + pago_parcial
   try { await db.execute(sql`ALTER TABLE obligaciones ADD COLUMN IF NOT EXISTS moneda TEXT NOT NULL DEFAULT 'ARS'`); } catch {}
+  try { await db.execute(sql`ALTER TABLE obligaciones ADD COLUMN IF NOT EXISTS pago_parcial BOOLEAN NOT NULL DEFAULT FALSE`); } catch {}
 
   console.log("NC migrations complete.");
 }

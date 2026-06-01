@@ -4849,7 +4849,7 @@ export const storage = {
   // ─── Obligaciones ───────────────────────────────────────────────────────────
   async getObligaciones(): Promise<any[]> {
     const rows = await db.execute(drizzleSql`
-      SELECT id, concepto, tipo, monto::float, moneda, fecha_vencimiento,
+      SELECT id, concepto, tipo, monto::float, moneda, pago_parcial, fecha_vencimiento,
              estado, grupo_cuota, numero_cuota, total_cuotas,
              notas, pagado_at, cuenta_pago_id, created_at
       FROM obligaciones
@@ -4882,7 +4882,7 @@ export const storage = {
   async patchObligacion(id: number, data: {
     estado?: string; cuentaPagoId?: number | null; pagadoAt?: string | null;
     monto?: string; moneda?: string; concepto?: string; tipo?: string;
-    fechaVencimiento?: string; notas?: string | null;
+    fechaVencimiento?: string; notas?: string | null; pagoParcial?: boolean;
   }): Promise<any> {
     const row = await db.execute(drizzleSql`
       UPDATE obligaciones
@@ -4891,12 +4891,13 @@ export const storage = {
           pagado_at = CASE WHEN ${data.pagadoAt !== undefined} THEN ${data.pagadoAt ?? null}::timestamp ELSE pagado_at END,
           monto = CASE WHEN ${data.monto !== undefined} THEN ${data.monto ?? null}::numeric ELSE monto END,
           moneda = COALESCE(${data.moneda ?? null}, moneda),
+          pago_parcial = CASE WHEN ${data.pagoParcial !== undefined} THEN ${data.pagoParcial ?? false} ELSE pago_parcial END,
           concepto = COALESCE(${data.concepto ?? null}, concepto),
           tipo = COALESCE(${data.tipo ?? null}, tipo),
           fecha_vencimiento = COALESCE(${data.fechaVencimiento ?? null}, fecha_vencimiento),
           notas = CASE WHEN ${data.notas !== undefined} THEN ${data.notas ?? null} ELSE notas END
       WHERE id = ${id}
-      RETURNING id, concepto, tipo, monto::float, moneda, fecha_vencimiento,
+      RETURNING id, concepto, tipo, monto::float, moneda, pago_parcial, fecha_vencimiento,
         estado, grupo_cuota, numero_cuota, total_cuotas, notas, pagado_at, cuenta_pago_id
     `);
     return (row.rows as any[])[0];

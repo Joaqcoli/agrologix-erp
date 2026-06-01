@@ -176,6 +176,7 @@ type Obligacion = {
   tipo: string;
   monto: number;
   moneda: string; // "ARS" | "USD"
+  pago_parcial: boolean;
   fecha_vencimiento: string;
   estado: "pendiente" | "pagado";
   grupo_cuota: string | null;
@@ -254,7 +255,8 @@ export default function CajaPage() {
   const [pagarOblOpen, setPagarOblOpen] = useState(false);
   const [pagarObl, setPagarObl] = useState<Obligacion | null>(null);
   const [pagarCuentaId, setPagarCuentaId] = useState<number | null>(null);
-  const [pagarMonto, setPagarMonto] = useState<string>("");
+  const [pagarMonto, setPagarMonto] = useState<string>("");      // en moneda de la obligación
+  const [pagarMontoARS, setPagarMontoARS] = useState<string>(""); // solo para USD: equiv ARS
   const [pagarCotizacion, setPagarCotizacion] = useState<string>("");
   // Edit
   const [editOblOpen, setEditOblOpen] = useState(false);
@@ -452,6 +454,7 @@ export default function CajaPage() {
       setPagarObl(null);
       setPagarCuentaId(null);
       setPagarMonto("");
+      setPagarMontoARS("");
       setPagarCotizacion("");
     },
   });
@@ -773,7 +776,12 @@ export default function CajaPage() {
                           {ob.fecha_vencimiento.slice(5).split("-").reverse().join("/")}
                         </td>
                         <td className="px-3 py-2 font-medium">
-                          <span className="truncate max-w-[200px] inline-block align-middle">{ob.concepto}</span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="truncate max-w-[180px]">{ob.concepto}</span>
+                            {ob.pago_parcial && (
+                              <Badge className="bg-amber-100 text-amber-700 border border-amber-300 text-[10px] px-1.5 py-0 h-4 font-medium">pago parcial</Badge>
+                            )}
+                          </div>
                         </td>
                         <td className="px-3 py-2">
                           <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${TIPO_BADGE[ob.tipo] ?? TIPO_BADGE.otro}`}>
@@ -937,7 +945,7 @@ export default function CajaPage() {
         </Dialog>
 
         {/* Dialog: pagar obligación */}
-        <Dialog open={pagarOblOpen} onOpenChange={v => { setPagarOblOpen(v); if (!v) { setPagarObl(null); setPagarCuentaId(null); setPagarMonto(""); setPagarCotizacion(""); } }}>
+        <Dialog open={pagarOblOpen} onOpenChange={v => { setPagarOblOpen(v); if (!v) { setPagarObl(null); setPagarCuentaId(null); setPagarMonto(""); setPagarMontoARS(""); setPagarCotizacion(""); } }}>
           <DialogContent className="max-w-sm">
             <DialogHeader><DialogTitle>Registrar pago</DialogTitle></DialogHeader>
             <div className="py-2 space-y-3">
@@ -947,30 +955,64 @@ export default function CajaPage() {
                 const montoNum = parseFloat(pagarMonto) || 0;
                 const pendiente = pagarObl.monto - montoNum;
                 const isPartial = montoNum > 0 && montoNum < pagarObl.monto;
-                const totalARS = isUSD ? montoNum * cotz : montoNum;
+
+                const handleUSDChange = (val: string) => {
+                  setPagarMonto(val);
+                  if (cotz > 0 && val) setPagarMontoARS(String(Math.round(parseFloat(val) * cotz * 100) / 100));
+                  else if (!val) setPagarMontoARS("");
+                };
+                const handleARSChange = (val: string) => {
+                  setPagarMontoARS(val);
+                  if (cotz > 0 && val) setPagarMonto(String(Math.round((parseFloat(val) / cotz) * 100) / 100));
+                  else if (!val) setPagarMonto("");
+                };
+                const handleCotzChange = (val: string) => {
+                  setPagarCotizacion(val);
+                  const c = parseFloat(val) || 0;
+                  if (c > 0) {
+                    if (pagarMonto) setPagarMontoARS(String(Math.round(parseFloat(pagarMonto) * c * 100) / 100));
+                    else if (pagarMontoARS) setPagarMonto(String(Math.round((parseFloat(pagarMontoARS) / c) * 100) / 100));
+                  }
+                };
+
                 return (
                   <>
                     <p className="text-sm font-medium">
                       {pagarObl.concepto} — <span className="text-red-700">{isUSD ? `USD ${pagarObl.monto.toLocaleString("es-AR")}` : fmt(pagarObl.monto)}</span>
                     </p>
-                    <div className="space-y-1">
-                      <Label className="text-xs">Monto pagado ({isUSD ? "USD" : "ARS $"})</Label>
-                      <Input type="number" min="0" step="0.01" value={pagarMonto} onChange={e => setPagarMonto(e.target.value)} />
-                      {isPartial && (
-                        <p className="text-xs text-amber-600 font-medium">
-                          Pago parcial — queda pendiente: {isUSD ? `USD ${(pendiente).toLocaleString("es-AR", {minimumFractionDigits: 2})}` : fmt(pendiente)}
-                        </p>
-                      )}
-                    </div>
-                    {isUSD && (
+
+                    {isUSD ? (
+                      <>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Cotización (ARS por USD) <span className="text-red-500">*</span></Label>
+                          <Input type="number" min="0" step="1" value={pagarCotizacion} onChange={e => handleCotzChange(e.target.value)} placeholder="Ej: 1200" />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <Label className="text-xs">Monto en USD</Label>
+                            <Input type="number" min="0" step="0.01" value={pagarMonto} onChange={e => handleUSDChange(e.target.value)} placeholder="0.00" />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Equivalente en ARS</Label>
+                            <Input type="number" min="0" step="1" value={pagarMontoARS} onChange={e => handleARSChange(e.target.value)} placeholder="0" />
+                          </div>
+                        </div>
+                        {isPartial && (
+                          <p className="text-xs text-amber-600 font-medium">
+                            Pago parcial — queda pendiente: USD {pendiente.toLocaleString("es-AR", { minimumFractionDigits: 2 })}
+                          </p>
+                        )}
+                      </>
+                    ) : (
                       <div className="space-y-1">
-                        <Label className="text-xs">Cotización USD → ARS <span className="text-red-500">*</span></Label>
-                        <Input type="number" min="0" step="1" value={pagarCotizacion} onChange={e => setPagarCotizacion(e.target.value)} placeholder="Ej: 1200" />
-                        {montoNum > 0 && cotz > 0 && (
-                          <p className="text-xs text-muted-foreground">Total en ARS: {fmt(totalARS)}</p>
+                        <Label className="text-xs">Monto pagado ($)</Label>
+                        <Input type="number" min="0" step="0.01" value={pagarMonto} onChange={e => setPagarMonto(e.target.value)} />
+                        {isPartial && (
+                          <p className="text-xs text-amber-600 font-medium">Pago parcial — queda pendiente: {fmt(pendiente)}</p>
                         )}
                       </div>
                     )}
+
                     <div className="space-y-1">
                       <Label className="text-xs">Cuenta de pago (ajusta saldo)</Label>
                       <Select
