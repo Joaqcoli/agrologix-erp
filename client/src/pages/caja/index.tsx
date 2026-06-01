@@ -484,39 +484,33 @@ export default function CajaPage() {
 
   const oblPendientes = useMemo(() => (obligaciones ?? []).filter((o: Obligacion) => o.estado === "pendiente"), [obligaciones]);
 
-  // Show only first pending per grupo_cuota (collapse recurring)
-  const oblVisible = useMemo(() => {
-    const seen = new Set<string>();
-    return oblPendientes.filter((ob: Obligacion) => {
-      if (!ob.grupo_cuota) return true;
-      if (seen.has(ob.grupo_cuota)) return false;
-      seen.add(ob.grupo_cuota);
-      return true;
-    });
-  }, [oblPendientes]);
-
-  // Count pending per group
-  const grupoCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const ob of oblPendientes as Obligacion[]) {
-      if (ob.grupo_cuota) counts[ob.grupo_cuota] = (counts[ob.grupo_cuota] ?? 0) + 1;
-    }
-    return counts;
-  }, [oblPendientes]);
-
   const today = new Date(); today.setHours(0,0,0,0);
   const endOfWeek = new Date(today); endOfWeek.setDate(today.getDate() + 7);
-  const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  const next30 = new Date(today); next30.setDate(today.getDate() + 30);
+
+  // List: all pending that are overdue OR due within the next 30 days
+  const oblVisible = useMemo(() => {
+    return (oblPendientes as Obligacion[]).filter(ob => {
+      const venc = new Date(ob.fecha_vencimiento + "T00:00:00");
+      return venc <= next30; // includes past (vencidas) + next 30 days
+    });
+  }, [oblPendientes]);
 
   const oblVencido = oblPendientes.filter((o: Obligacion) => oblSemaforoClass(o.fecha_vencimiento) === "vencido");
   const oblSemana  = oblPendientes.filter((o: Obligacion) => oblSemaforoClass(o.fecha_vencimiento) === "semana");
   const oblFuturo  = oblPendientes.filter((o: Obligacion) => {
     const venc = new Date(o.fecha_vencimiento + "T00:00:00");
-    return oblSemaforoClass(o.fecha_vencimiento) === "futuro" && venc <= endOfMonth;
+    return venc > endOfWeek && venc <= next30;
   });
-  const totalVencido = oblVencido.reduce((s: number, o: Obligacion) => s + o.monto, 0);
-  const totalSemana  = oblSemana.reduce((s: number, o: Obligacion) => s + o.monto, 0);
-  const totalFuturo  = oblFuturo.reduce((s: number, o: Obligacion) => s + o.monto, 0);
+
+  // Totals split by currency
+  const sumByCurrency = (arr: Obligacion[]) => ({
+    ars: arr.filter(o => (o.moneda ?? "ARS") === "ARS").reduce((s, o) => s + o.monto, 0),
+    usd: arr.filter(o => (o.moneda ?? "ARS") === "USD").reduce((s, o) => s + o.monto, 0),
+  });
+  const totVencido = sumByCurrency(oblVencido);
+  const totSemana  = sumByCurrency(oblSemana);
+  const totFuturo  = sumByCurrency(oblFuturo);
 
   // Build unified feed
   const feed = useMemo((): FeedItem[] => {
@@ -719,7 +713,9 @@ export default function CajaPage() {
                   <span className="text-xs font-medium text-red-700">Vencido</span>
                   {oblVencido.length > 0 && <Badge className="ml-auto bg-red-600 text-white text-[10px] h-4 px-1">{oblVencido.length}</Badge>}
                 </div>
-                <p className="text-xl font-bold text-red-700">{fmt(totalVencido)}</p>
+                {totVencido.ars > 0 && <p className="text-xl font-bold text-red-700">{fmt(totVencido.ars)}</p>}
+                {totVencido.usd > 0 && <p className={`font-bold text-red-700 ${totVencido.ars > 0 ? "text-sm" : "text-xl"}`}>USD {totVencido.usd.toLocaleString("es-AR", { minimumFractionDigits: 0 })}</p>}
+                {totVencido.ars === 0 && totVencido.usd === 0 && <p className="text-xl font-bold text-red-700">$0</p>}
               </CardContent>
             </Card>
             <Card className="border-yellow-200 bg-yellow-50/40">
@@ -729,17 +725,21 @@ export default function CajaPage() {
                   <span className="text-xs font-medium text-yellow-700">Esta semana</span>
                   {oblSemana.length > 0 && <Badge className="ml-auto bg-yellow-500 text-white text-[10px] h-4 px-1">{oblSemana.length}</Badge>}
                 </div>
-                <p className="text-xl font-bold text-yellow-700">{fmt(totalSemana)}</p>
+                {totSemana.ars > 0 && <p className="text-xl font-bold text-yellow-700">{fmt(totSemana.ars)}</p>}
+                {totSemana.usd > 0 && <p className={`font-bold text-yellow-700 ${totSemana.ars > 0 ? "text-sm" : "text-xl"}`}>USD {totSemana.usd.toLocaleString("es-AR", { minimumFractionDigits: 0 })}</p>}
+                {totSemana.ars === 0 && totSemana.usd === 0 && <p className="text-xl font-bold text-yellow-700">$0</p>}
               </CardContent>
             </Card>
             <Card className="border-gray-200">
               <CardContent className="pt-4 pb-3 px-4">
                 <div className="flex items-center gap-2 mb-1">
                   <DollarSign className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-xs font-medium text-muted-foreground">Resto del mes</span>
+                  <span className="text-xs font-medium text-muted-foreground">Próximos 30 días</span>
                   {oblFuturo.length > 0 && <Badge variant="secondary" className="ml-auto text-[10px] h-4 px-1">{oblFuturo.length}</Badge>}
                 </div>
-                <p className="text-xl font-bold text-foreground">{fmt(totalFuturo)}</p>
+                {totFuturo.ars > 0 && <p className="text-xl font-bold text-foreground">{fmt(totFuturo.ars)}</p>}
+                {totFuturo.usd > 0 && <p className={`font-bold text-foreground ${totFuturo.ars > 0 ? "text-sm" : "text-xl"}`}>USD {totFuturo.usd.toLocaleString("es-AR", { minimumFractionDigits: 0 })}</p>}
+                {totFuturo.ars === 0 && totFuturo.usd === 0 && <p className="text-xl font-bold text-foreground">$0</p>}
               </CardContent>
             </Card>
           </div>
