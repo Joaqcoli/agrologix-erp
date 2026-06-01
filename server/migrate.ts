@@ -1037,5 +1037,24 @@ export async function runNcMigrations() {
     }
   } catch {}
 
+  // Obligaciones
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS obligaciones (
+      id SERIAL PRIMARY KEY,
+      concepto TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      monto NUMERIC(14,2) NOT NULL,
+      fecha_vencimiento TEXT NOT NULL,
+      estado TEXT NOT NULL DEFAULT 'pendiente',
+      grupo_cuota TEXT,
+      numero_cuota INTEGER,
+      total_cuotas INTEGER,
+      notas TEXT,
+      pagado_at TIMESTAMP,
+      cuenta_pago_id INTEGER REFERENCES cuentas_financieras(id),
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+
   console.log("NC migrations complete.");
 }

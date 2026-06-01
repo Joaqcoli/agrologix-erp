@@ -1898,6 +1898,100 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Obligaciones ────────────────────────────────────────────────────────────
+  app.get("/api/caja/obligaciones", requireAuth, async (_req, res) => {
+    try { return res.json(await storage.getObligaciones()); }
+    catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/caja/obligaciones", requireAuth, async (req, res) => {
+    try {
+      const { concepto, tipo, monto, fechaVencimiento, notas, cuotas } = req.body;
+      if (!concepto || !tipo || !monto || !fechaVencimiento)
+        return res.status(400).json({ error: "Campos requeridos: concepto, tipo, monto, fechaVencimiento" });
+
+      const n = parseInt(cuotas) || 1;
+      if (n <= 1) {
+        const created = await storage.createObligaciones([{ concepto, tipo, monto: parseFloat(monto), fechaVencimiento, notas }]);
+        return res.json(created[0]);
+      }
+
+      // Dividir en cuotas
+      const grupoCuota = `gc-${Date.now()}`;
+      const montoPorCuota = Math.floor((parseFloat(monto) / n) * 100) / 100;
+      const items = [];
+      let base = new Date(fechaVencimiento + "T12:00:00Z");
+      let acumulado = 0;
+      for (let i = 1; i <= n; i++) {
+        const isLast = i === n;
+        const montoI = isLast
+          ? Math.round((parseFloat(monto) - acumulado) * 100) / 100
+          : montoPorCuota;
+        acumulado += montoI;
+        const vencimiento = `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2,"0")}-${String(base.getUTCDate()).padStart(2,"0")}`;
+        items.push({ concepto: `${concepto} — cuota ${i} de ${n}`, tipo, monto: montoI,
+          fechaVencimiento: vencimiento, grupoCuota, numeroCuota: i, totalCuotas: n, notas });
+        base.setUTCMonth(base.getUTCMonth() + 1);
+      }
+      const created = await storage.createObligaciones(items);
+      return res.json(created);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.patch("/api/caja/obligaciones/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const { estado, cuentaPagoId } = req.body;
+
+      const patch: { estado?: string; cuentaPagoId?: number | null; pagadoAt?: string | null } = {};
+      if (estado) patch.estado = estado;
+      if (cuentaPagoId !== undefined) patch.cuentaPagoId = cuentaPagoId ? parseInt(cuentaPagoId) : null;
+
+      if (estado === "pagado") {
+        patch.pagadoAt = new Date().toISOString();
+        // Ajustar saldo de cuenta si no es MP
+        if (cuentaPagoId) {
+          const cuentaIdNum = parseInt(cuentaPagoId);
+          // Obtener la cuenta para saber si es MP
+          const cuentas = await storage.getCuentasFinancieras();
+          const cuenta = cuentas.find((c: any) => c.id === cuentaIdNum);
+          if (cuenta && cuenta.tipo !== "mp") {
+            // Obtener monto de la obligación
+            const obs = await storage.getObligaciones();
+            const ob = obs.find((o: any) => o.id === id);
+            if (ob) {
+              await storage.createMovimientoCuenta({
+                cuentaId: cuentaIdNum,
+                signo: "egreso",
+                monto: parseFloat(ob.monto),
+                concepto: ob.concepto,
+                origenTipo: "obligacion",
+                origenId: String(id),
+              });
+            }
+          }
+        }
+      } else if (estado === "pendiente") {
+        patch.pagadoAt = null;
+        patch.cuentaPagoId = null;
+        // Revertir movimiento si existe
+        await storage.deleteMovimientoCuentaByOrigen("obligacion", String(id));
+      }
+
+      const updated = await storage.patchObligacion(id, patch);
+      return res.json(updated);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.delete("/api/caja/obligaciones/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      await storage.deleteMovimientoCuentaByOrigen("obligacion", String(id));
+      await storage.deleteObligacion(id);
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Mercado Pago (proxy) ────────────────────────────────────────────────────
   // Cache del merchant user ID (se resuelve una vez, luego se reutiliza)
   let _mpMerchantId: string | null = null;

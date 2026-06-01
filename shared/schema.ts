@@ -504,3 +504,21 @@ export const socios = pgTable("socios", {
   activo: boolean("activo").notNull().default(true),
 });
 export type Socio = typeof socios.$inferSelect;
+
+// ─── Obligaciones (vencimientos) ──────────────────────────────────────────────
+export const obligaciones = pgTable("obligaciones", {
+  id: serial("id").primaryKey(),
+  concepto: text("concepto").notNull(),
+  tipo: text("tipo").notNull(), // proveedor|impuesto|cuota|servicio|sueldo|otro
+  monto: numeric("monto", { precision: 14, scale: 2 }).notNull(),
+  fechaVencimiento: text("fecha_vencimiento").notNull(), // ISO date string YYYY-MM-DD
+  estado: text("estado").notNull().default("pendiente"), // pendiente|pagado
+  grupoCuota: text("grupo_cuota"),
+  numeroCuota: integer("numero_cuota"),
+  totalCuotas: integer("total_cuotas"),
+  notas: text("notas"),
+  pagadoAt: timestamp("pagado_at"),
+  cuentaPagoId: integer("cuenta_pago_id").references(() => cuentasFinancieras.id),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type Obligacion = typeof obligaciones.$inferSelect;

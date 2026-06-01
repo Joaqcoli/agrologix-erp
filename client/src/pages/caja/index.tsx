@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   TrendingUp, TrendingDown, DollarSign, Plus, Trash2,
   ChevronLeft, ChevronRight, Wallet, Building2, CreditCard,
-  Landmark, Pencil,
+  Landmark, Pencil, AlertCircle, CheckCircle2, Clock,
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
@@ -154,6 +154,51 @@ const METHOD_CONFIG: Record<MethodKey, { label: string; icon: React.ReactNode; c
   CHEQUE:        { label: "Cheques",       icon: <CreditCard className="h-4 w-4 text-purple-600" />, color: "text-purple-700", mutedColor: "text-purple-600" },
 };
 
+type Obligacion = {
+  id: number;
+  concepto: string;
+  tipo: string;
+  monto: number;
+  fecha_vencimiento: string;
+  estado: "pendiente" | "pagado";
+  grupo_cuota: string | null;
+  numero_cuota: number | null;
+  total_cuotas: number | null;
+  notas: string | null;
+  pagado_at: string | null;
+  cuenta_pago_id: number | null;
+};
+
+const TIPO_BADGE: Record<string, string> = {
+  proveedor: "bg-orange-100 text-orange-800",
+  impuesto:  "bg-red-100 text-red-800",
+  cuota:     "bg-blue-100 text-blue-800",
+  servicio:  "bg-sky-100 text-sky-800",
+  sueldo:    "bg-purple-100 text-purple-800",
+  otro:      "bg-gray-100 text-gray-700",
+};
+
+const TIPOS_OBLIGACION = ["proveedor","impuesto","cuota","servicio","sueldo","otro"] as const;
+
+function oblSemaforoClass(fechaVenc: string): "vencido" | "semana" | "futuro" {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const venc = new Date(fechaVenc + "T00:00:00");
+  const diff = Math.ceil((venc.getTime() - today.getTime()) / 86400000);
+  if (diff < 0) return "vencido";
+  if (diff <= 7) return "semana";
+  return "futuro";
+}
+
+type OblForm = {
+  concepto: string; tipo: string; monto: string;
+  fechaVencimiento: string; notas: string; cuotas: string;
+};
+const emptyOblForm = (): OblForm => ({
+  concepto: "", tipo: "otro", monto: "",
+  fechaVencimiento: new Date().toISOString().slice(0, 10),
+  notas: "", cuotas: "1",
+});
+
 export default function CajaPage() {
   const [viewMode, setViewMode] = useState<"day" | "week" | "month">("month");
   const [monthOffset, setMonthOffset] = useState(0);
@@ -164,6 +209,13 @@ export default function CajaPage() {
   const [editCuentaOpen, setEditCuentaOpen] = useState(false);
   const [editCuenta, setEditCuenta] = useState<CuentaFinanciera | null>(null);
   const [editSaldo, setEditSaldo] = useState("");
+
+  // Obligaciones
+  const [oblDialogOpen, setOblDialogOpen] = useState(false);
+  const [oblForm, setOblForm] = useState<OblForm>(emptyOblForm());
+  const [pagarOblOpen, setPagarOblOpen] = useState(false);
+  const [pagarObl, setPagarObl] = useState<Obligacion | null>(null);
+  const [pagarCuentaId, setPagarCuentaId] = useState<number | null>(null);
 
   const { from, to, label } = getRange(viewMode, monthOffset);
 
@@ -245,6 +297,56 @@ export default function CajaPage() {
     if (!form.description || !form.amount || !form.date || !form.method) return;
     addMutation.mutate(form);
   };
+
+  // ── Obligaciones queries & mutations ─────────────────────────────────────────
+  const { data: obligaciones } = useQuery<Obligacion[]>({
+    queryKey: ["/api/caja/obligaciones"],
+    queryFn: () => fetch("/api/caja/obligaciones", { credentials: "include" }).then(r => r.json()),
+  });
+
+  const addOblMutation = useMutation({
+    mutationFn: (body: OblForm) => apiRequest("POST", "/api/caja/obligaciones", body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/obligaciones"] });
+      setOblDialogOpen(false);
+      setOblForm(emptyOblForm());
+    },
+  });
+
+  const pagarOblMutation = useMutation({
+    mutationFn: ({ id, cuentaPagoId }: { id: number; cuentaPagoId: number | null }) =>
+      apiRequest("PATCH", `/api/caja/obligaciones/${id}`, { estado: "pagado", cuentaPagoId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/obligaciones"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
+      setPagarOblOpen(false);
+      setPagarObl(null);
+      setPagarCuentaId(null);
+    },
+  });
+
+  const delOblMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/caja/obligaciones/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/obligaciones"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
+    },
+  });
+
+  const oblPendientes = useMemo(() => (obligaciones ?? []).filter(o => o.estado === "pendiente"), [obligaciones]);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const endOfWeek = new Date(today); endOfWeek.setDate(today.getDate() + 7);
+  const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+
+  const oblVencido = oblPendientes.filter(o => oblSemaforoClass(o.fecha_vencimiento) === "vencido");
+  const oblSemana  = oblPendientes.filter(o => oblSemaforoClass(o.fecha_vencimiento) === "semana");
+  const oblFuturo  = oblPendientes.filter(o => {
+    const venc = new Date(o.fecha_vencimiento + "T00:00:00");
+    return oblSemaforoClass(o.fecha_vencimiento) === "futuro" && venc <= endOfMonth;
+  });
+  const totalVencido = oblVencido.reduce((s, o) => s + o.monto, 0);
+  const totalSemana  = oblSemana.reduce((s, o) => s + o.monto, 0);
+  const totalFuturo  = oblFuturo.reduce((s, o) => s + o.monto, 0);
 
   // Build unified feed
   const feed = useMemo((): FeedItem[] => {
@@ -425,6 +527,202 @@ export default function CajaPage() {
                 disabled={updateCuentaMut.isPending}
               >
                 Guardar
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* ── Próximos pagos y vencimientos ─────────────────────────────── */}
+        <section className="space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h2 className="text-base font-semibold">Próximos pagos y vencimientos</h2>
+            <Button size="sm" variant="outline" onClick={() => { setOblForm(emptyOblForm()); setOblDialogOpen(true); }}>
+              <Plus className="h-4 w-4 mr-1" /> Agregar obligación
+            </Button>
+          </div>
+
+          {/* Resumen */}
+          <div className="grid grid-cols-3 gap-3">
+            <Card className="border-red-200 bg-red-50/40">
+              <CardContent className="pt-4 pb-3 px-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertCircle className="h-4 w-4 text-red-600" />
+                  <span className="text-xs font-medium text-red-700">Vencido</span>
+                  {oblVencido.length > 0 && <Badge className="ml-auto bg-red-600 text-white text-[10px] h-4 px-1">{oblVencido.length}</Badge>}
+                </div>
+                <p className="text-xl font-bold text-red-700">{fmt(totalVencido)}</p>
+              </CardContent>
+            </Card>
+            <Card className="border-yellow-200 bg-yellow-50/40">
+              <CardContent className="pt-4 pb-3 px-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Clock className="h-4 w-4 text-yellow-600" />
+                  <span className="text-xs font-medium text-yellow-700">Esta semana</span>
+                  {oblSemana.length > 0 && <Badge className="ml-auto bg-yellow-500 text-white text-[10px] h-4 px-1">{oblSemana.length}</Badge>}
+                </div>
+                <p className="text-xl font-bold text-yellow-700">{fmt(totalSemana)}</p>
+              </CardContent>
+            </Card>
+            <Card className="border-gray-200">
+              <CardContent className="pt-4 pb-3 px-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <DollarSign className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-xs font-medium text-muted-foreground">Resto del mes</span>
+                  {oblFuturo.length > 0 && <Badge variant="secondary" className="ml-auto text-[10px] h-4 px-1">{oblFuturo.length}</Badge>}
+                </div>
+                <p className="text-xl font-bold text-foreground">{fmt(totalFuturo)}</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Lista pendientes */}
+          {oblPendientes.length > 0 && (
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-medium w-6" />
+                    <th className="text-left px-3 py-2 font-medium">Vencimiento</th>
+                    <th className="text-left px-3 py-2 font-medium">Concepto</th>
+                    <th className="text-left px-3 py-2 font-medium">Tipo</th>
+                    <th className="text-right px-3 py-2 font-medium">Monto</th>
+                    <th className="px-3 py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {oblPendientes.map(ob => {
+                    const sem = oblSemaforoClass(ob.fecha_vencimiento);
+                    const rowColor = sem === "vencido" ? "bg-red-50/60" : sem === "semana" ? "bg-yellow-50/40" : "";
+                    const dotColor = sem === "vencido" ? "bg-red-500" : sem === "semana" ? "bg-yellow-400" : "bg-gray-300";
+                    return (
+                      <tr key={ob.id} className={`border-t hover:bg-muted/20 ${rowColor}`}>
+                        <td className="px-3 py-2">
+                          <span className={`inline-block h-2.5 w-2.5 rounded-full ${dotColor}`} />
+                        </td>
+                        <td className="px-3 py-2 tabular-nums text-muted-foreground whitespace-nowrap">
+                          {ob.fecha_vencimiento.slice(5).replace("-","/")}
+                        </td>
+                        <td className="px-3 py-2 max-w-[220px] truncate font-medium">{ob.concepto}</td>
+                        <td className="px-3 py-2">
+                          <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${TIPO_BADGE[ob.tipo] ?? TIPO_BADGE.otro}`}>
+                            {ob.tipo}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold text-red-700">{fmt(ob.monto)}</td>
+                        <td className="px-3 py-2 text-right flex items-center gap-1 justify-end">
+                          <Button
+                            size="sm" variant="ghost"
+                            className="h-7 text-xs text-green-700 hover:text-green-800 hover:bg-green-50"
+                            onClick={() => { setPagarObl(ob); setPagarCuentaId(null); setPagarOblOpen(true); }}
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Pagar
+                          </Button>
+                          <Button
+                            size="icon" variant="ghost" className="h-7 w-7"
+                            onClick={() => delOblMutation.mutate(ob.id)}
+                            disabled={delOblMutation.isPending}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {oblPendientes.length === 0 && (
+            <p className="text-sm text-muted-foreground">Sin obligaciones pendientes.</p>
+          )}
+        </section>
+
+        {/* Dialog: agregar obligación */}
+        <Dialog open={oblDialogOpen} onOpenChange={v => { setOblDialogOpen(v); if (!v) setOblForm(emptyOblForm()); }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader><DialogTitle>Agregar obligación</DialogTitle></DialogHeader>
+            <div className="space-y-3 py-1">
+              <div className="space-y-1">
+                <Label>Concepto <span className="text-red-500">*</span></Label>
+                <Input value={oblForm.concepto} onChange={e => setOblForm(f => ({ ...f, concepto: e.target.value }))} placeholder="Ej: Alquiler galpón, IVA junio..." />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label>Tipo <span className="text-red-500">*</span></Label>
+                  <Select value={oblForm.tipo} onValueChange={v => setOblForm(f => ({ ...f, tipo: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {TIPOS_OBLIGACION.map(t => <SelectItem key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label>Monto ($) <span className="text-red-500">*</span></Label>
+                  <Input type="number" min="0" step="0.01" value={oblForm.monto} onChange={e => setOblForm(f => ({ ...f, monto: e.target.value }))} placeholder="0.00" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label>Vencimiento <span className="text-red-500">*</span></Label>
+                  <Input type="date" value={oblForm.fechaVencimiento} onChange={e => setOblForm(f => ({ ...f, fechaVencimiento: e.target.value }))} />
+                </div>
+                <div className="space-y-1">
+                  <Label>Dividir en cuotas</Label>
+                  <Input type="number" min="1" max="60" step="1" value={oblForm.cuotas} onChange={e => setOblForm(f => ({ ...f, cuotas: e.target.value }))} placeholder="1" />
+                  <p className="text-[10px] text-muted-foreground">1 = sin cuotas. Fechas mensuales consecutivas.</p>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label>Notas (opcional)</Label>
+                <Input value={oblForm.notas} onChange={e => setOblForm(f => ({ ...f, notas: e.target.value }))} placeholder="Referencia, nro. expte., etc." />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOblDialogOpen(false)}>Cancelar</Button>
+              <Button
+                onClick={() => addOblMutation.mutate(oblForm)}
+                disabled={addOblMutation.isPending || !oblForm.concepto || !oblForm.monto || !oblForm.fechaVencimiento}
+              >
+                {addOblMutation.isPending ? "Guardando..." : (parseInt(oblForm.cuotas) > 1 ? `Crear ${oblForm.cuotas} cuotas` : "Guardar")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Dialog: pagar obligación */}
+        <Dialog open={pagarOblOpen} onOpenChange={v => { setPagarOblOpen(v); if (!v) { setPagarObl(null); setPagarCuentaId(null); } }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader><DialogTitle>Marcar como pagado</DialogTitle></DialogHeader>
+            <div className="py-2 space-y-3">
+              {pagarObl && (
+                <p className="text-sm font-medium">{pagarObl.concepto} — <span className="text-red-700">{fmt(pagarObl.monto)}</span></p>
+              )}
+              <div className="space-y-1">
+                <Label className="text-xs">Cuenta de pago (ajusta saldo)</Label>
+                <Select
+                  value={pagarCuentaId ? String(pagarCuentaId) : "none"}
+                  onValueChange={v => setPagarCuentaId(v === "none" ? null : Number(v))}
+                >
+                  <SelectTrigger><SelectValue placeholder="Sin ajuste" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Sin ajuste de saldo</SelectItem>
+                    {(cuentas ?? []).map(c => (
+                      <SelectItem key={c.id} value={String(c.id)}>
+                        {c.nombre}{c.tipo === "mp" ? " (solo registra, no ajusta saldo)" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">MP: el saldo se refleja por el feed automático.</p>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPagarOblOpen(false)}>Cancelar</Button>
+              <Button
+                onClick={() => pagarObl && pagarOblMutation.mutate({ id: pagarObl.id, cuentaPagoId: pagarCuentaId })}
+                disabled={pagarOblMutation.isPending}
+              >
+                {pagarOblMutation.isPending ? "Guardando..." : "Confirmar pago"}
               </Button>
             </DialogFooter>
           </DialogContent>

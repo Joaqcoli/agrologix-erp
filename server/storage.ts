@@ -4759,4 +4759,56 @@ export const storage = {
       DELETE FROM movimientos_cuenta WHERE origen_tipo = ${origenTipo} AND origen_id = ${origenId}
     `);
   },
+
+  // ─── Obligaciones ───────────────────────────────────────────────────────────
+  async getObligaciones(): Promise<any[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT id, concepto, tipo, monto::float, fecha_vencimiento,
+             estado, grupo_cuota, numero_cuota, total_cuotas,
+             notas, pagado_at, cuenta_pago_id, created_at
+      FROM obligaciones
+      ORDER BY fecha_vencimiento ASC, id ASC
+    `);
+    return rows.rows as any[];
+  },
+
+  async createObligaciones(items: {
+    concepto: string; tipo: string; monto: number;
+    fechaVencimiento: string; grupoCuota?: string | null;
+    numeroCuota?: number | null; totalCuotas?: number | null; notas?: string | null;
+  }[]): Promise<any[]> {
+    const result: any[] = [];
+    for (const item of items) {
+      const row = await db.execute(drizzleSql`
+        INSERT INTO obligaciones (concepto, tipo, monto, fecha_vencimiento,
+          grupo_cuota, numero_cuota, total_cuotas, notas)
+        VALUES (${item.concepto}, ${item.tipo}, ${item.monto}, ${item.fechaVencimiento},
+          ${item.grupoCuota ?? null}, ${item.numeroCuota ?? null},
+          ${item.totalCuotas ?? null}, ${item.notas ?? null})
+        RETURNING id, concepto, tipo, monto::float, fecha_vencimiento,
+          estado, grupo_cuota, numero_cuota, total_cuotas, notas, created_at
+      `);
+      result.push((row.rows as any[])[0]);
+    }
+    return result;
+  },
+
+  async patchObligacion(id: number, data: {
+    estado?: string; cuentaPagoId?: number | null; pagadoAt?: string | null;
+  }): Promise<any> {
+    const row = await db.execute(drizzleSql`
+      UPDATE obligaciones
+      SET estado = COALESCE(${data.estado ?? null}, estado),
+          cuenta_pago_id = CASE WHEN ${data.cuentaPagoId !== undefined} THEN ${data.cuentaPagoId ?? null} ELSE cuenta_pago_id END,
+          pagado_at = CASE WHEN ${data.pagadoAt !== undefined} THEN ${data.pagadoAt ?? null}::timestamp ELSE pagado_at END
+      WHERE id = ${id}
+      RETURNING id, concepto, tipo, monto::float, fecha_vencimiento,
+        estado, grupo_cuota, numero_cuota, total_cuotas, notas, pagado_at, cuenta_pago_id
+    `);
+    return (row.rows as any[])[0];
+  },
+
+  async deleteObligacion(id: number): Promise<void> {
+    await db.execute(drizzleSql`DELETE FROM obligaciones WHERE id = ${id}`);
+  },
 };
