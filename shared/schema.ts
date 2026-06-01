@@ -506,6 +506,21 @@ export const socios = pgTable("socios", {
 export type Socio = typeof socios.$inferSelect;
 
 // ─── Obligaciones (vencimientos) ──────────────────────────────────────────────
+export const cheques = pgTable("cheques", {
+  id: serial("id").primaryKey(),
+  tipo: text("tipo").notNull(), // recibido | emitido
+  monto: numeric("monto", { precision: 14, scale: 2 }).notNull(),
+  fechaCobro: text("fecha_cobro").notNull(), // YYYY-MM-DD
+  estado: text("estado").notNull().default("en_cartera"), // en_cartera | depositado | endosado | cobrado
+  contraparte: text("contraparte").notNull(),
+  cuentaDestinoId: integer("cuenta_destino_id").references(() => cuentasFinancieras.id),
+  comision: numeric("comision", { precision: 14, scale: 2 }).notNull().default("0"),
+  obligacionId: integer("obligacion_id"),  // se referencia a obligaciones, sin FK circular
+  notas: text("notas"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type Cheque = typeof cheques.$inferSelect;
+
 export const obligaciones = pgTable("obligaciones", {
   id: serial("id").primaryKey(),
   concepto: text("concepto").notNull(),

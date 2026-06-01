@@ -682,6 +682,7 @@ function PaymentModal({
   const [retentionAmount, setRetentionAmount] = useState("");
   const [retentionType, setRetentionType] = useState("IIBB");
   const [cuentaId, setCuentaId] = useState<number | null>(null);
+  const [chequeFechaCobro, setChequeFechaCobro] = useState("");
   const { data: cuentas } = useQuery<any[]>({
     queryKey: ["/api/caja/cuentas"],
     queryFn: () => fetch("/api/caja/cuentas", { credentials: "include" }).then(r => r.json()),
@@ -715,6 +716,7 @@ function PaymentModal({
         notes: notes || null,
         orderIds: selectedOrderIds,
         cuentaId: (method === "EFECTIVO" || method === "TRANSFERENCIA") ? cuentaId : null,
+        chequeInfo: method === "CHEQUE" ? { fechaCobro: chequeFechaCobro } : undefined,
       });
       if (!isNaN(retAmt) && retAmt > 0) {
         await apiRequest("POST", "/api/payments", {
@@ -735,7 +737,7 @@ function PaymentModal({
       queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
       toast({ title: "Pago registrado" });
       setAmount(""); setNotes(""); setMethod("EFECTIVO"); setSelectedOrderIds([]);
-      setRetentionAmount(""); setRetentionType("IIBB"); setCuentaId(null);
+      setRetentionAmount(""); setRetentionType("IIBB"); setCuentaId(null); setChequeFechaCobro("");
       onClose();
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -821,6 +823,18 @@ function PaymentModal({
                   </SelectContent>
                 </Select>
               )}
+            </div>
+          )}
+
+          {/* Cheque: fecha de cobro */}
+          {method === "CHEQUE" && (
+            <div>
+              <Label className="text-xs">Fecha de cobro del cheque <span className="text-red-500">*</span></Label>
+              <Input
+                type="date" className="mt-1"
+                value={chequeFechaCobro}
+                onChange={e => setChequeFechaCobro(e.target.value)}
+              />
             </div>
           )}
 

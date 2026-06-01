@@ -4760,6 +4760,50 @@ export const storage = {
     `);
   },
 
+  // ─── Cheques ────────────────────────────────────────────────────────────────
+  async getCheques(): Promise<any[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT id, tipo, monto::float, fecha_cobro, estado, contraparte,
+             cuenta_destino_id, comision::float, obligacion_id, notas, created_at
+      FROM cheques ORDER BY fecha_cobro ASC, id ASC
+    `);
+    return rows.rows as any[];
+  },
+
+  async createCheque(data: {
+    tipo: string; monto: number; fechaCobro: string; estado?: string;
+    contraparte: string; cuentaDestinoId?: number | null;
+    comision?: number; obligacionId?: number | null; notas?: string | null;
+  }): Promise<any> {
+    const row = await db.execute(drizzleSql`
+      INSERT INTO cheques (tipo, monto, fecha_cobro, estado, contraparte,
+        cuenta_destino_id, comision, obligacion_id, notas)
+      VALUES (${data.tipo}, ${data.monto}, ${data.fechaCobro},
+        ${data.estado ?? "en_cartera"}, ${data.contraparte},
+        ${data.cuentaDestinoId ?? null}, ${data.comision ?? 0},
+        ${data.obligacionId ?? null}, ${data.notas ?? null})
+      RETURNING id, tipo, monto::float, fecha_cobro, estado, contraparte,
+        cuenta_destino_id, comision::float, obligacion_id, notas, created_at
+    `);
+    return (row.rows as any[])[0];
+  },
+
+  async patchCheque(id: number, data: {
+    estado?: string; cuentaDestinoId?: number | null; comision?: number; contraparte?: string;
+  }): Promise<any> {
+    const row = await db.execute(drizzleSql`
+      UPDATE cheques SET
+        estado = COALESCE(${data.estado ?? null}, estado),
+        cuenta_destino_id = CASE WHEN ${data.cuentaDestinoId !== undefined} THEN ${data.cuentaDestinoId ?? null} ELSE cuenta_destino_id END,
+        comision = CASE WHEN ${data.comision !== undefined} THEN ${data.comision ?? 0}::numeric ELSE comision END,
+        contraparte = COALESCE(${data.contraparte ?? null}, contraparte)
+      WHERE id = ${id}
+      RETURNING id, tipo, monto::float, fecha_cobro, estado, contraparte,
+        cuenta_destino_id, comision::float, obligacion_id, notas, created_at
+    `);
+    return (row.rows as any[])[0];
+  },
+
   // ─── Obligaciones ───────────────────────────────────────────────────────────
   async getObligaciones(): Promise<any[]> {
     const rows = await db.execute(drizzleSql`

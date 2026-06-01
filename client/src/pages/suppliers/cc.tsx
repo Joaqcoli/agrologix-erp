@@ -181,11 +181,21 @@ function PaymentModal({
   const [notes, setNotes] = useState("");
   const [selectedPurchaseIds, setSelectedPurchaseIds] = useState<number[]>([]);
   const [cuentaId, setCuentaId] = useState<number | null>(null);
+  const [chequeSubtipo, setChequeSubtipo] = useState<"cartera" | "propio">("cartera");
+  const [chequeFechaCobro, setChequeFechaCobro] = useState("");
+  const [chequeCarteraId, setChequeCarteraId] = useState<number | null>(null);
 
   const { data: cuentas } = useQuery<any[]>({
     queryKey: ["/api/caja/cuentas"],
     queryFn: () => fetch("/api/caja/cuentas", { credentials: "include" }).then((r) => r.json()),
   });
+
+  const { data: todosCheques } = useQuery<any[]>({
+    queryKey: ["/api/caja/cheques"],
+    queryFn: () => fetch("/api/caja/cheques", { credentials: "include" }).then((r) => r.json()),
+    enabled: method === "CHEQUE",
+  });
+  const chequesCartera = (todosCheques ?? []).filter((c: any) => c.tipo === "recibido" && c.estado === "en_cartera");
 
   const togglePurchase = (id: number) => {
     setSelectedPurchaseIds((prev) =>
@@ -207,6 +217,11 @@ function PaymentModal({
         notes: notes || null,
         purchaseId: selectedPurchaseIds.length === 1 ? selectedPurchaseIds[0] : null,
         cuentaId,
+        chequeInfo: method === "CHEQUE" ? {
+          tipo: chequeSubtipo,
+          chequeCarteraId: chequeSubtipo === "cartera" ? chequeCarteraId : undefined,
+          fechaCobro: chequeSubtipo === "propio" ? chequeFechaCobro : undefined,
+        } : undefined,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ap/cc"] });
@@ -214,8 +229,11 @@ function PaymentModal({
       queryClient.invalidateQueries({ queryKey: ["/api/ap/cc/summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ap/pending-purchases", supplierId] });
       queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/cheques"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/obligaciones"] });
       toast({ title: "Pago registrado" });
       setAmount(""); setNotes(""); setMethod("EFECTIVO"); setSelectedPurchaseIds([]); setCuentaId(null);
+      setChequeSubtipo("cartera"); setChequeFechaCobro(""); setChequeCarteraId(null);
       onClose();
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -299,6 +317,48 @@ function PaymentModal({
                     ))}
                 </SelectContent>
               </Select>
+            </div>
+          )}
+
+          {/* Cheque: subtipo cartera / propio */}
+          {method === "CHEQUE" && (
+            <div className="space-y-2">
+              <div>
+                <Label className="text-xs">Tipo de cheque</Label>
+                <Select value={chequeSubtipo} onValueChange={(v) => { setChequeSubtipo(v as "cartera" | "propio"); setChequeCarteraId(null); setChequeFechaCobro(""); }}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cartera">De cartera (cheque recibido de cliente)</SelectItem>
+                    <SelectItem value="propio">Propio (cheque del banco)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {chequeSubtipo === "cartera" && (
+                <div>
+                  <Label className="text-xs">Cheque a endosar <span className="text-red-500">*</span></Label>
+                  {chequesCartera.length === 0 ? (
+                    <p className="text-xs text-muted-foreground mt-1 py-2 border rounded-md text-center">Sin cheques en cartera</p>
+                  ) : (
+                    <Select value={chequeCarteraId ? String(chequeCarteraId) : ""} onValueChange={v => setChequeCarteraId(v ? Number(v) : null)}>
+                      <SelectTrigger className="mt-1"><SelectValue placeholder="Seleccionar cheque" /></SelectTrigger>
+                      <SelectContent>
+                        {chequesCartera.map((ch: any) => (
+                          <SelectItem key={ch.id} value={String(ch.id)}>
+                            {ch.contraparte} — ${Math.round(ch.monto).toLocaleString("es-AR")} — vence {ch.fecha_cobro.slice(5).replace("-","/")}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+              )}
+              {chequeSubtipo === "propio" && (
+                <div>
+                  <Label className="text-xs">Fecha de cobro del cheque <span className="text-red-500">*</span></Label>
+                  <Input type="date" className="mt-1" value={chequeFechaCobro} onChange={e => setChequeFechaCobro(e.target.value)} />
+                  <p className="text-[10px] text-muted-foreground mt-1">Se crea una obligación en "Próximos vencimientos". Galicia se debita cuando la marcás pagada.</p>
+                </div>
+              )}
             </div>
           )}
 

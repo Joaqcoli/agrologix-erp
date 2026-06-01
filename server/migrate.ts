@@ -1037,6 +1037,23 @@ export async function runNcMigrations() {
     }
   } catch {}
 
+  // Cheques
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS cheques (
+      id SERIAL PRIMARY KEY,
+      tipo TEXT NOT NULL,
+      monto NUMERIC(14,2) NOT NULL,
+      fecha_cobro TEXT NOT NULL,
+      estado TEXT NOT NULL DEFAULT 'en_cartera',
+      contraparte TEXT NOT NULL,
+      cuenta_destino_id INTEGER REFERENCES cuentas_financieras(id),
+      comision NUMERIC(14,2) NOT NULL DEFAULT 0,
+      obligacion_id INTEGER,
+      notas TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+
   // Obligaciones
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS obligaciones (

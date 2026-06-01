@@ -154,6 +154,19 @@ const METHOD_CONFIG: Record<MethodKey, { label: string; icon: React.ReactNode; c
   CHEQUE:        { label: "Cheques",       icon: <CreditCard className="h-4 w-4 text-purple-600" />, color: "text-purple-700", mutedColor: "text-purple-600" },
 };
 
+type Cheque = {
+  id: number;
+  tipo: "recibido" | "emitido";
+  monto: number;
+  fecha_cobro: string;
+  estado: "en_cartera" | "depositado" | "endosado" | "cobrado";
+  contraparte: string;
+  cuenta_destino_id: number | null;
+  comision: number;
+  obligacion_id: number | null;
+  notas: string | null;
+};
+
 type Obligacion = {
   id: number;
   concepto: string;
@@ -210,6 +223,14 @@ export default function CajaPage() {
   const [editCuenta, setEditCuenta] = useState<CuentaFinanciera | null>(null);
   const [editSaldo, setEditSaldo] = useState("");
 
+  // Cheques
+  const [depositarChequeOpen, setDepositarChequeOpen] = useState(false);
+  const [endosarChequeOpen, setEndosarChequeOpen] = useState(false);
+  const [activeCheque, setActiveCheque] = useState<Cheque | null>(null);
+  const [chequeComision, setChequeComision] = useState("");
+  const [chequeEndosarA, setChequeEndosarA] = useState("");
+  const [chequeCuentaDestinoId, setChequeCuentaDestinoId] = useState<number | null>(null);
+
   // Obligaciones
   const [oblDialogOpen, setOblDialogOpen] = useState(false);
   const [oblForm, setOblForm] = useState<OblForm>(emptyOblForm());
@@ -262,6 +283,7 @@ export default function CajaPage() {
     const base = parseFloat(String(c.saldo_base ?? 0));
     const ajuste = c.ajuste ?? 0;
     if (c.tipo === "mp") return base + ajuste + mpDelta;
+    if (c.tipo === "cheque") return chequesEnCartera.reduce((s, ch) => s + ch.monto, 0);
     return base + ajuste;
   }
 
@@ -297,6 +319,36 @@ export default function CajaPage() {
     if (!form.description || !form.amount || !form.date || !form.method) return;
     addMutation.mutate(form);
   };
+
+  // ── Cheques queries & mutations ───────────────────────────────────────────────
+  const { data: cheques } = useQuery<Cheque[]>({
+    queryKey: ["/api/caja/cheques"],
+    queryFn: () => fetch("/api/caja/cheques", { credentials: "include" }).then(r => r.json()),
+  });
+
+  const chequesEnCartera = useMemo(() =>
+    (cheques ?? []).filter(c => c.tipo === "recibido" && c.estado === "en_cartera"),
+  [cheques]);
+
+  const depositarMut = useMutation({
+    mutationFn: ({ id, comision, cuentaDestinoId }: { id: number; comision: number; cuentaDestinoId: number | null }) =>
+      apiRequest("PATCH", `/api/caja/cheques/${id}`, { accion: "depositar", comision, cuentaDestinoId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/cheques"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
+      setDepositarChequeOpen(false); setActiveCheque(null); setChequeComision(""); setChequeCuentaDestinoId(null);
+    },
+  });
+
+  const endosarMut = useMutation({
+    mutationFn: ({ id, contraparte }: { id: number; contraparte: string }) =>
+      apiRequest("PATCH", `/api/caja/cheques/${id}`, { accion: "endosar", contraparte }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/cheques"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
+      setEndosarChequeOpen(false); setActiveCheque(null); setChequeEndosarA("");
+    },
+  });
 
   // ── Obligaciones queries & mutations ─────────────────────────────────────────
   const { data: obligaciones } = useQuery<Obligacion[]>({
@@ -723,6 +775,126 @@ export default function CajaPage() {
                 disabled={pagarOblMutation.isPending}
               >
                 {pagarOblMutation.isPending ? "Guardando..." : "Confirmar pago"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* ── Cheques en cartera ────────────────────────────────────────── */}
+        {chequesEnCartera.length > 0 && (
+          <section className="space-y-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-semibold">Cheques en cartera</h2>
+              <Badge variant="secondary">{chequesEnCartera.length}</Badge>
+              <span className="text-sm text-muted-foreground ml-auto font-medium">
+                Total: {fmt(chequesEnCartera.reduce((s, c) => s + c.monto, 0))}
+              </span>
+            </div>
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-medium">Cobro</th>
+                    <th className="text-left px-3 py-2 font-medium">De quién</th>
+                    <th className="text-right px-3 py-2 font-medium">Monto</th>
+                    <th className="px-3 py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {chequesEnCartera.map(ch => (
+                    <tr key={ch.id} className="border-t hover:bg-muted/20">
+                      <td className="px-3 py-2 tabular-nums text-muted-foreground">{ch.fecha_cobro.slice(5).replace("-","/")}/{ch.fecha_cobro.slice(0,4).slice(2)}</td>
+                      <td className="px-3 py-2 font-medium">{ch.contraparte}</td>
+                      <td className="px-3 py-2 text-right font-semibold text-purple-700">{fmt(ch.monto)}</td>
+                      <td className="px-3 py-2 text-right">
+                        <div className="flex items-center gap-1 justify-end">
+                          <Button size="sm" variant="outline" className="h-7 text-xs"
+                            onClick={() => { setActiveCheque(ch); setChequeCuentaDestinoId(null); setChequeComision(""); setDepositarChequeOpen(true); }}>
+                            Depositar
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 text-xs"
+                            onClick={() => { setActiveCheque(ch); setChequeEndosarA(""); setEndosarChequeOpen(true); }}>
+                            Endosar
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* Dialog: depositar cheque */}
+        <Dialog open={depositarChequeOpen} onOpenChange={v => { setDepositarChequeOpen(v); if (!v) { setActiveCheque(null); setChequeComision(""); setChequeCuentaDestinoId(null); } }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader><DialogTitle>Depositar cheque</DialogTitle></DialogHeader>
+            <div className="py-2 space-y-3">
+              {activeCheque && (
+                <p className="text-sm font-medium">{activeCheque.contraparte} — <span className="text-purple-700">{fmt(activeCheque.monto)}</span></p>
+              )}
+              <div className="space-y-1">
+                <Label className="text-xs">Cuenta destino</Label>
+                <Select
+                  value={chequeCuentaDestinoId ? String(chequeCuentaDestinoId) : (cuentas?.find(c => c.tipo === "banco")?.id ? String(cuentas.find(c => c.tipo === "banco")!.id) : "")}
+                  onValueChange={v => setChequeCuentaDestinoId(Number(v))}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {(cuentas ?? []).filter(c => c.tipo === "banco" || c.tipo === "mp").map(c => (
+                      <SelectItem key={c.id} value={String(c.id)}>{c.nombre}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Comisión / gastos bancarios (opcional)</Label>
+                <div className="flex items-center gap-1">
+                  <span className="text-sm text-muted-foreground">$</span>
+                  <Input type="number" min="0" step="0.01" value={chequeComision} onChange={e => setChequeComision(e.target.value)} placeholder="0" className="flex-1" />
+                </div>
+                {parseFloat(chequeComision || "0") > 0 && activeCheque && (
+                  <p className="text-xs text-muted-foreground">Acreditado: {fmt(activeCheque.monto - parseFloat(chequeComision))}</p>
+                )}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDepositarChequeOpen(false)}>Cancelar</Button>
+              <Button
+                onClick={() => activeCheque && depositarMut.mutate({
+                  id: activeCheque.id,
+                  comision: parseFloat(chequeComision || "0") || 0,
+                  cuentaDestinoId: chequeCuentaDestinoId ?? (cuentas?.find(c => c.tipo === "banco")?.id ?? null),
+                })}
+                disabled={depositarMut.isPending}
+              >
+                {depositarMut.isPending ? "Guardando..." : "Confirmar depósito"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Dialog: endosar cheque */}
+        <Dialog open={endosarChequeOpen} onOpenChange={v => { setEndosarChequeOpen(v); if (!v) { setActiveCheque(null); setChequeEndosarA(""); } }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader><DialogTitle>Endosar cheque</DialogTitle></DialogHeader>
+            <div className="py-2 space-y-3">
+              {activeCheque && (
+                <p className="text-sm font-medium">{activeCheque.contraparte} — <span className="text-purple-700">{fmt(activeCheque.monto)}</span></p>
+              )}
+              <div className="space-y-1">
+                <Label className="text-xs">Endosar a (proveedor u otro) <span className="text-red-500">*</span></Label>
+                <Input value={chequeEndosarA} onChange={e => setChequeEndosarA(e.target.value)} placeholder="Nombre del proveedor" className="mt-1" />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEndosarChequeOpen(false)}>Cancelar</Button>
+              <Button
+                onClick={() => activeCheque && endosarMut.mutate({ id: activeCheque.id, contraparte: chequeEndosarA || activeCheque.contraparte })}
+                disabled={endosarMut.isPending || !chequeEndosarA}
+              >
+                {endosarMut.isPending ? "Guardando..." : "Confirmar endoso"}
               </Button>
             </DialogFooter>
           </DialogContent>

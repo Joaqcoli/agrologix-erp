@@ -1160,6 +1160,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           concepto: `Cobro cliente`, origenTipo: "cobro", origenId: String(payment.id),
         });
       }
+      // Si pago con cheque, crear cheque recibido + movimiento en Cheques en cartera
+      if (data.method === "CHEQUE" && req.body.chequeInfo?.fechaCobro) {
+        const customer = await storage.getCustomer(data.customerId);
+        const contraparte = customer?.name ?? "Cliente";
+        const allCuentas = await storage.getCuentasFinancieras();
+        const chequeCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "cheque");
+        const cheque = await storage.createCheque({
+          tipo: "recibido",
+          monto: parseFloat(String(data.amount)),
+          fechaCobro: req.body.chequeInfo.fechaCobro,
+          estado: "en_cartera",
+          contraparte,
+          notas: data.notes ?? null,
+        });
+        if (chequeCuenta) {
+          await storage.createMovimientoCuenta({
+            cuentaId: chequeCuenta.id, signo: "ingreso",
+            monto: parseFloat(String(data.amount)),
+            concepto: `Cheque de ${contraparte}`,
+            origenTipo: "cheque_recibido", origenId: String(cheque.id),
+          });
+        }
+      }
       return res.json(payment);
     } catch (e: any) {
       return res.status(400).json({ error: e.message });
@@ -1337,6 +1360,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           cuentaId, signo: "egreso", monto: parseFloat(String(data.amount)),
           concepto: `Pago proveedor`, origenTipo: "pago", origenId: String(payment.id),
         });
+      }
+      // Circuito cheques para pagos a proveedores
+      if (data.method === "CHEQUE") {
+        const chequeInfo = req.body.chequeInfo as {
+          tipo?: "cartera" | "propio"; chequeCarteraId?: number; fechaCobro?: string;
+        } | undefined;
+        const allCuentas = await storage.getCuentasFinancieras();
+        const chequeCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "cheque");
+
+        if (chequeInfo?.tipo === "cartera" && chequeInfo.chequeCarteraId) {
+          // Endosar cheque de cartera
+          await storage.patchCheque(chequeInfo.chequeCarteraId, { estado: "endosado" });
+          if (chequeCuenta) {
+            const supplier = await storage.getSupplier(data.supplierId);
+            await storage.createMovimientoCuenta({
+              cuentaId: chequeCuenta.id, signo: "egreso",
+              monto: parseFloat(String(data.amount)),
+              concepto: `Cheque endosado a ${supplier?.name ?? "proveedor"}`,
+              origenTipo: "cheque_endosado", origenId: String(chequeInfo.chequeCarteraId),
+            });
+          }
+        } else if (chequeInfo?.tipo === "propio" && chequeInfo.fechaCobro) {
+          // Cheque propio: crear obligacion + cheque emitido (Galicia no baja hasta pagar la obligacion)
+          const supplier = await storage.getSupplier(data.supplierId);
+          const supplierName = supplier?.name ?? "Proveedor";
+          const obs = await storage.createObligaciones([{
+            concepto: `Cheque propio — ${supplierName}`,
+            tipo: "proveedor",
+            monto: parseFloat(String(data.amount)),
+            fechaVencimiento: chequeInfo.fechaCobro,
+            notas: data.notes ?? null,
+          }]);
+          await storage.createCheque({
+            tipo: "emitido",
+            monto: parseFloat(String(data.amount)),
+            fechaCobro: chequeInfo.fechaCobro,
+            estado: "en_cartera",
+            contraparte: supplierName,
+            obligacionId: obs[0].id,
+          });
+        }
       }
       return res.json(payment);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
@@ -1898,6 +1962,58 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Cheques ─────────────────────────────────────────────────────────────────
+  app.get("/api/caja/cheques", requireAuth, async (_req, res) => {
+    try { return res.json(await storage.getCheques()); }
+    catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.patch("/api/caja/cheques/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const { accion, comision, contraparte, cuentaDestinoId } = req.body;
+      const allCuentas = await storage.getCuentasFinancieras();
+      const chequeCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "cheque");
+      const galiciaCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "banco");
+
+      const todosCheques = await storage.getCheques();
+      const cheque = (todosCheques as any[]).find((c: any) => c.id === id);
+      if (!cheque) return res.status(404).json({ error: "Cheque no encontrado" });
+      if (cheque.estado !== "en_cartera") return res.status(400).json({ error: "El cheque no está en cartera" });
+
+      if (accion === "depositar") {
+        const comisionNum = parseFloat(comision ?? 0) || 0;
+        const destinoId = cuentaDestinoId ? parseInt(cuentaDestinoId) : galiciaCuenta?.id;
+        await storage.patchCheque(id, { estado: "depositado", cuentaDestinoId: destinoId ?? null, comision: comisionNum });
+        if (chequeCuenta) {
+          await storage.createMovimientoCuenta({
+            cuentaId: chequeCuenta.id, signo: "egreso", monto: cheque.monto,
+            concepto: `Cheque depositado de ${cheque.contraparte}`,
+            origenTipo: "cheque_depositado", origenId: String(id),
+          });
+        }
+        if (destinoId) {
+          await storage.createMovimientoCuenta({
+            cuentaId: destinoId, signo: "ingreso", monto: cheque.monto - comisionNum,
+            concepto: `Depósito cheque de ${cheque.contraparte}`,
+            origenTipo: "cheque_deposito_destino", origenId: String(id),
+          });
+        }
+      } else if (accion === "endosar") {
+        const nuevaContraparte = contraparte || cheque.contraparte;
+        await storage.patchCheque(id, { estado: "endosado", contraparte: nuevaContraparte });
+        if (chequeCuenta) {
+          await storage.createMovimientoCuenta({
+            cuentaId: chequeCuenta.id, signo: "egreso", monto: cheque.monto,
+            concepto: `Cheque endosado a ${nuevaContraparte}`,
+            origenTipo: "cheque_endosado", origenId: String(id),
+          });
+        }
+      }
+      return res.json(await storage.getCheques().then(cs => (cs as any[]).find(c => c.id === id)));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Obligaciones ────────────────────────────────────────────────────────────
   app.get("/api/caja/obligaciones", requireAuth, async (_req, res) => {
     try { return res.json(await storage.getObligaciones()); }
@@ -1979,6 +2095,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const updated = await storage.patchObligacion(id, patch);
+      // Si es pago, marcar cheque emitido vinculado como cobrado
+      if (estado === "pagado") {
+        try {
+          const linkedCheques = await storage.getCheques();
+          for (const ch of (linkedCheques as any[]).filter((c: any) => c.obligacion_id === id)) {
+            await storage.patchCheque(ch.id, { estado: "cobrado" });
+          }
+        } catch {}
+      }
       return res.json(updated);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
