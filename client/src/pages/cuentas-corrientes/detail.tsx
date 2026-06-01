@@ -353,15 +353,15 @@ async function generateCCPDF(opts: {
   // ── Column positions ────────────────────────────────────────────────────────
   // Without sede + factura:  FECHA 20% | N° REMITO 27% | N° FACTURA 27% | MONTO 26%
   // Without sede, no fact:   FECHA 20% | N° REMITO 54%                  | MONTO 26%
-  // With sede + factura:     FECHA 13% | SEDE 25% | N° REMITO 20% | N° FACTURA 20% | MONTO 22%
-  // With sede, no factura:   FECHA 13% | SEDE 25% | N° REMITO 40%                  | MONTO 22%
-  const fechaW   = tblW * (showSede ? 0.13 : 0.20);
-  const sedeW    = tblW * (showSede ? 0.25 : 0);
+  // With sede + factura:     FECHA 12% | SEDE 30% | N° REMITO 16% | N° FACTURA 19% | MONTO 23%
+  // With sede, no factura:   FECHA 12% | SEDE 30% | N° REMITO 35%                  | MONTO 23%
+  const fechaW   = tblW * (showSede ? 0.12 : 0.20);
+  const sedeW    = tblW * (showSede ? 0.30 : 0);
   const remitoW  = showSede
-    ? (hideFactura ? tblW * 0.40 : tblW * 0.20)
+    ? (hideFactura ? tblW * 0.35 : tblW * 0.16)
     : (hideFactura ? tblW * 0.54 : tblW * 0.27);
   const facturaW = showSede
-    ? (hideFactura ? 0 : tblW * 0.20)
+    ? (hideFactura ? 0 : tblW * 0.19)
     : (hideFactura ? 0 : tblW * 0.27);
   const fechaX   = mx;
   const sedeX    = fechaX + fechaW;
