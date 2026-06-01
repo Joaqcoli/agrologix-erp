@@ -4760,6 +4760,48 @@ export const storage = {
     `);
   },
 
+  // ─── Socios ─────────────────────────────────────────────────────────────────
+  async getSocios(): Promise<any[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT id, nombre, activo FROM socios ORDER BY id ASC
+    `);
+    return rows.rows as any[];
+  },
+
+  // ─── Retiros ─────────────────────────────────────────────────────────────────
+  async getCajaRetiros(): Promise<any[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT r.id, r.socio_id, s.nombre AS socio_nombre, r.monto::float,
+             r.fecha, r.origen, r.movimiento_ref, r.notas, r.created_at
+      FROM retiros r
+      JOIN socios s ON s.id = r.socio_id
+      ORDER BY r.fecha DESC, r.id DESC
+    `);
+    return rows.rows as any[];
+  },
+
+  async createRetiro(data: {
+    socioId: number; monto: number; fecha: string;
+    origen: string; movimientoRef?: string | null; notas?: string | null;
+  }): Promise<any> {
+    const row = await db.execute(drizzleSql`
+      INSERT INTO retiros (socio_id, monto, fecha, origen, movimiento_ref, notas)
+      VALUES (${data.socioId}, ${data.monto}, ${data.fecha}, ${data.origen},
+        ${data.movimientoRef ?? null}, ${data.notas ?? null})
+      ON CONFLICT (movimiento_ref) WHERE movimiento_ref IS NOT NULL DO NOTHING
+      RETURNING id, socio_id, monto::float, fecha, origen, movimiento_ref, notas, created_at
+    `);
+    return (row.rows as any[])[0];
+  },
+
+  async deleteRetiro(id: number): Promise<void> {
+    await db.execute(drizzleSql`DELETE FROM retiros WHERE id = ${id}`);
+  },
+
+  async deleteRetiroByMovimientoRef(ref: string): Promise<void> {
+    await db.execute(drizzleSql`DELETE FROM retiros WHERE movimiento_ref = ${ref}`);
+  },
+
   // ─── Cheques ────────────────────────────────────────────────────────────────
   async getCheques(): Promise<any[]> {
     const rows = await db.execute(drizzleSql`

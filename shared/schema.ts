@@ -505,6 +505,19 @@ export const socios = pgTable("socios", {
 });
 export type Socio = typeof socios.$inferSelect;
 
+// ─── Retiros ──────────────────────────────────────────────────────────────────
+export const retiros = pgTable("retiros", {
+  id: serial("id").primaryKey(),
+  socioId: integer("socio_id").notNull().references(() => socios.id),
+  monto: numeric("monto", { precision: 14, scale: 2 }).notNull(),
+  fecha: text("fecha").notNull(), // YYYY-MM-DD
+  origen: text("origen").notNull().default("manual"), // manual | movimiento
+  movimientoRef: text("movimiento_ref"),              // id de caja_movement que lo originó
+  notas: text("notas"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type Retiro = typeof retiros.$inferSelect;
+
 // ─── Obligaciones (vencimientos) ──────────────────────────────────────────────
 export const cheques = pgTable("cheques", {
   id: serial("id").primaryKey(),

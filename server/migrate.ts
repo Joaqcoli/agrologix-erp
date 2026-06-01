@@ -1073,5 +1073,23 @@ export async function runNcMigrations() {
     )
   `);
 
+  // Retiros
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS retiros (
+      id SERIAL PRIMARY KEY,
+      socio_id INTEGER NOT NULL REFERENCES socios(id),
+      monto NUMERIC(14,2) NOT NULL,
+      fecha TEXT NOT NULL,
+      origen TEXT NOT NULL DEFAULT 'manual',
+      movimiento_ref TEXT,
+      notas TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+  try { await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS retiros_movimiento_ref_idx
+    ON retiros(movimiento_ref) WHERE movimiento_ref IS NOT NULL
+  `); } catch {}
+
   console.log("NC migrations complete.");
 }

@@ -1898,6 +1898,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ─── Socios & Retiros ─────────────────────────────────────────────────────
+  app.get("/api/caja/socios", requireAuth, async (_req, res) => {
+    try { return res.json(await storage.getSocios()); }
+    catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/caja/retiros", requireAuth, async (_req, res) => {
+    try { return res.json(await storage.getCajaRetiros()); }
+    catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.post("/api/caja/retiros", requireAuth, async (req, res) => {
+    try {
+      const { socioId, monto, fecha, notas } = req.body;
+      if (!socioId || !monto || !fecha) return res.status(400).json({ error: "socioId, monto, fecha requeridos" });
+      const retiro = await storage.createRetiro({
+        socioId: parseInt(socioId), monto: parseFloat(monto),
+        fecha, origen: "manual", notas: notas || null,
+      });
+      return res.json(retiro);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.delete("/api/caja/retiros/:id", requireAuth, async (req, res) => {
+    try {
+      await storage.deleteRetiro(parseInt(req.params.id));
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Cuentas Financieras ──────────────────────────────────────────────────
   app.get("/api/caja/cuentas", requireAuth, async (_req, res) => {
     try {
@@ -1937,6 +1967,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           concepto: parsed.data.description ?? "", origenTipo: "manual", origenId: String(m.id),
         });
       }
+      // Auto-crear retiro si categoría = "Retiro" y viene socioId
+      if (parsed.data.category === "Retiro" && req.body.socioId) {
+        const socioId = parseInt(req.body.socioId);
+        if (!isNaN(socioId)) {
+          await storage.createRetiro({
+            socioId, monto: parseFloat(String(parsed.data.amount)),
+            fecha: parsed.data.date, origen: "movimiento",
+            movimientoRef: String(m.id),
+            notas: parsed.data.description ?? null,
+          });
+        }
+      }
       return res.json(m);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
@@ -1944,6 +1986,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.delete("/api/caja/movements/:id", requireAuth, async (req, res) => {
     try {
       await storage.deleteMovimientoCuentaByOrigen("manual", req.params.id);
+      await storage.deleteRetiroByMovimientoRef(req.params.id);
       await storage.deleteCajaMovement(Number(req.params.id));
       return res.json({ ok: true });
     } catch (e: any) { return res.status(500).json({ error: e.message }); }

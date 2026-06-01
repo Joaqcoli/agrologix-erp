@@ -12,6 +12,7 @@ import {
   TrendingUp, TrendingDown, DollarSign, Plus, Trash2,
   ChevronLeft, ChevronRight, Wallet, Building2, CreditCard,
   Landmark, Pencil, AlertCircle, CheckCircle2, Clock,
+  ChevronDown, ChevronUp, Users,
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
@@ -116,6 +117,7 @@ type MovForm = {
   category: string;
   method: string;
   cuentaId: number | null;
+  socioId: number | null;
 };
 
 const emptyForm = (): MovForm => ({
@@ -126,6 +128,7 @@ const emptyForm = (): MovForm => ({
   category: "",
   method: "",
   cuentaId: null,
+  socioId: null,
 });
 
 const METHOD_LABEL: Record<string, string> = {
@@ -217,11 +220,17 @@ export default function CajaPage() {
   const [monthOffset, setMonthOffset] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<MovForm>(emptyForm());
-  const [filterCat, setFilterCat] = useState("_all");
-  const [filterType, setFilterType] = useState("_all");
   const [editCuentaOpen, setEditCuentaOpen] = useState(false);
   const [editCuenta, setEditCuenta] = useState<CuentaFinanciera | null>(null);
   const [editSaldo, setEditSaldo] = useState("");
+
+  // Retiros
+  const [retiroDialogOpen, setRetiroDialogOpen] = useState(false);
+  const [retiroForm, setRetiroForm] = useState({ socioId: "", monto: "", fecha: new Date().toISOString().slice(0,10), notas: "" });
+  const [socioDetailId, setSocioDetailId] = useState<number | null>(null);
+
+  // Acordeón categorías
+  const [expandedCat, setExpandedCat] = useState<string | null>(null);
 
   // Cheques
   const [depositarChequeOpen, setDepositarChequeOpen] = useState(false);
@@ -302,6 +311,7 @@ export default function CajaPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/caja/summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/retiros"] });
       setDialogOpen(false);
       setForm(emptyForm());
     },
@@ -312,6 +322,7 @@ export default function CajaPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/caja/summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/retiros"] });
     },
   });
 
@@ -319,6 +330,53 @@ export default function CajaPage() {
     if (!form.description || !form.amount || !form.date || !form.method) return;
     addMutation.mutate(form);
   };
+
+  // ── Retiros queries & mutations ───────────────────────────────────────────────
+  const { data: socios } = useQuery<any[]>({
+    queryKey: ["/api/caja/socios"],
+    queryFn: () => fetch("/api/caja/socios", { credentials: "include" }).then(r => r.json()),
+  });
+
+  const { data: retiros } = useQuery<any[]>({
+    queryKey: ["/api/caja/retiros"],
+    queryFn: () => fetch("/api/caja/retiros", { credentials: "include" }).then(r => r.json()),
+  });
+
+  const addRetiroMut = useMutation({
+    mutationFn: (body: typeof retiroForm) => apiRequest("POST", "/api/caja/retiros", body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/retiros"] });
+      setRetiroDialogOpen(false);
+      setRetiroForm({ socioId: "", monto: "", fecha: new Date().toISOString().slice(0,10), notas: "" });
+    },
+  });
+
+  const delRetiroMut = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/caja/retiros/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/caja/retiros"] }),
+  });
+
+  const retirosPeriodo = useMemo(() =>
+    (retiros ?? []).filter((r: any) => r.fecha >= from && r.fecha <= to),
+  [retiros, from, to]);
+
+  const retirosBySocio = useMemo(() => {
+    const map: Record<number, number> = {};
+    for (const r of retirosPeriodo) map[r.socio_id] = (map[r.socio_id] ?? 0) + r.monto;
+    return map;
+  }, [retirosPeriodo]);
+
+  const retirosTotalPeriodo = Object.values(retirosBySocio).reduce((s, v) => s + v, 0);
+
+  const retirosMensuales = useMemo(() => {
+    const map: Record<number, Record<string, number>> = {};
+    for (const r of (retiros ?? [])) {
+      const mes = (r.fecha as string).slice(0, 7);
+      if (!map[r.socio_id]) map[r.socio_id] = {};
+      map[r.socio_id][mes] = (map[r.socio_id][mes] ?? 0) + r.monto;
+    }
+    return map;
+  }, [retiros]);
 
   // ── Cheques queries & mutations ───────────────────────────────────────────────
   const { data: cheques } = useQuery<Cheque[]>({
@@ -468,21 +526,6 @@ export default function CajaPage() {
     return result;
   }, [feed]);
 
-  // Filter feed
-  const filteredFeed = useMemo(() => {
-    return feed.filter(item => {
-      if (filterCat !== "_all" && item.category !== filterCat) return false;
-      if (filterType !== "_all" && item.type !== filterType) return false;
-      return true;
-    });
-  }, [feed, filterCat, filterType]);
-
-  // Category options for filter (from feed)
-  const feedCategories = useMemo(() => {
-    const set = new Set(feed.map(i => i.category));
-    return Array.from(set).sort();
-  }, [feed]);
-
   // Pie: egresos by category for the selected period
   const pieData = useMemo(() => {
     const map: Record<string, number> = {};
@@ -493,6 +536,20 @@ export default function CajaPage() {
     return Object.entries(map)
       .sort((a, b) => b[1] - a[1])
       .map(([name, value]) => ({ name, value: Math.round(value) }));
+  }, [feed]);
+
+  // Accordion: egresos agrupados por categoría del período
+  const categoriaData = useMemo(() => {
+    const map: Record<string, { total: number; items: FeedItem[] }> = {};
+    for (const item of feed) {
+      if (item.type !== "egreso") continue;
+      if (!map[item.category]) map[item.category] = { total: 0, items: [] };
+      map[item.category].total += item.amount;
+      map[item.category].items.push(item);
+    }
+    return Object.entries(map)
+      .sort((a, b) => b[1].total - a[1].total)
+      .map(([cat, d]) => ({ cat, total: d.total, items: d.items.sort((a, b) => b.date.localeCompare(a.date)) }));
   }, [feed]);
 
   const bankCatNames = (bankCats ?? []).map(c => c.name);
@@ -900,6 +957,120 @@ export default function CajaPage() {
           </DialogContent>
         </Dialog>
 
+        {/* ── Retiros de socios ─────────────────────────────────────── */}
+        <section className="space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-base font-semibold flex items-center gap-2">
+              <Users className="h-4 w-4 text-muted-foreground" /> Retiros de socios
+            </h2>
+            <span className="text-xs text-muted-foreground">— {label}</span>
+            <Button size="sm" variant="outline" className="ml-auto"
+              onClick={() => setRetiroDialogOpen(true)}>
+              <Plus className="h-4 w-4 mr-1" /> Cargar retiro
+            </Button>
+          </div>
+          {(socios ?? []).filter((s: any) => s.activo).length > 0 && (
+            <div className="grid grid-cols-2 gap-3">
+              {(socios ?? []).filter((s: any) => s.activo).map((s: any) => {
+                const total = retirosBySocio[s.id] ?? 0;
+                const pct = retirosTotalPeriodo > 0 ? Math.round((total / retirosTotalPeriodo) * 100) : 0;
+                return (
+                  <Card key={s.id} className="cursor-pointer hover:border-primary/40 transition-colors"
+                    onClick={() => setSocioDetailId(s.id)}>
+                    <CardContent className="pt-4 pb-3 px-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-sm font-semibold">{s.nombre}</span>
+                        {pct > 0 && <span className="text-[10px] text-muted-foreground ml-auto">{pct}%</span>}
+                      </div>
+                      <p className="text-xl font-bold text-orange-700">{fmt(total)}</p>
+                      {retirosTotalPeriodo > 0 && (
+                        <div className="mt-2 h-1.5 bg-muted rounded-full overflow-hidden">
+                          <div className="h-full bg-orange-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+          {retirosPeriodo.length === 0 && (
+            <p className="text-xs text-muted-foreground">Sin retiros en este período.</p>
+          )}
+        </section>
+
+        {/* Dialog: agregar retiro manual */}
+        <Dialog open={retiroDialogOpen} onOpenChange={v => { setRetiroDialogOpen(v); if (!v) setRetiroForm({ socioId: "", monto: "", fecha: new Date().toISOString().slice(0,10), notas: "" }); }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader><DialogTitle>Cargar retiro manual</DialogTitle></DialogHeader>
+            <div className="space-y-3 py-1">
+              <div className="space-y-1">
+                <Label className="text-xs">Socio <span className="text-red-500">*</span></Label>
+                <Select value={retiroForm.socioId} onValueChange={v => setRetiroForm(f => ({ ...f, socioId: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Seleccionar socio" /></SelectTrigger>
+                  <SelectContent>
+                    {(socios ?? []).filter((s: any) => s.activo).map((s: any) => (
+                      <SelectItem key={s.id} value={String(s.id)}>{s.nombre}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Monto ($) <span className="text-red-500">*</span></Label>
+                  <Input type="number" min="0" step="0.01" value={retiroForm.monto} onChange={e => setRetiroForm(f => ({ ...f, monto: e.target.value }))} placeholder="0.00" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Fecha <span className="text-red-500">*</span></Label>
+                  <Input type="date" value={retiroForm.fecha} onChange={e => setRetiroForm(f => ({ ...f, fecha: e.target.value }))} />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Notas (opcional)</Label>
+                <Input value={retiroForm.notas} onChange={e => setRetiroForm(f => ({ ...f, notas: e.target.value }))} placeholder="Referencia..." />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRetiroDialogOpen(false)}>Cancelar</Button>
+              <Button onClick={() => addRetiroMut.mutate(retiroForm)}
+                disabled={addRetiroMut.isPending || !retiroForm.socioId || !retiroForm.monto}>
+                {addRetiroMut.isPending ? "Guardando..." : "Guardar"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Dialog: detalle mensual de socio */}
+        {socioDetailId !== null && (() => {
+          const socio = (socios ?? []).find((s: any) => s.id === socioDetailId);
+          const mensual = retirosMensuales[socioDetailId] ?? {};
+          const meses = Object.entries(mensual).sort((a, b) => b[0].localeCompare(a[0]));
+          return (
+            <Dialog open onOpenChange={v => { if (!v) setSocioDetailId(null); }}>
+              <DialogContent className="max-w-sm">
+                <DialogHeader><DialogTitle>Retiros — {socio?.nombre}</DialogTitle></DialogHeader>
+                <div className="py-1 space-y-1 max-h-72 overflow-y-auto">
+                  {meses.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-2 text-center">Sin retiros registrados.</p>
+                  ) : meses.map(([mes, total]) => {
+                    const [y, m] = mes.split("-");
+                    const label2 = `${MONTHS_ES[parseInt(m) - 1]} ${y}`;
+                    return (
+                      <div key={mes} className="flex items-center justify-between px-1 py-1.5 border-b last:border-0">
+                        <span className="text-sm text-muted-foreground">{label2}</span>
+                        <span className="text-sm font-semibold text-orange-700">{fmt(total)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setSocioDetailId(null)}>Cerrar</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          );
+        })()}
+
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <h1 className="text-2xl font-bold">Caja</h1>
@@ -1050,88 +1221,50 @@ export default function CajaPage() {
           </Card>
         )}
 
-        {/* Unified feed */}
-        <section>
-          <div className="flex items-center gap-3 mb-3 flex-wrap">
-            <h2 className="font-semibold text-base">Movimientos — {label}</h2>
-            <Badge variant="secondary">{filteredFeed.length}</Badge>
-            <div className="ml-auto flex items-center gap-2">
-              <Select value={filterType} onValueChange={setFilterType}>
-                <SelectTrigger className="h-8 text-xs w-32">
-                  <SelectValue placeholder="Tipo" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="_all">Todos</SelectItem>
-                  <SelectItem value="ingreso">Ingresos</SelectItem>
-                  <SelectItem value="egreso">Egresos</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={filterCat} onValueChange={setFilterCat}>
-                <SelectTrigger className="h-8 text-xs w-44">
-                  <SelectValue placeholder="Categoría" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="_all">Todas las categorías</SelectItem>
-                  {feedCategories.map(cat => (
-                    <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+        {/* ── Acordeón: egresos por categoría ─────────────────────────── */}
+        {categoriaData.length > 0 && (
+          <section className="space-y-1">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+              Detalle por categoría — {label}
+            </p>
+            <div className="border rounded-lg overflow-hidden divide-y">
+              {categoriaData.map(({ cat, total, items }, ci) => {
+                const isOpen = expandedCat === cat;
+                const color = PIE_COLORS[ci % PIE_COLORS.length];
+                return (
+                  <div key={cat}>
+                    <button
+                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-muted/30 transition-colors text-left"
+                      onClick={() => setExpandedCat(isOpen ? null : cat)}
+                    >
+                      <span className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
+                      <span className="flex-1 text-sm font-medium truncate">{cat}</span>
+                      <span className="text-sm font-semibold text-red-700 tabular-nums">{fmt(total)}</span>
+                      {isOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />}
+                    </button>
+                    {isOpen && (
+                      <div className="bg-muted/20 divide-y">
+                        {items.map(item => (
+                          <div key={item.id} className="flex items-center gap-3 px-6 py-1.5 text-xs">
+                            <span className="text-muted-foreground tabular-nums w-10 flex-shrink-0">{fmtDate(item.date)}</span>
+                            <span className="flex-1 truncate text-muted-foreground">{item.description}{item.counterpart ? ` — ${item.counterpart}` : ""}</span>
+                            <span className="font-medium text-red-700 tabular-nums">{fmt(item.amount)}</span>
+                            {item.sourceType === "manual" && !item.isBankSync && (
+                              <Button size="icon" variant="ghost" className="h-5 w-5 -my-0.5"
+                                onClick={() => delMutation.mutate(item.sourceId)} disabled={delMutation.isPending}>
+                                <Trash2 className="h-3 w-3 text-muted-foreground" />
+                              </Button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          </div>
-
-          {filteredFeed.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Sin movimientos en este período.</p>
-          ) : (
-            <div className="border rounded-lg overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="text-left px-3 py-2 font-medium">Fecha</th>
-                    <th className="text-left px-3 py-2 font-medium">Descripción</th>
-                    <th className="text-left px-3 py-2 font-medium">Parte</th>
-                    <th className="text-left px-3 py-2 font-medium">Método</th>
-                    <th className="text-left px-3 py-2 font-medium">Categoría</th>
-                    <th className="text-right px-3 py-2 font-medium">Monto</th>
-                    <th className="px-3 py-2" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredFeed.map(item => (
-                    <tr key={item.id} className="border-t hover:bg-muted/30">
-                      <td className="px-3 py-2 text-muted-foreground tabular-nums">{fmtDate(item.date)}</td>
-                      <td className="px-3 py-2 max-w-[180px] truncate">{item.description}</td>
-                      <td className="px-3 py-2 text-muted-foreground max-w-[120px] truncate">{item.counterpart || "—"}</td>
-                      <td className="px-3 py-2">
-                        <Badge variant="outline" className="text-xs">
-                          {METHOD_LABEL[item.method.toUpperCase()] ?? item.method}
-                        </Badge>
-                      </td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground">{item.category}</td>
-                      <td className={`px-3 py-2 text-right font-medium ${item.type === "ingreso" ? "text-green-700" : "text-red-700"}`}>
-                        {item.type === "egreso" ? "-" : "+"}{fmt(item.amount)}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        {item.sourceType === "manual" && !item.isBankSync && (
-                          <Button
-                            size="icon" variant="ghost" className="h-7 w-7"
-                            onClick={() => delMutation.mutate(item.sourceId)}
-                            disabled={delMutation.isPending}
-                          >
-                            <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                          </Button>
-                        )}
-                        {item.isBankSync && (
-                          <span className="text-[10px] text-muted-foreground bg-muted rounded px-1.5 py-0.5">Banco</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
+          </section>
+        )}
       </div>
 
       {/* Dialog agregar movimiento */}
@@ -1222,7 +1355,7 @@ export default function CajaPage() {
                 {bankCatNames.length > 0 ? (
                   <Select
                     value={form.category || "_none"}
-                    onValueChange={v => setForm(f => ({ ...f, category: v === "_none" ? "" : v }))}
+                    onValueChange={v => setForm(f => ({ ...f, category: v === "_none" ? "" : v, socioId: null }))}
                   >
                     <SelectTrigger><SelectValue placeholder="Sin categoría" /></SelectTrigger>
                     <SelectContent>
@@ -1241,6 +1374,21 @@ export default function CajaPage() {
                 )}
               </div>
             </div>
+            {form.category === "Retiro" && (
+              <div className="space-y-1">
+                <Label className="text-xs">Socio que retira</Label>
+                <Select value={form.socioId != null ? String(form.socioId) : "_none"}
+                  onValueChange={v => setForm(f => ({ ...f, socioId: v === "_none" ? null : Number(v) }))}>
+                  <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Sin asignar" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">Sin asignar</SelectItem>
+                    {(socios ?? []).filter((s: any) => s.activo).map((s: any) => (
+                      <SelectItem key={s.id} value={String(s.id)}>{s.nombre}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>
