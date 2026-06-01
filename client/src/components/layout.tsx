@@ -3,7 +3,9 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { useAuth } from "@/lib/auth";
 import { Redirect } from "wouter";
-import { Loader2 } from "lucide-react";
+import { Loader2, Moon, Sun } from "lucide-react";
+import { useDarkMode } from "@/lib/useDarkMode";
+import { Button } from "@/components/ui/button";
 
 type LayoutProps = {
   children: ReactNode;
@@ -12,6 +14,7 @@ type LayoutProps = {
 
 export function Layout({ children, title }: LayoutProps) {
   const { user, loading } = useAuth();
+  const { dark, toggle } = useDarkMode();
 
   if (loading) {
     return (
@@ -35,6 +38,16 @@ export function Layout({ children, title }: LayoutProps) {
             {title && (
               <h1 className="text-base font-semibold text-foreground truncate">{title}</h1>
             )}
+            <div className="ml-auto">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggle}
+                title={dark ? "Modo claro" : "Modo oscuro"}
+              >
+                {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </Button>
+            </div>
           </header>
           <main className="flex-1 overflow-auto">
             {children}
