@@ -637,7 +637,11 @@ async function generateResumenCCPDF(opts: {
     const ry = y + RH / 2 + 3;
     doc.text(fmtD(o.orderDate), fechaX  + fechaW  / 2, ry, { align: "center" });
     if (isParent) {
-      const shortName = o.schoolName.replace(/^colegio\s+/i, "");
+      const parentBase = customerName.replace(/^colegio\s+/i, "").trim();
+      const shortName = o.schoolName
+        .replace(/^colegio\s+/i, "")
+        .replace(new RegExp(`^${parentBase}\\s*[-–]\\s*`, "i"), "")
+        .trim();
       doc.text(doc.splitTextToSize(shortName, sedeW - 4)[0], sedeX + 2, ry);
     }
     doc.text(formatRemito(o),              remitoX + remitoW / 2, ry, { align: "center" });
