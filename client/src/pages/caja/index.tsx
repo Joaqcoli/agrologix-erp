@@ -246,6 +246,7 @@ export default function CajaPage() {
   const [pagarOblOpen, setPagarOblOpen] = useState(false);
   const [pagarObl, setPagarObl] = useState<Obligacion | null>(null);
   const [pagarCuentaId, setPagarCuentaId] = useState<number | null>(null);
+  const [pagarMonto, setPagarMonto] = useState<string>("");
 
   const { from, to, label } = getRange(viewMode, monthOffset);
 
@@ -424,14 +425,15 @@ export default function CajaPage() {
   });
 
   const pagarOblMutation = useMutation({
-    mutationFn: ({ id, cuentaPagoId }: { id: number; cuentaPagoId: number | null }) =>
-      apiRequest("PATCH", `/api/caja/obligaciones/${id}`, { estado: "pagado", cuentaPagoId }),
+    mutationFn: ({ id, cuentaPagoId, montoPagado }: { id: number; cuentaPagoId: number | null; montoPagado: number }) =>
+      apiRequest("PATCH", `/api/caja/obligaciones/${id}`, { cuentaPagoId, montoPagado }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/caja/obligaciones"] });
       queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
       setPagarOblOpen(false);
       setPagarObl(null);
       setPagarCuentaId(null);
+      setPagarMonto("");
     },
   });
 
@@ -722,7 +724,7 @@ export default function CajaPage() {
                           <Button
                             size="sm" variant="ghost"
                             className="h-7 text-xs text-green-700 hover:text-green-800 hover:bg-green-50"
-                            onClick={() => { setPagarObl(ob); setPagarCuentaId(null); setPagarOblOpen(true); }}
+                            onClick={() => { setPagarObl(ob); setPagarCuentaId(null); setPagarMonto(String(ob.monto)); setPagarOblOpen(true); }}
                           >
                             <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Pagar
                           </Button>
@@ -820,37 +822,62 @@ export default function CajaPage() {
         </Dialog>
 
         {/* Dialog: pagar obligación */}
-        <Dialog open={pagarOblOpen} onOpenChange={v => { setPagarOblOpen(v); if (!v) { setPagarObl(null); setPagarCuentaId(null); } }}>
+        <Dialog open={pagarOblOpen} onOpenChange={v => { setPagarOblOpen(v); if (!v) { setPagarObl(null); setPagarCuentaId(null); setPagarMonto(""); } }}>
           <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle>Marcar como pagado</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>Registrar pago</DialogTitle></DialogHeader>
             <div className="py-2 space-y-3">
-              {pagarObl && (
-                <p className="text-sm font-medium">{pagarObl.concepto} — <span className="text-red-700">{fmt(pagarObl.monto)}</span></p>
-              )}
-              <div className="space-y-1">
-                <Label className="text-xs">Cuenta de pago (ajusta saldo)</Label>
-                <Select
-                  value={pagarCuentaId ? String(pagarCuentaId) : "none"}
-                  onValueChange={v => setPagarCuentaId(v === "none" ? null : Number(v))}
-                >
-                  <SelectTrigger><SelectValue placeholder="Sin ajuste" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Sin ajuste de saldo</SelectItem>
-                    {(cuentas ?? []).map(c => (
-                      <SelectItem key={c.id} value={String(c.id)}>
-                        {c.nombre}{c.tipo === "mp" ? " (solo registra, no ajusta saldo)" : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-[10px] text-muted-foreground">MP: el saldo se refleja por el feed automático.</p>
-              </div>
+              {pagarObl && (() => {
+                const montoNum = parseFloat(pagarMonto) || 0;
+                const pendiente = pagarObl.monto - montoNum;
+                const isPartial = montoNum > 0 && montoNum < pagarObl.monto;
+                return (
+                  <>
+                    <p className="text-sm font-medium">{pagarObl.concepto} — <span className="text-red-700">{fmt(pagarObl.monto)}</span></p>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Monto pagado</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={pagarMonto}
+                        onChange={e => setPagarMonto(e.target.value)}
+                      />
+                      {isPartial && (
+                        <p className="text-xs text-amber-600 font-medium">Pago parcial — queda pendiente: {fmt(pendiente)}</p>
+                      )}
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Cuenta de pago (ajusta saldo)</Label>
+                      <Select
+                        value={pagarCuentaId ? String(pagarCuentaId) : "none"}
+                        onValueChange={v => setPagarCuentaId(v === "none" ? null : Number(v))}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Sin ajuste" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Sin ajuste de saldo</SelectItem>
+                          {(cuentas ?? []).map(c => (
+                            <SelectItem key={c.id} value={String(c.id)}>
+                              {c.nombre}{c.tipo === "mp" ? " (solo registra, no ajusta saldo)" : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[10px] text-muted-foreground">MP: el saldo se refleja por el feed automático.</p>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setPagarOblOpen(false)}>Cancelar</Button>
               <Button
-                onClick={() => pagarObl && pagarOblMutation.mutate({ id: pagarObl.id, cuentaPagoId: pagarCuentaId })}
-                disabled={pagarOblMutation.isPending}
+                onClick={() => {
+                  if (!pagarObl) return;
+                  const montoNum = parseFloat(pagarMonto);
+                  if (!montoNum || montoNum <= 0) return;
+                  pagarOblMutation.mutate({ id: pagarObl.id, cuentaPagoId: pagarCuentaId, montoPagado: montoNum });
+                }}
+                disabled={pagarOblMutation.isPending || !parseFloat(pagarMonto)}
               >
                 {pagarOblMutation.isPending ? "Guardando..." : "Confirmar pago"}
               </Button>

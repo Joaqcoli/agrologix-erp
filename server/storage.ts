@@ -4880,13 +4880,14 @@ export const storage = {
   },
 
   async patchObligacion(id: number, data: {
-    estado?: string; cuentaPagoId?: number | null; pagadoAt?: string | null;
+    estado?: string; cuentaPagoId?: number | null; pagadoAt?: string | null; monto?: string;
   }): Promise<any> {
     const row = await db.execute(drizzleSql`
       UPDATE obligaciones
       SET estado = COALESCE(${data.estado ?? null}, estado),
           cuenta_pago_id = CASE WHEN ${data.cuentaPagoId !== undefined} THEN ${data.cuentaPagoId ?? null} ELSE cuenta_pago_id END,
-          pagado_at = CASE WHEN ${data.pagadoAt !== undefined} THEN ${data.pagadoAt ?? null}::timestamp ELSE pagado_at END
+          pagado_at = CASE WHEN ${data.pagadoAt !== undefined} THEN ${data.pagadoAt ?? null}::timestamp ELSE pagado_at END,
+          monto = CASE WHEN ${data.monto !== undefined} THEN ${data.monto ?? null}::numeric ELSE monto END
       WHERE id = ${id}
       RETURNING id, concepto, tipo, monto::float, fecha_vencimiento,
         estado, grupo_cuota, numero_cuota, total_cuotas, notas, pagado_at, cuenta_pago_id

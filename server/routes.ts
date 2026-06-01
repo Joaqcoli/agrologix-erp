@@ -2100,53 +2100,76 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/caja/obligaciones/:id", requireAuth, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const { estado, cuentaPagoId } = req.body;
+      const { estado, cuentaPagoId, montoPagado } = req.body;
 
-      const patch: { estado?: string; cuentaPagoId?: number | null; pagadoAt?: string | null } = {};
-      if (estado) patch.estado = estado;
-      if (cuentaPagoId !== undefined) patch.cuentaPagoId = cuentaPagoId ? parseInt(cuentaPagoId) : null;
+      // Revert mode (marcar como pendiente)
+      if (estado === "pendiente") {
+        await storage.deleteMovimientoCuentaByOrigen("obligacion", String(id));
+        const updated = await storage.patchObligacion(id, { estado: "pendiente", pagadoAt: null, cuentaPagoId: null });
+        return res.json(updated);
+      }
 
-      if (estado === "pagado") {
-        patch.pagadoAt = new Date().toISOString();
-        // Ajustar saldo de cuenta si no es MP
+      // Payment mode: requires montoPagado
+      if (montoPagado !== undefined) {
+        const montoNum = parseFloat(montoPagado);
+        if (isNaN(montoNum) || montoNum <= 0) return res.status(400).json({ error: "Monto inválido" });
+
+        const obs = await storage.getObligaciones();
+        const ob = obs.find((o: any) => o.id === id);
+        if (!ob) return res.status(404).json({ error: "Obligación no encontrada" });
+
+        const montoOriginal = parseFloat(ob.monto);
+        const isFullPayment = montoNum >= montoOriginal;
+
+        const patch: Record<string, any> = {
+          cuentaPagoId: cuentaPagoId ? parseInt(cuentaPagoId) : null,
+        };
+
+        if (isFullPayment) {
+          patch.estado = "pagado";
+          patch.pagadoAt = new Date().toISOString();
+        } else {
+          // Partial: reduce monto, keep pendiente
+          patch.estado = "pendiente";
+          patch.monto = String(montoOriginal - montoNum);
+        }
+
+        // Crear movimiento de cuenta si no es MP
         if (cuentaPagoId) {
           const cuentaIdNum = parseInt(cuentaPagoId);
-          // Obtener la cuenta para saber si es MP
           const cuentas = await storage.getCuentasFinancieras();
           const cuenta = cuentas.find((c: any) => c.id === cuentaIdNum);
           if (cuenta && cuenta.tipo !== "mp") {
-            // Obtener monto de la obligación
-            const obs = await storage.getObligaciones();
-            const ob = obs.find((o: any) => o.id === id);
-            if (ob) {
-              await storage.createMovimientoCuenta({
-                cuentaId: cuentaIdNum,
-                signo: "egreso",
-                monto: parseFloat(ob.monto),
-                concepto: ob.concepto,
-                origenTipo: "obligacion",
-                origenId: String(id),
-              });
-            }
+            await storage.createMovimientoCuenta({
+              cuentaId: cuentaIdNum,
+              signo: "egreso",
+              monto: montoNum,
+              concepto: ob.concepto,
+              origenTipo: "obligacion",
+              origenId: String(id),
+            });
           }
         }
-      } else if (estado === "pendiente") {
-        patch.pagadoAt = null;
-        patch.cuentaPagoId = null;
-        // Revertir movimiento si existe
-        await storage.deleteMovimientoCuentaByOrigen("obligacion", String(id));
+
+        const updated = await storage.patchObligacion(id, patch);
+
+        // Si es pago completo, marcar cheque vinculado como cobrado
+        if (isFullPayment) {
+          try {
+            const linkedCheques = await storage.getCheques();
+            for (const ch of (linkedCheques as any[]).filter((c: any) => c.obligacion_id === id)) {
+              await storage.patchCheque(ch.id, { estado: "cobrado" });
+            }
+          } catch {}
+        }
+        return res.json(updated);
       }
 
+      // Legacy fallback (estado directo)
+      const patch: { estado?: string; cuentaPagoId?: number | null; pagadoAt?: string | null } = {};
+      if (estado) patch.estado = estado;
+      if (cuentaPagoId !== undefined) patch.cuentaPagoId = cuentaPagoId ? parseInt(cuentaPagoId) : null;
       const updated = await storage.patchObligacion(id, patch);
-      // Si es pago, marcar cheque emitido vinculado como cobrado
-      if (estado === "pagado") {
-        try {
-          const linkedCheques = await storage.getCheques();
-          for (const ch of (linkedCheques as any[]).filter((c: any) => c.obligacion_id === id)) {
-            await storage.patchCheque(ch.id, { estado: "cobrado" });
-          }
-        } catch {}
-      }
       return res.json(updated);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
