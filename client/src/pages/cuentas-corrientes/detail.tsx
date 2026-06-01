@@ -1323,11 +1323,16 @@ export default function CCCustomerDetailPage({
 
     // Use string keys to avoid number/string type mismatch from raw SQL results
     const subMap = new Map((data?.subsidiaries ?? []).map((s) => [String(s.customerId), s.customerName]));
+    const parentPrefix = (data.customer?.name ?? "").replace(/^colegio\s+/i, "").trim();
     const getSede = (custId: number | string | undefined | null) => {
       if (!data?.isParent || custId == null) return "";
       const cidStr = String(custId);
       if (Number(cidStr) === customerId) return "Principal";
-      return (subMap.get(cidStr) ?? "").replace(/^colegio\s+/i, "");
+      const raw = subMap.get(cidStr) ?? "";
+      if (parentPrefix && raw.toUpperCase().startsWith(parentPrefix.toUpperCase())) {
+        return raw.slice(parentPrefix.length).trim() || raw;
+      }
+      return raw;
     };
 
     // Pedidos pendientes de períodos anteriores (de pendingOrders que no están en el período actual)
