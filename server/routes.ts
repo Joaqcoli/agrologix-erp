@@ -98,6 +98,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(stats);
   });
 
+  // Diagnostic: show raw cost data for a product (temp endpoint)
+  app.get("/api/debug/product-cost", requireAuth, async (req, res) => {
+    try {
+      const name = (req.query.name as string) ?? "";
+      const rows = await db.execute(drizzleSql`
+        SELECT
+          p.id, p.name,
+          pu.unit, pu.avg_cost, pu.stock_qty, pu.weight_per_unit, pu.base_unit,
+          pi.id AS pi_id, pi.purchase_unit, pi.unit AS pi_unit,
+          pi.cost_per_unit, pi.cost_per_purchase_unit,
+          pi.quantity, pi.purchase_qty, pi.weight_per_package, pi.subtotal,
+          sm.id AS sm_id, sm.movement_type, sm.unit_cost AS sm_unit_cost,
+          sm.quantity AS sm_qty, sm.notes, sm.reference_type
+        FROM products p
+        LEFT JOIN product_units pu ON pu.product_id = p.id
+        LEFT JOIN purchase_items pi ON pi.product_id = p.id
+        LEFT JOIN stock_movements sm ON sm.product_id = p.id
+        WHERE LOWER(p.name) ILIKE ${('%' + name.toLowerCase() + '%')}
+        ORDER BY pi.id DESC, sm.id DESC
+        LIMIT 30
+      `);
+      return res.json(rows.rows);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   app.get("/api/dashboard/rinde-detail", requireAuth, async (req, res) => {
     try {
       const { from, to } = req.query as { from?: string; to?: string };
