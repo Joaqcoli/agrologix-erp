@@ -207,12 +207,12 @@ function oblSemaforoClass(fechaVenc: string): "vencido" | "semana" | "futuro" {
 
 type OblForm = {
   concepto: string; tipo: string; monto: string;
-  fechaVencimiento: string; notas: string; cuotas: string;
+  fechaVencimiento: string; notas: string; cuotas: string; mensual: boolean;
 };
 const emptyOblForm = (): OblForm => ({
   concepto: "", tipo: "otro", monto: "",
   fechaVencimiento: new Date().toISOString().slice(0, 10),
-  notas: "", cuotas: "1",
+  notas: "", cuotas: "1", mensual: false,
 });
 
 export default function CajaPage() {
@@ -709,7 +709,7 @@ export default function CajaPage() {
                           <span className={`inline-block h-2.5 w-2.5 rounded-full ${dotColor}`} />
                         </td>
                         <td className="px-3 py-2 tabular-nums text-muted-foreground whitespace-nowrap">
-                          {ob.fecha_vencimiento.slice(5).replace("-","/")}
+                          {ob.fecha_vencimiento.slice(5).split("-").reverse().join("/")}
                         </td>
                         <td className="px-3 py-2 max-w-[220px] truncate font-medium">{ob.concepto}</td>
                         <td className="px-3 py-2">
@@ -758,12 +758,15 @@ export default function CajaPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <Label>Tipo <span className="text-red-500">*</span></Label>
-                  <Select value={oblForm.tipo} onValueChange={v => setOblForm(f => ({ ...f, tipo: v }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {TIPOS_OBLIGACION.map(t => <SelectItem key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  <Input
+                    list="tipos-obl-list"
+                    value={oblForm.tipo}
+                    onChange={e => setOblForm(f => ({ ...f, tipo: e.target.value }))}
+                    placeholder="Ej: impuesto, alquiler…"
+                  />
+                  <datalist id="tipos-obl-list">
+                    {TIPOS_OBLIGACION.map(t => <option key={t} value={t} />)}
+                  </datalist>
                 </div>
                 <div className="space-y-1">
                   <Label>Monto ($) <span className="text-red-500">*</span></Label>
@@ -777,9 +780,27 @@ export default function CajaPage() {
                 </div>
                 <div className="space-y-1">
                   <Label>Dividir en cuotas</Label>
-                  <Input type="number" min="1" max="60" step="1" value={oblForm.cuotas} onChange={e => setOblForm(f => ({ ...f, cuotas: e.target.value }))} placeholder="1" />
+                  <Input
+                    type="number" min="1" max="60" step="1"
+                    value={oblForm.mensual ? "12" : oblForm.cuotas}
+                    disabled={oblForm.mensual}
+                    onChange={e => setOblForm(f => ({ ...f, cuotas: e.target.value }))}
+                    placeholder="1"
+                  />
                   <p className="text-[10px] text-muted-foreground">1 = sin cuotas. Fechas mensuales consecutivas.</p>
                 </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  id="obl-mensual"
+                  type="checkbox"
+                  checked={oblForm.mensual}
+                  onChange={e => setOblForm(f => ({ ...f, mensual: e.target.checked, cuotas: e.target.checked ? "12" : "1" }))}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                <Label htmlFor="obl-mensual" className="cursor-pointer font-normal">
+                  Se repite todos los meses (ej: alquiler, sueldo)
+                </Label>
               </div>
               <div className="space-y-1">
                 <Label>Notas (opcional)</Label>
@@ -789,10 +810,10 @@ export default function CajaPage() {
             <DialogFooter>
               <Button variant="outline" onClick={() => setOblDialogOpen(false)}>Cancelar</Button>
               <Button
-                onClick={() => addOblMutation.mutate(oblForm)}
-                disabled={addOblMutation.isPending || !oblForm.concepto || !oblForm.monto || !oblForm.fechaVencimiento}
+                onClick={() => addOblMutation.mutate({ ...oblForm, cuotas: oblForm.mensual ? "12" : oblForm.cuotas })}
+                disabled={addOblMutation.isPending || !oblForm.concepto || !oblForm.monto || !oblForm.fechaVencimiento || !oblForm.tipo}
               >
-                {addOblMutation.isPending ? "Guardando..." : (parseInt(oblForm.cuotas) > 1 ? `Crear ${oblForm.cuotas} cuotas` : "Guardar")}
+                {addOblMutation.isPending ? "Guardando..." : oblForm.mensual ? "Crear 12 meses" : (parseInt(oblForm.cuotas) > 1 ? `Crear ${oblForm.cuotas} cuotas` : "Guardar")}
               </Button>
             </DialogFooter>
           </DialogContent>
