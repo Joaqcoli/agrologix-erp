@@ -2065,30 +2065,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/caja/obligaciones", requireAuth, async (req, res) => {
     try {
-      const { concepto, tipo, monto, fechaVencimiento, notas, cuotas } = req.body;
+      const { concepto, tipo, monto, moneda, fechaVencimiento, notas, cuotas, mensual } = req.body;
       if (!concepto || !tipo || !monto || !fechaVencimiento)
         return res.status(400).json({ error: "Campos requeridos: concepto, tipo, monto, fechaVencimiento" });
 
+      const currency = moneda ?? "ARS";
       const n = parseInt(cuotas) || 1;
       if (n <= 1) {
-        const created = await storage.createObligaciones([{ concepto, tipo, monto: parseFloat(monto), fechaVencimiento, notas }]);
+        const created = await storage.createObligaciones([{ concepto, tipo, monto: parseFloat(monto), moneda: currency, fechaVencimiento, notas }]);
         return res.json(created[0]);
       }
 
-      // Dividir en cuotas
       const grupoCuota = `gc-${Date.now()}`;
-      const montoPorCuota = Math.floor((parseFloat(monto) / n) * 100) / 100;
       const items = [];
       let base = new Date(fechaVencimiento + "T12:00:00Z");
-      let acumulado = 0;
       for (let i = 1; i <= n; i++) {
-        const isLast = i === n;
-        const montoI = isLast
-          ? Math.round((parseFloat(monto) - acumulado) * 100) / 100
-          : montoPorCuota;
-        acumulado += montoI;
+        // mensual=true → each occurrence is the full monto (recurring expense)
+        // mensual=false (cuotas) → total divided by n (installment debt)
+        const montoI = mensual
+          ? parseFloat(monto)
+          : Math.round((parseFloat(monto) / n) * 100) / 100;
         const vencimiento = `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2,"0")}-${String(base.getUTCDate()).padStart(2,"0")}`;
-        items.push({ concepto: `${concepto} — cuota ${i} de ${n}`, tipo, monto: montoI,
+        const label = mensual ? concepto : `${concepto} — cuota ${i} de ${n}`;
+        items.push({ concepto: label, tipo, monto: montoI, moneda: currency,
           fechaVencimiento: vencimiento, grupoCuota, numeroCuota: i, totalCuotas: n, notas });
         base.setUTCMonth(base.getUTCMonth() + 1);
       }
@@ -2097,10 +2096,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
-  app.patch("/api/caja/obligaciones/:id", requireAuth, async (req, res) => {
+  app.patch("/api/caja/obligaciones/:id", requireAuth, async (req: any, res) => {
     try {
       const id = parseInt(req.params.id);
-      const { estado, cuentaPagoId, montoPagado } = req.body;
+      const { estado, cuentaPagoId, montoPagado, cotizacion } = req.body;
 
       // Revert mode (marcar como pendiente)
       if (estado === "pendiente") {
@@ -2120,6 +2119,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
         const montoOriginal = parseFloat(ob.monto);
         const isFullPayment = montoNum >= montoOriginal;
+        const isUSD = (ob.moneda ?? "ARS") === "USD";
+        const cotz = cotizacion ? parseFloat(cotizacion) : 1;
+        const montoARS = isUSD ? montoNum * cotz : montoNum;
 
         const patch: Record<string, any> = {
           cuentaPagoId: cuentaPagoId ? parseInt(cuentaPagoId) : null,
@@ -2129,26 +2131,44 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           patch.estado = "pagado";
           patch.pagadoAt = new Date().toISOString();
         } else {
-          // Partial: reduce monto, keep pendiente
+          // Partial: reduce monto in the obligation's currency, keep pendiente
           patch.estado = "pendiente";
-          patch.monto = String(montoOriginal - montoNum);
+          patch.monto = String(Math.round((montoOriginal - montoNum) * 100) / 100);
         }
 
+        const cuentas = await storage.getCuentasFinancieras();
+        const cuenta = cuentaPagoId ? cuentas.find((c: any) => c.id === parseInt(cuentaPagoId)) : null;
+        const isMP = cuenta?.tipo === "mp";
+
         // Crear movimiento de cuenta si no es MP
-        if (cuentaPagoId) {
-          const cuentaIdNum = parseInt(cuentaPagoId);
-          const cuentas = await storage.getCuentasFinancieras();
-          const cuenta = cuentas.find((c: any) => c.id === cuentaIdNum);
-          if (cuenta && cuenta.tipo !== "mp") {
-            await storage.createMovimientoCuenta({
-              cuentaId: cuentaIdNum,
-              signo: "egreso",
-              monto: montoNum,
-              concepto: ob.concepto,
-              origenTipo: "obligacion",
-              origenId: String(id),
-            });
-          }
+        if (cuenta && !isMP) {
+          await storage.createMovimientoCuenta({
+            cuentaId: cuenta.id,
+            signo: "egreso",
+            monto: montoARS,
+            concepto: ob.concepto,
+            origenTipo: "obligacion",
+            origenId: null, // null allows multiple partial payments
+          });
+        }
+
+        // Crear movimiento en feed de egresos (caja_movements) para no-MP
+        if (!isMP) {
+          const cuentaTipoMethod = (t: string) => {
+            if (t === "efectivo") return "EFECTIVO";
+            if (t === "cheque") return "CHEQUE";
+            return "TRANSFERENCIA";
+          };
+          try {
+            await storage.createCajaMovement({
+              date: new Date().toISOString().slice(0, 10),
+              type: "egreso",
+              description: ob.concepto,
+              amount: String(montoARS),
+              category: ob.tipo,
+              method: cuenta ? cuentaTipoMethod(cuenta.tipo) : "TRANSFERENCIA",
+            }, req.user?.id ?? 0);
+          } catch {}
         }
 
         const updated = await storage.patchObligacion(id, patch);
@@ -2170,6 +2190,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (estado) patch.estado = estado;
       if (cuentaPagoId !== undefined) patch.cuentaPagoId = cuentaPagoId ? parseInt(cuentaPagoId) : null;
       const updated = await storage.patchObligacion(id, patch);
+      return res.json(updated);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // Edit obligación (with optional group propagation)
+  app.put("/api/caja/obligaciones/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const { concepto, tipo, monto, moneda, fechaVencimiento, notas, propagate } = req.body;
+
+      const obs = await storage.getObligaciones();
+      const ob = obs.find((o: any) => o.id === id);
+      if (!ob) return res.status(404).json({ error: "Obligación no encontrada" });
+
+      const editData: Record<string, any> = {};
+      if (concepto !== undefined) editData.concepto = concepto;
+      if (tipo !== undefined) editData.tipo = tipo;
+      if (monto !== undefined) editData.monto = String(parseFloat(monto));
+      if (moneda !== undefined) editData.moneda = moneda;
+      if (fechaVencimiento !== undefined) editData.fechaVencimiento = fechaVencimiento;
+      if (notas !== undefined) editData.notas = notas;
+
+      const updated = await storage.patchObligacion(id, editData);
+
+      // Propagate to future group members if requested
+      if (propagate && ob.grupo_cuota) {
+        const groupData: Record<string, any> = {};
+        if (concepto !== undefined) groupData.concepto = concepto;
+        if (tipo !== undefined) groupData.tipo = tipo;
+        if (monto !== undefined) groupData.monto = String(parseFloat(monto));
+        if (moneda !== undefined) groupData.moneda = moneda;
+        if (notas !== undefined) groupData.notas = notas;
+        await storage.updateObligacionesGrupo(ob.grupo_cuota, id, groupData);
+      }
+
       return res.json(updated);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });

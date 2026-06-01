@@ -4849,7 +4849,7 @@ export const storage = {
   // ─── Obligaciones ───────────────────────────────────────────────────────────
   async getObligaciones(): Promise<any[]> {
     const rows = await db.execute(drizzleSql`
-      SELECT id, concepto, tipo, monto::float, fecha_vencimiento,
+      SELECT id, concepto, tipo, monto::float, moneda, fecha_vencimiento,
              estado, grupo_cuota, numero_cuota, total_cuotas,
              notas, pagado_at, cuenta_pago_id, created_at
       FROM obligaciones
@@ -4859,19 +4859,19 @@ export const storage = {
   },
 
   async createObligaciones(items: {
-    concepto: string; tipo: string; monto: number;
+    concepto: string; tipo: string; monto: number; moneda?: string;
     fechaVencimiento: string; grupoCuota?: string | null;
     numeroCuota?: number | null; totalCuotas?: number | null; notas?: string | null;
   }[]): Promise<any[]> {
     const result: any[] = [];
     for (const item of items) {
       const row = await db.execute(drizzleSql`
-        INSERT INTO obligaciones (concepto, tipo, monto, fecha_vencimiento,
+        INSERT INTO obligaciones (concepto, tipo, monto, moneda, fecha_vencimiento,
           grupo_cuota, numero_cuota, total_cuotas, notas)
-        VALUES (${item.concepto}, ${item.tipo}, ${item.monto}, ${item.fechaVencimiento},
+        VALUES (${item.concepto}, ${item.tipo}, ${item.monto}, ${item.moneda ?? "ARS"}, ${item.fechaVencimiento},
           ${item.grupoCuota ?? null}, ${item.numeroCuota ?? null},
           ${item.totalCuotas ?? null}, ${item.notas ?? null})
-        RETURNING id, concepto, tipo, monto::float, fecha_vencimiento,
+        RETURNING id, concepto, tipo, monto::float, moneda, fecha_vencimiento,
           estado, grupo_cuota, numero_cuota, total_cuotas, notas, created_at
       `);
       result.push((row.rows as any[])[0]);
@@ -4880,19 +4880,44 @@ export const storage = {
   },
 
   async patchObligacion(id: number, data: {
-    estado?: string; cuentaPagoId?: number | null; pagadoAt?: string | null; monto?: string;
+    estado?: string; cuentaPagoId?: number | null; pagadoAt?: string | null;
+    monto?: string; moneda?: string; concepto?: string; tipo?: string;
+    fechaVencimiento?: string; notas?: string | null;
   }): Promise<any> {
     const row = await db.execute(drizzleSql`
       UPDATE obligaciones
       SET estado = COALESCE(${data.estado ?? null}, estado),
           cuenta_pago_id = CASE WHEN ${data.cuentaPagoId !== undefined} THEN ${data.cuentaPagoId ?? null} ELSE cuenta_pago_id END,
           pagado_at = CASE WHEN ${data.pagadoAt !== undefined} THEN ${data.pagadoAt ?? null}::timestamp ELSE pagado_at END,
-          monto = CASE WHEN ${data.monto !== undefined} THEN ${data.monto ?? null}::numeric ELSE monto END
+          monto = CASE WHEN ${data.monto !== undefined} THEN ${data.monto ?? null}::numeric ELSE monto END,
+          moneda = COALESCE(${data.moneda ?? null}, moneda),
+          concepto = COALESCE(${data.concepto ?? null}, concepto),
+          tipo = COALESCE(${data.tipo ?? null}, tipo),
+          fecha_vencimiento = COALESCE(${data.fechaVencimiento ?? null}, fecha_vencimiento),
+          notas = CASE WHEN ${data.notas !== undefined} THEN ${data.notas ?? null} ELSE notas END
       WHERE id = ${id}
-      RETURNING id, concepto, tipo, monto::float, fecha_vencimiento,
+      RETURNING id, concepto, tipo, monto::float, moneda, fecha_vencimiento,
         estado, grupo_cuota, numero_cuota, total_cuotas, notas, pagado_at, cuenta_pago_id
     `);
     return (row.rows as any[])[0];
+  },
+
+  async updateObligacionesGrupo(grupoCuota: string, fromId: number, data: {
+    concepto?: string; tipo?: string; monto?: string; moneda?: string; notas?: string | null;
+  }): Promise<void> {
+    // Updates all pending obligations in the same group that come after (by fecha_vencimiento >= that of fromId)
+    // We use id >= fromId as a proxy for "same or future"
+    await db.execute(drizzleSql`
+      UPDATE obligaciones
+      SET concepto = COALESCE(${data.concepto ?? null}, concepto),
+          tipo     = COALESCE(${data.tipo ?? null}, tipo),
+          monto    = CASE WHEN ${data.monto !== undefined} THEN ${data.monto ?? null}::numeric ELSE monto END,
+          moneda   = COALESCE(${data.moneda ?? null}, moneda),
+          notas    = CASE WHEN ${data.notas !== undefined} THEN ${data.notas ?? null} ELSE notas END
+      WHERE grupo_cuota = ${grupoCuota}
+        AND id >= ${fromId}
+        AND estado = 'pendiente'
+    `);
   },
 
   async deleteObligacion(id: number): Promise<void> {

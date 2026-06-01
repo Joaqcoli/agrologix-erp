@@ -539,6 +539,7 @@ export const obligaciones = pgTable("obligaciones", {
   concepto: text("concepto").notNull(),
   tipo: text("tipo").notNull(), // proveedor|impuesto|cuota|servicio|sueldo|otro
   monto: numeric("monto", { precision: 14, scale: 2 }).notNull(),
+  moneda: text("moneda").notNull().default("ARS"), // ARS | USD
   fechaVencimiento: text("fecha_vencimiento").notNull(), // ISO date string YYYY-MM-DD
   estado: text("estado").notNull().default("pendiente"), // pendiente|pagado
   grupoCuota: text("grupo_cuota"),

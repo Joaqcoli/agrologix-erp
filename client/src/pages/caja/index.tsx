@@ -175,6 +175,7 @@ type Obligacion = {
   concepto: string;
   tipo: string;
   monto: number;
+  moneda: string; // "ARS" | "USD"
   fecha_vencimiento: string;
   estado: "pendiente" | "pagado";
   grupo_cuota: string | null;
@@ -191,10 +192,11 @@ const TIPO_BADGE: Record<string, string> = {
   cuota:     "bg-blue-100 text-blue-800",
   servicio:  "bg-sky-100 text-sky-800",
   sueldo:    "bg-purple-100 text-purple-800",
+  alquiler:  "bg-yellow-100 text-yellow-800",
   otro:      "bg-gray-100 text-gray-700",
 };
 
-const TIPOS_OBLIGACION = ["proveedor","impuesto","cuota","servicio","sueldo","otro"] as const;
+const BASE_TIPOS = ["proveedor","impuesto","alquiler","cuota","servicio","sueldo","otro"];
 
 function oblSemaforoClass(fechaVenc: string): "vencido" | "semana" | "futuro" {
   const today = new Date(); today.setHours(0,0,0,0);
@@ -206,14 +208,19 @@ function oblSemaforoClass(fechaVenc: string): "vencido" | "semana" | "futuro" {
 }
 
 type OblForm = {
-  concepto: string; tipo: string; monto: string;
+  concepto: string; tipo: string; moneda: "ARS" | "USD"; monto: string;
   fechaVencimiento: string; notas: string; cuotas: string; mensual: boolean;
 };
 const emptyOblForm = (): OblForm => ({
-  concepto: "", tipo: "otro", monto: "",
+  concepto: "", tipo: "otro", moneda: "ARS", monto: "",
   fechaVencimiento: new Date().toISOString().slice(0, 10),
   notas: "", cuotas: "1", mensual: false,
 });
+
+type EditOblForm = {
+  concepto: string; tipo: string; moneda: "ARS" | "USD"; monto: string;
+  fechaVencimiento: string; notas: string;
+};
 
 export default function CajaPage() {
   const [viewMode, setViewMode] = useState<"day" | "week" | "month">("month");
@@ -243,10 +250,19 @@ export default function CajaPage() {
   // Obligaciones
   const [oblDialogOpen, setOblDialogOpen] = useState(false);
   const [oblForm, setOblForm] = useState<OblForm>(emptyOblForm());
+  const [oblTipoCustom, setOblTipoCustom] = useState(false); // show custom input in add form
   const [pagarOblOpen, setPagarOblOpen] = useState(false);
   const [pagarObl, setPagarObl] = useState<Obligacion | null>(null);
   const [pagarCuentaId, setPagarCuentaId] = useState<number | null>(null);
   const [pagarMonto, setPagarMonto] = useState<string>("");
+  const [pagarCotizacion, setPagarCotizacion] = useState<string>("");
+  // Edit
+  const [editOblOpen, setEditOblOpen] = useState(false);
+  const [editObl, setEditObl] = useState<Obligacion | null>(null);
+  const [editForm, setEditForm] = useState<EditOblForm>({ concepto: "", tipo: "", moneda: "ARS", monto: "", fechaVencimiento: "", notas: "" });
+  const [editTipoCustom, setEditTipoCustom] = useState(false);
+  const [propagateDialogOpen, setPropagateDialogOpen] = useState(false);
+  const [propagatePendingData, setPropagatePendingData] = useState<{ id: number; form: EditOblForm } | null>(null);
 
   const { from, to, label } = getRange(viewMode, monthOffset);
 
@@ -421,19 +437,34 @@ export default function CajaPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/caja/obligaciones"] });
       setOblDialogOpen(false);
       setOblForm(emptyOblForm());
+      setOblTipoCustom(false);
     },
   });
 
   const pagarOblMutation = useMutation({
-    mutationFn: ({ id, cuentaPagoId, montoPagado }: { id: number; cuentaPagoId: number | null; montoPagado: number }) =>
-      apiRequest("PATCH", `/api/caja/obligaciones/${id}`, { cuentaPagoId, montoPagado }),
+    mutationFn: ({ id, cuentaPagoId, montoPagado, cotizacion }: { id: number; cuentaPagoId: number | null; montoPagado: number; cotizacion?: number }) =>
+      apiRequest("PATCH", `/api/caja/obligaciones/${id}`, { cuentaPagoId, montoPagado, cotizacion }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/caja/obligaciones"] });
       queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/summary", from, to] });
       setPagarOblOpen(false);
       setPagarObl(null);
       setPagarCuentaId(null);
       setPagarMonto("");
+      setPagarCotizacion("");
+    },
+  });
+
+  const editOblMutation = useMutation({
+    mutationFn: ({ id, form, propagate }: { id: number; form: EditOblForm; propagate: boolean }) =>
+      apiRequest("PUT", `/api/caja/obligaciones/${id}`, { ...form, monto: parseFloat(form.monto), propagate }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/obligaciones"] });
+      setEditOblOpen(false);
+      setEditObl(null);
+      setPropagateDialogOpen(false);
+      setPropagatePendingData(null);
     },
   });
 
@@ -445,20 +476,47 @@ export default function CajaPage() {
     },
   });
 
-  const oblPendientes = useMemo(() => (obligaciones ?? []).filter(o => o.estado === "pendiente"), [obligaciones]);
+  // All unique tipos from DB + base list (for dropdown)
+  const allTipos = useMemo(() => {
+    const fromDb = (obligaciones ?? []).map((o: Obligacion) => o.tipo).filter(t => !BASE_TIPOS.includes(t));
+    return [...BASE_TIPOS, ...Array.from(new Set(fromDb))];
+  }, [obligaciones]);
+
+  const oblPendientes = useMemo(() => (obligaciones ?? []).filter((o: Obligacion) => o.estado === "pendiente"), [obligaciones]);
+
+  // Show only first pending per grupo_cuota (collapse recurring)
+  const oblVisible = useMemo(() => {
+    const seen = new Set<string>();
+    return oblPendientes.filter((ob: Obligacion) => {
+      if (!ob.grupo_cuota) return true;
+      if (seen.has(ob.grupo_cuota)) return false;
+      seen.add(ob.grupo_cuota);
+      return true;
+    });
+  }, [oblPendientes]);
+
+  // Count pending per group
+  const grupoCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const ob of oblPendientes as Obligacion[]) {
+      if (ob.grupo_cuota) counts[ob.grupo_cuota] = (counts[ob.grupo_cuota] ?? 0) + 1;
+    }
+    return counts;
+  }, [oblPendientes]);
+
   const today = new Date(); today.setHours(0,0,0,0);
   const endOfWeek = new Date(today); endOfWeek.setDate(today.getDate() + 7);
   const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
 
-  const oblVencido = oblPendientes.filter(o => oblSemaforoClass(o.fecha_vencimiento) === "vencido");
-  const oblSemana  = oblPendientes.filter(o => oblSemaforoClass(o.fecha_vencimiento) === "semana");
-  const oblFuturo  = oblPendientes.filter(o => {
+  const oblVencido = oblPendientes.filter((o: Obligacion) => oblSemaforoClass(o.fecha_vencimiento) === "vencido");
+  const oblSemana  = oblPendientes.filter((o: Obligacion) => oblSemaforoClass(o.fecha_vencimiento) === "semana");
+  const oblFuturo  = oblPendientes.filter((o: Obligacion) => {
     const venc = new Date(o.fecha_vencimiento + "T00:00:00");
     return oblSemaforoClass(o.fecha_vencimiento) === "futuro" && venc <= endOfMonth;
   });
-  const totalVencido = oblVencido.reduce((s, o) => s + o.monto, 0);
-  const totalSemana  = oblSemana.reduce((s, o) => s + o.monto, 0);
-  const totalFuturo  = oblFuturo.reduce((s, o) => s + o.monto, 0);
+  const totalVencido = oblVencido.reduce((s: number, o: Obligacion) => s + o.monto, 0);
+  const totalSemana  = oblSemana.reduce((s: number, o: Obligacion) => s + o.monto, 0);
+  const totalFuturo  = oblFuturo.reduce((s: number, o: Obligacion) => s + o.monto, 0);
 
   // Build unified feed
   const feed = useMemo((): FeedItem[] => {
@@ -687,7 +745,7 @@ export default function CajaPage() {
           </div>
 
           {/* Lista pendientes */}
-          {oblPendientes.length > 0 && (
+          {oblVisible.length > 0 && (
             <div className="border rounded-lg overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50">
@@ -695,16 +753,18 @@ export default function CajaPage() {
                     <th className="text-left px-3 py-2 font-medium w-6" />
                     <th className="text-left px-3 py-2 font-medium">Vencimiento</th>
                     <th className="text-left px-3 py-2 font-medium">Concepto</th>
-                    <th className="text-left px-3 py-2 font-medium">Tipo</th>
+                    <th className="text-left px-3 py-2 font-medium">Categoría</th>
                     <th className="text-right px-3 py-2 font-medium">Monto</th>
                     <th className="px-3 py-2" />
                   </tr>
                 </thead>
                 <tbody>
-                  {oblPendientes.map(ob => {
+                  {(oblVisible as Obligacion[]).map(ob => {
                     const sem = oblSemaforoClass(ob.fecha_vencimiento);
                     const rowColor = sem === "vencido" ? "bg-red-50/60" : sem === "semana" ? "bg-yellow-50/40" : "";
                     const dotColor = sem === "vencido" ? "bg-red-500" : sem === "semana" ? "bg-yellow-400" : "bg-gray-300";
+                    const pendingCount = ob.grupo_cuota ? (grupoCounts[ob.grupo_cuota] ?? 1) : 1;
+                    const isUSD = (ob.moneda ?? "ARS") === "USD";
                     return (
                       <tr key={ob.id} className={`border-t hover:bg-muted/20 ${rowColor}`}>
                         <td className="px-3 py-2">
@@ -713,28 +773,48 @@ export default function CajaPage() {
                         <td className="px-3 py-2 tabular-nums text-muted-foreground whitespace-nowrap">
                           {ob.fecha_vencimiento.slice(5).split("-").reverse().join("/")}
                         </td>
-                        <td className="px-3 py-2 max-w-[220px] truncate font-medium">{ob.concepto}</td>
+                        <td className="px-3 py-2 font-medium">
+                          <span className="truncate max-w-[180px] inline-block align-middle">{ob.concepto}</span>
+                          {pendingCount > 1 && (
+                            <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5 py-0 h-4">+{pendingCount - 1} más</Badge>
+                          )}
+                        </td>
                         <td className="px-3 py-2">
                           <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${TIPO_BADGE[ob.tipo] ?? TIPO_BADGE.otro}`}>
                             {ob.tipo}
                           </span>
                         </td>
-                        <td className="px-3 py-2 text-right font-semibold text-red-700">{fmt(ob.monto)}</td>
-                        <td className="px-3 py-2 text-right flex items-center gap-1 justify-end">
-                          <Button
-                            size="sm" variant="ghost"
-                            className="h-7 text-xs text-green-700 hover:text-green-800 hover:bg-green-50"
-                            onClick={() => { setPagarObl(ob); setPagarCuentaId(null); setPagarMonto(String(ob.monto)); setPagarOblOpen(true); }}
-                          >
-                            <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Pagar
-                          </Button>
-                          <Button
-                            size="icon" variant="ghost" className="h-7 w-7"
-                            onClick={() => delOblMutation.mutate(ob.id)}
-                            disabled={delOblMutation.isPending}
-                          >
-                            <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                          </Button>
+                        <td className="px-3 py-2 text-right font-semibold text-red-700 whitespace-nowrap">
+                          {isUSD ? `USD ${ob.monto.toLocaleString("es-AR")}` : fmt(ob.monto)}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <div className="flex items-center gap-1 justify-end">
+                            <Button
+                              size="sm" variant="ghost"
+                              className="h-7 text-xs text-green-700 hover:text-green-800 hover:bg-green-50"
+                              onClick={() => { setPagarObl(ob); setPagarCuentaId(null); setPagarMonto(String(ob.monto)); setPagarCotizacion(""); setPagarOblOpen(true); }}
+                            >
+                              <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Pagar
+                            </Button>
+                            <Button
+                              size="icon" variant="ghost" className="h-7 w-7"
+                              onClick={() => {
+                                setEditObl(ob);
+                                setEditForm({ concepto: ob.concepto, tipo: ob.tipo, moneda: (ob.moneda ?? "ARS") as "ARS" | "USD", monto: String(ob.monto), fechaVencimiento: ob.fecha_vencimiento, notas: ob.notas ?? "" });
+                                setEditTipoCustom(!allTipos.includes(ob.tipo));
+                                setEditOblOpen(true);
+                              }}
+                            >
+                              <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                            </Button>
+                            <Button
+                              size="icon" variant="ghost" className="h-7 w-7"
+                              onClick={() => delOblMutation.mutate(ob.id)}
+                              disabled={delOblMutation.isPending}
+                            >
+                              <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -743,13 +823,13 @@ export default function CajaPage() {
               </table>
             </div>
           )}
-          {oblPendientes.length === 0 && (
+          {oblVisible.length === 0 && (
             <p className="text-sm text-muted-foreground">Sin obligaciones pendientes.</p>
           )}
         </section>
 
         {/* Dialog: agregar obligación */}
-        <Dialog open={oblDialogOpen} onOpenChange={v => { setOblDialogOpen(v); if (!v) setOblForm(emptyOblForm()); }}>
+        <Dialog open={oblDialogOpen} onOpenChange={v => { setOblDialogOpen(v); if (!v) { setOblForm(emptyOblForm()); setOblTipoCustom(false); } }}>
           <DialogContent className="max-w-md">
             <DialogHeader><DialogTitle>Agregar obligación</DialogTitle></DialogHeader>
             <div className="space-y-3 py-1">
@@ -759,20 +839,45 @@ export default function CajaPage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <Label>Tipo <span className="text-red-500">*</span></Label>
-                  <Input
-                    list="tipos-obl-list"
-                    value={oblForm.tipo}
-                    onChange={e => setOblForm(f => ({ ...f, tipo: e.target.value }))}
-                    placeholder="Ej: impuesto, alquiler…"
-                  />
-                  <datalist id="tipos-obl-list">
-                    {TIPOS_OBLIGACION.map(t => <option key={t} value={t} />)}
-                  </datalist>
+                  <Label>Categoría <span className="text-red-500">*</span></Label>
+                  <Select
+                    value={oblTipoCustom ? "__nueva__" : (allTipos.includes(oblForm.tipo) ? oblForm.tipo : (oblForm.tipo ? "__nueva__" : ""))}
+                    onValueChange={v => {
+                      if (v === "__nueva__") { setOblTipoCustom(true); setOblForm(f => ({ ...f, tipo: "" })); }
+                      else { setOblTipoCustom(false); setOblForm(f => ({ ...f, tipo: v })); }
+                    }}
+                  >
+                    <SelectTrigger><SelectValue placeholder="Seleccionar..." /></SelectTrigger>
+                    <SelectContent>
+                      {allTipos.map(t => <SelectItem key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</SelectItem>)}
+                      <SelectItem value="__nueva__">+ Nueva categoría...</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {oblTipoCustom && (
+                    <Input
+                      autoFocus
+                      value={oblForm.tipo}
+                      onChange={e => setOblForm(f => ({ ...f, tipo: e.target.value }))}
+                      placeholder="Nombre de la categoría"
+                    />
+                  )}
                 </div>
                 <div className="space-y-1">
-                  <Label>Monto ($) <span className="text-red-500">*</span></Label>
-                  <Input type="number" min="0" step="0.01" value={oblForm.monto} onChange={e => setOblForm(f => ({ ...f, monto: e.target.value }))} placeholder="0.00" />
+                  <Label>Moneda</Label>
+                  <Select value={oblForm.moneda} onValueChange={v => setOblForm(f => ({ ...f, moneda: v as "ARS" | "USD" }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ARS">ARS — Pesos</SelectItem>
+                      <SelectItem value="USD">USD — Dólares</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label>Monto <span className="text-red-500">*</span></Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">{oblForm.moneda === "USD" ? "USD" : "$"}</span>
+                  <Input type="number" min="0" step="0.01" className="pl-12" value={oblForm.monto} onChange={e => setOblForm(f => ({ ...f, monto: e.target.value }))} placeholder="0.00" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -781,7 +886,7 @@ export default function CajaPage() {
                   <Input type="date" value={oblForm.fechaVencimiento} onChange={e => setOblForm(f => ({ ...f, fechaVencimiento: e.target.value }))} />
                 </div>
                 <div className="space-y-1">
-                  <Label>Dividir en cuotas</Label>
+                  <Label>Cuotas</Label>
                   <Input
                     type="number" min="1" max="60" step="1"
                     value={oblForm.mensual ? "12" : oblForm.cuotas}
@@ -801,7 +906,7 @@ export default function CajaPage() {
                   className="h-4 w-4 rounded border-gray-300"
                 />
                 <Label htmlFor="obl-mensual" className="cursor-pointer font-normal">
-                  Se repite todos los meses (ej: alquiler, sueldo)
+                  Se repite todos los meses — mismo monto cada mes (ej: alquiler, sueldo)
                 </Label>
               </div>
               <div className="space-y-1">
@@ -812,7 +917,7 @@ export default function CajaPage() {
             <DialogFooter>
               <Button variant="outline" onClick={() => setOblDialogOpen(false)}>Cancelar</Button>
               <Button
-                onClick={() => addOblMutation.mutate({ ...oblForm, cuotas: oblForm.mensual ? "12" : oblForm.cuotas })}
+                onClick={() => addOblMutation.mutate({ ...oblForm, cuotas: oblForm.mensual ? "12" : oblForm.cuotas, mensual: oblForm.mensual })}
                 disabled={addOblMutation.isPending || !oblForm.concepto || !oblForm.monto || !oblForm.fechaVencimiento || !oblForm.tipo}
               >
                 {addOblMutation.isPending ? "Guardando..." : oblForm.mensual ? "Crear 12 meses" : (parseInt(oblForm.cuotas) > 1 ? `Crear ${oblForm.cuotas} cuotas` : "Guardar")}
@@ -822,30 +927,40 @@ export default function CajaPage() {
         </Dialog>
 
         {/* Dialog: pagar obligación */}
-        <Dialog open={pagarOblOpen} onOpenChange={v => { setPagarOblOpen(v); if (!v) { setPagarObl(null); setPagarCuentaId(null); setPagarMonto(""); } }}>
+        <Dialog open={pagarOblOpen} onOpenChange={v => { setPagarOblOpen(v); if (!v) { setPagarObl(null); setPagarCuentaId(null); setPagarMonto(""); setPagarCotizacion(""); } }}>
           <DialogContent className="max-w-sm">
             <DialogHeader><DialogTitle>Registrar pago</DialogTitle></DialogHeader>
             <div className="py-2 space-y-3">
               {pagarObl && (() => {
+                const isUSD = (pagarObl.moneda ?? "ARS") === "USD";
+                const cotz = parseFloat(pagarCotizacion) || 0;
                 const montoNum = parseFloat(pagarMonto) || 0;
                 const pendiente = pagarObl.monto - montoNum;
                 const isPartial = montoNum > 0 && montoNum < pagarObl.monto;
+                const totalARS = isUSD ? montoNum * cotz : montoNum;
                 return (
                   <>
-                    <p className="text-sm font-medium">{pagarObl.concepto} — <span className="text-red-700">{fmt(pagarObl.monto)}</span></p>
+                    <p className="text-sm font-medium">
+                      {pagarObl.concepto} — <span className="text-red-700">{isUSD ? `USD ${pagarObl.monto.toLocaleString("es-AR")}` : fmt(pagarObl.monto)}</span>
+                    </p>
                     <div className="space-y-1">
-                      <Label className="text-xs">Monto pagado</Label>
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={pagarMonto}
-                        onChange={e => setPagarMonto(e.target.value)}
-                      />
+                      <Label className="text-xs">Monto pagado ({isUSD ? "USD" : "ARS $"})</Label>
+                      <Input type="number" min="0" step="0.01" value={pagarMonto} onChange={e => setPagarMonto(e.target.value)} />
                       {isPartial && (
-                        <p className="text-xs text-amber-600 font-medium">Pago parcial — queda pendiente: {fmt(pendiente)}</p>
+                        <p className="text-xs text-amber-600 font-medium">
+                          Pago parcial — queda pendiente: {isUSD ? `USD ${(pendiente).toLocaleString("es-AR", {minimumFractionDigits: 2})}` : fmt(pendiente)}
+                        </p>
                       )}
                     </div>
+                    {isUSD && (
+                      <div className="space-y-1">
+                        <Label className="text-xs">Cotización USD → ARS <span className="text-red-500">*</span></Label>
+                        <Input type="number" min="0" step="1" value={pagarCotizacion} onChange={e => setPagarCotizacion(e.target.value)} placeholder="Ej: 1200" />
+                        {montoNum > 0 && cotz > 0 && (
+                          <p className="text-xs text-muted-foreground">Total en ARS: {fmt(totalARS)}</p>
+                        )}
+                      </div>
+                    )}
                     <div className="space-y-1">
                       <Label className="text-xs">Cuenta de pago (ajusta saldo)</Label>
                       <Select
@@ -875,11 +990,116 @@ export default function CajaPage() {
                   if (!pagarObl) return;
                   const montoNum = parseFloat(pagarMonto);
                   if (!montoNum || montoNum <= 0) return;
-                  pagarOblMutation.mutate({ id: pagarObl.id, cuentaPagoId: pagarCuentaId, montoPagado: montoNum });
+                  const isUSD = (pagarObl.moneda ?? "ARS") === "USD";
+                  const cotz = isUSD ? parseFloat(pagarCotizacion) : undefined;
+                  if (isUSD && (!cotz || cotz <= 0)) return;
+                  pagarOblMutation.mutate({ id: pagarObl.id, cuentaPagoId: pagarCuentaId, montoPagado: montoNum, cotizacion: cotz });
                 }}
-                disabled={pagarOblMutation.isPending || !parseFloat(pagarMonto)}
+                disabled={pagarOblMutation.isPending || !parseFloat(pagarMonto) || ((pagarObl?.moneda ?? "ARS") === "USD" && !parseFloat(pagarCotizacion))}
               >
                 {pagarOblMutation.isPending ? "Guardando..." : "Confirmar pago"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Dialog: editar obligación */}
+        <Dialog open={editOblOpen} onOpenChange={v => { setEditOblOpen(v); if (!v) { setEditObl(null); setEditTipoCustom(false); } }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader><DialogTitle>Editar obligación</DialogTitle></DialogHeader>
+            <div className="space-y-3 py-1">
+              <div className="space-y-1">
+                <Label>Concepto</Label>
+                <Input value={editForm.concepto} onChange={e => setEditForm(f => ({ ...f, concepto: e.target.value }))} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label>Categoría</Label>
+                  <Select
+                    value={editTipoCustom ? "__nueva__" : (allTipos.includes(editForm.tipo) ? editForm.tipo : (editForm.tipo ? "__nueva__" : ""))}
+                    onValueChange={v => {
+                      if (v === "__nueva__") { setEditTipoCustom(true); setEditForm(f => ({ ...f, tipo: "" })); }
+                      else { setEditTipoCustom(false); setEditForm(f => ({ ...f, tipo: v })); }
+                    }}
+                  >
+                    <SelectTrigger><SelectValue placeholder="Seleccionar..." /></SelectTrigger>
+                    <SelectContent>
+                      {allTipos.map(t => <SelectItem key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</SelectItem>)}
+                      <SelectItem value="__nueva__">+ Nueva categoría...</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {editTipoCustom && (
+                    <Input autoFocus value={editForm.tipo} onChange={e => setEditForm(f => ({ ...f, tipo: e.target.value }))} placeholder="Nombre de la categoría" />
+                  )}
+                </div>
+                <div className="space-y-1">
+                  <Label>Moneda</Label>
+                  <Select value={editForm.moneda} onValueChange={v => setEditForm(f => ({ ...f, moneda: v as "ARS" | "USD" }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ARS">ARS — Pesos</SelectItem>
+                      <SelectItem value="USD">USD — Dólares</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label>Monto</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">{editForm.moneda === "USD" ? "USD" : "$"}</span>
+                  <Input type="number" min="0" step="0.01" className="pl-12" value={editForm.monto} onChange={e => setEditForm(f => ({ ...f, monto: e.target.value }))} />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label>Vencimiento</Label>
+                <Input type="date" value={editForm.fechaVencimiento} onChange={e => setEditForm(f => ({ ...f, fechaVencimiento: e.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label>Notas</Label>
+                <Input value={editForm.notas} onChange={e => setEditForm(f => ({ ...f, notas: e.target.value }))} />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditOblOpen(false)}>Cancelar</Button>
+              <Button
+                disabled={editOblMutation.isPending || !editForm.concepto || !editForm.monto || !editForm.tipo}
+                onClick={() => {
+                  if (!editObl) return;
+                  if (editObl.grupo_cuota) {
+                    // Ask about propagation first
+                    setPropagatePendingData({ id: editObl.id, form: editForm });
+                    setEditOblOpen(false);
+                    setPropagateDialogOpen(true);
+                  } else {
+                    editOblMutation.mutate({ id: editObl.id, form: editForm, propagate: false });
+                  }
+                }}
+              >
+                {editOblMutation.isPending ? "Guardando..." : "Guardar"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Dialog: propagar cambios al grupo */}
+        <Dialog open={propagateDialogOpen} onOpenChange={v => { if (!v) { setPropagateDialogOpen(false); setPropagatePendingData(null); } }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader><DialogTitle>Aplicar cambios</DialogTitle></DialogHeader>
+            <p className="text-sm text-muted-foreground py-2">
+              Esta obligación pertenece a un grupo recurrente. ¿Querés aplicar los cambios también a los próximos vencimientos pendientes del mismo grupo?
+            </p>
+            <DialogFooter className="flex-col gap-2 sm:flex-row">
+              <Button variant="outline" className="flex-1"
+                onClick={() => { if (propagatePendingData) editOblMutation.mutate({ ...propagatePendingData, propagate: false }); }}
+                disabled={editOblMutation.isPending}
+              >
+                Solo esta
+              </Button>
+              <Button className="flex-1"
+                onClick={() => { if (propagatePendingData) editOblMutation.mutate({ ...propagatePendingData, propagate: true }); }}
+                disabled={editOblMutation.isPending}
+              >
+                Todos los futuros
               </Button>
             </DialogFooter>
           </DialogContent>
