@@ -1196,5 +1196,25 @@ export async function runNcMigrations() {
       )
   `); } catch {}
 
+  // Step 6: Fix rinde movements where unit_cost = per-cajón price (avg_cost × weight_per_unit)
+  // Detectable: sm.unit_cost / pu.avg_cost ≈ pu.weight_per_unit (ratio = kg/cajón)
+  try { await db.execute(sql`
+    UPDATE stock_movements sm
+    SET unit_cost = (sm.unit_cost::numeric / pu.weight_per_unit::numeric)::text
+    FROM product_units pu
+    WHERE sm.notes ILIKE '%Rinde%'
+      AND sm.movement_type = 'in'
+      AND sm.product_id = pu.product_id
+      AND pu.base_unit IS NOT NULL
+      AND pu.unit NOT IN ('CAJON','BOLSA','BANDEJA')
+      AND pu.weight_per_unit IS NOT NULL
+      AND pu.weight_per_unit::numeric > 1
+      AND pu.avg_cost IS NOT NULL
+      AND pu.avg_cost::numeric > 0
+      AND sm.unit_cost IS NOT NULL
+      AND sm.unit_cost::numeric > 0
+      AND ABS(sm.unit_cost::numeric / NULLIF(pu.avg_cost::numeric, 0) - pu.weight_per_unit::numeric) < 0.5
+  `); } catch (e) { console.error("Step 6 rinde fix failed:", e); }
+
   console.log("NC migrations complete.");
 }
