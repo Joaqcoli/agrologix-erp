@@ -220,7 +220,7 @@ const emptyOblForm = (): OblForm => ({
 
 type EditOblForm = {
   concepto: string; tipo: string; moneda: "ARS" | "USD"; monto: string;
-  fechaVencimiento: string; notas: string;
+  fechaVencimiento: string; notas: string; pagoParcial: boolean;
 };
 
 export default function CajaPage() {
@@ -261,7 +261,7 @@ export default function CajaPage() {
   // Edit
   const [editOblOpen, setEditOblOpen] = useState(false);
   const [editObl, setEditObl] = useState<Obligacion | null>(null);
-  const [editForm, setEditForm] = useState<EditOblForm>({ concepto: "", tipo: "", moneda: "ARS", monto: "", fechaVencimiento: "", notas: "" });
+  const [editForm, setEditForm] = useState<EditOblForm>({ concepto: "", tipo: "", moneda: "ARS", monto: "", fechaVencimiento: "", notas: "", pagoParcial: false });
   const [editTipoCustom, setEditTipoCustom] = useState(false);
   const [propagateDialogOpen, setPropagateDialogOpen] = useState(false);
   const [propagatePendingData, setPropagatePendingData] = useState<{ id: number; form: EditOblForm } | null>(null);
@@ -804,7 +804,7 @@ export default function CajaPage() {
                               size="icon" variant="ghost" className="h-7 w-7"
                               onClick={() => {
                                 setEditObl(ob);
-                                setEditForm({ concepto: ob.concepto, tipo: ob.tipo, moneda: (ob.moneda ?? "ARS") as "ARS" | "USD", monto: String(ob.monto), fechaVencimiento: ob.fecha_vencimiento, notas: ob.notas ?? "" });
+                                setEditForm({ concepto: ob.concepto, tipo: ob.tipo, moneda: (ob.moneda ?? "ARS") as "ARS" | "USD", monto: String(ob.monto), fechaVencimiento: ob.fecha_vencimiento, notas: ob.notas ?? "", pagoParcial: ob.pago_parcial ?? false });
                                 setEditTipoCustom(!allTipos.includes(ob.tipo));
                                 setEditOblOpen(true);
                               }}
@@ -1109,6 +1109,10 @@ export default function CajaPage() {
               <div className="space-y-1">
                 <Label>Notas</Label>
                 <Input value={editForm.notas} onChange={e => setEditForm(f => ({ ...f, notas: e.target.value }))} />
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <input type="checkbox" id="editPagoParcial" checked={editForm.pagoParcial} onChange={e => setEditForm(f => ({ ...f, pagoParcial: e.target.checked }))} className="h-4 w-4" />
+                <Label htmlFor="editPagoParcial" className="cursor-pointer font-normal">Marcar como pago parcial</Label>
               </div>
             </div>
             <DialogFooter>

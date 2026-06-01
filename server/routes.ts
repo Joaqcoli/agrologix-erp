@@ -2168,8 +2168,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               amount: String(montoARS),
               category: ob.tipo,
               method: cuenta ? cuentaTipoMethod(cuenta.tipo) : "TRANSFERENCIA",
-            }, req.user?.id ?? 0);
-          } catch {}
+            }, req.session.userId!);
+          } catch (e) { console.error("caja_movement creation failed:", e); }
         }
 
         const updated = await storage.patchObligacion(id, patch);
@@ -2199,7 +2199,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.put("/api/caja/obligaciones/:id", requireAuth, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const { concepto, tipo, monto, moneda, fechaVencimiento, notas, propagate } = req.body;
+      const { concepto, tipo, monto, moneda, fechaVencimiento, notas, propagate, pagoParcial } = req.body;
 
       const obs = await storage.getObligaciones();
       const ob = obs.find((o: any) => o.id === id);
@@ -2212,6 +2212,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (moneda !== undefined) editData.moneda = moneda;
       if (fechaVencimiento !== undefined) editData.fechaVencimiento = fechaVencimiento;
       if (notas !== undefined) editData.notas = notas;
+      if (pagoParcial !== undefined) editData.pagoParcial = pagoParcial;
 
       const updated = await storage.patchObligacion(id, editData);
 
