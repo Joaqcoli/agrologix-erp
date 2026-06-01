@@ -98,6 +98,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(stats);
   });
 
+  app.get("/api/dashboard/rinde-detail", requireAuth, async (req, res) => {
+    try {
+      const { from, to } = req.query as { from?: string; to?: string };
+      if (!from || !to) return res.status(400).json({ error: "from and to are required" });
+      const rows = await db.execute(drizzleSql`
+        SELECT
+          sm.id,
+          sm.created_at,
+          p.name AS product_name,
+          sm.quantity::float AS quantity,
+          pu.unit,
+          sm.unit_cost::float AS unit_cost,
+          (sm.quantity::numeric * COALESCE(sm.unit_cost::numeric, 0))::float AS total,
+          sm.notes
+        FROM stock_movements sm
+        JOIN products p ON p.id = sm.product_id
+        LEFT JOIN product_units pu ON pu.product_id = sm.product_id AND pu.base_unit IS NOT NULL
+        WHERE sm.created_at >= ${from}::timestamp
+          AND sm.created_at < ${to}::timestamp
+          AND sm.notes ILIKE '%Rinde%'
+        ORDER BY sm.created_at DESC
+      `);
+      return res.json(rows.rows);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   app.get("/api/dashboard/bolsa-fv", requireAuth, async (req, res) => {
     try {
       const { from, to, type } = req.query as { from?: string; to?: string; type?: string };

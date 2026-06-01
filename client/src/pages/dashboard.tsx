@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { TrendingUp, Package, Truck, AlertTriangle, Users, Download } from "lucide-react";
+import { TrendingUp, Package, Truck, AlertTriangle, Users, Download, Info } from "lucide-react";
 import { generateBolsaFvPDF, generateComisionesPDF, type BolsaFvRow, type ComisionRow } from "@/lib/pdf";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -257,6 +257,7 @@ export default function DashboardPage() {
   );
   const [bolsaFilter, setBolsaFilter] = useState<"all" | "bolsa" | "bolsa_propia">("all");
   const [comisionesOpen, setComisionesOpen] = useState(false);
+  const [rindeOpen, setRindeOpen] = useState(false);
 
   const [from, to] = useMemo((): [string, string] => {
     if (period === "hoy") return todayRange();
@@ -271,6 +272,13 @@ export default function DashboardPage() {
     queryKey: ["/api/dashboard/stats", from, to],
     queryFn: () =>
       fetch(`/api/dashboard/stats?from=${from}&to=${to}`, { credentials: "include" }).then((r) => r.json()),
+    staleTime: 30_000,
+  });
+
+  const { data: rindeDetail } = useQuery<{ id: number; created_at: string; product_name: string; quantity: number; unit: string; unit_cost: number; total: number; notes: string }[]>({
+    queryKey: ["/api/dashboard/rinde-detail", from, to],
+    queryFn: () => fetch(`/api/dashboard/rinde-detail?from=${from}&to=${to}`, { credentials: "include" }).then(r => r.json()),
+    enabled: rindeOpen,
     staleTime: 30_000,
   });
 
@@ -399,7 +407,12 @@ export default function DashboardPage() {
                 {s && s.rindeTotal > 0 && (
                   <div>
                     <p className="text-[10px] text-muted-foreground">+ Rinde</p>
-                    <p className="text-sm font-semibold text-green-600 dark:text-green-400">+{fmt(s.rindeTotal)}</p>
+                    <button
+                      className="text-sm font-semibold text-green-600 dark:text-green-400 underline decoration-dotted underline-offset-2 cursor-pointer hover:opacity-80 flex items-center gap-1"
+                      onClick={() => setRindeOpen(true)}
+                    >
+                      +{fmt(s.rindeTotal)} <Info className="h-3 w-3 opacity-60" />
+                    </button>
                   </div>
                 )}
                 {s && s.mermaTotal > 0 && (
@@ -494,7 +507,14 @@ export default function DashboardPage() {
                   </p>
                   <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
                     <p>Merma: {s ? fmt(s.mermaTotal) : "—"}</p>
-                    <p>Rinde: {s ? fmt(s.rindeTotal) : "—"}</p>
+                    <p>
+                      Rinde:{" "}
+                      {s && s.rindeTotal > 0 ? (
+                        <button className="underline decoration-dotted underline-offset-2 hover:opacity-80" onClick={() => setRindeOpen(true)}>
+                          {fmt(s.rindeTotal)}
+                        </button>
+                      ) : (s ? fmt(s.rindeTotal) : "—")}
+                    </p>
                   </div>
                 </>
               )}
@@ -652,6 +672,60 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Rinde detail dialog */}
+      <Dialog open={rindeOpen} onOpenChange={setRindeOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col gap-3">
+          <DialogHeader>
+            <DialogTitle>Detalle de Rinde — {from} al {to}</DialogTitle>
+          </DialogHeader>
+          <div className="overflow-y-auto flex-1">
+            {!rindeDetail ? (
+              <div className="space-y-2">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+            ) : rindeDetail.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">Sin movimientos de rinde en el período</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left pb-1.5 text-xs text-muted-foreground font-medium">Fecha</th>
+                    <th className="text-left pb-1.5 text-xs text-muted-foreground font-medium">Producto</th>
+                    <th className="text-right pb-1.5 text-xs text-muted-foreground font-medium">Cantidad</th>
+                    <th className="text-right pb-1.5 text-xs text-muted-foreground font-medium">Costo unit.</th>
+                    <th className="text-right pb-1.5 text-xs text-muted-foreground font-medium">Total</th>
+                    <th className="text-left pb-1.5 text-xs text-muted-foreground font-medium">Nota</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rindeDetail.map((row, i) => (
+                    <tr key={row.id} className={`border-b border-border/50 last:border-0 ${i % 2 !== 0 ? "bg-muted/20" : ""}`}>
+                      <td className="py-1.5 text-xs text-muted-foreground whitespace-nowrap pr-3">
+                        {new Date(row.created_at).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" })}
+                      </td>
+                      <td className="py-1.5 pr-2 font-medium">{row.product_name}</td>
+                      <td className="py-1.5 text-right tabular-nums text-xs pr-2">
+                        {row.quantity.toLocaleString("es-AR", { maximumFractionDigits: 2 })} {row.unit ?? ""}
+                      </td>
+                      <td className="py-1.5 text-right tabular-nums text-xs pr-2">{fmt(row.unit_cost)}</td>
+                      <td className="py-1.5 text-right font-semibold tabular-nums text-green-600 dark:text-green-400">{fmt(row.total)}</td>
+                      <td className="py-1.5 text-xs text-muted-foreground pl-2 max-w-[180px] truncate">{row.notes}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-border">
+                    <td colSpan={4} className="pt-2 text-xs font-semibold">Total</td>
+                    <td className="pt-2 text-right font-bold text-green-600 tabular-nums">
+                      {fmt(rindeDetail.reduce((s, r) => s + r.total, 0))}
+                    </td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <ComisionesModal open={comisionesOpen} onClose={() => setComisionesOpen(false)} />
     </Layout>
