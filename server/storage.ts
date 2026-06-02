@@ -1012,7 +1012,15 @@ export const storage = {
         if (item.productId) {
           costPerUnit = await this._getCostForUnit(item.productId, item.unit ?? "KG");
         }
-        const pricePerUnit = (item as any).pricePerUnit != null ? String((item as any).pricePerUnit) : null as any;
+        let pricePerUnit = (item as any).pricePerUnit != null ? String((item as any).pricePerUnit) : null as any;
+        // Bug A fix: si el front no mandó un precio válido (>0), buscarlo server-side
+        // (cliente + peers del grupo, unidad exacta). Hace el precio determinístico,
+        // independiente del timing del prefill async del navegador. Si el front ya mandó
+        // un precio válido, se respeta y NO se pisa. No hay fallback de unidad (Bug B intacto).
+        if ((!pricePerUnit || parseFloat(pricePerUnit) === 0) && item.productId) {
+          const looked = await this.getLastPriceByUnit(item.productId, data.customerId, item.unit ?? "KG");
+          if (looked && parseFloat(looked) > 0) pricePerUnit = looked;
+        }
         const subtotal = pricePerUnit && item.quantity
           ? (parseFloat(pricePerUnit) * parseFloat(String(item.quantity))).toFixed(4)
           : "0";
@@ -1046,13 +1054,22 @@ export const storage = {
     rawProductName?: string;
     parseStatus?: string;
   }[]): Promise<void> {
+    // customerId del pedido — necesario para el lookup de precio server-side (Bug A fix)
+    const [ord] = await db.select({ customerId: orders.customerId }).from(orders).where(eq(orders.id, orderId)).limit(1);
+    const orderCustomerId = ord?.customerId ?? null;
     const itemsToInsert = await Promise.all(
       items.map(async (item) => {
         let costPerUnit = "0";
         if (item.productId) {
           costPerUnit = await this._getCostForUnit(item.productId, item.unit ?? "KG");
         }
-        const pricePerUnit = item.pricePerUnit != null ? String(item.pricePerUnit) : null as any;
+        let pricePerUnit = item.pricePerUnit != null ? String(item.pricePerUnit) : null as any;
+        // Bug A fix: si no llega precio válido (>0), buscarlo server-side (cliente + peers del grupo,
+        // unidad exacta). Respeta un precio válido enviado por el front. Sin fallback de unidad (Bug B intacto).
+        if ((!pricePerUnit || parseFloat(pricePerUnit) === 0) && item.productId && orderCustomerId) {
+          const looked = await this.getLastPriceByUnit(item.productId, orderCustomerId, item.unit ?? "KG");
+          if (looked && parseFloat(looked) > 0) pricePerUnit = looked;
+        }
         const subtotal = pricePerUnit && item.quantity
           ? (parseFloat(pricePerUnit) * parseFloat(String(item.quantity))).toFixed(4)
           : "0";
