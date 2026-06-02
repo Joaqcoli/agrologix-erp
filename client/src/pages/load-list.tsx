@@ -56,20 +56,16 @@ type LoadListData = {
 
 type RowResolution = "ok" | "pending";
 
-function fmtQty(qty: number, unit: string) {
-  const u = unit.toUpperCase();
-  if (u === "KG") {
-    const frac = qty % 1;
-    return frac === 0 ? qty.toFixed(0) : qty.toFixed(2);
-  }
-  return Math.round(qty).toString();
+// Valor exacto para TODAS las unidades: entero si no hay fracción, 2 decimales si la hay.
+// Nunca se redondea hacia arriba (un faltante de 0.5 cajón se muestra 0.5, no 1).
+function fmtQty(qty: number, _unit: string) {
+  const frac = qty % 1;
+  return frac === 0 ? qty.toFixed(0) : qty.toFixed(2);
 }
 
-function fmtDiff(diff: number, unit: string) {
+function fmtDiff(diff: number, _unit: string) {
   const frac = diff % 1;
-  const u = unit.toUpperCase();
-  if (u === "KG") return (frac === 0 ? diff.toFixed(0) : diff.toFixed(2));
-  return Math.round(diff).toString();
+  return frac === 0 ? diff.toFixed(0) : diff.toFixed(2);
 }
 
 const PACKAGED_UNITS = new Set(["CAJON", "BOLSA", "BANDEJA"]);

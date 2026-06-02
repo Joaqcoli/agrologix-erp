@@ -1996,7 +1996,7 @@ export const storage = {
       if (!["CAJON", "BOLSA", "BANDEJA"].includes(canonUnit)) {
         baseStockMap.set(pu.productId, stockVal);
         const wpu = parseFloat(pu.weightPerUnit as string ?? "0");
-        if (wpu > 0) wpuMap.set(`${pu.productId}`, wpu);
+        if (Number.isFinite(wpu) && wpu > 0) wpuMap.set(`${pu.productId}`, wpu);
       }
     }
 
@@ -2007,6 +2007,8 @@ export const storage = {
         .map((i) => i.productId as number),
     )];
     if (packagePids.length > 0) {
+      // OJO Postgres: 'NaN'::numeric > 0 es TRUE, así que el filtro > 0 no excluye NaN.
+      // Hay datos con weight_per_package = 'NaN' (ej. BROTE DE SOJA) → excluir explícitamente.
       const wpuRows = await db.execute(drizzleSql.raw(`
         SELECT DISTINCT ON (product_id, purchase_unit::text)
           product_id, purchase_unit::text AS pu, weight_per_package::numeric AS wpu
@@ -2014,11 +2016,14 @@ export const storage = {
         WHERE product_id = ANY(ARRAY[${packagePids.join(",")}]::int[])
           AND purchase_unit IS NOT NULL
           AND weight_per_package IS NOT NULL
+          AND weight_per_package::text <> 'NaN'
           AND weight_per_package::numeric > 0
         ORDER BY product_id, purchase_unit::text, id DESC
       `));
       for (const row of wpuRows.rows as any[]) {
-        wpuMap.set(`${row.product_id}-${row.pu}`, parseFloat(row.wpu));
+        const wpu = parseFloat(row.wpu);
+        // Guard defensivo: nunca dejar entrar NaN/inválido/≤0 al wpuMap
+        if (Number.isFinite(wpu) && wpu > 0) wpuMap.set(`${row.product_id}-${row.pu}`, wpu);
       }
     }
 
@@ -2027,7 +2032,8 @@ export const storage = {
       if (["CAJON", "BOLSA", "BANDEJA"].includes(canonUnit)) {
         const base = baseStockMap.get(pid) ?? 0;
         const wpu = wpuMap.get(`${pid}-${canonUnit}`) ?? wpuMap.get(`${pid}`) ?? 0;
-        return wpu > 0 ? base / wpu : 0;
+        // Guard: un wpu NaN/inválido nunca debe propagar NaN al stock convertido
+        return Number.isFinite(wpu) && wpu > 0 ? base / wpu : 0;
       }
       return stockMap.get(`${pid}-${canonUnit}`) ?? 0;
     };

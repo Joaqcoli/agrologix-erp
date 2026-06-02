@@ -1069,10 +1069,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
         // Items
         for (const row of rows.sort((a, b) => a.productName.localeCompare(b.productName))) {
+          // Valor exacto con 2 decimales para TODAS las unidades (incl. envases).
+          // Sin Math.ceil: un faltante de 0.5 cajón debe mostrarse 0.5, no redondear a 1.
           const toBuy = Math.abs(row.diffQty);
-          const qtyValue = row.unit.toUpperCase() === "KG"
-            ? parseFloat(toBuy.toFixed(2))
-            : Math.ceil(toBuy);
+          const qtyValue = parseFloat(toBuy.toFixed(2));
 
           const itemRow = ws.addRow([row.productName, row.unit, qtyValue]);
           itemRow.getCell(1).font = { name: "Arial", size: 10 };
@@ -1083,7 +1083,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (row.unit.toUpperCase() === "KG") {
             itemRow.getCell(3).numFmt = '#,##0.00" KG"';
           } else {
-            itemRow.getCell(3).numFmt = `#,##0" ${row.unit}"`;
+            // 0.## → muestra decimales exactos sin redondear (0.5 → "0.5", 2 → "2")
+            itemRow.getCell(3).numFmt = `#,##0.##" ${row.unit}"`;
           }
           itemRow.height = 15;
           itemRow.commit();
