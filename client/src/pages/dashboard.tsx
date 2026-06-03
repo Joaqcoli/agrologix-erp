@@ -260,6 +260,7 @@ export default function DashboardPage() {
   const [bolsaFilter, setBolsaFilter] = useState<"all" | "bolsa" | "bolsa_propia">("all");
   const [comisionesOpen, setComisionesOpen] = useState(false);
   const [rindeOpen, setRindeOpen] = useState(false);
+  const [mermaOpen, setMermaOpen] = useState(false);
 
   const [from, to] = useMemo((): [string, string] => {
     if (period === "hoy") return todayRange();
@@ -281,6 +282,13 @@ export default function DashboardPage() {
     queryKey: ["/api/dashboard/rinde-detail", from, to],
     queryFn: () => fetch(`/api/dashboard/rinde-detail?from=${from}&to=${to}`, { credentials: "include" }).then(r => r.json()),
     enabled: rindeOpen,
+    staleTime: 30_000,
+  });
+
+  const { data: mermaDetail } = useQuery<{ id: number; created_at: string; product_name: string; quantity: number; unit: string; unit_cost: number; total: number; notes: string }[]>({
+    queryKey: ["/api/dashboard/merma-detail", from, to],
+    queryFn: () => fetch(`/api/dashboard/merma-detail?from=${from}&to=${to}`, { credentials: "include" }).then(r => r.json()),
+    enabled: mermaOpen,
     staleTime: 30_000,
   });
 
@@ -420,7 +428,12 @@ export default function DashboardPage() {
                 {s && s.mermaTotal > 0 && (
                   <div>
                     <p className="text-[10px] text-muted-foreground">- Merma</p>
-                    <p className="text-sm font-semibold text-red-600 dark:text-red-400">-{fmt(s.mermaTotal)}</p>
+                    <button
+                      className="text-sm font-semibold text-red-600 dark:text-red-400 underline decoration-dotted underline-offset-2 cursor-pointer hover:opacity-80 flex items-center gap-1"
+                      onClick={() => setMermaOpen(true)}
+                    >
+                      -{fmt(s.mermaTotal)} <Info className="h-3 w-3 opacity-60" />
+                    </button>
                   </div>
                 )}
                 <span className="text-xs text-muted-foreground">→</span>
@@ -542,7 +555,14 @@ export default function DashboardPage() {
                     {s ? (ajustePositivo ? "+" : "") + fmt(ajusteNeto) : "—"}
                   </p>
                   <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
-                    <p>Merma: {s ? fmt(s.mermaTotal) : "—"}</p>
+                    <p>
+                      Merma:{" "}
+                      {s && s.mermaTotal > 0 ? (
+                        <button className="underline decoration-dotted underline-offset-2 hover:opacity-80" onClick={() => setMermaOpen(true)}>
+                          {fmt(s.mermaTotal)}
+                        </button>
+                      ) : (s ? fmt(s.mermaTotal) : "—")}
+                    </p>
                     <p>
                       Rinde:{" "}
                       {s && s.rindeTotal > 0 ? (
@@ -753,6 +773,60 @@ export default function DashboardPage() {
                     <td colSpan={4} className="pt-2 text-xs font-semibold">Total</td>
                     <td className="pt-2 text-right font-bold text-green-600 tabular-nums">
                       {fmt(rindeDetail.reduce((s, r) => s + r.total, 0))}
+                    </td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Merma detail dialog */}
+      <Dialog open={mermaOpen} onOpenChange={setMermaOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col gap-3">
+          <DialogHeader>
+            <DialogTitle>Detalle de Merma — {from} al {to}</DialogTitle>
+          </DialogHeader>
+          <div className="overflow-y-auto flex-1">
+            {!mermaDetail ? (
+              <div className="space-y-2">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+            ) : mermaDetail.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">Sin movimientos de merma en el período</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left pb-1.5 text-xs text-muted-foreground font-medium">Fecha</th>
+                    <th className="text-left pb-1.5 text-xs text-muted-foreground font-medium">Producto</th>
+                    <th className="text-right pb-1.5 text-xs text-muted-foreground font-medium">Cantidad</th>
+                    <th className="text-right pb-1.5 text-xs text-muted-foreground font-medium">Costo unit.</th>
+                    <th className="text-right pb-1.5 text-xs text-muted-foreground font-medium">Total</th>
+                    <th className="text-left pb-1.5 text-xs text-muted-foreground font-medium">Nota</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mermaDetail.map((row, i) => (
+                    <tr key={row.id} className={`border-b border-border/50 last:border-0 ${i % 2 !== 0 ? "bg-muted/20" : ""}`}>
+                      <td className="py-1.5 text-xs text-muted-foreground whitespace-nowrap pr-3">
+                        {new Date(row.created_at).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" })}
+                      </td>
+                      <td className="py-1.5 pr-2 font-medium">{row.product_name}</td>
+                      <td className="py-1.5 text-right tabular-nums text-xs pr-2">
+                        {row.quantity.toLocaleString("es-AR", { maximumFractionDigits: 2 })} {row.unit ?? ""}
+                      </td>
+                      <td className="py-1.5 text-right tabular-nums text-xs pr-2">{fmt(row.unit_cost)}</td>
+                      <td className="py-1.5 text-right font-semibold tabular-nums text-red-600 dark:text-red-400">{fmt(row.total)}</td>
+                      <td className="py-1.5 text-xs text-muted-foreground pl-2 max-w-[180px] truncate">{row.notes}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-border">
+                    <td colSpan={4} className="pt-2 text-xs font-semibold">Total</td>
+                    <td className="pt-2 text-right font-bold text-red-600 tabular-nums">
+                      {fmt(mermaDetail.reduce((s, r) => s + r.total, 0))}
                     </td>
                     <td />
                   </tr>
