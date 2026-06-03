@@ -773,6 +773,11 @@ export async function runMigrations() {
       END IF;
     END $$
   `);
+  // Categoría "Comisiones" (egresos de comisión de MP separados del monto transferido)
+  try { await db.execute(sql`
+    INSERT INTO bank_categories (name) SELECT 'Comisiones'
+    WHERE NOT EXISTS (SELECT 1 FROM bank_categories WHERE name = 'Comisiones')
+  `); } catch {}
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS mp_movement_overrides (

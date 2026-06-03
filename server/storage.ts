@@ -4522,6 +4522,53 @@ export const storage = {
 
   async deleteBankMovementFromCaja(sourceId: string): Promise<void> {
     await db.delete(cajaMovements).where(drizzleSql`${cajaMovements.sourceId} = ${sourceId}`);
+    await db.delete(cajaMovements).where(drizzleSql`${cajaMovements.sourceId} = ${sourceId + ":fee"}`);
+    await this.deleteRetiroByMovimientoRef(sourceId);
+  },
+
+  // Sincroniza un movimiento de MP a caja separando comisión:
+  //  - el monto TRANSFERIDO (gross) va en su categoría
+  //  - la comisión (fee) va como egreso aparte en categoría "Comisiones" (sourceId mp:<id>:fee)
+  // Retiro: el monto del retiro es el transferido (gross). Si no se pasa socioId, se conserva el del retiro previo.
+  async reconcileMpCajaMovement(data: {
+    sourceId: string; date: string; type: "ingreso" | "egreso";
+    description: string; gross: number; fee: number; category: string; socioId?: number | null;
+  }): Promise<void> {
+    const feeSrc = `${data.sourceId}:fee`;
+    // Conservar socio del retiro previo si no viene uno nuevo
+    let socioId = data.socioId ?? null;
+    if (socioId == null) {
+      const prev = await db.execute(drizzleSql`SELECT socio_id FROM retiros WHERE movimiento_ref = ${data.sourceId} LIMIT 1`);
+      socioId = (prev.rows[0] as any)?.socio_id ?? null;
+    }
+    await db.delete(cajaMovements).where(drizzleSql`${cajaMovements.sourceId} IN (${data.sourceId}, ${feeSrc})`);
+    await this.deleteRetiroByMovimientoRef(data.sourceId);
+
+    await db.insert(cajaMovements).values({
+      sourceId: data.sourceId, date: data.date, type: data.type,
+      description: data.description, amount: data.gross.toFixed(2), category: data.category, method: "TRANSFERENCIA",
+    });
+    if (data.fee > 0.005) {
+      await db.insert(cajaMovements).values({
+        sourceId: feeSrc, date: data.date, type: "egreso",
+        description: `Comisión MP — ${data.description}`, amount: data.fee.toFixed(2), category: "Comisiones", method: "TRANSFERENCIA",
+      });
+    }
+    if (data.category === "Retiro" && socioId != null) {
+      await this.createRetiro({
+        socioId, monto: data.gross, fecha: data.date, origen: "movimiento",
+        movimientoRef: data.sourceId, notas: data.description,
+      });
+    }
+  },
+
+  // Monto actual del caja_movement principal por sourceId (para detectar los que aún no separan comisión)
+  async getCajaAmountsBySourceIds(sourceIds: string[]): Promise<Map<string, number>> {
+    if (sourceIds.length === 0) return new Map();
+    const rows = await db.select({ sourceId: cajaMovements.sourceId, amount: cajaMovements.amount })
+      .from(cajaMovements)
+      .where(inArray(cajaMovements.sourceId, sourceIds));
+    return new Map(rows.map(r => [String(r.sourceId), parseFloat(String(r.amount ?? "0"))]));
   },
 
   // Backfill: inserta entradas de banco que ya tenían categoría pero aún no están en caja_movements

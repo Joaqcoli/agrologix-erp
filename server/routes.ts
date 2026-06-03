@@ -2784,28 +2784,40 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         };
       });
 
-      // Backfill: sync movimientos ya categorizados que aún no están en caja_movements
+      // Reconciliación banco→caja: sincroniza movimientos categorizados separando la comisión.
+      // Se ejecuta solo cuando hace falta (el caja_movement falta o aún guarda el monto con comisión),
+      // así los movimientos viejos se auto-corrigen al ver Bancos y los nuevos no se reescriben de más.
       try {
-        const needBackfill = (withCats as any[]).filter(
-          (m: any) => m.categoryId != null && (m.netAmount ?? 0) > 0
+        const categorized = (withCats as any[]).filter(
+          (m: any) => m.categoryId != null && (m.grossAmount ?? m.netAmount ?? 0) > 0
         );
-        if (needBackfill.length > 0) {
+        if (categorized.length > 0) {
           const allCats = await storage.getBankCategories();
           const catNameMap = new Map(allCats.map(c => [c.id, c.name]));
-          const backfillData = needBackfill.map((m: any) => ({
-            sourceId: `mp:${String(m.id)}`,
-            date: (m.date_created ?? "").slice(0, 10),
-            type: (m.isOutgoing ? "egreso" : "ingreso") as "egreso" | "ingreso",
-            description: String(m.displayName || m.description || (m.isOutgoing ? "Pago banco" : "Cobro banco")),
-            amount: parseFloat(String(m.netAmount ?? 0)).toFixed(2),
-            category: catNameMap.get(m.categoryId as number) ?? "Sin categoría",
-            method: "TRANSFERENCIA",
-          }));
-          const synced = await storage.backfillBankMovementsToCaja(backfillData);
-          if (synced > 0) console.log(`[caja backfill] sincronizados ${synced} movimientos banco→caja`);
+          const currentAmounts = await storage.getCajaAmountsBySourceIds(categorized.map(m => `mp:${String(m.id)}`));
+          let synced = 0;
+          for (const m of categorized) {
+            const sourceId = `mp:${String(m.id)}`;
+            const gross = parseFloat(String(m.grossAmount ?? m.netAmount ?? 0));
+            const fee = parseFloat(String(m.feeAmount ?? 0));
+            const existing = currentAmounts.get(sourceId);
+            // Reconciliar si falta o si el monto guardado no es el transferido (gross) → todavía con comisión
+            if (existing != null && Math.abs(existing - gross) < 0.01) continue;
+            await storage.reconcileMpCajaMovement({
+              sourceId,
+              date: (m.date_created ?? "").slice(0, 10),
+              type: (m.isOutgoing ? "egreso" : "ingreso"),
+              description: String(m.displayName || m.description || (m.isOutgoing ? "Pago banco" : "Cobro banco")),
+              gross, fee,
+              category: catNameMap.get(m.categoryId as number) ?? "Sin categoría",
+              // socioId omitido → reconcileMpCajaMovement conserva el socio del retiro existente
+            });
+            synced++;
+          }
+          if (synced > 0) console.log(`[caja reconcile] ${synced} movimientos banco→caja (comisión separada)`);
         }
       } catch (backfillErr: any) {
-        console.warn("[caja backfill] error:", backfillErr.message);
+        console.warn("[caja reconcile] error:", backfillErr.message);
       }
 
       // ── Merge XLSX movements (missing from payments API) ─────────────────────
@@ -2936,9 +2948,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.put("/api/mp/movements/:mpId/category", requireAuth, async (req, res) => {
     try {
       const { mpId } = req.params;
-      const { categoryId, amount, date, isOutgoing, description } = req.body as {
+      const { categoryId, amount, fee, date, isOutgoing, description } = req.body as {
         categoryId: number | null;
-        amount?: number;
+        amount?: number;   // monto TRANSFERIDO (gross), sin comisión
+        fee?: number;      // comisión de MP → va a categoría "Comisiones"
         date?: string;
         isOutgoing?: boolean;
         description?: string;
@@ -2949,32 +2962,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (categoryId != null && amount != null && amount > 0) {
         const cats = await storage.getBankCategories();
         const catName = cats.find(c => c.id === categoryId)?.name ?? "Sin categoría";
-        await storage.syncBankMovementToCaja({
+        const socioRaw = req.body.socioId != null ? parseInt(String(req.body.socioId)) : NaN;
+        await storage.reconcileMpCajaMovement({
           sourceId,
           date: date ?? new Date().toISOString().slice(0, 10),
           type: isOutgoing ? "egreso" : "ingreso",
           description: description || (isOutgoing ? "Pago banco" : "Cobro banco"),
-          amount: String(parseFloat(String(amount)).toFixed(2)),
+          gross: parseFloat(String(amount)),
+          fee: fee != null ? parseFloat(String(fee)) : 0,
           category: catName,
-          method: "TRANSFERENCIA",
+          socioId: catName === "Retiro" && !isNaN(socioRaw) ? socioRaw : null,
         });
-        // Retiro de socio: vinculado al movimiento por sourceId (estable ante re-categorización).
-        // Siempre limpiamos el retiro previo de este movimiento antes de recrear (cambio de socio o de categoría).
-        await storage.deleteRetiroByMovimientoRef(sourceId);
-        const socioId = req.body.socioId != null ? parseInt(String(req.body.socioId)) : NaN;
-        if (catName === "Retiro" && !isNaN(socioId)) {
-          await storage.createRetiro({
-            socioId,
-            monto: parseFloat(String(amount)),
-            fecha: date ?? new Date().toISOString().slice(0, 10),
-            origen: "movimiento",
-            movimientoRef: sourceId,
-            notas: description ?? null,
-          });
-        }
       } else {
-        await storage.deleteBankMovementFromCaja(sourceId);
-        await storage.deleteRetiroByMovimientoRef(sourceId);
+        await storage.deleteBankMovementFromCaja(sourceId); // borra el principal, la comisión y el retiro
       }
 
       return res.json({ ok: true });

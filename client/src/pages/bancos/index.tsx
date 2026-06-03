@@ -329,15 +329,16 @@ export default function BancosPage() {
   // ── mutations ─────────────────────────────────────────────────────────────────
 
   const setCategoryMut = useMutation({
-    mutationFn: ({ mpId, categoryId, amount, date, isOutgoing, description, socioId }: {
+    mutationFn: ({ mpId, categoryId, amount, fee, date, isOutgoing, description, socioId }: {
       mpId: string | number;
       categoryId: number | null;
-      amount?: number;
+      amount?: number;   // monto transferido (gross), sin comisión
+      fee?: number;      // comisión MP → categoría "Comisiones"
       date?: string;
       isOutgoing?: boolean;
       description?: string;
       socioId?: number | null;
-    }) => apiRequest("PUT", `/api/mp/movements/${mpId}/category`, { categoryId, amount, date, isOutgoing, description, socioId }),
+    }) => apiRequest("PUT", `/api/mp/movements/${mpId}/category`, { categoryId, amount, fee, date, isOutgoing, description, socioId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/mp/movements"] });
       qc.invalidateQueries({ queryKey: ["/api/caja/summary"] });
@@ -353,13 +354,13 @@ export default function BancosPage() {
 
   // Prompt para elegir socio cuando la categoría es "Retiro"
   const [retiroPrompt, setRetiroPrompt] = useState<{
-    mpId: string | number; categoryId: number; amount?: number; date?: string; isOutgoing?: boolean; description?: string;
+    mpId: string | number; categoryId: number; amount?: number; fee?: number; date?: string; isOutgoing?: boolean; description?: string;
   } | null>(null);
   const [retiroSocioId, setRetiroSocioId] = useState<number | null>(null);
 
   // Categoriza un movimiento; si la categoría es "Retiro" pide socio antes de guardar
   const handleCategorize = (payload: {
-    mpId: string | number; categoryId: number | null; amount?: number; date?: string; isOutgoing?: boolean; description?: string;
+    mpId: string | number; categoryId: number | null; amount?: number; fee?: number; date?: string; isOutgoing?: boolean; description?: string;
   }) => {
     const catName = payload.categoryId != null ? categories.find(c => c.id === payload.categoryId)?.name : null;
     if (catName === "Retiro" && payload.categoryId != null) {
@@ -841,7 +842,8 @@ export default function BancosPage() {
                                 onSelect={(id, catId) => handleCategorize({
                                   mpId: id,
                                   categoryId: catId,
-                                  amount: m.netAmount,
+                                  amount: m.grossAmount ?? m.netAmount,   // monto transferido (sin comisión)
+                                  fee: m.feeAmount ?? 0,                   // comisión → categoría "Comisiones"
                                   date: toArgDate(m.date_created ?? ""),
                                   isOutgoing: m.isOutgoing,
                                   description: m.displayName || m.description || "",
