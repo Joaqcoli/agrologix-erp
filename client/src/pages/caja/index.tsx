@@ -15,6 +15,7 @@ import {
   ChevronDown, ChevronUp, Users,
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
 const fmt = (v: number) => "$" + Math.round(v).toLocaleString("es-AR");
@@ -224,6 +225,7 @@ type EditOblForm = {
 };
 
 export default function CajaPage() {
+  const { toast } = useToast();
   const [viewMode, setViewMode] = useState<"day" | "week" | "month">("month");
   const [monthOffset, setMonthOffset] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -334,6 +336,7 @@ export default function CajaPage() {
       setDialogOpen(false);
       setForm(emptyForm());
     },
+    onError: (e: any) => toast({ title: "No se pudo guardar el movimiento", description: e?.message ?? "Error", variant: "destructive" }),
   });
 
   const delMutation = useMutation({

@@ -2054,7 +2054,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const parsed = insertCajaMovementSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-      const m = await storage.createCajaMovement(parsed.data as any, req.user?.id ?? 0);
+      const m = await storage.createCajaMovement(parsed.data as any, req.session.userId!);
       const cuentaId = req.body.cuentaId ? Number(req.body.cuentaId) : null;
       if (cuentaId) {
         await storage.createMovimientoCuenta({
