@@ -1394,13 +1394,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── AP CC ─────────────────────────────────────────────────────────────────────
+  // GET /api/ap/cc/summary?month=2&year=2026  OR  ?dateFrom=...&dateTo=...
   app.get("/api/ap/cc/summary", requireAuth, async (req, res) => {
+    try {
+      const range = parseCCDateRange(req.query as Record<string, any>);
+      if (!range) return res.status(400).json({ error: "Invalid date params" });
+      return res.json(await storage.getAPCCSummary(range.startDate, range.endDate));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // GET /api/ap/cc/export?month=2&year=2026 — resumen CC proveedores en XLSX
+  app.get("/api/ap/cc/export", requireAuth, async (req, res) => {
     try {
       const month = parseInt(req.query.month as string);
       const year = parseInt(req.query.year as string);
-      if (!month || !year || month < 1 || month > 12)
-        return res.status(400).json({ error: "Invalid month/year" });
-      return res.json(await storage.getAPCCSummary(month, year));
+      if (!month || !year) return res.status(400).json({ error: "Invalid params" });
+      const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
+      const endMonth = month === 12 ? 1 : month + 1;
+      const endYear = month === 12 ? year + 1 : year;
+      const endDate = `${endYear}-${String(endMonth).padStart(2, "0")}-01`;
+      const data = await storage.getAPCCSummary(startDate, endDate);
+      const monthName = new Date(year, month - 1, 1).toLocaleString("es-AR", { month: "long", year: "numeric" });
+
+      const wb = XLSX.utils.book_new();
+      const sheetData = [
+        ["Proveedor", "Saldo Anterior", "Facturación", "Pagos", "Saldo Actual", "% Deuda"],
+        ...data.suppliers.map((r) => [
+          r.supplierName, r.saldoMesAnterior, r.facturacion, r.cobranza, r.saldo,
+          parseFloat(r.pct.toFixed(2)),
+        ]),
+        ["TOTAL", data.totals.saldoMesAnterior, data.totals.facturacion, data.totals.cobranza, data.totals.saldo, ""],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(sheetData);
+      XLSX.utils.book_append_sheet(wb, ws, "CC Proveedores");
+      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="CC-Proveedores-${monthName}.xlsx"`);
+      return res.send(buf);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 

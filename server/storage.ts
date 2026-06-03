@@ -3579,12 +3579,7 @@ export const storage = {
 
   // ─── AP CC Summary (resumen mensual por proveedor) ────────────────────────────
 
-  async getAPCCSummary(month: number, year: number) {
-    const fromDate = `${year}-${String(month).padStart(2, "0")}-01`;
-    const toDate = month === 12
-      ? `${year + 1}-01-01`
-      : `${year}-${String(month + 1).padStart(2, "0")}-01`;
-
+  async getAPCCSummary(fromDate: string, toDate: string) {
     const rows = await db.execute(drizzleSql`
       WITH period_purchases AS (
         SELECT supplier_id, SUM(total::numeric) AS facturacion
@@ -3644,6 +3639,13 @@ export const storage = {
       saldo: Math.round(parseFloat(r.saldo ?? "0")),
     }));
 
+    // % de deuda: proporción del saldo de cada proveedor sobre el total adeudado (saldos positivos)
+    const totalDeuda = supplierRows.reduce((s, r) => s + (r.saldo > 0 ? r.saldo : 0), 0);
+    const suppliersWithPct = supplierRows.map((r) => ({
+      ...r,
+      pct: totalDeuda > 0 && r.saldo > 0 ? (r.saldo / totalDeuda) * 100 : 0,
+    }));
+
     const totals = supplierRows.reduce(
       (acc, r) => ({
         saldoMesAnterior: acc.saldoMesAnterior + r.saldoMesAnterior,
@@ -3654,7 +3656,7 @@ export const storage = {
       { saldoMesAnterior: 0, facturacion: 0, cobranza: 0, saldo: 0 }
     );
 
-    return { month, year, suppliers: supplierRows, totals };
+    return { fromDate, toDate, suppliers: suppliersWithPct, totals };
   },
 
   // ─── AP CC Detail (detalle mensual de un proveedor) ───────────────────────────
