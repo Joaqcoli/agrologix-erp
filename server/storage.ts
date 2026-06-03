@@ -894,11 +894,11 @@ export const storage = {
     // 1) Clientes inactivos: asignados + activos + con AL MENOS un pedido; días desde el último pedido >= 7.
     //    (Los que nunca pidieron quedan fuera por el JOIN.)
     const inactivos = await db.execute(drizzleSql`
-      SELECT c.id, c.name, (CURRENT_DATE - MAX(o.order_date)::date) AS dias
+      SELECT c.id, c.name, c.phone, (CURRENT_DATE - MAX(o.order_date)::date) AS dias
       FROM customers c
       JOIN orders o ON o.customer_id = c.id
       WHERE c.salesperson_name = ${salespersonName} AND c.active = true
-      GROUP BY c.id, c.name
+      GROUP BY c.id, c.name, c.phone
       HAVING (CURRENT_DATE - MAX(o.order_date)::date) >= 7
       ORDER BY dias DESC
     `);
@@ -927,24 +927,29 @@ export const storage = {
       LIMIT 8
     `);
 
-    // 4) Top 5 clientes del mes por facturación
+    // 4) Top 5 clientes del mes por facturación — unificando sedes del mismo dueño (parent_customer_id)
     const topClientes = await db.execute(drizzleSql`
-      SELECT c.id, c.name, COALESCE(SUM(${iva}), 0)::float AS total
-      FROM orders o
-      JOIN customers c ON c.id = o.customer_id
-      JOIN order_items oi ON oi.order_id = o.id
-      LEFT JOIN products p ON p.id = oi.product_id
-      WHERE o.status = 'approved' AND c.salesperson_name = ${salespersonName}
-        AND o.order_date >= ${monthStart} AND o.order_date < ${monthEnd}
-      GROUP BY c.id, c.name
-      HAVING COALESCE(SUM(${iva}), 0) > 0
+      WITH ventas AS (
+        SELECT COALESCE(c.parent_customer_id, c.id) AS gid, (${iva}) AS v
+        FROM orders o
+        JOIN customers c ON c.id = o.customer_id
+        JOIN order_items oi ON oi.order_id = o.id
+        LEFT JOIN products p ON p.id = oi.product_id
+        WHERE o.status = 'approved' AND c.salesperson_name = ${salespersonName}
+          AND o.order_date >= ${monthStart} AND o.order_date < ${monthEnd}
+      )
+      SELECT pc.id, pc.name, COALESCE(SUM(ventas.v), 0)::float AS total
+      FROM ventas
+      JOIN customers pc ON pc.id = ventas.gid
+      GROUP BY pc.id, pc.name
+      HAVING COALESCE(SUM(ventas.v), 0) > 0
       ORDER BY total DESC
       LIMIT 5
     `);
 
     return {
       inactivos: (inactivos.rows as any[]).map((r) => ({
-        id: Number(r.id), name: String(r.name), dias: Number(r.dias),
+        id: Number(r.id), name: String(r.name), phone: r.phone ? String(r.phone) : null, dias: Number(r.dias),
         bucket: Number(r.dias) >= 14 ? "roja" : "naranja",
       })),
       ventasPorDia: (ventasPorDia.rows as any[]).map((r) => ({ dia: String(r.dia), total: Number(r.total) })),

@@ -7,13 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Users, AlertTriangle, Trophy, ListOrdered, ChevronRight, Clock } from "lucide-react";
+import { BarChart3, Users, AlertTriangle, Trophy, ListOrdered, Clock, MessageCircle } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 const fmt = (n: number) => "$" + Math.round(n).toLocaleString("es-MX");
 
 type ExtraData = {
-  inactivos: { id: number; name: string; dias: number; bucket: "naranja" | "roja" }[];
+  inactivos: { id: number; name: string; phone: string | null; dias: number; bucket: "naranja" | "roja" }[];
   ventasPorDia: { dia: string; total: number }[];
   ultimosPedidos: { id: number; folio: string; fecha: string; status: string; cliente: string; total: number }[];
   topClientes: { id: number; name: string; total: number }[];
@@ -84,6 +84,10 @@ export default function VendedorDashboard() {
   });
 
   const verCliente = (name: string) => setLocation(`/vendedor/customers?q=${encodeURIComponent(name)}`);
+  const waLink = (phone: string | null) => {
+    const d = (phone ?? "").replace(/\D/g, "");
+    return d.length >= 8 ? `https://wa.me/${d}` : null;
+  };
   const inacNaranja = (extra?.inactivos ?? []).filter((c) => c.bucket === "naranja");
   const inacRoja = (extra?.inactivos ?? []).filter((c) => c.bucket === "roja");
   const fmtFecha = (s: string) => { const [y, m, d] = s.split("-"); return `${d}/${m}`; };
@@ -98,42 +102,6 @@ export default function VendedorDashboard() {
           <h2 className="text-xl font-semibold text-foreground">Mi Resumen</h2>
           <p className="text-sm text-muted-foreground mt-0.5">Ventas y comisiones por período</p>
         </div>
-
-        {/* Clientes inactivos (arriba de todo) */}
-        {extra && extra.inactivos.length > 0 && (
-          <Card className="border-amber-300/50">
-            <CardHeader className="pb-2 pt-4">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-amber-600" /> Clientes sin pedir
-              </CardTitle>
-              <p className="text-xs text-muted-foreground">
-                <span className="font-semibold text-amber-600">{inacNaranja.length}</span> sin pedir hace 1 semana
-                {" · "}
-                <span className="font-semibold text-red-600">{inacRoja.length}</span> hace 2+ semanas
-              </p>
-            </CardHeader>
-            <CardContent className="pb-4 space-y-1.5">
-              {[...inacRoja, ...inacNaranja].map((c) => {
-                const roja = c.bucket === "roja";
-                return (
-                  <div
-                    key={c.id}
-                    className={`flex items-center gap-2 rounded-md border px-3 py-2 ${roja ? "border-red-300/50 bg-red-50/40 dark:bg-red-950/10" : "border-amber-300/50 bg-amber-50/40 dark:bg-amber-950/10"}`}
-                  >
-                    <span className={`h-2 w-2 rounded-full shrink-0 ${roja ? "bg-red-500" : "bg-amber-500"}`} />
-                    <span className="font-medium text-sm text-foreground truncate flex-1">{c.name}</span>
-                    <span className={`text-xs whitespace-nowrap flex items-center gap-1 ${roja ? "text-red-600" : "text-amber-600"}`}>
-                      <Clock className="h-3 w-3" /> hace {c.dias} días
-                    </span>
-                    <Button size="sm" variant="outline" className="h-7 text-xs shrink-0" onClick={() => verCliente(c.name)}>
-                      Ver <ChevronRight className="h-3 w-3 ml-0.5" />
-                    </Button>
-                  </div>
-                );
-              })}
-            </CardContent>
-          </Card>
-        )}
 
         {/* Period selector */}
         <div className="flex flex-wrap items-center gap-2">
@@ -296,6 +264,49 @@ export default function VendedorDashboard() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Clientes sin pedir (último) */}
+        {extra && extra.inactivos.length > 0 && (
+          <Card className="border-amber-300/50">
+            <CardHeader className="pb-2 pt-4">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-600" /> Clientes sin pedir
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                <span className="font-semibold text-amber-600">{inacNaranja.length}</span> sin pedir hace 1 semana
+                {" · "}
+                <span className="font-semibold text-red-600">{inacRoja.length}</span> hace 2+ semanas
+              </p>
+            </CardHeader>
+            <CardContent className="pb-4 space-y-1.5">
+              {[...inacRoja, ...inacNaranja].map((c) => {
+                const roja = c.bucket === "roja";
+                const wa = waLink(c.phone);
+                return (
+                  <div
+                    key={c.id}
+                    className={`flex items-center gap-2 rounded-md border px-3 py-2 ${roja ? "border-red-300/50 bg-red-50/40 dark:bg-red-950/10" : "border-amber-300/50 bg-amber-50/40 dark:bg-amber-950/10"}`}
+                  >
+                    <span className={`h-2 w-2 rounded-full shrink-0 ${roja ? "bg-red-500" : "bg-amber-500"}`} />
+                    <span className="font-medium text-sm text-foreground truncate flex-1">{c.name}</span>
+                    <span className={`text-xs whitespace-nowrap flex items-center gap-1 ${roja ? "text-red-600" : "text-amber-600"}`}>
+                      <Clock className="h-3 w-3" /> hace {c.dias} días
+                    </span>
+                    {wa ? (
+                      <a href={wa} target="_blank" rel="noopener noreferrer" className="shrink-0">
+                        <Button size="sm" className="h-7 text-xs bg-green-600 hover:bg-green-700 text-white">
+                          <MessageCircle className="h-3.5 w-3.5 mr-1" /> WhatsApp
+                        </Button>
+                      </a>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground shrink-0 italic px-1">sin teléfono</span>
+                    )}
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+        )}
       </div>
     </VendedorLayout>
   );
