@@ -2784,37 +2784,45 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         };
       });
 
-      // Reconciliación banco→caja: sincroniza movimientos categorizados separando la comisión.
-      // Se ejecuta solo cuando hace falta (el caja_movement falta o aún guarda el monto con comisión),
-      // así los movimientos viejos se auto-corrigen al ver Bancos y los nuevos no se reescriben de más.
+      // Reconciliación banco→caja:
+      //  (1) movimientos CATEGORIZADOS → su monto principal = transferido (gross), separando la comisión.
+      //  (2) TODO movimiento con comisión → un egreso en "Comisiones" (categorizado o no), así el total de
+      //      comisiones en egresos coincide con el total del período en Bancos.
+      // Solo reescribe lo que cambió (idempotente y barato en cada fetch).
       try {
-        const categorized = (withCats as any[]).filter(
-          (m: any) => m.categoryId != null && (m.grossAmount ?? m.netAmount ?? 0) > 0
-        );
-        if (categorized.length > 0) {
+        const allMovs = (withCats as any[]).filter((m: any) => (m.grossAmount ?? m.netAmount ?? 0) > 0 || (m.feeAmount ?? 0) > 0);
+        if (allMovs.length > 0) {
           const allCats = await storage.getBankCategories();
           const catNameMap = new Map(allCats.map(c => [c.id, c.name]));
-          const currentAmounts = await storage.getCajaAmountsBySourceIds(categorized.map(m => `mp:${String(m.id)}`));
-          let synced = 0;
-          for (const m of categorized) {
+          const mainAmounts = await storage.getCajaAmountsBySourceIds(allMovs.map(m => `mp:${String(m.id)}`));
+          const feeAmounts = await storage.getCajaAmountsBySourceIds(allMovs.map(m => `mp:${String(m.id)}:fee`));
+          let syncedMain = 0, syncedFee = 0;
+          for (const m of allMovs) {
             const sourceId = `mp:${String(m.id)}`;
+            const movDate = (m.date_created ?? "").slice(0, 10);
+            const movDesc = String(m.displayName || m.description || (m.isOutgoing ? "Pago banco" : "Cobro banco"));
             const gross = parseFloat(String(m.grossAmount ?? m.netAmount ?? 0));
             const fee = parseFloat(String(m.feeAmount ?? 0));
-            const existing = currentAmounts.get(sourceId);
-            // Reconciliar si falta o si el monto guardado no es el transferido (gross) → todavía con comisión
-            if (existing != null && Math.abs(existing - gross) < 0.01) continue;
-            await storage.reconcileMpCajaMovement({
-              sourceId,
-              date: (m.date_created ?? "").slice(0, 10),
-              type: (m.isOutgoing ? "egreso" : "ingreso"),
-              description: String(m.displayName || m.description || (m.isOutgoing ? "Pago banco" : "Cobro banco")),
-              gross, fee,
-              category: catNameMap.get(m.categoryId as number) ?? "Sin categoría",
-              // socioId omitido → reconcileMpCajaMovement conserva el socio del retiro existente
-            });
-            synced++;
+            // (1) principal solo si está categorizado y el monto guardado no es el gross
+            if (m.categoryId != null && gross > 0) {
+              const existing = mainAmounts.get(sourceId);
+              if (existing == null || Math.abs(existing - gross) >= 0.01) {
+                await storage.reconcileMpCajaMovement({
+                  sourceId, date: movDate, type: (m.isOutgoing ? "egreso" : "ingreso"),
+                  description: movDesc, gross, category: catNameMap.get(m.categoryId as number) ?? "Sin categoría",
+                });
+                syncedMain++;
+              }
+            }
+            // (2) comisión para TODOS los movimientos con fee (o quitarla si ya no hay)
+            const existingFee = feeAmounts.get(`${sourceId}:fee`) ?? 0;
+            const wantFee = fee > 0.005 ? fee : 0;
+            if (Math.abs(existingFee - wantFee) >= 0.01) {
+              await storage.syncMpFee({ sourceId, fee: wantFee, date: movDate, description: movDesc });
+              syncedFee++;
+            }
           }
-          if (synced > 0) console.log(`[caja reconcile] ${synced} movimientos banco→caja (comisión separada)`);
+          if (syncedMain > 0 || syncedFee > 0) console.log(`[caja reconcile] principal:${syncedMain} comisiones:${syncedFee}`);
         }
       } catch (backfillErr: any) {
         console.warn("[caja reconcile] error:", backfillErr.message);
@@ -2963,16 +2971,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const cats = await storage.getBankCategories();
         const catName = cats.find(c => c.id === categoryId)?.name ?? "Sin categoría";
         const socioRaw = req.body.socioId != null ? parseInt(String(req.body.socioId)) : NaN;
+        const movDate = date ?? new Date().toISOString().slice(0, 10);
+        const movDesc = description || (isOutgoing ? "Pago banco" : "Cobro banco");
         await storage.reconcileMpCajaMovement({
-          sourceId,
-          date: date ?? new Date().toISOString().slice(0, 10),
-          type: isOutgoing ? "egreso" : "ingreso",
-          description: description || (isOutgoing ? "Pago banco" : "Cobro banco"),
-          gross: parseFloat(String(amount)),
-          fee: fee != null ? parseFloat(String(fee)) : 0,
-          category: catName,
+          sourceId, date: movDate, type: isOutgoing ? "egreso" : "ingreso",
+          description: movDesc, gross: parseFloat(String(amount)), category: catName,
           socioId: catName === "Retiro" && !isNaN(socioRaw) ? socioRaw : null,
         });
+        await storage.syncMpFee({ sourceId, fee: fee != null ? parseFloat(String(fee)) : 0, date: movDate, description: movDesc });
       } else {
         await storage.deleteBankMovementFromCaja(sourceId); // borra el principal, la comisión y el retiro
       }
