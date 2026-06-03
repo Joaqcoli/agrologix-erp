@@ -346,10 +346,13 @@ export default function CajaPage() {
   });
 
   const handleAdd = () => {
-    if (!form.description || !form.amount || !form.date || !form.method) return;
+    if (!form.amount || !form.date || !form.method) return;
+    // La categoría es suficiente: si no hay descripción, se usa la categoría. Pero algo tiene que identificarlo.
+    if (!form.description.trim() && !form.category) return;
     // Categoría Retiro requiere socio asignado, así el monto siempre suma en la card del socio
     if (form.category === "Retiro" && form.socioId == null) return;
-    addMutation.mutate(form);
+    const description = form.description.trim() || form.category;
+    addMutation.mutate({ ...form, description });
   };
 
   // ── Retiros queries & mutations ───────────────────────────────────────────────
@@ -1740,7 +1743,7 @@ export default function CajaPage() {
               </div>
             )}
             <div className="space-y-1">
-              <Label>Descripción</Label>
+              <Label>Descripción <span className="text-muted-foreground font-normal">(opcional si elegís categoría)</span></Label>
               <Input
                 value={form.description}
                 onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
@@ -1803,7 +1806,7 @@ export default function CajaPage() {
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>
             <Button
               onClick={handleAdd}
-              disabled={addMutation.isPending || !form.description || !form.amount || !form.method || (form.category === "Retiro" && form.socioId == null)}
+              disabled={addMutation.isPending || !form.amount || !form.method || (!form.description.trim() && !form.category) || (form.category === "Retiro" && form.socioId == null)}
             >
               {addMutation.isPending ? "Guardando..." : "Guardar"}
             </Button>
