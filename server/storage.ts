@@ -3641,10 +3641,12 @@ export const storage = {
 
     // % de deuda: proporción del saldo de cada proveedor sobre el total adeudado (saldos positivos)
     const totalDeuda = supplierRows.reduce((s, r) => s + (r.saldo > 0 ? r.saldo : 0), 0);
-    const suppliersWithPct = supplierRows.map((r) => ({
-      ...r,
-      pct: totalDeuda > 0 && r.saldo > 0 ? (r.saldo / totalDeuda) * 100 : 0,
-    }));
+    const suppliersWithPct = supplierRows
+      .map((r) => ({
+        ...r,
+        pct: totalDeuda > 0 && r.saldo > 0 ? (r.saldo / totalDeuda) * 100 : 0,
+      }))
+      .sort((a, b) => b.saldo - a.saldo); // mayor saldo a menor, igual que la CC de clientes
 
     const totals = supplierRows.reduce(
       (acc, r) => ({
