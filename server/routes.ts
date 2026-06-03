@@ -1617,6 +1617,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  app.get("/api/vendedor/dashboard-extra", requireVendedor, async (req, res) => {
+    try {
+      const user = await storage.getUserById(req.session.userId!);
+      if (!user) return res.status(401).json({ error: "User not found" });
+      return res.json(await storage.getVendedorDashboardExtra(user.name));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   app.get("/api/vendedor/orders", requireVendedor, async (req, res) => {
     try {
       const user = await storage.getUserById(req.session.userId!);

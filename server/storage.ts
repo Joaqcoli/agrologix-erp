@@ -879,6 +879,83 @@ export const storage = {
     return rows.rows as any[];
   },
 
+  // Elementos extra del dashboard del vendedor — TODO filtrado por su salesperson_name (sus clientes/pedidos).
+  async getVendedorDashboardExtra(salespersonName: string) {
+    // Venta con IVA (misma lógica que /api/vendedor/dashboard)
+    const iva = drizzleSql`CASE
+      WHEN oi.price_per_unit::numeric = 0 THEN 0
+      WHEN c.has_iva = true AND (p.name ILIKE '%huevo%' OR p.category ILIKE '%huevo%')
+        THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
+      WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+      ELSE oi.quantity::numeric * oi.price_per_unit::numeric END`;
+    const monthStart = drizzleSql`date_trunc('month', CURRENT_DATE)`;
+    const monthEnd = drizzleSql`date_trunc('month', CURRENT_DATE) + interval '1 month'`;
+
+    // 1) Clientes inactivos: asignados + activos + con AL MENOS un pedido; días desde el último pedido >= 7.
+    //    (Los que nunca pidieron quedan fuera por el JOIN.)
+    const inactivos = await db.execute(drizzleSql`
+      SELECT c.id, c.name, (CURRENT_DATE - MAX(o.order_date)::date) AS dias
+      FROM customers c
+      JOIN orders o ON o.customer_id = c.id
+      WHERE c.salesperson_name = ${salespersonName} AND c.active = true
+      GROUP BY c.id, c.name
+      HAVING (CURRENT_DATE - MAX(o.order_date)::date) >= 7
+      ORDER BY dias DESC
+    `);
+
+    // 2) Ventas por día del mes actual (solo sus ventas aprobadas)
+    const ventasPorDia = await db.execute(drizzleSql`
+      SELECT o.order_date::date::text AS dia, COALESCE(SUM(${iva}), 0)::float AS total
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      JOIN order_items oi ON oi.order_id = o.id
+      LEFT JOIN products p ON p.id = oi.product_id
+      WHERE o.status = 'approved' AND c.salesperson_name = ${salespersonName}
+        AND o.order_date >= ${monthStart} AND o.order_date < ${monthEnd}
+      GROUP BY o.order_date::date
+      ORDER BY o.order_date::date
+    `);
+
+    // 3) Últimos pedidos cargados (cualquier estado), del vendedor
+    const ultimosPedidos = await db.execute(drizzleSql`
+      SELECT o.id, o.folio, o.order_date::date::text AS fecha, o.status,
+             c.name AS cliente, o.total::float AS total
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      WHERE c.salesperson_name = ${salespersonName}
+      ORDER BY o.created_at DESC
+      LIMIT 8
+    `);
+
+    // 4) Top 5 clientes del mes por facturación
+    const topClientes = await db.execute(drizzleSql`
+      SELECT c.id, c.name, COALESCE(SUM(${iva}), 0)::float AS total
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      JOIN order_items oi ON oi.order_id = o.id
+      LEFT JOIN products p ON p.id = oi.product_id
+      WHERE o.status = 'approved' AND c.salesperson_name = ${salespersonName}
+        AND o.order_date >= ${monthStart} AND o.order_date < ${monthEnd}
+      GROUP BY c.id, c.name
+      HAVING COALESCE(SUM(${iva}), 0) > 0
+      ORDER BY total DESC
+      LIMIT 5
+    `);
+
+    return {
+      inactivos: (inactivos.rows as any[]).map((r) => ({
+        id: Number(r.id), name: String(r.name), dias: Number(r.dias),
+        bucket: Number(r.dias) >= 14 ? "roja" : "naranja",
+      })),
+      ventasPorDia: (ventasPorDia.rows as any[]).map((r) => ({ dia: String(r.dia), total: Number(r.total) })),
+      ultimosPedidos: (ultimosPedidos.rows as any[]).map((r) => ({
+        id: Number(r.id), folio: String(r.folio), fecha: String(r.fecha),
+        status: String(r.status), cliente: String(r.cliente), total: Number(r.total),
+      })),
+      topClientes: (topClientes.rows as any[]).map((r) => ({ id: Number(r.id), name: String(r.name), total: Number(r.total) })),
+    };
+  },
+
   // ─── Orders ───────────────────────────────────────────────────────────────
   async getNextRemitoFolio(): Promise<string> {
     const [last] = await db.select().from(remitos).orderBy(desc(remitos.id)).limit(1);

@@ -37,7 +37,10 @@ const EMPTY: Partial<Customer> = {
 
 export default function VendedorCustomers() {
   const { toast } = useToast();
-  const [search, setSearch] = useState("");
+  // Prefiltrar por ?q= (ej. al venir desde "Ver" en el dashboard)
+  const [search, setSearch] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("q") ?? ""; } catch { return ""; }
+  });
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [form, setForm] = useState<Partial<Customer>>(EMPTY);
