@@ -76,8 +76,19 @@ type APCCDetail = {
   cobranza: number;
   saldo: number;
   plazoPromedioChequesDias?: number | null;
+  cheques?: ChequeRow[];
   purchases: PurchaseRow[];
   payments: PaymentRow[];
+};
+
+type ChequeRow = {
+  id: number;
+  numero: string | null;
+  fechaEmision: string; // YYYY-MM-DD
+  fechaCobro: string;   // YYYY-MM-DD
+  monto: number;
+  plazoDias: number;
+  estado: string;       // en_cartera | depositado | endosado | cobrado
 };
 
 type PendingPurchase = { id: number; folio: string; total: string; purchaseDate: string };
@@ -509,6 +520,16 @@ export default function SupplierCCPage({
     .filter((p) => !p.isPaid)
     .reduce((s, p) => s + p.total, 0);
 
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const chequeEstado = (c: ChequeRow): { label: string; vencido: boolean } => {
+    if (c.estado === "cobrado") return { label: "Cobrado", vencido: false };
+    if ((c.estado === "en_cartera" || c.estado === "endosado") && c.fechaCobro < todayISO) {
+      return { label: "Vencido", vencido: true };
+    }
+    const labels: Record<string, string> = { en_cartera: "En cartera", depositado: "Depositado", endosado: "Endosado" };
+    return { label: labels[c.estado] ?? c.estado, vencido: false };
+  };
+
   return (
     <Layout title={title}>
       <div className="p-5 max-w-4xl mx-auto space-y-4">
@@ -613,6 +634,76 @@ export default function SupplierCCPage({
             <Wallet className="h-3.5 w-3.5" />
             Plazo promedio cheques: <span className="font-semibold text-foreground">{data.plazoPromedioChequesDias} días</span>
           </div>
+        )}
+
+        {/* Cheques emitidos (solo lectura — no afecta saldos) */}
+        {!isLoading && (data?.cheques?.length ?? 0) > 0 && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <Wallet className="h-4 w-4" />
+                Cheques emitidos ({data?.cheques?.length ?? 0})
+                {(() => {
+                  const venc = (data?.cheques ?? []).filter((c) => chequeEstado(c).vencido).length;
+                  return venc > 0 ? (
+                    <Badge className="text-[9px] bg-red-100 text-red-700 border-red-200 ml-1">
+                      {venc} vencido{venc > 1 ? "s" : ""}
+                    </Badge>
+                  ) : null;
+                })()}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/30">
+                      <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Nº</th>
+                      <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Emisión</th>
+                      <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Cobro</th>
+                      <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Monto</th>
+                      <th className="text-right py-2 px-3 font-semibold text-muted-foreground">Plazo</th>
+                      <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(data?.cheques ?? []).map((c) => {
+                      const est = chequeEstado(c);
+                      return (
+                        <tr key={c.id} className={`border-b border-border last:border-0 ${est.vencido ? "bg-red-50/60 dark:bg-red-950/20" : ""}`}>
+                          <td className="py-1.5 px-3 font-medium text-foreground">{c.numero ?? "—"}</td>
+                          <td className="py-1.5 px-3 text-muted-foreground">{fmtDate(c.fechaEmision)}</td>
+                          <td className={`py-1.5 px-3 ${est.vencido ? "font-semibold text-destructive" : "text-muted-foreground"}`}>{fmtDate(c.fechaCobro)}</td>
+                          <td className="py-1.5 px-3 text-right font-semibold text-foreground">${fmtInt(c.monto)}</td>
+                          <td className="py-1.5 px-3 text-right text-muted-foreground">{c.plazoDias} días</td>
+                          <td className="py-1.5 px-3">
+                            <span className={`inline-flex items-center text-[9px] py-0.5 px-1.5 rounded-full ${
+                              est.vencido
+                                ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                                : c.estado === "cobrado"
+                                  ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                                  : "bg-muted text-muted-foreground"
+                            }`}>
+                              {est.label}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t border-border bg-muted/20">
+                      <td className="py-2 px-3 font-bold text-foreground" colSpan={3}>TOTAL ({data?.cheques?.length ?? 0})</td>
+                      <td className="py-2 px-3 text-right font-bold text-foreground">
+                        ${fmtInt((data?.cheques ?? []).reduce((s, c) => s + c.monto, 0))}
+                      </td>
+                      <td colSpan={2}></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Purchases in period */}

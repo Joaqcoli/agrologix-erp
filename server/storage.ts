@@ -3695,10 +3695,10 @@ export const storage = {
         WHERE supplier_id = ${supplierId}
         ORDER BY date DESC
       `),
-      // Cheques emitidos a este proveedor (para mostrar fecha de cobro + plazo)
+      // Cheques emitidos a este proveedor (para el detalle + plazo)
       db.execute(drizzleSql`
         SELECT id, monto::float AS monto, fecha_cobro AS "fechaCobro",
-               created_at AS "createdAt", estado
+               created_at AS "createdAt", estado, notas
         FROM cheques
         WHERE supplier_id = ${supplierId} AND tipo = 'emitido'
         ORDER BY created_at DESC
@@ -3736,15 +3736,27 @@ export const storage = {
     const toDay = (v: any) => new Date(v).toISOString().slice(0, 10);
     const diffDays = (a: string, b: string) =>
       Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
-    const emitidos = (chequesRows.rows as any[]).map((c) => ({
-      monto: Number(c.monto),
-      fechaCobro: String(c.fechaCobro),
-      emisionMs: new Date(c.createdAt).getTime(),
-      plazoDias: diffDays(toDay(c.createdAt), String(c.fechaCobro)),
-    }));
+    const emitidos = (chequesRows.rows as any[]).map((c) => {
+      const fechaEmision = toDay(c.createdAt);
+      const numMatch = typeof c.notas === "string" ? c.notas.match(/N[º°o]\s*([^\s,;]+)/i) : null;
+      return {
+        id: Number(c.id),
+        numero: numMatch ? numMatch[1] : (c.notas ?? null),
+        monto: Number(c.monto),
+        fechaEmision,
+        fechaCobro: String(c.fechaCobro),
+        emisionMs: new Date(c.createdAt).getTime(),
+        plazoDias: diffDays(fechaEmision, String(c.fechaCobro)),
+        estado: String(c.estado),
+      };
+    });
     const plazoPromedioChequesDias = emitidos.length > 0
       ? Math.round(emitidos.reduce((s, c) => s + c.plazoDias, 0) / emitidos.length)
       : null;
+    // Lista para la tabla de la CC, ordenada por fecha de cobro
+    const cheques = emitidos
+      .map(({ emisionMs, ...c }) => c)
+      .sort((a, b) => (a.fechaCobro < b.fechaCobro ? -1 : a.fechaCobro > b.fechaCobro ? 1 : 0));
 
     // Vincular cada pago con método CHEQUE a su cheque emitido (mismo monto, emisión más cercana al pago)
     const usedCheque = new Set<number>();
@@ -3772,6 +3784,7 @@ export const storage = {
       cobranza,
       saldo,
       plazoPromedioChequesDias,
+      cheques,
       purchases: purchasesInPeriod,
       payments,
     };
