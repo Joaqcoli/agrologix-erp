@@ -319,16 +319,45 @@ function ResetStockDialog({ open, onClose }: { open: boolean; onClose: () => voi
 
 // ─── Adjustment History Section ───────────────────────────────────────────────
 function AdjustmentHistory() {
+  const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [motiveFilter, setMotiveFilter] = useState<"all" | Motivo>("all");
   const [dateFrom, setDateFrom] = useState(monthStartStr);
   const [dateTo, setDateTo] = useState(todayStr);
+  const [revertTarget, setRevertTarget] = useState<AdjustmentMovement | null>(null);
+  const [revertQty, setRevertQty] = useState("");
+
+  // Ventana de reversión: hoy o ayer (fechas UTC, igual que como se muestran)
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const yestISO = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const isRevertible = (m: AdjustmentMovement) => {
+    if (m.notes !== "Merma" && m.notes !== "Rinde") return false;
+    const d = m.createdAt.slice(0, 10);
+    return d === todayISO || d === yestISO;
+  };
 
   const { data: movements = [], isLoading } = useQuery<AdjustmentMovement[]>({
     queryKey: ["/api/stock-movements"],
     enabled: open,
     staleTime: 30_000,
   });
+
+  const revertMut = useMutation({
+    mutationFn: ({ id, qty }: { id: number; qty: number }) =>
+      apiRequest("POST", `/api/stock-movements/${id}/revert`, { qty }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/stock-movements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/product-units"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      toast({ title: "Ajuste revertido" });
+      setRevertTarget(null);
+      setRevertQty("");
+    },
+    onError: (e: any) => toast({ title: "No se pudo revertir", description: e?.message ?? "Error", variant: "destructive" }),
+  });
+
+  const openRevert = (m: AdjustmentMovement) => { setRevertTarget(m); setRevertQty(parseFloat(m.quantity).toString()); };
 
   // Apply date + motive filters
   const filtered = useMemo(() => {
@@ -398,6 +427,7 @@ function AdjustmentHistory() {
   };
 
   return (
+    <>
     <Collapsible open={open} onOpenChange={setOpen}>
       <Card>
         <CollapsibleTrigger asChild>
@@ -509,6 +539,9 @@ function AdjustmentHistory() {
                             const isMerma = m.notes === "Merma";
                             const isRinde = m.notes === "Rinde";
                             const isCorreccion = m.notes === "Corrección";
+                            const isReverted = m.notes === "REVERTIDO";
+                            const isReversion = (m.notes ?? "").startsWith("Reversión");
+                            const revertible = isRevertible(m);
                             return (
                               <tr key={m.id} className="border-b border-border last:border-0 hover:bg-muted/20">
                                 <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">{formatDate(m.createdAt)}</td>
@@ -516,21 +549,35 @@ function AdjustmentHistory() {
                                 <td className="py-2 px-3">
                                   <Badge variant="secondary" className="text-[10px]">{m.unit}</Badge>
                                 </td>
-                                <td className={`py-2 px-3 text-right font-semibold whitespace-nowrap ${isIn ? "text-green-600" : "text-red-600"}`}>
+                                <td className={`py-2 px-3 text-right font-semibold whitespace-nowrap ${isReverted ? "text-muted-foreground line-through" : isIn ? "text-green-600" : "text-red-600"}`}>
                                   {isIn ? "+" : "-"}{fmtStock(qty)}
                                 </td>
                                 <td className="py-2 px-3">
-                                  {isMerma ? (
-                                    <Badge variant="outline" className="text-[10px] text-red-600 border-red-400/40">Merma</Badge>
-                                  ) : isRinde ? (
-                                    <Badge variant="outline" className="text-[10px] text-green-600 border-green-400/40">Rinde</Badge>
-                                  ) : isCorreccion ? (
-                                    <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-400/40">Corrección</Badge>
-                                  ) : (
-                                    <span className="text-muted-foreground">{m.notes || "—"}</span>
-                                  )}
+                                  <div className="flex items-center gap-1.5">
+                                    {isReverted ? (
+                                      <Badge variant="outline" className="text-[10px] text-muted-foreground border-muted-foreground/40 line-through">
+                                        {m.movementType === "out" ? "Merma" : "Rinde"}
+                                      </Badge>
+                                    ) : isReversion ? (
+                                      <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-400/40">Reversión</Badge>
+                                    ) : isMerma ? (
+                                      <Badge variant="outline" className="text-[10px] text-red-600 border-red-400/40">Merma</Badge>
+                                    ) : isRinde ? (
+                                      <Badge variant="outline" className="text-[10px] text-green-600 border-green-400/40">Rinde</Badge>
+                                    ) : isCorreccion ? (
+                                      <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-400/40">Corrección</Badge>
+                                    ) : (
+                                      <span className="text-muted-foreground">{m.notes || "—"}</span>
+                                    )}
+                                    {isReverted && <span className="text-[10px] text-muted-foreground italic">Revertido</span>}
+                                    {revertible && (
+                                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[10px] text-muted-foreground hover:text-foreground" onClick={() => openRevert(m)}>
+                                        <RefreshCw className="h-3 w-3 mr-1" /> Revertir
+                                      </Button>
+                                    )}
+                                  </div>
                                 </td>
-                                <td className={`py-2 px-3 text-right font-semibold whitespace-nowrap ${pesos > 0 ? "text-green-600" : pesos < 0 ? "text-red-600" : "text-muted-foreground"}`}>
+                                <td className={`py-2 px-3 text-right font-semibold whitespace-nowrap ${isReverted ? "text-muted-foreground line-through" : pesos > 0 ? "text-green-600" : pesos < 0 ? "text-red-600" : "text-muted-foreground"}`}>
                                   {parseFloat(m.avgCost ?? "0") > 0 ? fmtPesos(pesos) : "—"}
                                 </td>
                               </tr>
@@ -547,6 +594,51 @@ function AdjustmentHistory() {
         </CollapsibleContent>
       </Card>
     </Collapsible>
+
+    {/* Diálogo: revertir ajuste (total o parcial) */}
+    <Dialog open={revertTarget !== null} onOpenChange={(v) => { if (!v) { setRevertTarget(null); setRevertQty(""); } }}>
+      <DialogContent className="max-w-sm">
+        {revertTarget && (() => {
+          const origQty = parseFloat(revertTarget.quantity);
+          const tipo = revertTarget.notes === "Merma" ? "Merma" : "Rinde";
+          const n = parseFloat(revertQty);
+          const invalid = !(n > 0) || n > origQty + 1e-6;
+          const esTotal = Math.abs(n - origQty) < 1e-6;
+          return (
+            <>
+              <DialogHeader>
+                <DialogTitle>Revertir {tipo} — {revertTarget.productName}</DialogTitle>
+                <DialogDescription>
+                  Ajuste original: {fmtStock(origQty)} {revertTarget.unit}. Indicá cuánto revertir (todo o una parte).
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-2 py-1">
+                <Label>¿Cuánto revertir? ({revertTarget.unit})</Label>
+                <Input
+                  type="number" min="0" max={origQty} step="0.01" autoFocus
+                  value={revertQty}
+                  onChange={(e) => setRevertQty(e.target.value)}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Máximo {fmtStock(origQty)}. {esTotal ? "Reversión total (sale completa de los totales)." : !invalid ? `Reversión parcial: quedan ${fmtStock(origQty - n)} ${revertTarget.unit} de ${tipo.toLowerCase()}.` : ""}
+                  {tipo === "Rinde" && " Si la mercadería ya se vendió/usó, se bloqueará."}
+                </p>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { setRevertTarget(null); setRevertQty(""); }}>Cancelar</Button>
+                <Button
+                  disabled={invalid || revertMut.isPending}
+                  onClick={() => revertMut.mutate({ id: revertTarget.id, qty: n })}
+                >
+                  {revertMut.isPending ? "Revirtiendo..." : "Revertir"}
+                </Button>
+              </DialogFooter>
+            </>
+          );
+        })()}
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
 

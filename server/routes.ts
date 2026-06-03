@@ -414,6 +414,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // Revertir (total o parcial) un ajuste de merma/rinde — limitado a hoy/ayer
+  app.post("/api/stock-movements/:id/revert", requireAuth, async (req, res) => {
+    try {
+      const { qty } = z.object({ qty: z.number().positive() }).parse(req.body);
+      const result = await storage.revertStockAdjustment(Number(req.params.id), qty);
+      return res.json(result);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   // ─── Stock Adjustments ─────────────────────────────────────────────────────
   app.post("/api/stock/adjust", requireAuth, async (req, res) => {
     try {

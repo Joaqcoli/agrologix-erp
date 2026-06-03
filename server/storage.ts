@@ -2242,6 +2242,72 @@ export const storage = {
     return updated;
   },
 
+  // Revierte (total o parcial) un ajuste de Merma/Rinde, limitado a hoy/ayer.
+  // Atómico. No toca fórmulas: reduce/marca el movimiento original (los totales se recalculan en vivo)
+  // y corrige el stock guardado (product_units + products). Registra un movimiento de auditoría neutro.
+  async revertStockAdjustment(movementId: number, qtyToRevert: number): Promise<{ ok: boolean }> {
+    return db.transaction(async (tx) => {
+      const [mv] = await tx.select().from(stockMovements)
+        .where(and(eq(stockMovements.id, movementId), eq(stockMovements.referenceType, "adjustment")))
+        .limit(1);
+      if (!mv) throw new Error("Ajuste no encontrado");
+      const note = mv.notes ?? "";
+      if (note !== "Merma" && note !== "Rinde") throw new Error("Solo se pueden revertir ajustes de Merma o Rinde");
+
+      // Límite hoy/ayer (fecha del servidor)
+      const g = await tx.execute(drizzleSql`SELECT (created_at::date >= CURRENT_DATE - 1) AS ok FROM stock_movements WHERE id = ${movementId}`);
+      if (!(g.rows[0] as any)?.ok) throw new Error("Solo se pueden revertir ajustes de hoy o ayer");
+
+      const origQty = parseFloat(mv.quantity as string);
+      if (!(qtyToRevert > 0)) throw new Error("La cantidad a revertir debe ser mayor a 0");
+      if (qtyToRevert > origQty + 1e-6) throw new Error(`No se puede revertir más que la cantidad original (${origQty.toFixed(2)})`);
+      const qty = Math.min(qtyToRevert, origQty);
+
+      const puId = mv.referenceId as number;
+      const [pu] = await tx.select().from(productUnits).where(eq(productUnits.id, puId)).limit(1);
+      if (!pu) throw new Error("Unidad de stock del ajuste no encontrada");
+      const currentStock = parseFloat(pu.stockQty as string);
+      const isMerma = note === "Merma"; // movimiento 'out' (bajó stock)
+
+      // Revertir un Rinde saca stock → validar que alcance. Revertir una Merma siempre es seguro.
+      if (!isMerma && currentStock < qty - 1e-6) {
+        throw new Error("No se puede revertir: la mercadería del rinde ya se usó/vendió (stock insuficiente)");
+      }
+
+      // 1) Corregir el stock real
+      const newStock = isMerma ? currentStock + qty : currentStock - qty;
+      await tx.update(productUnits)
+        .set({ stockQty: Math.max(0, newStock).toFixed(4), isActive: true })
+        .where(eq(productUnits.id, puId));
+      const allPu = await tx.select().from(productUnits).where(eq(productUnits.productId, mv.productId));
+      const totalStock = allPu.reduce((s, p) => s + parseFloat(p.stockQty as string), 0);
+      await tx.update(products).set({ currentStock: totalStock.toFixed(4) }).where(eq(products.id, mv.productId));
+
+      // 2) Reducir / marcar el ajuste original (sin tocar fórmulas — los totales son en vivo)
+      const remaining = origQty - qty;
+      if (remaining <= 1e-6) {
+        // Total: notes sin %Merma%/%Rinde% → sale de TODOS los totales. El tipo se infiere de movement_type.
+        await tx.update(stockMovements).set({ notes: "REVERTIDO" }).where(eq(stockMovements.id, movementId));
+      } else {
+        await tx.update(stockMovements).set({ quantity: remaining.toFixed(4) }).where(eq(stockMovements.id, movementId));
+      }
+
+      // 3) Auditoría: movimiento neutro (no matchea Merma/Rinde, no impacta ningún total)
+      const [prod] = await tx.select({ name: products.name }).from(products).where(eq(products.id, mv.productId)).limit(1);
+      await tx.insert(stockMovements).values({
+        productId: mv.productId,
+        movementType: isMerma ? "in" : "out",
+        quantity: qty.toFixed(4),
+        unitCost: mv.unitCost as string,
+        referenceType: "adjustment",
+        referenceId: puId,
+        notes: `Reversión — ${prod?.name ?? ""} (${qty.toFixed(2)} de ${origQty.toFixed(2)})`,
+      });
+
+      return { ok: true };
+    });
+  },
+
   async resetAllStock(asMerma: boolean): Promise<{ affected: number }> {
     const allPu = await db.select().from(productUnits)
       .where(drizzleSql`${productUnits.stockQty}::numeric > 0 AND ${productUnits.isActive} = true`);
