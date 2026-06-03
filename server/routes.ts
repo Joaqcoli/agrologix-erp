@@ -2958,8 +2958,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           category: catName,
           method: "TRANSFERENCIA",
         });
+        // Retiro de socio: vinculado al movimiento por sourceId (estable ante re-categorización).
+        // Siempre limpiamos el retiro previo de este movimiento antes de recrear (cambio de socio o de categoría).
+        await storage.deleteRetiroByMovimientoRef(sourceId);
+        const socioId = req.body.socioId != null ? parseInt(String(req.body.socioId)) : NaN;
+        if (catName === "Retiro" && !isNaN(socioId)) {
+          await storage.createRetiro({
+            socioId,
+            monto: parseFloat(String(amount)),
+            fecha: date ?? new Date().toISOString().slice(0, 10),
+            origen: "movimiento",
+            movimientoRef: sourceId,
+            notas: description ?? null,
+          });
+        }
       } else {
         await storage.deleteBankMovementFromCaja(sourceId);
+        await storage.deleteRetiroByMovimientoRef(sourceId);
       }
 
       return res.json({ ok: true });

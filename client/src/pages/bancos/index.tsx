@@ -329,19 +329,46 @@ export default function BancosPage() {
   // ── mutations ─────────────────────────────────────────────────────────────────
 
   const setCategoryMut = useMutation({
-    mutationFn: ({ mpId, categoryId, amount, date, isOutgoing, description }: {
+    mutationFn: ({ mpId, categoryId, amount, date, isOutgoing, description, socioId }: {
       mpId: string | number;
       categoryId: number | null;
       amount?: number;
       date?: string;
       isOutgoing?: boolean;
       description?: string;
-    }) => apiRequest("PUT", `/api/mp/movements/${mpId}/category`, { categoryId, amount, date, isOutgoing, description }),
+      socioId?: number | null;
+    }) => apiRequest("PUT", `/api/mp/movements/${mpId}/category`, { categoryId, amount, date, isOutgoing, description, socioId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/mp/movements"] });
       qc.invalidateQueries({ queryKey: ["/api/caja/summary"] });
+      qc.invalidateQueries({ queryKey: ["/api/caja/retiros"] });
     },
   });
+
+  // Socios para asignar retiros desde la categorización de banco
+  const { data: socios = [] } = useQuery<{ id: number; nombre: string; activo: boolean }[]>({
+    queryKey: ["/api/caja/socios"],
+    queryFn: () => fetch("/api/caja/socios", { credentials: "include" }).then(r => r.json()),
+  });
+
+  // Prompt para elegir socio cuando la categoría es "Retiro"
+  const [retiroPrompt, setRetiroPrompt] = useState<{
+    mpId: string | number; categoryId: number; amount?: number; date?: string; isOutgoing?: boolean; description?: string;
+  } | null>(null);
+  const [retiroSocioId, setRetiroSocioId] = useState<number | null>(null);
+
+  // Categoriza un movimiento; si la categoría es "Retiro" pide socio antes de guardar
+  const handleCategorize = (payload: {
+    mpId: string | number; categoryId: number | null; amount?: number; date?: string; isOutgoing?: boolean; description?: string;
+  }) => {
+    const catName = payload.categoryId != null ? categories.find(c => c.id === payload.categoryId)?.name : null;
+    if (catName === "Retiro" && payload.categoryId != null) {
+      setRetiroPrompt({ ...payload, categoryId: payload.categoryId });
+      setRetiroSocioId(null);
+    } else {
+      setCategoryMut.mutate(payload);
+    }
+  };
 
   const createCategoryMut = useMutation({
     mutationFn: (name: string) => apiRequest("POST", "/api/bank-categories", { name }),
@@ -811,7 +838,7 @@ export default function BancosPage() {
                                 movId={m.id}
                                 categoryId={m.categoryId}
                                 categories={categories}
-                                onSelect={(id, catId) => setCategoryMut.mutate({
+                                onSelect={(id, catId) => handleCategorize({
                                   mpId: id,
                                   categoryId: catId,
                                   amount: m.netAmount,
@@ -1261,6 +1288,42 @@ export default function BancosPage() {
           </Dialog>
         );
       })()}
+
+      {/* ── Dialog: elegir socio para un movimiento categorizado como Retiro ── */}
+      <Dialog open={retiroPrompt != null} onOpenChange={v => { if (!v) { setRetiroPrompt(null); setRetiroSocioId(null); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>¿Quién retira?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <p className="text-xs text-muted-foreground">
+              Elegí el socio para que el retiro sume en su card de "Retiros de socios".
+            </p>
+            <Select value={retiroSocioId != null ? String(retiroSocioId) : ""} onValueChange={v => setRetiroSocioId(Number(v))}>
+              <SelectTrigger><SelectValue placeholder="Elegí un socio" /></SelectTrigger>
+              <SelectContent>
+                {socios.filter(s => s.activo).map(s => (
+                  <SelectItem key={s.id} value={String(s.id)}>{s.nombre}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setRetiroPrompt(null); setRetiroSocioId(null); }}>Cancelar</Button>
+            <Button
+              disabled={retiroSocioId == null || setCategoryMut.isPending}
+              onClick={() => {
+                if (retiroPrompt == null || retiroSocioId == null) return;
+                setCategoryMut.mutate({ ...retiroPrompt, socioId: retiroSocioId });
+                setRetiroPrompt(null);
+                setRetiroSocioId(null);
+              }}
+            >
+              Guardar retiro
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Layout>
   );
 }
