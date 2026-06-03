@@ -3669,7 +3669,7 @@ export const storage = {
       ? `${year + 1}-01-01`
       : `${year}-${String(month + 1).padStart(2, "0")}-01`;
 
-    const [supplier, purchasesPrevRows, purchasesInRows, paymentsRows] = await Promise.all([
+    const [supplier, purchasesPrevRows, purchasesInRows, paymentsRows, chequesRows] = await Promise.all([
       db.select().from(suppliers).where(eq(suppliers.id, supplierId)).limit(1),
       // Compras anteriores al período
       db.execute(drizzleSql`
@@ -3694,6 +3694,14 @@ export const storage = {
         FROM supplier_payments
         WHERE supplier_id = ${supplierId}
         ORDER BY date DESC
+      `),
+      // Cheques emitidos a este proveedor (para mostrar fecha de cobro + plazo)
+      db.execute(drizzleSql`
+        SELECT id, monto::float AS monto, fecha_cobro AS "fechaCobro",
+               created_at AS "createdAt", estado
+        FROM cheques
+        WHERE supplier_id = ${supplierId} AND tipo = 'emitido'
+        ORDER BY created_at DESC
       `),
     ]);
 
@@ -3724,6 +3732,37 @@ export const storage = {
     const cobranza = paymentsInPeriod.reduce((s, p) => s + Math.round(parseFloat(p.amount ?? "0")), 0);
     const saldo = saldoMesAnterior + facturacion - cobranza;
 
+    // Cheques emitidos a este proveedor: plazo = fecha_cobro − fecha de emisión (created_at)
+    const toDay = (v: any) => new Date(v).toISOString().slice(0, 10);
+    const diffDays = (a: string, b: string) =>
+      Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
+    const emitidos = (chequesRows.rows as any[]).map((c) => ({
+      monto: Number(c.monto),
+      fechaCobro: String(c.fechaCobro),
+      emisionMs: new Date(c.createdAt).getTime(),
+      plazoDias: diffDays(toDay(c.createdAt), String(c.fechaCobro)),
+    }));
+    const plazoPromedioChequesDias = emitidos.length > 0
+      ? Math.round(emitidos.reduce((s, c) => s + c.plazoDias, 0) / emitidos.length)
+      : null;
+
+    // Vincular cada pago con método CHEQUE a su cheque emitido (mismo monto, emisión más cercana al pago)
+    const usedCheque = new Set<number>();
+    const payments = paymentsInPeriod.map((p) => {
+      const base = { ...p, amount: parseFloat(p.amount ?? "0") };
+      if (String(p.method ?? "").toUpperCase() !== "CHEQUE") return base;
+      const payMs = new Date(p.createdAt ?? p.date).getTime();
+      let bestIdx = -1, bestDelta = Infinity;
+      emitidos.forEach((c, i) => {
+        if (usedCheque.has(i) || Math.abs(c.monto - base.amount) > 0.5) return;
+        const delta = Math.abs(c.emisionMs - payMs);
+        if (delta < bestDelta) { bestDelta = delta; bestIdx = i; }
+      });
+      if (bestIdx < 0) return base;
+      usedCheque.add(bestIdx);
+      return { ...base, chequeFechaCobro: emitidos[bestIdx].fechaCobro, chequePlazoDias: emitidos[bestIdx].plazoDias };
+    });
+
     return {
       supplier: { id: sup.id, name: sup.name, phone: sup.phone, email: sup.email, cuit: sup.cuit, ccType: sup.ccType },
       month,
@@ -3732,8 +3771,9 @@ export const storage = {
       facturacion,
       cobranza,
       saldo,
+      plazoPromedioChequesDias,
       purchases: purchasesInPeriod,
-      payments: paymentsInPeriod.map((p) => ({ ...p, amount: parseFloat(p.amount ?? "0") })),
+      payments,
     };
   },
 
@@ -4850,7 +4890,7 @@ export const storage = {
   // ─── Cheques ────────────────────────────────────────────────────────────────
   async getCheques(): Promise<any[]> {
     const rows = await db.execute(drizzleSql`
-      SELECT id, tipo, monto::float, fecha_cobro, estado, contraparte,
+      SELECT id, tipo, monto::float, fecha_cobro, estado, contraparte, supplier_id,
              cuenta_destino_id, comision::float, obligacion_id, notas, created_at
       FROM cheques ORDER BY fecha_cobro ASC, id ASC
     `);
@@ -4859,17 +4899,17 @@ export const storage = {
 
   async createCheque(data: {
     tipo: string; monto: number; fechaCobro: string; estado?: string;
-    contraparte: string; cuentaDestinoId?: number | null;
+    contraparte: string; supplierId?: number | null; cuentaDestinoId?: number | null;
     comision?: number; obligacionId?: number | null; notas?: string | null;
   }): Promise<any> {
     const row = await db.execute(drizzleSql`
-      INSERT INTO cheques (tipo, monto, fecha_cobro, estado, contraparte,
+      INSERT INTO cheques (tipo, monto, fecha_cobro, estado, contraparte, supplier_id,
         cuenta_destino_id, comision, obligacion_id, notas)
       VALUES (${data.tipo}, ${data.monto}, ${data.fechaCobro},
-        ${data.estado ?? "en_cartera"}, ${data.contraparte},
+        ${data.estado ?? "en_cartera"}, ${data.contraparte}, ${data.supplierId ?? null},
         ${data.cuentaDestinoId ?? null}, ${data.comision ?? 0},
         ${data.obligacionId ?? null}, ${data.notas ?? null})
-      RETURNING id, tipo, monto::float, fecha_cobro, estado, contraparte,
+      RETURNING id, tipo, monto::float, fecha_cobro, estado, contraparte, supplier_id,
         cuenta_destino_id, comision::float, obligacion_id, notas, created_at
     `);
     return (row.rows as any[])[0];

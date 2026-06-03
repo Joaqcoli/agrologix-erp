@@ -975,6 +975,8 @@ export async function runNcMigrations() {
   try { await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS caja_movements_source_id_idx ON caja_movements(source_id) WHERE source_id IS NOT NULL`); } catch {}
   try { await db.execute(sql`ALTER TABLE mp_xlsx_movements ADD COLUMN IF NOT EXISTS fecha_ts TEXT`); } catch {}
   try { await db.execute(sql`ALTER TABLE mp_xlsx_movements ADD COLUMN IF NOT EXISTS fee_amount NUMERIC(12,2)`); } catch {}
+  // Vínculo de cheque emitido → proveedor (los recibidos de clientes quedan null). contraparte (nombre) se mantiene por compat.
+  try { await db.execute(sql`ALTER TABLE cheques ADD COLUMN IF NOT EXISTS supplier_id INTEGER REFERENCES suppliers(id)`); } catch {}
 
   // Movimientos de cuenta (libro de ajustes por cuenta)
   await db.execute(sql`

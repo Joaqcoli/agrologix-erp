@@ -13,7 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2, Wallet } from "lucide-react";
 import React, { useState } from "react";
 import { jsPDF } from "jspdf";
 
@@ -56,6 +56,8 @@ type PaymentRow = {
   method: string;
   notes?: string | null;
   purchaseId?: number | null;
+  chequeFechaCobro?: string;   // solo en pagos con método CHEQUE (emitido propio)
+  chequePlazoDias?: number;    // fecha_cobro − fecha de emisión
 };
 
 type APCCDetail = {
@@ -73,6 +75,7 @@ type APCCDetail = {
   facturacion: number;
   cobranza: number;
   saldo: number;
+  plazoPromedioChequesDias?: number | null;
   purchases: PurchaseRow[];
   payments: PaymentRow[];
 };
@@ -604,6 +607,14 @@ export default function SupplierCCPage({
           ))}
         </div>
 
+        {/* Indicador: plazo promedio de cheques emitidos a este proveedor */}
+        {!isLoading && data?.plazoPromedioChequesDias != null && (
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground -mt-1">
+            <Wallet className="h-3.5 w-3.5" />
+            Plazo promedio cheques: <span className="font-semibold text-foreground">{data.plazoPromedioChequesDias} días</span>
+          </div>
+        )}
+
         {/* Purchases in period */}
         <Card>
           <CardHeader className="pb-2">
@@ -722,6 +733,12 @@ export default function SupplierCCPage({
                       <td className="py-1.5 px-3">
                         <div className="flex items-center gap-1 flex-wrap">
                           <Badge variant="outline" className="text-[9px] py-0">{p.method}</Badge>
+                          {p.method === "CHEQUE" && p.chequeFechaCobro && (
+                            <span className="inline-flex items-center gap-1 text-[9px] py-0 px-1.5 rounded-full bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400">
+                              Cobro {fmtDate(p.chequeFechaCobro)}
+                              {p.chequePlazoDias != null && ` · ${p.chequePlazoDias} días`}
+                            </span>
+                          )}
                           {p.notes && (
                             <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">{p.notes}</span>
                           )}

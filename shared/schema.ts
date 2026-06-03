@@ -525,7 +525,8 @@ export const cheques = pgTable("cheques", {
   monto: numeric("monto", { precision: 14, scale: 2 }).notNull(),
   fechaCobro: text("fecha_cobro").notNull(), // YYYY-MM-DD
   estado: text("estado").notNull().default("en_cartera"), // en_cartera | depositado | endosado | cobrado
-  contraparte: text("contraparte").notNull(),
+  contraparte: text("contraparte").notNull(), // nombre (compat); para emitidos a proveedor también se guarda supplierId
+  supplierId: integer("supplier_id").references(() => suppliers.id), // null para cheques recibidos de clientes
   cuentaDestinoId: integer("cuenta_destino_id").references(() => cuentasFinancieras.id),
   comision: numeric("comision", { precision: 14, scale: 2 }).notNull().default("0"),
   obligacionId: integer("obligacion_id"),  // se referencia a obligaciones, sin FK circular

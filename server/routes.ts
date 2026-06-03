@@ -1492,6 +1492,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             fechaCobro: chequeInfo.fechaCobro,
             estado: "en_cartera",
             contraparte: supplierName,
+            supplierId: data.supplierId, // vínculo por ID (contraparte se mantiene por compat)
             obligacionId: obs[0].id,
           });
         }
