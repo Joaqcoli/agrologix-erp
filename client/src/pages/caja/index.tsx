@@ -407,6 +407,20 @@ export default function CajaPage() {
     (cheques ?? []).filter(c => c.tipo === "recibido" && c.estado === "en_cartera"),
   [cheques]);
 
+  // Cheques emitidos en circulación (tipo=emitido, en_cartera) — lee en vivo; baja solo al marcar cobrado
+  const chequesEmitidosTotal = useMemo(() =>
+    (cheques ?? []).filter(c => c.tipo === "emitido" && c.estado === "en_cartera").reduce((s, c) => s + c.monto, 0),
+  [cheques]);
+  const chequesEnCarteraTotal = useMemo(() => chequesEnCartera.reduce((s, c) => s + c.monto, 0), [chequesEnCartera]);
+
+  // Deudas (mismo cálculo del Dashboard, son all-time; el rango no las afecta)
+  const monthStart = todayIso.slice(0, 8) + "01";
+  const { data: deudaStats } = useQuery<{ deudaClientes: number; deudaProveedores: number }>({
+    queryKey: ["/api/dashboard/stats", monthStart, todayIso],
+    queryFn: () => fetch(`/api/dashboard/stats?from=${monthStart}&to=${todayIso}`, { credentials: "include" }).then(r => r.json()),
+    staleTime: 60_000,
+  });
+
   const depositarMut = useMutation({
     mutationFn: ({ id, comision, cuentaDestinoId }: { id: number; comision: number; cuentaDestinoId: number | null }) =>
       apiRequest("PATCH", `/api/caja/cheques/${id}`, { accion: "depositar", comision, cuentaDestinoId }),
@@ -615,50 +629,110 @@ export default function CajaPage() {
     <Layout>
       <div className="p-6 space-y-6">
         {/* ── Posición financiera ─────────────────────────────────────────── */}
-        <section className="space-y-3">
+        <section className="space-y-4">
           <h2 className="text-base font-semibold">¿Dónde está mi plata hoy?</h2>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-            {(cuentas ?? []).map(cuenta => {
-              const saldo = getSaldoActual(cuenta);
-              return (
-                <Card
-                  key={cuenta.id}
-                  className="cursor-pointer hover:border-primary/40 transition-colors"
-                  onClick={() => { setEditCuenta(cuenta); setEditSaldo(String(cuenta.saldo_base ?? 0)); setEditCuentaOpen(true); }}
-                >
-                  <CardContent className="pt-4 pb-3 px-4">
-                    <div className="flex items-center gap-1.5 mb-1.5">
-                      {CUENTA_ICONS[cuenta.tipo]}
-                      <span className="text-xs font-medium text-muted-foreground truncate flex-1">{cuenta.nombre}</span>
-                      <Pencil className="h-3 w-3 text-muted-foreground/40 flex-shrink-0" />
-                    </div>
-                    <p className={`text-xl font-bold ${saldo >= 0 ? "text-foreground" : "text-red-600"}`}>{fmt(saldo)}</p>
-                    {cuenta.saldo_base_fecha && (
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
-                        base {new Date(cuenta.saldo_base_fecha).toLocaleDateString("es-AR", { day: "numeric", month: "short" })}
-                        {cuenta.tipo === "mp" && mpDelta !== 0 && (
-                          <span className={mpDelta > 0 ? " text-green-600" : " text-red-600"}>
-                            {" "}{mpDelta > 0 ? "+" : ""}{fmt(mpDelta)}
-                          </span>
-                        )}
-                      </p>
-                    )}
-                  </CardContent>
-                </Card>
-              );
-            })}
-            {/* Total */}
-            <Card className="bg-primary/5 border-primary/20">
-              <CardContent className="pt-4 pb-3 px-4">
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <DollarSign className="h-4 w-4 text-primary" />
-                  <span className="text-xs font-semibold text-primary">Disponible total</span>
-                </div>
-                <p className="text-xl font-bold text-primary">
-                  {cuentas ? fmt((cuentas).reduce((s, c) => s + getSaldoActual(c), 0)) : "…"}
-                </p>
-              </CardContent>
-            </Card>
+
+          {/* ── Grupo 1: Lo que tengo (plata líquida) ───────────────────── */}
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Lo que tengo</h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {(cuentas ?? []).filter(c => c.tipo !== "cheque").map(cuenta => {
+                const saldo = getSaldoActual(cuenta);
+                return (
+                  <Card
+                    key={cuenta.id}
+                    className="cursor-pointer hover:border-primary/40 transition-colors"
+                    onClick={() => { setEditCuenta(cuenta); setEditSaldo(String(cuenta.saldo_base ?? 0)); setEditCuentaOpen(true); }}
+                  >
+                    <CardContent className="pt-4 pb-3 px-4">
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        {CUENTA_ICONS[cuenta.tipo]}
+                        <span className="text-xs font-medium text-muted-foreground truncate flex-1">{cuenta.nombre}</span>
+                        <Pencil className="h-3 w-3 text-muted-foreground/40 flex-shrink-0" />
+                      </div>
+                      <p className={`text-xl font-bold ${saldo >= 0 ? "text-foreground" : "text-red-600"}`}>{fmt(saldo)}</p>
+                      {cuenta.saldo_base_fecha && (
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          base {new Date(cuenta.saldo_base_fecha).toLocaleDateString("es-AR", { day: "numeric", month: "short" })}
+                          {cuenta.tipo === "mp" && mpDelta !== 0 && (
+                            <span className={mpDelta > 0 ? " text-green-600" : " text-red-600"}>
+                              {" "}{mpDelta > 0 ? "+" : ""}{fmt(mpDelta)}
+                            </span>
+                          )}
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+              {/* Disponible total — SOLO plata líquida (MP + Galicia + Efectivo), sin cheques */}
+              <Card className="bg-primary/5 border-primary/20">
+                <CardContent className="pt-4 pb-3 px-4">
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <DollarSign className="h-4 w-4 text-primary" />
+                    <span className="text-xs font-semibold text-primary">Disponible total</span>
+                  </div>
+                  <p className="text-xl font-bold text-primary">
+                    {cuentas ? fmt(cuentas.filter(c => c.tipo !== "cheque").reduce((s, c) => s + getSaldoActual(c), 0)) : "…"}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">solo plata líquida</p>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+
+          {/* ── Grupo 2: Por cobrar (cada card su número, sin sumar entre sí) ── */}
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Por cobrar</h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              <Card>
+                <CardContent className="pt-4 pb-3 px-4">
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <CreditCard className="h-4 w-4 text-purple-600" />
+                    <span className="text-xs font-medium text-muted-foreground truncate flex-1">Cheques en cartera</span>
+                  </div>
+                  <p className="text-xl font-bold text-green-600 dark:text-green-400">{fmt(chequesEnCarteraTotal)}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{chequesEnCartera.length} recibido{chequesEnCartera.length !== 1 ? "s" : ""} por cobrar</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="pt-4 pb-3 px-4">
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <Users className="h-4 w-4 text-green-600" />
+                    <span className="text-xs font-medium text-muted-foreground truncate flex-1">Deuda de clientes</span>
+                  </div>
+                  <p className="text-xl font-bold text-green-600 dark:text-green-400">{deudaStats ? fmt(deudaStats.deudaClientes) : "…"}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">a cobrar de clientes activos</p>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+
+          {/* ── Grupo 3: Por pagar (cada card su número, sin sumar entre sí) ── */}
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Por pagar</h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              <Card>
+                <CardContent className="pt-4 pb-3 px-4">
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <CreditCard className="h-4 w-4 text-purple-600" />
+                    <span className="text-xs font-medium text-muted-foreground truncate flex-1">Cheques emitidos</span>
+                  </div>
+                  <p className="text-xl font-bold text-red-600 dark:text-red-400">{fmt(chequesEmitidosTotal)}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">comprometido, aún no salió de Galicia</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="pt-4 pb-3 px-4">
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <Building2 className="h-4 w-4 text-red-600" />
+                    <span className="text-xs font-medium text-muted-foreground truncate flex-1">Deuda a proveedores</span>
+                  </div>
+                  <p className="text-xl font-bold text-red-600 dark:text-red-400">{deudaStats ? fmt(deudaStats.deudaProveedores) : "…"}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">compras pendientes de pago</p>
+                </CardContent>
+              </Card>
+            </div>
           </div>
         </section>
 

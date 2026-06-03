@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { TrendingUp, Package, Truck, AlertTriangle, Users, Download, Info } from "lucide-react";
+import { TrendingUp, Package, Truck, AlertTriangle, Users, Download, Info, CreditCard } from "lucide-react";
 import { generateBolsaFvPDF, generateComisionesPDF, type BolsaFvRow, type ComisionRow } from "@/lib/pdf";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -61,6 +61,8 @@ type Stats = {
   vaciosEnPoder: { qty: number; pesos: number };
   deudaProveedores: number;
   deudaClientes: number;
+  chequesEmitidos: number;
+  chequesEnCartera: number;
   stockValorizado: number;
   comisiones: { vendedor: string; total: number }[];
 };
@@ -475,6 +477,23 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
+          {/* Cheques en cartera (par de Deuda de clientes — por cobrar) */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <CreditCard className="h-3.5 w-3.5" /> Cheques en cartera
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {isLoading ? <Skeleton className="h-8 w-28" /> : (
+                <>
+                  <p className="text-2xl font-bold text-green-600 dark:text-green-400">{s ? fmt(s.chequesEnCartera) : "—"}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Cheques recibidos por cobrar</p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Deuda proveedores */}
           <Card>
             <CardHeader className="pb-2">
@@ -487,6 +506,23 @@ export default function DashboardPage() {
                 <>
                   <p className="text-2xl font-bold text-red-600 dark:text-red-400">{s ? fmt(s.deudaProveedores) : "—"}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">Compras pendientes de pago</p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Cheques emitidos (par de Deuda a proveedores — por pagar) */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <CreditCard className="h-3.5 w-3.5" /> Cheques emitidos
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {isLoading ? <Skeleton className="h-8 w-28" /> : (
+                <>
+                  <p className="text-2xl font-bold text-red-600 dark:text-red-400">{s ? fmt(s.chequesEmitidos) : "—"}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Comprometido, aún no salió de Galicia</p>
                 </>
               )}
             </CardContent>

@@ -4087,6 +4087,15 @@ export const storage = {
       }
     }
 
+    // Cheques en circulación (no suman entre sí ni con deudas — cada uno es su propio concepto)
+    const chequesRow = await db.execute(drizzleSql`
+      SELECT
+        COALESCE(SUM(CASE WHEN tipo = 'emitido'  AND estado = 'en_cartera' THEN monto::numeric ELSE 0 END), 0) AS cheques_emitidos,
+        COALESCE(SUM(CASE WHEN tipo = 'recibido' AND estado = 'en_cartera' THEN monto::numeric ELSE 0 END), 0) AS cheques_en_cartera
+      FROM cheques
+    `);
+    const chq = (chequesRow.rows[0] as any) ?? {};
+
     return {
       ventas,
       ganancia_bruta,
@@ -4095,6 +4104,8 @@ export const storage = {
       ganancia_real,
       diasPeriodo,
       diasTrabajados,
+      chequesEmitidos: parseFloat(chq.cheques_emitidos ?? "0"),
+      chequesEnCartera: parseFloat(chq.cheques_en_cartera ?? "0"),
       vaciosRecibidosPeriodo: { qty: parseFloat(vr.qty ?? "0"), pesos: parseFloat(vr.pesos ?? "0") },
       vaciosEntregadosPeriodo: { pesos: parseFloat(ve.pesos ?? "0"), qty: avgCost > 0 ? Math.round(parseFloat(ve.pesos ?? "0") / avgCost) : 0 },
       vaciosEnPoder: { qty: enPoderQty, pesos: enPoderPesos },
