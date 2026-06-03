@@ -347,6 +347,8 @@ export default function CajaPage() {
 
   const handleAdd = () => {
     if (!form.description || !form.amount || !form.date || !form.method) return;
+    // Categoría Retiro requiere socio asignado, así el monto siempre suma en la card del socio
+    if (form.category === "Retiro" && form.socioId == null) return;
     addMutation.mutate(form);
   };
 
@@ -1781,17 +1783,19 @@ export default function CajaPage() {
             </div>
             {form.category === "Retiro" && (
               <div className="space-y-1">
-                <Label className="text-xs">Socio que retira</Label>
+                <Label className="text-xs">Socio que retira <span className="text-destructive">*</span></Label>
                 <Select value={form.socioId != null ? String(form.socioId) : "_none"}
                   onValueChange={v => setForm(f => ({ ...f, socioId: v === "_none" ? null : Number(v) }))}>
-                  <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Sin asignar" /></SelectTrigger>
+                  <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Elegí un socio" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="_none">Sin asignar</SelectItem>
                     {(socios ?? []).filter((s: any) => s.activo).map((s: any) => (
                       <SelectItem key={s.id} value={String(s.id)}>{s.nombre}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                {form.socioId == null && (
+                  <p className="text-[10px] text-muted-foreground">Obligatorio para que el retiro sume en la card del socio.</p>
+                )}
               </div>
             )}
           </div>
@@ -1799,7 +1803,7 @@ export default function CajaPage() {
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>
             <Button
               onClick={handleAdd}
-              disabled={addMutation.isPending || !form.description || !form.amount || !form.method}
+              disabled={addMutation.isPending || !form.description || !form.amount || !form.method || (form.category === "Retiro" && form.socioId == null)}
             >
               {addMutation.isPending ? "Guardando..." : "Guardar"}
             </Button>
