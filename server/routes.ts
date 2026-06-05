@@ -865,6 +865,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const wb = new ExcelJS.Workbook();
       wb.creator = "AgroLogix ERP";
 
+      // Nombres de hoja únicos: si se repite un colegio (varios pedidos), agrega " 2", " 3"…
+      // (Excel limita el nombre de hoja a 31 caracteres, así que se recorta la base para que entre el sufijo.)
+      const usedSheetNames = new Set<string>();
+      const uniqueSheetName = (base: string): string => {
+        const b = base || "Hoja";
+        if (!usedSheetNames.has(b.toLowerCase())) { usedSheetNames.add(b.toLowerCase()); return b; }
+        let n = 2;
+        while (true) {
+          const suffix = ` ${n}`;
+          const cand = b.slice(0, 31 - suffix.length) + suffix;
+          if (!usedSheetNames.has(cand.toLowerCase())) { usedSheetNames.add(cand.toLowerCase()); return cand; }
+          n++;
+        }
+      };
+
       for (const id of orderIds) {
         const order = await storage.getOrder(id);
         if (!order) continue;
@@ -876,7 +891,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const d = new Date(order.orderDate);
         const dateStr = `${d.getDate()}-${MONTHS_ES[d.getMonth()]}`;
 
-        const sheetName = schoolName.replace(/[\\\/\?\*\[\]:]/g, "").slice(0, 31) || `Pedido-${id}`;
+        const baseName = schoolName.replace(/[\\\/\?\*\[\]:]/g, "").slice(0, 31) || `Pedido-${id}`;
+        const sheetName = uniqueSheetName(baseName);
         const ws = wb.addWorksheet(sheetName);
 
         ws.columns = [
