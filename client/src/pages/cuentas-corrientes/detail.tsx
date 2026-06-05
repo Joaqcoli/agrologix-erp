@@ -20,7 +20,7 @@ import { useState, useRef, useMemo, useEffect } from "react";
 import type { Payment, Withholding } from "@shared/schema";
 import { PAYMENT_METHODS } from "@shared/schema";
 import { jsPDF } from "jspdf";
-import { generateInvoicePDF } from "@/lib/pdf";
+import { generateInvoicePDF, generateRemitoPDF } from "@/lib/pdf";
 
 const WhatsAppIcon = ({ className }: { className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor">
@@ -1483,6 +1483,95 @@ export default function CCCustomerDetailPage({
     }
   };
 
+  // Descargar las facturas (PDF) de los pedidos seleccionados que tengan factura emitida
+  const handleDownloadFacturas = async () => {
+    const invs = customerInvoices.filter((i) => selectedOrderIds.has(i.orderId));
+    if (invs.length === 0) {
+      toast({ title: "Sin facturas", description: "Los pedidos seleccionados no tienen factura emitida." });
+      return;
+    }
+    let ok = 0;
+    for (const inv of invs) {
+      try {
+        const res = await fetch(`/api/invoices/${inv.id}`, { credentials: "include" });
+        if (res.ok) { await generateInvoicePDF(await res.json(), "completo"); ok++; }
+      } catch { /* sigue con las demás */ }
+    }
+    const sinFactura = selectedOrderIds.size - invs.length;
+    toast({
+      title: `${ok} factura${ok !== 1 ? "s" : ""} descargada${ok !== 1 ? "s" : ""}`,
+      description: sinFactura > 0 ? `${sinFactura} pedido(s) seleccionado(s) sin factura.` : undefined,
+    });
+  };
+
+  // Descargar los remitos (PDF) de los pedidos seleccionados
+  const handleDownloadRemitos = async () => {
+    const ids = Array.from(selectedOrderIds);
+    if (ids.length === 0) return;
+    type RemitoItem = { product: { name: string; sku: string } | null; quantity: string; unit: string; pricePerUnit: string; subtotal: string; bolsaType?: string | null; isBonification?: boolean | null };
+    let ok = 0;
+    for (const oid of ids) {
+      try {
+        const r = await fetch(`/api/orders/${oid}`, { credentials: "include" });
+        if (!r.ok) continue;
+        const order: any = await r.json();
+
+        let remitoItems: RemitoItem[] | null = null;
+        if (order.remitoId) {
+          const rr = await fetch(`/api/remitos/${order.remitoId}`, { credentials: "include" });
+          if (rr.ok) { const remito = await rr.json(); remitoItems = remito.order.items; }
+        }
+        if (!remitoItems) {
+          remitoItems = (order.items ?? []).map((item: any) => ({
+            product: item.product ? { name: item.product.name, sku: item.product.sku ?? "" } : null,
+            quantity: String(item.quantity), unit: String(item.unit),
+            pricePerUnit: String(item.pricePerUnit ?? "0"), subtotal: String(item.subtotal),
+            bolsaType: item.bolsaType ?? null, isBonification: item.isBonification ?? false,
+          }));
+        }
+        const remitoFolio = order.remitoNum != null
+          ? String(order.remitoNum)
+          : (order.notes?.match(/Remito\s+(\S+)/i)?.[1] ?? order.folio);
+
+        const remito = {
+          folio: remitoFolio,
+          issuedAt: order.orderDate,
+          order: {
+            folio: order.folio, orderDate: order.orderDate, notes: order.notes,
+            customer: {
+              name: order.customer.name, hasIva: order.customer.hasIva,
+              rfc: order.customer.rfc ?? null, address: order.customer.address ?? null,
+              city: order.customer.city ?? null, phone: order.customer.phone ?? null,
+            },
+            items: remitoItems as RemitoItem[],
+            total: String(order.total),
+          },
+        };
+
+        // Mismo merge que el remito individual para clientes con Bolsa FV
+        if (order.customer.bolsaFv) {
+          const merged = new Map<string, RemitoItem>();
+          for (const item of remito.order.items) {
+            const key = String(item.product?.name ?? Math.random());
+            if (merged.has(key)) {
+              const ex = merged.get(key)!;
+              merged.set(key, { ...ex, quantity: String(parseFloat(ex.quantity) + parseFloat(item.quantity)), subtotal: String(parseFloat(ex.subtotal) + parseFloat(item.subtotal)) });
+            } else merged.set(key, { ...item });
+          }
+          remito.order.items = Array.from(merged.values());
+          remito.order.total = String(remito.order.items.reduce((s, i) => s + parseFloat(i.subtotal), 0));
+        }
+
+        await generateRemitoPDF(remito, { hidePrecios: false });
+        ok++;
+      } catch { /* sigue con los demás */ }
+    }
+    toast({
+      title: ok > 0 ? `${ok} remito${ok !== 1 ? "s" : ""} descargado${ok !== 1 ? "s" : ""}` : "No se pudieron generar remitos",
+      ...(ok === 0 ? { variant: "destructive" as const } : {}),
+    });
+  };
+
   const handleWaSendResumen = async () => {
     const rawPhone = data?.customer?.phone ?? "";
     const waPhone = fmtWaPhone(rawPhone);
@@ -1647,6 +1736,16 @@ export default function CCCustomerDetailPage({
           {selectedOrderIds.size > 0 && (
             <Button size="sm" variant="outline" onClick={handleDownloadResumen} data-testid="button-download-resumen">
               <FileText className="mr-1 h-3.5 w-3.5" /> Bajar Resumen ({selectedOrderIds.size})
+            </Button>
+          )}
+          {selectedOrderIds.size > 0 && (
+            <Button size="sm" variant="outline" onClick={handleDownloadFacturas} data-testid="button-download-facturas">
+              <FileText className="mr-1 h-3.5 w-3.5" /> Descargar Facturas ({selectedInvoiceCount})
+            </Button>
+          )}
+          {selectedOrderIds.size > 0 && (
+            <Button size="sm" variant="outline" onClick={handleDownloadRemitos} data-testid="button-download-remitos">
+              <Download className="mr-1 h-3.5 w-3.5" /> Descargar Remitos ({selectedOrderIds.size})
             </Button>
           )}
           {selectedOrderIds.size > 0 && data?.customer?.blackPot && (
