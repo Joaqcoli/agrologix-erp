@@ -1625,11 +1625,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const r = (salesRow.rows as any[])[0] ?? {};
       const clientesTotal = ((clientesRow.rows as any[])[0]?.total) ?? 0;
+      let ventas = parseFloat(r.ventas ?? "0");
+      let comisiones = parseFloat(r.comisiones ?? "0");
+      // Si el rango es exactamente un mes con histórico cargado (sin pedidos), usar esos valores
+      const ym = from.slice(0, 7);
+      const [yy, mm] = from.split("-").map(Number);
+      const nextFirst = mm === 12 ? `${yy + 1}-01-01` : `${yy}-${String(mm + 1).padStart(2, "0")}-01`;
+      const isFullMonth = from === `${ym}-01` && to === nextFirst;
+      const ov = storage.vendedorHistOverride(user.name, ym);
+      if (isFullMonth && ov) { ventas = ov.facturacion; comisiones = ov.comisiones; }
       return res.json({
-        ventas: parseFloat(r.ventas ?? "0"),
-        comisiones: parseFloat(r.comisiones ?? "0"),
+        ventas,
+        comisiones,
         clientesAsignados: Number(clientesTotal),
       });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/vendedor/dashboard-monthly", requireVendedor, async (req, res) => {
+    try {
+      const user = await storage.getUserById(req.session.userId!);
+      if (!user) return res.status(401).json({ error: "User not found" });
+      return res.json(await storage.getVendedorMonthly(user.name));
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 

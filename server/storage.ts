@@ -70,6 +70,16 @@ function isBulto(unit: string): boolean {
   return BULTO_UNITS.has(unit.toUpperCase());
 }
 
+// Históricos de ventas/comisiones cargados a mano para meses sin pedidos (por vendedor + YYYY-MM).
+// Si un mes tiene override, se usa ese valor (en el banner mensual y en el gráfico) en vez de calcular.
+const VENDEDOR_HIST: Record<string, Record<string, { facturacion: number; comisiones: number }>> = {
+  Juan: {
+    "2026-01": { facturacion: 707300, comisiones: 35365 },
+    "2026-02": { facturacion: 5644580, comisiones: 282229 },
+    "2026-03": { facturacion: 6003480, comisiones: 300174 },
+  },
+};
+
 export const storage = {
   // ─── Auth ─────────────────────────────────────────────────────────────────
   async getUserByEmail(email: string): Promise<User | undefined> {
@@ -959,6 +969,49 @@ export const storage = {
       })),
       topClientes: (topClientes.rows as any[]).map((r) => ({ id: Number(r.id), name: String(r.name), total: Number(r.total) })),
     };
+  },
+
+  // Override de histórico para un vendedor en un mes (YYYY-MM); null si no hay
+  vendedorHistOverride(salespersonName: string, ym: string): { facturacion: number; comisiones: number } | null {
+    return VENDEDOR_HIST[salespersonName]?.[ym] ?? null;
+  },
+
+  // Facturación + comisiones mes a mes del año en curso (del vendedor). Usa el override donde exista.
+  async getVendedorMonthly(salespersonName: string) {
+    const year = new Date().getFullYear();
+    const curMonth = new Date().getMonth() + 1;
+    const rows = await db.execute(drizzleSql`
+      SELECT to_char(o.order_date, 'YYYY-MM') AS ym,
+        COALESCE(SUM(
+          CASE
+            WHEN oi.price_per_unit::numeric = 0 THEN 0
+            WHEN c.has_iva = true AND (p.name ILIKE '%huevo%' OR p.category ILIKE '%huevo%')
+              THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
+            WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+            ELSE oi.quantity::numeric * oi.price_per_unit::numeric
+          END
+        ), 0)::float AS facturacion,
+        COALESCE(SUM(
+          CASE WHEN oi.price_per_unit::numeric = 0 THEN 0
+            ELSE c.commission_pct::numeric / 100 * oi.quantity::numeric * oi.price_per_unit::numeric END
+        ), 0)::float AS comisiones
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      JOIN order_items oi ON oi.order_id = o.id
+      LEFT JOIN products p ON p.id = oi.product_id
+      WHERE o.status = 'approved' AND c.salesperson_name = ${salespersonName}
+        AND o.order_date >= ${`${year}-01-01`}::timestamp AND o.order_date < ${`${year + 1}-01-01`}::timestamp
+      GROUP BY to_char(o.order_date, 'YYYY-MM')
+    `);
+    const map = new Map((rows.rows as any[]).map((r) => [String(r.ym), { facturacion: Number(r.facturacion), comisiones: Number(r.comisiones) }]));
+    const MES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+    const out: { month: string; label: string; facturacion: number; comisiones: number }[] = [];
+    for (let m = 1; m <= curMonth; m++) {
+      const ym = `${year}-${String(m).padStart(2, "0")}`;
+      const v = this.vendedorHistOverride(salespersonName, ym) ?? (map.get(ym) ?? { facturacion: 0, comisiones: 0 });
+      out.push({ month: ym, label: MES[m - 1], facturacion: v.facturacion, comisiones: v.comisiones });
+    }
+    return out;
   },
 
   // ─── Orders ───────────────────────────────────────────────────────────────

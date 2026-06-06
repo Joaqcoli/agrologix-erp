@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BarChart3, Users, AlertTriangle, Trophy, ListOrdered, Clock, MessageCircle } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ComposedChart, Line, Legend } from "recharts";
 
 const fmt = (n: number) => "$" + Math.round(n).toLocaleString("es-MX");
 
@@ -45,12 +45,24 @@ function yearRange(): [string, string] {
 }
 
 type VendedorStats = { ventas: number; comisiones: number; clientesAsignados: number };
-type RangeMode = "hoy" | "semana" | "mes" | "año" | "rango";
+type MonthlyData = { month: string; label: string; facturacion: number; comisiones: number }[];
+type RangeMode = "hoy" | "semana" | "mes" | "pormes" | "año" | "rango";
 
-function getRange(mode: RangeMode, customFrom: string, customTo: string): [string, string] {
+function currentYM() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function monthRangeFromStr(ym: string): [string, string] {
+  const [y, m] = ym.split("-").map(Number);
+  const next = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
+  return [`${ym}-01`, next];
+}
+
+function getRange(mode: RangeMode, customFrom: string, customTo: string, selectedMonth: string): [string, string] {
   if (mode === "hoy") return todayRange();
   if (mode === "semana") return weekRange();
   if (mode === "mes") return monthRange();
+  if (mode === "pormes") return monthRangeFromStr(selectedMonth);
   if (mode === "año") return yearRange();
   return [customFrom, customTo];
 }
@@ -59,6 +71,7 @@ const RANGE_BTNS: { label: string; value: RangeMode }[] = [
   { label: "Hoy", value: "hoy" },
   { label: "Semana", value: "semana" },
   { label: "Mes", value: "mes" },
+  { label: "Por mes", value: "pormes" },
   { label: "Año", value: "año" },
   { label: "Rango", value: "rango" },
 ];
@@ -68,12 +81,19 @@ export default function VendedorDashboard() {
   const [mode, setMode] = useState<RangeMode>("mes");
   const [customFrom, setCustomFrom] = useState(localStr(new Date()));
   const [customTo, setCustomTo] = useState(localStr(new Date()));
+  const [selectedMonth, setSelectedMonth] = useState(currentYM());
 
-  const [from, to] = getRange(mode, customFrom, customTo);
+  const [from, to] = getRange(mode, customFrom, customTo, selectedMonth);
 
   const { data: stats, isLoading } = useQuery<VendedorStats>({
     queryKey: ["/api/vendedor/dashboard", from, to],
     queryFn: () => fetch(`/api/vendedor/dashboard?from=${from}&to=${to}`).then((r) => r.json()),
+  });
+
+  const { data: monthly } = useQuery<MonthlyData>({
+    queryKey: ["/api/vendedor/dashboard-monthly"],
+    queryFn: () => fetch("/api/vendedor/dashboard-monthly").then((r) => r.json()),
+    staleTime: 60_000,
   });
 
   // Elementos extra (siempre actual: inactividad, mes en curso, últimos pedidos) — filtrados por el vendedor logueado
@@ -132,6 +152,14 @@ export default function VendedorDashboard() {
               />
             </div>
           )}
+          {mode === "pormes" && (
+            <input
+              type="month"
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value || currentYM())}
+              className="h-8 rounded-md border border-input bg-background px-3 text-sm ml-2"
+            />
+          )}
         </div>
 
         {/* Summary banner */}
@@ -189,6 +217,33 @@ export default function VendedorDashboard() {
                     <Tooltip formatter={(v: number) => [fmt(v), "Ventas"]} labelFormatter={(l) => fmtFecha(String(l))} />
                     <Bar dataKey="total" fill="hsl(var(--primary))" radius={[3, 3, 0, 0]} />
                   </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Facturación y comisiones mes a mes (año en curso) */}
+        {monthly && monthly.length > 0 && (
+          <Card>
+            <CardHeader className="pb-2 pt-4">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-primary" /> Facturación y comisiones por mes
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={monthly} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" />
+                    <XAxis dataKey="label" fontSize={11} tickLine={false} axisLine={false} />
+                    <YAxis yAxisId="fact" tickFormatter={(v) => "$" + Math.round(Number(v) / 1000) + "k"} fontSize={11} tickLine={false} axisLine={false} width={50} />
+                    <YAxis yAxisId="com" orientation="right" tickFormatter={(v) => "$" + Math.round(Number(v) / 1000) + "k"} fontSize={11} tickLine={false} axisLine={false} width={50} />
+                    <Tooltip formatter={(v: number, name: string) => [fmt(v), name === "facturacion" ? "Facturación" : "Comisión"]} />
+                    <Legend formatter={(val) => (val === "facturacion" ? "Facturación" : "Comisión")} wrapperStyle={{ fontSize: 11 }} />
+                    <Bar yAxisId="fact" dataKey="facturacion" fill="hsl(var(--primary))" radius={[3, 3, 0, 0]} maxBarSize={36} />
+                    <Line yAxisId="com" type="monotone" dataKey="comisiones" stroke="#16a34a" strokeWidth={2} dot={{ r: 3 }} />
+                  </ComposedChart>
                 </ResponsiveContainer>
               </div>
             </CardContent>
