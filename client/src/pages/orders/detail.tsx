@@ -1899,7 +1899,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
             </label>
             <div className="flex items-center justify-between rounded-md bg-muted px-4 py-3">
               <span className="text-sm text-muted-foreground">Total del pedido</span>
-              <span className="font-semibold">${parseFloat(order?.total ?? "0").toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span>
+              <span className="font-semibold">${grandTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span>
             </div>
           </div>
           <DialogFooter className="mt-4">

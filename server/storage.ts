@@ -1176,6 +1176,10 @@ export const storage = {
 
     if (itemsToInsert.length > 0) {
       await db.insert(orderItems).values(itemsToInsert);
+      // Recalcular el total del pedido a partir de los subtotales (antes quedaba en 0)
+      const total = itemsToInsert.reduce((s, it) => s + (parseFloat(String(it.subtotal ?? "0")) || 0), 0);
+      await db.update(orders).set({ total: total.toFixed(2) }).where(eq(orders.id, order.id));
+      return { ...order, total: total.toFixed(2) };
     }
 
     return order;
