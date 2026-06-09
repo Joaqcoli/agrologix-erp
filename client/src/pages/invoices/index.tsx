@@ -95,10 +95,10 @@ export default function InvoicesPage() {
     inv.cae.includes(search)
   );
 
-  const handleDownloadPDF = async (inv: InvoiceRow) => {
+  const handleDownloadPDF = async (inv: InvoiceRow, mode: "completo" | "agrupado" = "agrupado") => {
     try {
       const detail = await fetch(`/api/invoices/${inv.id}`).then((r) => r.json());
-      await generateInvoicePDF(detail, "agrupado");
+      await generateInvoicePDF(detail, mode);
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     }
@@ -286,8 +286,11 @@ export default function InvoicesPage() {
                     <td className="px-4 py-3 text-muted-foreground text-xs">{inv.orderRemitoNum ?? "—"}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => handleDownloadPDF(inv)}>
+                        <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => handleDownloadPDF(inv, "agrupado")} title="PDF agrupado (Frutas/Huevos)">
                           <Download className="h-3.5 w-3.5 mr-1" /> PDF
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => handleDownloadPDF(inv, "completo")} title="PDF con el detalle de cada producto">
+                          <Download className="h-3.5 w-3.5 mr-1" /> Detallado
                         </Button>
                         <Button
                           size="sm" variant="ghost"
