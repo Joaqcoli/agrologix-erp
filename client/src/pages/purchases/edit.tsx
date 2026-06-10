@@ -10,6 +10,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { Plus, Trash2, ArrowLeft, Save, Calculator, Info, PackagePlus } from "lucide-react";
@@ -47,6 +51,8 @@ type PurchaseItem = {
   costPerUnit: string;
   weightPerPackage: string;
   baseUnit: string; // actual base unit stored in DB (for submit conversion)
+  isNew?: boolean;        // agregado en esta sesión de edición (no estaba en la compra original)
+  affectsStock?: boolean; // si false, no suma al stock actual (línea sólo financiera)
 };
 
 export default function EditPurchasePage({ id }: { id: number }) {
@@ -60,6 +66,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
   const [globalEmptyCost, setGlobalEmptyCost] = useState("0");
   const [items, setItems] = useState<PurchaseItem[]>([{ productId: 0, quantity: "", unit: "KG", costPerUnit: "", weightPerPackage: "", baseUnit: "KG" }]);
   const [initialized, setInitialized] = useState(false);
+  const [stockDialogOpen, setStockDialogOpen] = useState(false);
 
   const { data: purchase, isLoading: loadingPurchase } = useQuery<any>({
     queryKey: ["/api/purchases", id],
@@ -112,6 +119,8 @@ export default function EditPurchasePage({ id }: { id: number }) {
               : String(Math.round(parseFloat(item.costPerUnit) * 100) / 100),
             weightPerPackage: item.weightPerPackage ? String(parseFloat(item.weightPerPackage)) : "",
             baseUnit: item.unit, // preserve DB base unit for submit
+            isNew: false,
+            affectsStock: true,
           };
         }));
       }
@@ -132,7 +141,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
   });
 
   // Fix 1: unshift so new item appears at top
-  const addItem = () => setItems([{ productId: 0, quantity: "", unit: "KG", costPerUnit: "", weightPerPackage: "", baseUnit: "KG" }, ...items]);
+  const addItem = () => setItems([{ productId: 0, quantity: "", unit: "KG", costPerUnit: "", weightPerPackage: "", baseUnit: "KG", isNew: true, affectsStock: true }, ...items]);
   const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
 
   const updateItem = (i: number, field: keyof PurchaseItem, value: string | number) => {
@@ -175,8 +184,15 @@ export default function EditPurchasePage({ id }: { id: number }) {
 
   const activeProducts = (products ?? []).filter((p) => p.active);
 
+  // Productos referenciados por la compra que pueden estar INACTIVOS (no vienen en /api/products).
+  // Sin esto, el <Select> de producto queda vacío y el item parece "desaparecer".
+  const purchaseProductsById = new Map<number, Product>();
+  (purchase?.items ?? []).forEach((it: any) => { if (it.product) purchaseProductsById.set(it.product.id, it.product); });
+  const findProduct = (productId: number): Product | undefined =>
+    activeProducts.find((p) => p.id === productId) ?? purchaseProductsById.get(productId);
+
   const isEggsProduct = (productId: number) => {
-    const p = activeProducts.find((x) => x.id === productId);
+    const p = findProduct(productId);
     return p?.category?.toLowerCase() === "huevos";
   };
 
@@ -204,12 +220,12 @@ export default function EditPurchasePage({ id }: { id: number }) {
   const emptyCostAmount = parseFloat(globalEmptyCost) || 0;
 
   const getProductAvgCost = (productId: number) => {
-    const p = activeProducts.find((x) => x.id === productId);
+    const p = findProduct(productId);
     return p ? parseFloat(p.averageCost as string) : null;
   };
 
   const getProjectedAvgCost = (item: PurchaseItem) => {
-    const p = activeProducts.find((x) => x.id === item.productId);
+    const p = findProduct(item.productId);
     if (!p) return null;
     const currentStock = parseFloat(p.currentStock as string);
     const currentAvg = parseFloat(p.averageCost as string);
@@ -235,6 +251,21 @@ export default function EditPurchasePage({ id }: { id: number }) {
       toast({ title: "Falta cantidad base por envase", description: `Completá cuántos unidades/kg trae cada ${missingWPU[0].unit.toLowerCase()} de: ${names}`, variant: "destructive" });
       return;
     }
+    // ¿Se agregaron productos nuevos a una compra vieja? → consultar si afectan el stock
+    const isOldPurchase = purchaseDate < todayLocal();
+    const newItems = validItems.filter((i) => i.isNew);
+    if (isOldPurchase && newItems.length > 0) {
+      setStockDialogOpen(true);
+      return; // la decisión se toma en el AlertDialog
+    }
+    submitPurchase(true);
+  };
+
+  // Construye el payload y dispara la mutación. `affectsNewStock` decide si los
+  // productos AGREGADOS en esta sesión suman al stock actual.
+  const submitPurchase = (affectsNewStock: boolean) => {
+    setStockDialogOpen(false);
+    const validItems = items.filter((i) => i.productId && parseFloat(i.quantity) > 0 && i.costPerUnit !== "" && parseFloat(i.costPerUnit) >= 0);
     const effectiveSupplierName = supplierId
       ? (activeSuppliers.find((s) => s.id === supplierId)?.name ?? supplierName)
       : supplierName;
@@ -245,6 +276,9 @@ export default function EditPurchasePage({ id }: { id: number }) {
       notes: notes || undefined,
       totalEmptyCost: globalEmptyCost,
       items: validItems.map((i) => {
+        // Items existentes siempre con affectsStock=true (el backend salta los no modificados).
+        // Items nuevos: respetan la decisión del usuario.
+        const affectsStock = i.isNew ? affectsNewStock : true;
         const wpp = parseFloat(i.weightPerPackage) || 0;
         const isPackage = isPackageUnit(i.unit) && wpp > 0;
         if (isPackage) {
@@ -259,6 +293,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
             purchaseQty: parseFloat(i.quantity).toFixed(4),
             purchaseUnit: i.unit,
             weightPerPackage: i.weightPerPackage,
+            affectsStock,
           };
         }
         return {
@@ -266,6 +301,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
           quantity: parseFloat(i.quantity).toFixed(4),
           unit: i.unit,
           costPerUnit: parseFloat(i.costPerUnit).toFixed(4),
+          affectsStock,
         };
       }),
     });
@@ -370,7 +406,8 @@ export default function EditPurchasePage({ id }: { id: number }) {
             </CardHeader>
             <CardContent className="space-y-3">
               {items.map((item, idx) => {
-                const product = activeProducts.find((p) => p.id === item.productId);
+                const product = findProduct(item.productId);
+                const itemProductInactive = !!product && !activeProducts.some((p) => p.id === product.id);
                 const currentAvg = item.productId ? getProductAvgCost(item.productId) : null;
                 const projectedAvg = item.productId && item.quantity && item.costPerUnit ? getProjectedAvgCost(item) : null;
                 const packageMode = isPackageUnit(item.unit);
@@ -399,6 +436,11 @@ export default function EditPurchasePage({ id }: { id: number }) {
                             <SelectValue placeholder="Seleccionar producto..." />
                           </SelectTrigger>
                           <SelectContent>
+                            {itemProductInactive && product && (
+                              <SelectItem value={String(product.id)}>
+                                {product.name} <span className="text-muted-foreground ml-1">(inactivo)</span>
+                              </SelectItem>
+                            )}
                             {activeProducts.map((p) => (
                               <SelectItem key={p.id} value={String(p.id)}>
                                 {p.name} <span className="text-muted-foreground ml-1">({p.sku})</span>
@@ -618,6 +660,34 @@ export default function EditPurchasePage({ id }: { id: number }) {
           </div>
         </form>
       </div>
+
+      <AlertDialog open={stockDialogOpen} onOpenChange={setStockDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Sumar los productos agregados al stock actual?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Estás agregando producto(s) a una compra vieja ({purchaseDate}). ¿Querés que esos
+              productos <strong>nuevos</strong> se sumen a tu stock actual?
+              <br /><br />
+              Elegí <strong>"No sumar"</strong> si ya ajustaste el stock manualmente y sólo querés
+              dejar registrada la compra (afecta la cuenta corriente del proveedor, no el inventario).
+              Los productos que ya estaban en la compra no se modifican.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-muted text-foreground hover:bg-muted/80"
+              onClick={() => submitPurchase(false)}
+            >
+              No sumar al stock
+            </AlertDialogAction>
+            <AlertDialogAction onClick={() => submitPurchase(true)}>
+              Sí, sumar al stock
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Layout>
   );
 }

@@ -507,6 +507,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           purchaseQty: z.string().optional(),
           purchaseUnit: z.enum(["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"]).optional(),
           weightPerPackage: z.string().optional(),
+          affectsStock: z.boolean().optional(),
         })).min(1),
       });
       const data = schema.parse(req.body);

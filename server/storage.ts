@@ -654,7 +654,7 @@ export const storage = {
     purchaseDate: Date;
     notes?: string;
     totalEmptyCost?: string;
-    items: { productId: number; quantity: string; unit: "KG" | "UNIDAD" | "CAJON" | "BOLSA" | "ATADO" | "MAPLE" | "BANDEJA"; costPerUnit: string; costPerPurchaseUnit?: string; purchaseQty?: string; purchaseUnit?: string; weightPerPackage?: string }[];
+    items: { productId: number; quantity: string; unit: "KG" | "UNIDAD" | "CAJON" | "BOLSA" | "ATADO" | "MAPLE" | "BANDEJA"; costPerUnit: string; costPerPurchaseUnit?: string; purchaseQty?: string; purchaseUnit?: string; weightPerPackage?: string; affectsStock?: boolean }[];
   }): Promise<Purchase> {
     return db.transaction(async (tx) => {
       const purchaseDateStr = data.purchaseDate.toISOString().slice(0, 10);
@@ -674,8 +674,37 @@ export const storage = {
           .limit(1);
       }
 
-      // ── PHASE 1: Revertir items anteriores ────────────────────────────────────
+      // ── Detección de items SIN CAMBIOS ────────────────────────────────────────
+      // Para no re-tocar el stock de líneas que ya estaban (y ya fueron contabilizadas),
+      // sólo se revierte/reaplica el stock de items removidos, cambiados o agregados.
+      // Esto evita inflar el stock al editar una compra vieja (ej. cambiar el proveedor).
+      // costo a 2 decimales para absorber ruido de redondeo en items por envase (cajón/bolsa)
+      const itemSig = (productId: number, unit: any, quantity: any, costPerUnit: any) =>
+        `${productId}|${dbEnumToCanonical(unit)}|${(parseFloat(String(quantity)) || 0).toFixed(4)}|${(parseFloat(String(costPerUnit)) || 0).toFixed(2)}`;
+      const oldSigCount = new Map<string, number>();
+      for (const it of oldItems) {
+        const s = itemSig(it.productId, it.unit, it.quantity, it.costPerUnit);
+        oldSigCount.set(s, (oldSigCount.get(s) ?? 0) + 1);
+      }
+      // Items nuevos que coinciden exactamente con uno viejo = "sin cambios"
+      const unchangedNewSet = new Set<object>();
+      const keepOldCount = new Map<string, number>();
+      const matchCount = new Map(oldSigCount);
+      for (const it of data.items) {
+        const s = itemSig(it.productId, it.unit, it.quantity, it.costPerUnit);
+        if ((matchCount.get(s) ?? 0) > 0) {
+          matchCount.set(s, matchCount.get(s)! - 1);
+          unchangedNewSet.add(it);
+          keepOldCount.set(s, (keepOldCount.get(s) ?? 0) + 1);
+        }
+      }
+      // affectsStock=false (línea sólo financiera) o item sin cambios → no toca stock
+      const itemAffectsStock = (it: any) => it.affectsStock !== false && !unchangedNewSet.has(it);
+
+      // ── PHASE 1: Revertir items anteriores (sólo los que cambiaron/se removieron) ─
       for (const item of oldItems) {
+        const sig = itemSig(item.productId, item.unit, item.quantity, item.costPerUnit);
+        if ((keepOldCount.get(sig) ?? 0) > 0) { keepOldCount.set(sig, keepOldCount.get(sig)! - 1); continue; } // sin cambios → no revertir
         const canonicalUnit = dbEnumToCanonical(item.unit as any);
         const [pu] = await tx.select().from(productUnits)
           .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
@@ -717,6 +746,7 @@ export const storage = {
       // Procesar en orden de productId (locks ya adquiridos arriba)
       const sortedNewItems = [...data.items].sort((a, b) => a.productId - b.productId);
       for (const item of sortedNewItems) {
+        if (!itemAffectsStock(item)) continue; // sin cambios o línea sólo financiera → no toca stock
         const newQty = Number(item.quantity);
         const newCost = Number(item.costPerUnit);
         const canonicalUnit = dbEnumToCanonical(item.unit);
@@ -835,6 +865,8 @@ export const storage = {
       await tx.delete(productCostHistory).where(eq(productCostHistory.purchaseId, id));
 
       for (const item of data.items) {
+        // Líneas sólo financieras (no afectan stock) → sin movimiento ni cost history
+        if (item.affectsStock === false) continue;
         // Leer producto con su averageCost ya recalculado en PHASE 2
         const [product] = await tx.select().from(products)
           .where(eq(products.id, item.productId)).limit(1);
