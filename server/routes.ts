@@ -494,6 +494,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const schema = z.object({
         supplierName: z.string().min(1),
+        supplierId: z.number().int().positive().nullable().optional(),
         purchaseDate: z.string(),
         notes: z.string().optional(),
         totalEmptyCost: z.string().optional(),

@@ -650,6 +650,7 @@ export const storage = {
 
   async updatePurchase(id: number, data: {
     supplierName: string;
+    supplierId?: number | null;
     purchaseDate: Date;
     notes?: string;
     totalEmptyCost?: string;
@@ -794,6 +795,7 @@ export const storage = {
       // ── Actualizar cabecera de compra ─────────────────────────────────────────
       const [updated] = await tx.update(purchases).set({
         supplierName: data.supplierName,
+        ...(data.supplierId !== undefined ? { supplierId: data.supplierId } : {}),
         purchaseDate: data.purchaseDate,
         notes: data.notes,
         totalEmptyCost: emptyCostAmount.toFixed(2),
@@ -804,7 +806,10 @@ export const storage = {
       // Para compras pagadas con efectivo/transferencia hay un supplier_payment
       // auto-creado con purchaseId. Si el total cambió, actualizar su monto.
       await tx.update(supplierPayments)
-        .set({ amount: (total + emptyCostAmount).toFixed(2) })
+        .set({
+          amount: (total + emptyCostAmount).toFixed(2),
+          ...(data.supplierId !== undefined && data.supplierId !== null ? { supplierId: data.supplierId } : {}),
+        })
         .where(eq(supplierPayments.purchaseId, id));
 
       // ── Reemplazar purchase_items ─────────────────────────────────────────────

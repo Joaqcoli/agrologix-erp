@@ -13,7 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { Plus, Trash2, ArrowLeft, Save, Calculator, Info, PackagePlus } from "lucide-react";
-import type { Product, ProductUnit } from "@shared/schema";
+import type { Product, ProductUnit, Supplier } from "@shared/schema";
 
 const UNIT_OPTIONS = [
   { value: "KG",      label: "KG" },
@@ -54,6 +54,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
   const [, setLocation] = useLocation();
 
   const [supplierName, setSupplierName] = useState("");
+  const [supplierId, setSupplierId] = useState<number | null>(null);
   const [purchaseDate, setPurchaseDate] = useState(todayLocal);
   const [notes, setNotes] = useState("");
   const [globalEmptyCost, setGlobalEmptyCost] = useState("0");
@@ -66,6 +67,8 @@ export default function EditPurchasePage({ id }: { id: number }) {
 
   const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
   const { data: stockData } = useQuery<(ProductUnit & { product: Product })[]>({ queryKey: ["/api/products/stock"] });
+  const { data: suppliers } = useQuery<Supplier[]>({ queryKey: ["/api/suppliers"] });
+  const activeSuppliers = (suppliers ?? []).filter((s) => s.active);
 
   const getKnownBaseUnit = (productId: number): string => {
     if (!productId) return "KG";
@@ -88,6 +91,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
   useEffect(() => {
     if (purchase && !initialized) {
       setSupplierName(purchase.supplierName ?? "");
+      setSupplierId(purchase.supplierId ?? null);
       setPurchaseDate(purchase.purchaseDate ? String(purchase.purchaseDate).slice(0, 10) : todayLocal());
       setNotes(purchase.notes ?? "");
       setGlobalEmptyCost(purchase.totalEmptyCost ? String(Math.round(parseFloat(purchase.totalEmptyCost))) : "0");
@@ -231,8 +235,12 @@ export default function EditPurchasePage({ id }: { id: number }) {
       toast({ title: "Falta cantidad base por envase", description: `Completá cuántos unidades/kg trae cada ${missingWPU[0].unit.toLowerCase()} de: ${names}`, variant: "destructive" });
       return;
     }
+    const effectiveSupplierName = supplierId
+      ? (activeSuppliers.find((s) => s.id === supplierId)?.name ?? supplierName)
+      : supplierName;
     updateMutation.mutate({
-      supplierName,
+      supplierName: effectiveSupplierName,
+      supplierId: supplierId ?? undefined,
       purchaseDate,
       notes: notes || undefined,
       totalEmptyCost: globalEmptyCost,
@@ -309,13 +317,41 @@ export default function EditPurchasePage({ id }: { id: number }) {
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="supplier">Proveedor *</Label>
-                  <Input
-                    id="supplier"
-                    placeholder="Nombre del proveedor"
-                    value={supplierName}
-                    onChange={(e) => setSupplierName(e.target.value)}
-                    required
-                  />
+                  {activeSuppliers.length > 0 ? (
+                    <Select
+                      value={supplierId ? String(supplierId) : "manual"}
+                      onValueChange={(v) => {
+                        if (v === "manual") { setSupplierId(null); }
+                        else { setSupplierId(Number(v)); setSupplierName(""); }
+                      }}
+                    >
+                      <SelectTrigger id="supplier" data-testid="select-supplier">
+                        <SelectValue placeholder="Seleccionar proveedor..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {activeSuppliers.map((s) => (
+                          <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
+                        ))}
+                        <SelectItem value="manual">— Ingresar manualmente —</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Input
+                      id="supplier"
+                      placeholder="Nombre del proveedor"
+                      value={supplierName}
+                      onChange={(e) => setSupplierName(e.target.value)}
+                      required
+                    />
+                  )}
+                  {supplierId === null && activeSuppliers.length > 0 && (
+                    <Input
+                      placeholder="Nombre del proveedor (manual)"
+                      value={supplierName}
+                      onChange={(e) => setSupplierName(e.target.value)}
+                      className="mt-2"
+                    />
+                  )}
                 </div>
               </div>
               <div className="space-y-1.5">
@@ -569,7 +605,7 @@ export default function EditPurchasePage({ id }: { id: number }) {
             <Button type="button" variant="outline" onClick={() => setLocation(`/purchases/${id}`)}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={updateMutation.isPending || !supplierName}>
+            <Button type="submit" disabled={updateMutation.isPending || (supplierId == null && !supplierName)}>
               {updateMutation.isPending ? (
                 <>Guardando...</>
               ) : (
