@@ -410,6 +410,12 @@ export const storage = {
         });
       }
 
+      // Costo basado en stock: recalcular con las compras recientes que componen el stock actual
+      const affectedPids = Array.from(new Set(data.items.map((i) => i.productId)));
+      for (const pid of affectedPids) {
+        await this._recomputeCostFromStock(pid, tx);
+      }
+
       return purchase;
     });
 
@@ -617,6 +623,42 @@ export const storage = {
     }
   },
 
+  // Recalcula el costo en base a las compras MÁS RECIENTES que componen el stock
+  // actual (no el promedio perpetuo que arrastra picos históricos ya vendidos).
+  // Implementa "el costo = lo que pagué por lo que efectivamente tengo en stock".
+  async _recomputeCostFromStock(pid: number, tx: any = db): Promise<void> {
+    // Fila base con stock (prioriza la marcada como base_unit; ignora cajón/bolsa)
+    const baseRes: any = await tx.execute(drizzleSql`
+      SELECT id, unit, stock_qty::float AS st FROM product_units
+      WHERE product_id = ${pid} AND stock_qty::float > 0
+        AND unit NOT IN ('CAJON','BOLSA','BANDEJA')
+      ORDER BY (base_unit IS NOT NULL) DESC, stock_qty::float DESC LIMIT 1
+    `);
+    const baseRow = (baseRes.rows ?? baseRes)[0];
+    if (!baseRow) return; // sin stock → preservar último costo conocido
+    const stock = Number(baseRow.st);
+    // Compras de la misma unidad base, de la más reciente a la más vieja
+    const itemsRes: any = await tx.execute(drizzleSql`
+      SELECT pi.quantity::float AS q, pi.cost_per_unit::float AS c
+      FROM purchase_items pi JOIN purchases p ON p.id = pi.purchase_id
+      WHERE pi.product_id = ${pid} AND pi.unit = ${baseRow.unit}
+      ORDER BY p.purchase_date DESC, pi.id DESC
+    `);
+    const items = itemsRes.rows ?? itemsRes;
+    let remaining = stock, sum = 0;
+    for (const it of items) {
+      if (remaining <= 0) break;
+      const take = Math.min(Number(it.q), remaining);
+      sum += take * Number(it.c);
+      remaining -= take;
+    }
+    const covered = stock - remaining;
+    if (covered <= 0) return; // no hay compras que matcheen → no tocar el costo
+    const cost = (sum / covered).toFixed(4);
+    await tx.execute(drizzleSql`UPDATE product_units SET avg_cost = ${cost} WHERE id = ${baseRow.id}`);
+    await tx.execute(drizzleSql`UPDATE products SET average_cost = ${cost} WHERE id = ${pid}`);
+  },
+
   async deletePurchase(id: number): Promise<void> {
     await db.transaction(async (tx) => {
       const items = await tx.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, id));
@@ -651,6 +693,7 @@ export const storage = {
   async updatePurchase(id: number, data: {
     supplierName: string;
     supplierId?: number | null;
+    affectsStock?: boolean; // global: si false, el edit NO toca el stock actual (sólo registro/CC/costo)
     purchaseDate: Date;
     notes?: string;
     totalEmptyCost?: string;
@@ -700,9 +743,12 @@ export const storage = {
       }
       // affectsStock=false (línea sólo financiera) o item sin cambios → no toca stock
       const itemAffectsStock = (it: any) => it.affectsStock !== false && !unchangedNewSet.has(it);
+      // Flag global: si el usuario eligió "no afectar stock", el edit no toca el inventario
+      // (sólo actualiza el registro de la compra, la CC del proveedor y el costo).
+      const stockEnabled = data.affectsStock !== false;
 
       // ── PHASE 1: Revertir items anteriores (sólo los que cambiaron/se removieron) ─
-      for (const item of oldItems) {
+      for (const item of (stockEnabled ? oldItems : [])) {
         const sig = itemSig(item.productId, item.unit, item.quantity, item.costPerUnit);
         if ((keepOldCount.get(sig) ?? 0) > 0) { keepOldCount.set(sig, keepOldCount.get(sig)! - 1); continue; } // sin cambios → no revertir
         const canonicalUnit = dbEnumToCanonical(item.unit as any);
@@ -746,7 +792,7 @@ export const storage = {
       // Procesar en orden de productId (locks ya adquiridos arriba)
       const sortedNewItems = [...data.items].sort((a, b) => a.productId - b.productId);
       for (const item of sortedNewItems) {
-        if (!itemAffectsStock(item)) continue; // sin cambios o línea sólo financiera → no toca stock
+        if (!stockEnabled || !itemAffectsStock(item)) continue; // global off, sin cambios, o línea sólo financiera → no toca stock
         const newQty = Number(item.quantity);
         const newCost = Number(item.costPerUnit);
         const canonicalUnit = dbEnumToCanonical(item.unit);
@@ -864,7 +910,7 @@ export const storage = {
         .where(and(eq(stockMovements.referenceType, "purchase"), eq(stockMovements.referenceId, id)));
       await tx.delete(productCostHistory).where(eq(productCostHistory.purchaseId, id));
 
-      for (const item of data.items) {
+      for (const item of (stockEnabled ? data.items : [])) {
         // Líneas sólo financieras (no afectan stock) → sin movimiento ni cost history
         if (item.affectsStock === false) continue;
         // Leer producto con su averageCost ya recalculado en PHASE 2
@@ -887,6 +933,13 @@ export const storage = {
           previousCost: previousCostMap.get(item.productId) ?? product.averageCost as string,
           purchaseId: id,
         });
+      }
+
+      // ── Costo basado en stock ─────────────────────────────────────────────────
+      // Recalcular el costo de cada producto afectado usando sólo las compras más
+      // recientes que componen el stock actual (ignora picos históricos ya vendidos).
+      for (const pid of allProductIds) {
+        await this._recomputeCostFromStock(pid, tx);
       }
 
       // Nota: costos en pedidos borrador del mismo día se actualizan al aprobar

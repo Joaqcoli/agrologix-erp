@@ -251,19 +251,37 @@ export default function EditPurchasePage({ id }: { id: number }) {
       toast({ title: "Falta cantidad base por envase", description: `Completá cuántos unidades/kg trae cada ${missingWPU[0].unit.toLowerCase()} de: ${names}`, variant: "destructive" });
       return;
     }
-    // ¿Se agregaron productos nuevos a una compra vieja? → consultar si afectan el stock
+    // ¿Hay cambios que afectarían el stock en una compra vieja? → consultar
+    // (agregar, cambiar cantidad/unidad/costo, o eliminar un producto).
     const isOldPurchase = purchaseDate < todayLocal();
-    const newItems = validItems.filter((i) => i.isNew);
-    if (isOldPurchase && newItems.length > 0) {
+    if (isOldPurchase && hasStockAffectingChanges(validItems)) {
       setStockDialogOpen(true);
       return; // la decisión se toma en el AlertDialog
     }
     submitPurchase(true);
   };
 
-  // Construye el payload y dispara la mutación. `affectsNewStock` decide si los
-  // productos AGREGADOS en esta sesión suman al stock actual.
-  const submitPurchase = (affectsNewStock: boolean) => {
+  // Firma base de un item del formulario (productId|unidadBase|cantBase|costoBase)
+  const formItemSig = (i: PurchaseItem): string => {
+    const wpp = parseFloat(i.weightPerPackage) || 0;
+    const isPackage = isPackageUnit(i.unit) && wpp > 0;
+    const baseUnit = isPackage ? (i.baseUnit || "KG") : i.unit;
+    const baseQty = isPackage ? (parseFloat(i.quantity) || 0) * wpp : (parseFloat(i.quantity) || 0);
+    const baseCost = isPackage ? (parseFloat(i.costPerUnit) || 0) / wpp : (parseFloat(i.costPerUnit) || 0);
+    return `${i.productId}|${baseUnit}|${baseQty.toFixed(4)}|${baseCost.toFixed(2)}`;
+  };
+  // ¿Difiere lo cargado respecto de la compra original? (multiset de firmas)
+  const hasStockAffectingChanges = (current: PurchaseItem[]): boolean => {
+    const orig = (purchase?.items ?? []).map((it: any) =>
+      `${it.productId}|${it.unit}|${(parseFloat(it.quantity) || 0).toFixed(4)}|${(parseFloat(it.costPerUnit) || 0).toFixed(2)}`
+    ).sort();
+    const cur = current.map(formItemSig).sort();
+    return orig.length !== cur.length || orig.some((s, idx) => s !== cur[idx]);
+  };
+
+  // Construye el payload y dispara la mutación. `affectsStock` (global) decide si el
+  // edit toca el stock actual.
+  const submitPurchase = (affectsStock: boolean) => {
     setStockDialogOpen(false);
     const validItems = items.filter((i) => i.productId && parseFloat(i.quantity) > 0 && i.costPerUnit !== "" && parseFloat(i.costPerUnit) >= 0);
     const effectiveSupplierName = supplierId
@@ -272,13 +290,11 @@ export default function EditPurchasePage({ id }: { id: number }) {
     updateMutation.mutate({
       supplierName: effectiveSupplierName,
       supplierId: supplierId ?? undefined,
+      affectsStock,
       purchaseDate,
       notes: notes || undefined,
       totalEmptyCost: globalEmptyCost,
       items: validItems.map((i) => {
-        // Items existentes siempre con affectsStock=true (el backend salta los no modificados).
-        // Items nuevos: respetan la decisión del usuario.
-        const affectsStock = i.isNew ? affectsNewStock : true;
         const wpp = parseFloat(i.weightPerPackage) || 0;
         const isPackage = isPackageUnit(i.unit) && wpp > 0;
         if (isPackage) {
@@ -664,14 +680,15 @@ export default function EditPurchasePage({ id }: { id: number }) {
       <AlertDialog open={stockDialogOpen} onOpenChange={setStockDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>¿Sumar los productos agregados al stock actual?</AlertDialogTitle>
+            <AlertDialogTitle>¿Los cambios deben afectar el stock actual?</AlertDialogTitle>
             <AlertDialogDescription>
-              Estás agregando producto(s) a una compra vieja ({purchaseDate}). ¿Querés que esos
-              productos <strong>nuevos</strong> se sumen a tu stock actual?
+              Estás editando una compra vieja ({purchaseDate}) y hay cambios en los productos
+              (agregaste, cambiaste cantidad/unidad o eliminaste algo). ¿Querés que esos cambios
+              se reflejen en tu <strong>stock actual</strong>?
               <br /><br />
-              Elegí <strong>"No sumar"</strong> si ya ajustaste el stock manualmente y sólo querés
-              dejar registrada la compra (afecta la cuenta corriente del proveedor, no el inventario).
-              Los productos que ya estaban en la compra no se modifican.
+              Elegí <strong>"No afectar stock"</strong> si esa mercadería ya se vendió o ya ajustaste
+              el inventario a mano: se corrige el registro de la compra y el costo, pero <strong>no</strong>
+              se toca el stock actual. Elegí <strong>"Sí, afectar"</strong> si recién entró la mercadería.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -680,10 +697,10 @@ export default function EditPurchasePage({ id }: { id: number }) {
               className="bg-muted text-foreground hover:bg-muted/80"
               onClick={() => submitPurchase(false)}
             >
-              No sumar al stock
+              No afectar stock
             </AlertDialogAction>
             <AlertDialogAction onClick={() => submitPurchase(true)}>
-              Sí, sumar al stock
+              Sí, afectar
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
