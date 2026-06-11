@@ -27,6 +27,11 @@ function normalizeCategory(cat: string): string {
   if (lower.includes("cobro") && lower.includes("client")) return "Cobros clientes";
   return cat;
 }
+// Categorías excluidas del gráfico de egresos por categoría (pagos a proveedores / mercadería)
+const EXCLUDE_FROM_PIE = (cat: string) => {
+  const l = cat.toLowerCase();
+  return l.includes("proveedor") || l.includes("mercader");
+};
 const pad = (n: number) => String(n).padStart(2, "0");
 const MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 const PIE_COLORS = ["#f87171","#fb923c","#fbbf24","#a3e635","#34d399","#38bdf8","#818cf8","#c084fc","#f472b6","#94a3b8"];
@@ -610,6 +615,7 @@ export default function CajaPage() {
     const map: Record<string, number> = {};
     for (const item of feed) {
       if (item.type !== "egreso") continue;
+      if (EXCLUDE_FROM_PIE(item.category)) continue; // excluir pagos proveedores / mercadería
       map[item.category] = (map[item.category] ?? 0) + item.amount;
     }
     return Object.entries(map)
@@ -1629,6 +1635,12 @@ export default function CajaPage() {
                     </div>
                   );
                 })}
+                <div className="border-t border-border pt-2 mt-1 flex items-center gap-2 font-bold">
+                  <span className="flex-1 text-foreground uppercase text-xs">Total</span>
+                  <span className="tabular-nums w-24 text-right text-red-600 dark:text-red-400">
+                    {fmt(pieData.reduce((acc, x) => acc + x.value, 0))}
+                  </span>
+                </div>
               </div>
             </CardContent>
           </Card>
