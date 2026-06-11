@@ -3001,6 +3001,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         console.warn("[mp-xlsx] fetch error:", xlsxErr.message);
       }
 
+      // Reconciliación de comisiones de movimientos XLSX-only (no estaban en payments API,
+      // por eso el loop anterior no los sincronizó). Sin esto, el total de "Comisiones" en
+      // egresos queda por debajo del total de comisiones que muestra Bancos.
+      // Se usa el mismo sourceId base `mp:{mpId}` que el payments API → idempotente, sin duplicar.
+      try {
+        const xlsxWithFee = (xlsxMovements as any[]).filter((m) => (m.feeAmount ?? 0) > 0.005);
+        if (xlsxWithFee.length > 0) {
+          const rawId = (m: any) => String(m.id).replace(/^xlsx_/, "");
+          const existingXlsxFees = await storage.getCajaAmountsBySourceIds(xlsxWithFee.map((m) => `mp:${rawId(m)}:fee`));
+          let syncedXlsxFee = 0;
+          for (const m of xlsxWithFee) {
+            const sourceId = `mp:${rawId(m)}`;
+            const fee = parseFloat(String(m.feeAmount ?? 0));
+            const existing = existingXlsxFees.get(`${sourceId}:fee`) ?? 0;
+            if (Math.abs(existing - fee) >= 0.01) {
+              await storage.syncMpFee({
+                sourceId, fee,
+                date: String(m.date_created ?? "").slice(0, 10),
+                description: String(m.displayName || m.description || "Comisión MP"),
+              });
+              syncedXlsxFee++;
+            }
+          }
+          if (syncedXlsxFee > 0) console.log(`[caja reconcile xlsx] comisiones:${syncedXlsxFee}`);
+        }
+      } catch (feeErr: any) {
+        console.warn("[caja reconcile xlsx] error:", feeErr.message);
+      }
+
       // Merge payments + xlsx, sorted by date desc
       const allMovements: any[] = [...withCats, ...xlsxMovements];
       allMovements.sort((a, b) =>
