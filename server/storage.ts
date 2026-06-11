@@ -4391,6 +4391,70 @@ export const storage = {
     `);
     const chq = (chequesRow.rows[0] as any) ?? {};
 
+    // ── Ventas y bultos por semana (lunes-domingo, calendario real) ─────────────
+    const ventasSemanaRow = await db.execute(drizzleSql`
+      SELECT to_char(date_trunc('week', o.order_date::date), 'YYYY-MM-DD') AS wk,
+        COALESCE(SUM(
+          CASE
+            WHEN oi.price_per_unit::numeric = 0 THEN 0
+            WHEN c.has_iva = true AND (p.name ILIKE '%huevo%' OR p.name ILIKE '%maple%' OR p.category ILIKE '%huevo%') THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
+            WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+            ELSE oi.quantity::numeric * oi.price_per_unit::numeric
+          END
+        ), 0) AS ventas
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      JOIN order_items oi ON oi.order_id = o.id
+      LEFT JOIN products p ON p.id = oi.product_id
+      WHERE o.status = 'approved'
+        AND o.order_date >= ${from}::timestamp AND o.order_date < ${to}::timestamp
+        AND (o.notes IS NULL OR o.notes NOT LIKE '%Facturación histórica importada%')
+      GROUP BY date_trunc('week', o.order_date::date)
+    `);
+    // Bultos = lo que se cargó en compras como CAJON o BOLSA (cantidad de envases)
+    const bultosSemanaRow = await db.execute(drizzleSql`
+      SELECT to_char(date_trunc('week', p.purchase_date::date), 'YYYY-MM-DD') AS wk,
+        COALESCE(SUM(
+          CASE WHEN pi.purchase_unit IN ('CAJON','BOLSA') THEN pi.purchase_qty::numeric
+               WHEN pi.unit IN ('CAJON','BOLSA') THEN pi.quantity::numeric
+               ELSE 0 END
+        ), 0) AS bultos
+      FROM purchases p
+      JOIN purchase_items pi ON pi.purchase_id = p.id
+      WHERE p.purchase_date >= ${from}::timestamp AND p.purchase_date < ${to}::timestamp
+      GROUP BY date_trunc('week', p.purchase_date::date)
+    `);
+    const ventasByWeek = new Map<string, number>();
+    for (const r of ventasSemanaRow.rows as any[]) ventasByWeek.set(String(r.wk), parseFloat(r.ventas ?? "0"));
+    const bultosByWeek = new Map<string, number>();
+    for (const r of bultosSemanaRow.rows as any[]) bultosByWeek.set(String(r.wk), parseFloat(r.bultos ?? "0"));
+
+    // Enumerar las semanas calendario (lunes) que solapan [from, to)
+    const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const fmtDM = (d: Date) => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const fromD = new Date(from + "T00:00:00");
+    const toD = new Date(to + "T00:00:00");
+    const semanas: { label: string; ventas: number; bultos: number }[] = [];
+    let bultosTotal = 0;
+    let wkStart = new Date(fromD);
+    wkStart.setDate(wkStart.getDate() - ((wkStart.getDay() + 6) % 7)); // lunes de la semana de 'from'
+    wkStart.setHours(0, 0, 0, 0);
+    let guard = 0;
+    while (wkStart < toD && guard++ < 80) {
+      const wkEnd = new Date(wkStart); wkEnd.setDate(wkStart.getDate() + 7);
+      const segStart = wkStart < fromD ? fromD : wkStart;
+      const segEnd = wkEnd > toD ? toD : wkEnd;
+      if (segStart < segEnd) {
+        const key = ymd(wkStart);
+        const v = ventasByWeek.get(key) ?? 0;
+        const b = bultosByWeek.get(key) ?? 0;
+        bultosTotal += b;
+        const lastDay = new Date(segEnd.getTime() - 86400000);
+        semanas.push({ label: `${fmtDM(segStart)}–${fmtDM(lastDay)}`, ventas: Math.round(v), bultos: Math.round(b) });
+      }
+      wkStart = wkEnd;
+    }
+
     return {
       ventas,
       ganancia_bruta,
@@ -4399,6 +4463,8 @@ export const storage = {
       ganancia_real,
       diasPeriodo,
       diasTrabajados,
+      semanas,
+      bultosTotal: Math.round(bultosTotal),
       chequesEmitidos: parseFloat(chq.cheques_emitidos ?? "0"),
       chequesEnCartera: parseFloat(chq.cheques_en_cartera ?? "0"),
       vaciosRecibidosPeriodo: { qty: parseFloat(vr.qty ?? "0"), pesos: parseFloat(vr.pesos ?? "0") },

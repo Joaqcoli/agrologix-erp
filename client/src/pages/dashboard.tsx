@@ -14,6 +14,7 @@ import { generateBolsaFvPDF, generateComisionesPDF, type BolsaFvRow, type Comisi
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const fmt = (n: number) =>
   "$" + Math.round(n).toLocaleString("es-MX");
+const fmtInt = (n: number) => Math.round(n).toLocaleString("es-MX");
 
 function localStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -56,6 +57,8 @@ type Stats = {
   ganancia_real: number;
   diasPeriodo: number;
   diasTrabajados: number;
+  semanas: { label: string; ventas: number; bultos: number }[];
+  bultosTotal: number;
   vaciosRecibidosPeriodo: { qty: number; pesos: number };
   vaciosEntregadosPeriodo: { pesos: number; qty: number };
   vaciosEnPoder: { qty: number; pesos: number };
@@ -449,6 +452,53 @@ export default function DashboardPage() {
                     {ajustePositivo ? "+" : ""}{fmt(ajusteNeto)} por {ajustePositivo ? "rinde" : "merma"}
                   </Badge>
                 )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ── Ventas y bultos por semana (calendario lunes-domingo) ── */}
+        <Card>
+          <CardHeader className="pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Ventas y bultos por semana</CardTitle>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Package className="h-3.5 w-3.5" />
+              <span>Bultos del mes:</span>
+              <span className="font-bold text-foreground">{isLoading ? "…" : fmtInt(s?.bultosTotal ?? 0)}</span>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {isLoading ? (
+              <Skeleton className="h-24 w-full" />
+            ) : (s?.semanas ?? []).length === 0 ? (
+              <p className="text-xs text-muted-foreground">Sin datos en el período.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-[11px] uppercase tracking-wide text-muted-foreground border-b border-border">
+                      <th className="text-left font-medium py-1.5">Semana</th>
+                      <th className="text-right font-medium py-1.5">Ventas</th>
+                      <th className="text-right font-medium py-1.5">Bultos</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {s?.semanas.map((w) => (
+                      <tr key={w.label} className="border-b border-border/50 last:border-0">
+                        <td className="py-1.5 text-muted-foreground">{w.label}</td>
+                        <td className="py-1.5 text-right font-semibold text-foreground">{fmt(w.ventas)}</td>
+                        <td className="py-1.5 text-right font-semibold text-foreground">{fmtInt(w.bultos)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t border-border font-bold">
+                      <td className="py-1.5 text-foreground uppercase text-xs">Total</td>
+                      <td className="py-1.5 text-right text-primary">{fmt(s?.ventas ?? 0)}</td>
+                      <td className="py-1.5 text-right text-foreground">{fmtInt(s?.bultosTotal ?? 0)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
               </div>
             )}
           </CardContent>
