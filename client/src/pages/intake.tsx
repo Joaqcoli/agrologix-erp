@@ -486,7 +486,7 @@ export default function IntakePage() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-foreground">{selectedCustomer?.name}</p>
-                    <p className="text-xs text-muted-foreground">{new Date(date).toLocaleDateString("es-MX", { weekday: "long", day: "2-digit", month: "long" })}</p>
+                    <p className="text-xs text-muted-foreground">{new Date(date + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "2-digit", month: "long" })}</p>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap text-right">
                     <Badge variant="default">{okCount} OK</Badge>

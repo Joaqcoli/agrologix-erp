@@ -123,8 +123,10 @@ function buildPDF(data: APCCDetail, monthLabel: string) {
   y += 5;
 
   const fmtDate = (d: string) => {
-    const dt = new Date(d.replace(/\s.+$/, "T00:00:00"));
-    return dt.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
+    // Tomar solo la parte de fecha (YYYY-MM-DD) y construirla en LOCAL para evitar
+    // el corrimiento de un día por interpretación UTC.
+    const [y, m, day] = String(d).slice(0, 10).split("-").map(Number);
+    return new Date(y, (m || 1) - 1, day || 1).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
   };
   const fmtMoney = (n: number) => `$${Math.round(n).toLocaleString("es-AR")}`;
 
@@ -502,8 +504,8 @@ export default function SupplierCCPage({
   });
 
   const fmtDate = (d: string) => {
-    const dt = new Date(d.replace(/\s.+$/, ""));
-    return dt.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
+    const [y, m, day] = String(d).slice(0, 10).split("-").map(Number);
+    return new Date(y, (m || 1) - 1, day || 1).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
   };
 
   const handleDownloadPDF = () => {
