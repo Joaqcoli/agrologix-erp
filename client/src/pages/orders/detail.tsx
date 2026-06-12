@@ -898,13 +898,17 @@ export default function OrderDetailPage({ id }: { id: number }) {
       })
       .map((c) => {
         const d = drafts[c.id]!;
+        // Solo tocar el override del costo si el usuario REALMENTE cambió el costo.
+        // Si no, undefined → el backend preserva el estado actual (no marca "Manual" al
+        // editar cantidad/precio/unidad sin tocar el costo).
+        const costChanged = d.cost !== String(Math.round(c.effectiveCostPerUnit));
         return {
           itemId: c.id,
           data: {
             quantity: d.qty,
             unit: d.unit,
             pricePerUnit: d.price !== "" ? d.price : null,
-            overrideCostPerUnit: d.cost !== "" ? d.cost : null,
+            overrideCostPerUnit: costChanged ? (d.cost !== "" ? d.cost : null) : undefined,
             productId: d.productId,
           },
         };
