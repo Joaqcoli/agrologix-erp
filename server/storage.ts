@@ -5381,6 +5381,29 @@ export const storage = {
     return rows.rows as any[];
   },
 
+  // Historial de pagos (parciales/total) de una obligación
+  async getObligacionPagos(obligacionId: number): Promise<any[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT id, obligacion_id, fecha, monto::float, moneda, cotizacion::float, monto_ars::float, cuenta_pago_id, created_at
+      FROM obligacion_pagos WHERE obligacion_id = ${obligacionId}
+      ORDER BY created_at ASC, id ASC
+    `);
+    return rows.rows as any[];
+  },
+
+  async addObligacionPago(data: {
+    obligacionId: number; fecha: string; monto: number; moneda: string;
+    cotizacion?: number | null; montoArs: number; cuentaPagoId?: number | null;
+  }): Promise<any> {
+    const row = await db.execute(drizzleSql`
+      INSERT INTO obligacion_pagos (obligacion_id, fecha, monto, moneda, cotizacion, monto_ars, cuenta_pago_id)
+      VALUES (${data.obligacionId}, ${data.fecha}, ${data.monto}, ${data.moneda},
+        ${data.cotizacion ?? null}, ${data.montoArs}, ${data.cuentaPagoId ?? null})
+      RETURNING id, obligacion_id, fecha, monto::float, moneda, cotizacion::float, monto_ars::float, cuenta_pago_id, created_at
+    `);
+    return (row.rows as any[])[0];
+  },
+
   async createObligaciones(items: {
     concepto: string; tipo: string; monto: number; moneda?: string;
     fechaVencimiento: string; grupoCuota?: string | null;

@@ -1102,6 +1102,22 @@ export async function runNcMigrations() {
   try { await db.execute(sql`ALTER TABLE obligaciones ADD COLUMN IF NOT EXISTS moneda TEXT NOT NULL DEFAULT 'ARS'`); } catch {}
   try { await db.execute(sql`ALTER TABLE obligaciones ADD COLUMN IF NOT EXISTS pago_parcial BOOLEAN NOT NULL DEFAULT FALSE`); } catch {}
 
+  // Historial de pagos (parciales o totales) por obligación
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS obligacion_pagos (
+      id SERIAL PRIMARY KEY,
+      obligacion_id INTEGER NOT NULL REFERENCES obligaciones(id) ON DELETE CASCADE,
+      fecha TEXT NOT NULL,
+      monto NUMERIC(14,2) NOT NULL,
+      moneda TEXT NOT NULL DEFAULT 'ARS',
+      cotizacion NUMERIC(14,4),
+      monto_ars NUMERIC(14,2) NOT NULL,
+      cuenta_pago_id INTEGER REFERENCES cuentas_financieras(id),
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+  try { await db.execute(sql`CREATE INDEX IF NOT EXISTS obligacion_pagos_obl_idx ON obligacion_pagos(obligacion_id)`); } catch {}
+
   // ── Fix: CAJÓN purchases where cost_per_unit was stored as per-cajón instead of per-KG ──
   // Detectable when: cost_per_unit ≈ cost_per_purchase_unit AND weight_per_package > 1
   // Step 1: Fix purchase_items.cost_per_unit

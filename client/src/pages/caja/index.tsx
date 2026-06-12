@@ -205,6 +205,16 @@ const TIPO_BADGE: Record<string, string> = {
 
 const BASE_TIPOS = ["proveedor","impuesto","alquiler","cuota","servicio","sueldo","otro"];
 
+// Etiqueta de la cuota: usa numero_cuota/total_cuotas (fuente de verdad) en vez del
+// texto fijo grabado en concepto (que puede tener el número mal si se cargó a mano).
+function oblLabel(ob: Obligacion): string {
+  if (ob.numero_cuota != null && ob.total_cuotas != null && ob.total_cuotas > 1) {
+    const base = ob.concepto.replace(/\s*\d+\s*de\s*\d+\s*$/i, "").trim();
+    return `${base.length > 0 ? base : ob.concepto} ${ob.numero_cuota} de ${ob.total_cuotas}`;
+  }
+  return ob.concepto;
+}
+
 function oblSemaforoClass(fechaVenc: string): "vencido" | "semana" | "futuro" {
   const today = new Date(); today.setHours(0,0,0,0);
   const venc = new Date(fechaVenc + "T00:00:00");
@@ -458,6 +468,13 @@ export default function CajaPage() {
   const { data: obligaciones } = useQuery<Obligacion[]>({
     queryKey: ["/api/caja/obligaciones"],
     queryFn: () => fetch("/api/caja/obligaciones", { credentials: "include" }).then(r => r.json()),
+  });
+
+  // Historial de pagos de la obligación que se está pagando (para mostrarlo en el diálogo)
+  const { data: oblPagos } = useQuery<any[]>({
+    queryKey: ["/api/caja/obligaciones", pagarObl?.id, "pagos"],
+    queryFn: () => fetch(`/api/caja/obligaciones/${pagarObl!.id}/pagos`, { credentials: "include" }).then(r => r.json()),
+    enabled: pagarOblOpen && !!pagarObl,
   });
 
   const addOblMutation = useMutation({
@@ -865,7 +882,7 @@ export default function CajaPage() {
                         </td>
                         <td className="px-3 py-2 font-medium">
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="truncate max-w-[180px]">{ob.concepto}</span>
+                            <span className="truncate max-w-[180px]">{oblLabel(ob)}</span>
                             {ob.pago_parcial && (
                               <Badge className="bg-amber-100 text-amber-700 border border-amber-300 text-[10px] px-1.5 py-0 h-4 font-medium">pago parcial</Badge>
                             )}
@@ -1066,8 +1083,29 @@ export default function CajaPage() {
                 return (
                   <>
                     <p className="text-sm font-medium">
-                      {pagarObl.concepto} — <span className="text-red-700">{isUSD ? `USD ${pagarObl.monto.toLocaleString("es-AR")}` : fmt(pagarObl.monto)}</span>
+                      {oblLabel(pagarObl)} — <span className="text-red-700">{isUSD ? `USD ${pagarObl.monto.toLocaleString("es-AR")}` : fmt(pagarObl.monto)}</span>
+                      {pagarObl.pago_parcial && <span className="text-xs text-amber-600 ml-1">(saldo restante)</span>}
                     </p>
+
+                    {(oblPagos ?? []).length > 0 && (
+                      <div className="rounded-md border border-border bg-muted/30 p-2 space-y-1">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Pagos realizados</p>
+                        {(oblPagos ?? []).map((p: any) => (
+                          <div key={p.id} className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground">{String(p.fecha).slice(5).split("-").reverse().join("/")}</span>
+                            <span className="font-medium tabular-nums">
+                              {p.moneda === "USD"
+                                ? `USD ${p.monto.toLocaleString("es-AR")} · ${fmt(p.monto_ars)}`
+                                : fmt(p.monto_ars)}
+                            </span>
+                          </div>
+                        ))}
+                        <div className="border-t border-border pt-1 flex justify-between text-xs font-semibold">
+                          <span>Total pagado</span>
+                          <span className="tabular-nums">{fmt((oblPagos ?? []).reduce((a: number, p: any) => a + (p.monto_ars ?? 0), 0))}</span>
+                        </div>
+                      </div>
+                    )}
 
                     {isUSD ? (
                       <>

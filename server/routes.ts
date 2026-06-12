@@ -2246,6 +2246,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  app.get("/api/caja/obligaciones/:id/pagos", requireAuth, async (req, res) => {
+    try {
+      return res.json(await storage.getObligacionPagos(parseInt(req.params.id)));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   app.post("/api/caja/obligaciones", requireAuth, async (req, res) => {
     try {
       const { concepto, tipo, monto, moneda, fechaVencimiento, notas, cuotas, cuotaInicial, mensual } = req.body;
@@ -2356,6 +2362,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
 
         const updated = await storage.patchObligacion(id, patch);
+
+        // Registrar el pago (parcial o total) en el historial
+        try {
+          await storage.addObligacionPago({
+            obligacionId: id,
+            fecha: new Date().toISOString().slice(0, 10),
+            monto: montoNum,
+            moneda: ob.moneda ?? "ARS",
+            cotizacion: isUSD ? cotz : null,
+            montoArs: montoARS,
+            cuentaPagoId: cuentaPagoId ? parseInt(cuentaPagoId) : null,
+          });
+        } catch (e) { console.error("addObligacionPago failed:", e); }
 
         // Si es pago completo, marcar cheque vinculado como cobrado
         if (isFullPayment) {
