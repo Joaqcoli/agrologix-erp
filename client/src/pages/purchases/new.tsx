@@ -31,6 +31,7 @@ const BASE_UNIT_OPTIONS = [
   { value: "KG",     label: "KG" },
   { value: "UNIDAD", label: "UNIDAD" },
   { value: "ATADO",  label: "ATADO" },
+  { value: "MAPLE",  label: "MAPLE" },
 ] as const;
 
 const PACKAGE_UNIT_SET = new Set(["CAJON", "BOLSA", "BANDEJA"]);
@@ -164,9 +165,9 @@ export default function NewPurchasePage() {
   const activeProducts = (products ?? []).filter((p) => p.active);
   const activeSuppliers = (suppliers ?? []).filter((s) => s.active);
 
-  const isEggsProduct = (productId: number) => {
-    const p = activeProducts.find((x) => x.id === productId);
-    return p?.category?.toLowerCase() === "huevos";
+  const isEggsProduct = (productId: number | string) => {
+    const p = activeProducts.find((x) => x.id === Number(productId));
+    return p?.category?.toLowerCase() === "huevos" || (p?.name?.toLowerCase().includes("huevo") ?? false);
   };
 
   const addItem = () => setItems([{ productId: 0, productSearch: "", quantity: "", unit: "KG", weightPerPackage: "", baseUnit: "KG", costPerUnit: "", emptyCost: "" }, ...items]);
@@ -259,7 +260,7 @@ export default function NewPurchasePage() {
       return;
     }
     // Block if any package item is missing weightPerPackage
-    const missingWPU = validItems.filter((i) => isPackageUnit(i.unit) && !(i.unit === "CAJON" && isEggsProduct(i.productId)) && !(parseFloat(i.weightPerPackage) > 0));
+    const missingWPU = validItems.filter((i) => isPackageUnit(i.unit) && !(parseFloat(i.weightPerPackage) > 0));
     if (missingWPU.length > 0) {
       const names = missingWPU.map((i) => activeProducts.find((p) => p.id === i.productId)?.name ?? "producto").join(", ");
       toast({ title: "Falta cantidad base por envase", description: `Completá cuántos KG/unidades trae cada ${missingWPU[0].unit.toLowerCase()} de: ${names}`, variant: "destructive" });
@@ -305,7 +306,7 @@ export default function NewPurchasePage() {
   };
 
   const selectedSupplier = supplierId ? activeSuppliers.find((s) => s.id === supplierId) : null;
-  const hasWPUError = items.some((i) => i.productId && isPackageUnit(i.unit) && !(i.unit === "CAJON" && isEggsProduct(i.productId)) && !(parseFloat(i.weightPerPackage) > 0));
+  const hasWPUError = items.some((i) => i.productId && isPackageUnit(i.unit) && !(parseFloat(i.weightPerPackage) > 0));
   const canSubmit = !createMutation.isPending && (supplierId != null || supplierName.trim().length > 0) && !hasWPUError;
 
   return (
@@ -514,16 +515,15 @@ export default function NewPurchasePage() {
                         <div className="space-y-1.5">
                           <Label className="flex items-center gap-1">
                             <PackagePlus className="h-3 w-3 text-muted-foreground" />
-                            ¿Cuántos {item.baseUnit} por {labelFor(item.unit)}?{!eggsLocked && <span className="text-destructive ml-0.5">*</span>}
+                            ¿Cuántos {item.baseUnit} por {labelFor(item.unit)}?<span className="text-destructive ml-0.5">*</span>
                           </Label>
                           <div className="flex gap-2">
                             <Input
                               type="number" min="0.0001" step="0.0001"
-                              placeholder={eggsLocked ? "12" : `ej. 18 ${item.baseUnit}`}
+                              placeholder={eggsLocked ? "ej. 12 MAPLE" : `ej. 18 ${item.baseUnit}`}
                               value={item.weightPerPackage}
-                              onChange={(e) => !eggsLocked && updateItem(idx, "weightPerPackage", e.target.value)}
-                              readOnly={eggsLocked}
-                              className={eggsLocked ? "bg-muted/40" : (!item.weightPerPackage ? "border-destructive/60 focus-visible:ring-destructive/40" : "")}
+                              onChange={(e) => updateItem(idx, "weightPerPackage", e.target.value)}
+                              className={!item.weightPerPackage ? "border-destructive/60 focus-visible:ring-destructive/40" : ""}
                               data-testid={`input-weight-per-package-${idx}`}
                             />
                             {eggsLocked ? (
