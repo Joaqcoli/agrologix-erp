@@ -181,7 +181,7 @@ export const storage = {
   },
 
   // ─── Purchases ────────────────────────────────────────────────────────────
-  async getPurchases(date?: string): Promise<(Purchase & { itemCount: number })[]> {
+  async getPurchases(date?: string): Promise<(Purchase & { itemCount: number; bultos: number })[]> {
     let all: Purchase[];
     if (date) {
       all = await db.select().from(purchases)
@@ -193,7 +193,15 @@ export const storage = {
     const result = await Promise.all(
       all.map(async (p) => {
         const items = await db.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, p.id));
-        return { ...p, itemCount: items.length };
+        // Bultos = lo cargado como CAJON o BOLSA (misma lógica que el dashboard)
+        const bultos = items.reduce((s, it) => {
+          const pu = String((it as any).purchaseUnit ?? "").toUpperCase();
+          const u = String(it.unit ?? "").toUpperCase();
+          if (pu === "CAJON" || pu === "BOLSA") return s + (parseFloat(String((it as any).purchaseQty ?? "0")) || 0);
+          if (u === "CAJON" || u === "BOLSA") return s + (parseFloat(String(it.quantity ?? "0")) || 0);
+          return s;
+        }, 0);
+        return { ...p, itemCount: items.length, bultos };
       })
     );
     return result;

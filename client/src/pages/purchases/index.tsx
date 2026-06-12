@@ -8,8 +8,10 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { Plus, ShoppingCart, Calendar, ChevronRight } from "lucide-react";
+import { Plus, ShoppingCart, Calendar, ChevronRight, Package, DollarSign, Users } from "lucide-react";
 import type { Purchase } from "@shared/schema";
+
+const fmtInt = (n: number) => Math.round(n).toLocaleString("es-AR");
 
 export default function PurchasesPage() {
   const [date, setDate] = useState(() => {
@@ -17,10 +19,15 @@ export default function PurchasesPage() {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
   });
 
-  const { data: purchases, isLoading } = useQuery<(Purchase & { itemCount: number })[]>({
+  const { data: purchases, isLoading } = useQuery<(Purchase & { itemCount: number; bultos: number })[]>({
     queryKey: ["/api/purchases", date],
     queryFn: () => apiRequest("GET", `/api/purchases?date=${date}`).then((r) => r.json()),
   });
+
+  const list = purchases ?? [];
+  const bultosTotal = list.reduce((s, p) => s + (p.bultos ?? 0), 0);
+  const totalComprado = list.reduce((s, p) => s + (parseFloat(p.total) || 0), 0);
+  const proveedoresCount = new Set(list.map((p) => p.supplierId ?? `n:${p.supplierName}`)).size;
 
   const formatDate = (d: string | Date) => {
     const s = typeof d === "string" ? d.slice(0, 10) : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -54,6 +61,36 @@ export default function PurchasesPage() {
             </Button>
           </Link>
         </div>
+
+        {/* Resumen del día */}
+        {!isLoading && list.length > 0 && (
+          <div className="grid grid-cols-3 gap-3">
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  <Package className="h-3.5 w-3.5" /> Bultos comprados
+                </div>
+                <p className="text-2xl font-bold text-foreground mt-1">{fmtInt(bultosTotal)}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  <DollarSign className="h-3.5 w-3.5" /> Total comprado
+                </div>
+                <p className="text-2xl font-bold text-foreground mt-1">${fmtInt(totalComprado)}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  <Users className="h-3.5 w-3.5" /> Proveedores
+                </div>
+                <p className="text-2xl font-bold text-foreground mt-1">{proveedoresCount}</p>
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
         {isLoading ? (
           <div className="space-y-3">
