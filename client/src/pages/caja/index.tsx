@@ -30,7 +30,8 @@ function normalizeCategory(cat: string): string {
 // Categorías excluidas del gráfico de egresos por categoría (pagos a proveedores / mercadería)
 const EXCLUDE_FROM_PIE = (cat: string) => {
   const l = cat.toLowerCase();
-  return l.includes("proveedor") || l.includes("mercader");
+  // proveedor/mercadería + "banco propio" (pase de dinero entre cuentas, no es egreso real)
+  return l.includes("proveedor") || l.includes("mercader") || l.includes("banco propio");
 };
 const pad = (n: number) => String(n).padStart(2, "0");
 const MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
@@ -1310,7 +1311,7 @@ export default function CajaPage() {
                 <tbody>
                   {chequesEnCartera.map(ch => (
                     <tr key={ch.id} className="border-t hover:bg-muted/20">
-                      <td className="px-3 py-2 tabular-nums text-muted-foreground">{ch.fecha_cobro.slice(5).replace("-","/")}/{ch.fecha_cobro.slice(0,4).slice(2)}</td>
+                      <td className="px-3 py-2 tabular-nums text-muted-foreground">{ch.fecha_cobro.slice(5).split("-").reverse().join("/")}/{ch.fecha_cobro.slice(2,4)}</td>
                       <td className="px-3 py-2 font-medium">{ch.contraparte}</td>
                       <td className="px-3 py-2 text-right font-semibold text-purple-700">{fmt(ch.monto)}</td>
                       <td className="px-3 py-2 text-right">
