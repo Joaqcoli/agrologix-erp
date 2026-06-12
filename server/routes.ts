@@ -1050,8 +1050,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!date) return res.status(400).json({ error: "date query param required" });
       const data = await storage.getLoadListByDate(date, true);
 
-      // Solo filas con faltante real (diffQty < 0)
-      const shortages = data.rows.filter((r) => r.diffQty < 0);
+      // Filas "duda" que el usuario confirmó como ya cubiertas por stock (key = productId-unit) → excluir
+      const excludeSet = new Set(((req.query.exclude as string) || "").split(",").filter(Boolean));
+
+      // Solo filas con faltante real (diffQty < 0), salvo las confirmadas como cubiertas
+      const shortages = data.rows.filter((r) => r.diffQty < 0 && !excludeSet.has(`${r.productId}-${r.unit}`));
 
       const CATEGORY_ORDER = [
         "Fruta", "Verdura", "Hortaliza Liviana", "Hortaliza Pesada", "Hongos/Hierbas", "Huevos",

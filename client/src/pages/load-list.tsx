@@ -156,7 +156,13 @@ export default function LoadListPage() {
   };
 
   const handleExportCompra = () => {
-    window.open(`/api/load-list/export-compra?date=${date}`, "_blank");
+    // Excluir de la lista de compra los "duda" que el usuario confirmó como ya cubiertos por stock
+    const excluded = Array.from(resolvedRows.entries())
+      .filter(([, res]) => res === "ok")
+      .map(([key]) => key);
+    const params = new URLSearchParams({ date });
+    if (excluded.length > 0) params.set("exclude", excluded.join(","));
+    window.open(`/api/load-list/export-compra?${params.toString()}`, "_blank");
   };
 
   const formattedDate = date
