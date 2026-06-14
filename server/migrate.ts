@@ -982,6 +982,8 @@ export async function runNcMigrations() {
   try { await db.execute(sql`ALTER TABLE mp_xlsx_movements ADD COLUMN IF NOT EXISTS fee_amount NUMERIC(12,2)`); } catch {}
   // Vínculo de cheque emitido → proveedor (los recibidos de clientes quedan null). contraparte (nombre) se mantiene por compat.
   try { await db.execute(sql`ALTER TABLE cheques ADD COLUMN IF NOT EXISTS supplier_id INTEGER REFERENCES suppliers(id)`); } catch {}
+  // Vínculo cheque → supplier_payment, para limpiar cheque+obligación al borrar el pago
+  try { await db.execute(sql`ALTER TABLE cheques ADD COLUMN IF NOT EXISTS supplier_payment_id INTEGER`); } catch {}
 
   // Movimientos de cuenta (libro de ajustes por cuenta)
   await db.execute(sql`

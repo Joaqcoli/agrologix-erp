@@ -1530,8 +1530,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const chequeCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "cheque");
 
         if (chequeInfo?.tipo === "cartera" && chequeInfo.chequeCarteraId) {
-          // Endosar cheque de cartera
-          await storage.patchCheque(chequeInfo.chequeCarteraId, { estado: "endosado" });
+          // Endosar cheque de cartera (vinculado al pago para poder revertir si se borra)
+          await storage.patchCheque(chequeInfo.chequeCarteraId, { estado: "endosado", supplierPaymentId: payment.id });
           if (chequeCuenta) {
             const supplier = await storage.getSupplier(data.supplierId);
             await storage.createMovimientoCuenta({
@@ -1560,6 +1560,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             contraparte: supplierName,
             supplierId: data.supplierId, // vínculo por ID (contraparte se mantiene por compat)
             obligacionId: obs[0].id,
+            supplierPaymentId: payment.id, // permite limpiar cheque+obligación si se borra el pago
           });
         }
       }

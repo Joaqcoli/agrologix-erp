@@ -3862,6 +3862,25 @@ export const storage = {
   },
 
   async deleteSupplierPayment(id: number): Promise<void> {
+    // Limpiar cheques/obligaciones vinculados a este pago (sin esto quedaban huérfanos
+    // y aparecían como cheques duplicados al borrar y recrear un pago con cheque).
+    const linked: any = await db.execute(drizzleSql`
+      SELECT id, tipo, estado, obligacion_id FROM cheques WHERE supplier_payment_id = ${id}
+    `);
+    for (const ch of (linked.rows ?? [])) {
+      if (ch.estado === "cobrado") continue; // ya cobrado: no deshacer
+      if (ch.tipo === "emitido") {
+        // Cheque propio: borrar cheque + su obligación si sigue pendiente
+        await db.execute(drizzleSql`DELETE FROM cheques WHERE id = ${ch.id}`);
+        if (ch.obligacion_id) {
+          await db.execute(drizzleSql`DELETE FROM obligaciones WHERE id = ${ch.obligacion_id} AND estado = 'pendiente'`);
+        }
+      } else if (ch.tipo === "recibido" && ch.estado === "endosado") {
+        // Cheque de cartera endosado: revertir a en_cartera y limpiar su movimiento
+        await db.execute(drizzleSql`UPDATE cheques SET estado = 'en_cartera', supplier_payment_id = NULL WHERE id = ${ch.id}`);
+        await this.deleteMovimientoCuentaByOrigen("cheque_endosado", String(ch.id));
+      }
+    }
     await db.delete(supplierPayments).where(eq(supplierPayments.id, id));
   },
 
@@ -5347,14 +5366,15 @@ export const storage = {
     tipo: string; monto: number; fechaCobro: string; estado?: string;
     contraparte: string; supplierId?: number | null; cuentaDestinoId?: number | null;
     comision?: number; obligacionId?: number | null; notas?: string | null;
+    supplierPaymentId?: number | null;
   }): Promise<any> {
     const row = await db.execute(drizzleSql`
       INSERT INTO cheques (tipo, monto, fecha_cobro, estado, contraparte, supplier_id,
-        cuenta_destino_id, comision, obligacion_id, notas)
+        cuenta_destino_id, comision, obligacion_id, notas, supplier_payment_id)
       VALUES (${data.tipo}, ${data.monto}, ${data.fechaCobro},
         ${data.estado ?? "en_cartera"}, ${data.contraparte}, ${data.supplierId ?? null},
         ${data.cuentaDestinoId ?? null}, ${data.comision ?? 0},
-        ${data.obligacionId ?? null}, ${data.notas ?? null})
+        ${data.obligacionId ?? null}, ${data.notas ?? null}, ${data.supplierPaymentId ?? null})
       RETURNING id, tipo, monto::float, fecha_cobro, estado, contraparte, supplier_id,
         cuenta_destino_id, comision::float, obligacion_id, notas, created_at
     `);
@@ -5363,13 +5383,15 @@ export const storage = {
 
   async patchCheque(id: number, data: {
     estado?: string; cuentaDestinoId?: number | null; comision?: number; contraparte?: string;
+    supplierPaymentId?: number | null;
   }): Promise<any> {
     const row = await db.execute(drizzleSql`
       UPDATE cheques SET
         estado = COALESCE(${data.estado ?? null}, estado),
         cuenta_destino_id = CASE WHEN ${data.cuentaDestinoId !== undefined} THEN ${data.cuentaDestinoId ?? null} ELSE cuenta_destino_id END,
         comision = CASE WHEN ${data.comision !== undefined} THEN ${data.comision ?? 0}::numeric ELSE comision END,
-        contraparte = COALESCE(${data.contraparte ?? null}, contraparte)
+        contraparte = COALESCE(${data.contraparte ?? null}, contraparte),
+        supplier_payment_id = CASE WHEN ${data.supplierPaymentId !== undefined} THEN ${data.supplierPaymentId ?? null} ELSE supplier_payment_id END
       WHERE id = ${id}
       RETURNING id, tipo, monto::float, fecha_cobro, estado, contraparte,
         cuenta_destino_id, comision::float, obligacion_id, notas, created_at
