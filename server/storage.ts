@@ -5383,7 +5383,7 @@ export const storage = {
 
   async patchCheque(id: number, data: {
     estado?: string; cuentaDestinoId?: number | null; comision?: number; contraparte?: string;
-    supplierPaymentId?: number | null;
+    supplierPaymentId?: number | null; fechaCobro?: string; monto?: number;
   }): Promise<any> {
     const row = await db.execute(drizzleSql`
       UPDATE cheques SET
@@ -5391,12 +5391,22 @@ export const storage = {
         cuenta_destino_id = CASE WHEN ${data.cuentaDestinoId !== undefined} THEN ${data.cuentaDestinoId ?? null} ELSE cuenta_destino_id END,
         comision = CASE WHEN ${data.comision !== undefined} THEN ${data.comision ?? 0}::numeric ELSE comision END,
         contraparte = COALESCE(${data.contraparte ?? null}, contraparte),
+        fecha_cobro = COALESCE(${data.fechaCobro ?? null}, fecha_cobro),
+        monto = CASE WHEN ${data.monto !== undefined} THEN ${data.monto ?? 0}::numeric ELSE monto END,
         supplier_payment_id = CASE WHEN ${data.supplierPaymentId !== undefined} THEN ${data.supplierPaymentId ?? null} ELSE supplier_payment_id END
       WHERE id = ${id}
       RETURNING id, tipo, monto::float, fecha_cobro, estado, contraparte,
         cuenta_destino_id, comision::float, obligacion_id, notas, created_at
     `);
     return (row.rows as any[])[0];
+  },
+
+  async deleteCheque(id: number): Promise<void> {
+    // Limpiar movimientos de cuenta que referencien este cheque (ingreso en cartera, depósito, etc.)
+    for (const origen of ["cheque_recibido", "cheque_deposito_destino", "cheque_depositado", "cheque_endosado"]) {
+      await this.deleteMovimientoCuentaByOrigen(origen, String(id));
+    }
+    await db.execute(drizzleSql`DELETE FROM cheques WHERE id = ${id}`);
   },
 
   // ─── Obligaciones ───────────────────────────────────────────────────────────

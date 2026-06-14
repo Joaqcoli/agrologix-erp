@@ -265,6 +265,10 @@ export default function CajaPage() {
   const [chequeComision, setChequeComision] = useState("");
   const [chequeEndosarA, setChequeEndosarA] = useState("");
   const [chequeCuentaDestinoId, setChequeCuentaDestinoId] = useState<number | null>(null);
+  // Editar / agregar cheque en cartera
+  const [editChequeOpen, setEditChequeOpen] = useState(false);
+  const [addChequeOpen, setAddChequeOpen] = useState(false);
+  const [chequeForm, setChequeForm] = useState({ monto: "", fechaCobro: "", contraparte: "" });
 
   // Obligaciones
   const [oblDialogOpen, setOblDialogOpen] = useState(false);
@@ -463,6 +467,31 @@ export default function CajaPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
       setEndosarChequeOpen(false); setActiveCheque(null); setChequeEndosarA("");
     },
+  });
+
+  const invalidateCheques = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/caja/cheques"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
+  };
+
+  const editChequeMut = useMutation({
+    mutationFn: ({ id, monto, fechaCobro, contraparte }: { id: number; monto: number; fechaCobro: string; contraparte: string }) =>
+      apiRequest("PATCH", `/api/caja/cheques/${id}`, { accion: "editar", monto, fechaCobro, contraparte }),
+    onSuccess: () => { invalidateCheques(); setEditChequeOpen(false); setActiveCheque(null); },
+    onError: (e: any) => toast({ title: "Error al editar", description: e.message, variant: "destructive" }),
+  });
+
+  const addChequeMut = useMutation({
+    mutationFn: (body: { monto: number; fechaCobro: string; contraparte: string }) =>
+      apiRequest("POST", `/api/caja/cheques`, body),
+    onSuccess: () => { invalidateCheques(); setAddChequeOpen(false); setChequeForm({ monto: "", fechaCobro: "", contraparte: "" }); },
+    onError: (e: any) => toast({ title: "Error al agregar", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteChequeMut = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/caja/cheques/${id}`),
+    onSuccess: () => invalidateCheques(),
+    onError: (e: any) => toast({ title: "Error al eliminar", description: e.message, variant: "destructive" }),
   });
 
   // ── Obligaciones queries & mutations ─────────────────────────────────────────
@@ -1289,15 +1318,21 @@ export default function CajaPage() {
         </Dialog>
 
         {/* ── Cheques en cartera ────────────────────────────────────────── */}
-        {chequesEnCartera.length > 0 && (
-          <section className="space-y-3">
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-semibold">Cheques en cartera</h2>
-              <Badge variant="secondary">{chequesEnCartera.length}</Badge>
-              <span className="text-sm text-muted-foreground ml-auto font-medium">
-                Total: {fmt(chequesEnCartera.reduce((s, c) => s + c.monto, 0))}
-              </span>
-            </div>
+        <section className="space-y-3">
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-semibold">Cheques en cartera</h2>
+            <Badge variant="secondary">{chequesEnCartera.length}</Badge>
+            <span className="text-sm text-muted-foreground ml-auto font-medium">
+              Total: {fmt(chequesEnCartera.reduce((s, c) => s + c.monto, 0))}
+            </span>
+            <Button size="sm" variant="outline" className="h-7"
+              onClick={() => { setChequeForm({ monto: "", fechaCobro: "", contraparte: "" }); setAddChequeOpen(true); }}>
+              <Plus className="h-4 w-4 mr-1" /> Agregar
+            </Button>
+          </div>
+          {chequesEnCartera.length === 0 ? (
+            <p className="text-sm text-muted-foreground border rounded-lg px-3 py-4 text-center">No hay cheques en cartera.</p>
+          ) : (
             <div className="border rounded-lg overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50">
@@ -1324,6 +1359,15 @@ export default function CajaPage() {
                             onClick={() => { setActiveCheque(ch); setChequeEndosarA(""); setEndosarChequeOpen(true); }}>
                             Endosar
                           </Button>
+                          <Button size="icon" variant="ghost" className="h-7 w-7" title="Editar"
+                            onClick={() => { setActiveCheque(ch); setChequeForm({ monto: String(Math.round(ch.monto)), fechaCobro: ch.fecha_cobro.slice(0, 10), contraparte: ch.contraparte }); setEditChequeOpen(true); }}>
+                            <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="h-7 w-7" title="Eliminar"
+                            disabled={deleteChequeMut.isPending}
+                            onClick={() => { if (window.confirm(`¿Eliminar el cheque de ${ch.contraparte} por ${fmt(ch.monto)}?`)) deleteChequeMut.mutate(ch.id); }}>
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -1331,8 +1375,42 @@ export default function CajaPage() {
                 </tbody>
               </table>
             </div>
-          </section>
-        )}
+          )}
+        </section>
+
+        {/* Dialog: agregar / editar cheque en cartera */}
+        <Dialog open={addChequeOpen || editChequeOpen} onOpenChange={v => { if (!v) { setAddChequeOpen(false); setEditChequeOpen(false); setActiveCheque(null); } }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader><DialogTitle>{editChequeOpen ? "Editar cheque" : "Agregar cheque en cartera"}</DialogTitle></DialogHeader>
+            <div className="py-2 space-y-3">
+              <div className="space-y-1">
+                <Label className="text-xs">De quién</Label>
+                <Input value={chequeForm.contraparte} onChange={e => setChequeForm(f => ({ ...f, contraparte: e.target.value }))} placeholder="Nombre del cliente/emisor" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Monto</Label>
+                <Input type="number" min="0" step="0.01" value={chequeForm.monto} onChange={e => setChequeForm(f => ({ ...f, monto: e.target.value }))} placeholder="0" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Fecha de cobro</Label>
+                <Input type="date" value={chequeForm.fechaCobro} onChange={e => setChequeForm(f => ({ ...f, fechaCobro: e.target.value }))} />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setAddChequeOpen(false); setEditChequeOpen(false); setActiveCheque(null); }}>Cancelar</Button>
+              <Button
+                disabled={!chequeForm.contraparte || !parseFloat(chequeForm.monto) || !chequeForm.fechaCobro || addChequeMut.isPending || editChequeMut.isPending}
+                onClick={() => {
+                  const body = { monto: parseFloat(chequeForm.monto), fechaCobro: chequeForm.fechaCobro, contraparte: chequeForm.contraparte };
+                  if (editChequeOpen && activeCheque) editChequeMut.mutate({ id: activeCheque.id, ...body });
+                  else addChequeMut.mutate(body);
+                }}
+              >
+                {editChequeOpen ? "Guardar" : "Agregar"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Dialog: depositar cheque */}
         <Dialog open={depositarChequeOpen} onOpenChange={v => { setDepositarChequeOpen(v); if (!v) { setActiveCheque(null); setChequeComision(""); setChequeCuentaDestinoId(null); } }}>

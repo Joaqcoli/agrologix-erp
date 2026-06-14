@@ -2198,10 +2198,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // Crear cheque en cartera manualmente
+  app.post("/api/caja/cheques", requireAuth, async (req, res) => {
+    try {
+      const { monto, fechaCobro, contraparte, notas } = req.body;
+      if (!monto || !fechaCobro || !contraparte) return res.status(400).json({ error: "Campos requeridos: monto, fechaCobro, contraparte" });
+      const cheque = await storage.createCheque({
+        tipo: "recibido", monto: parseFloat(monto), fechaCobro,
+        estado: "en_cartera", contraparte, notas: notas ?? null,
+      });
+      return res.json(cheque);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // Eliminar cheque en cartera
+  app.delete("/api/caja/cheques/:id", requireAuth, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const cheque = (await storage.getCheques() as any[]).find((c: any) => c.id === id);
+      if (!cheque) return res.status(404).json({ error: "Cheque no encontrado" });
+      if (cheque.estado === "depositado" || cheque.estado === "cobrado")
+        return res.status(400).json({ error: "No se puede eliminar un cheque depositado o cobrado" });
+      await storage.deleteCheque(id);
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   app.patch("/api/caja/cheques/:id", requireAuth, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const { accion, comision, contraparte, cuentaDestinoId } = req.body;
+      const { accion, comision, contraparte, cuentaDestinoId, monto, fechaCobro } = req.body;
       const allCuentas = await storage.getCuentasFinancieras();
       const chequeCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "cheque");
       const galiciaCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "banco");
@@ -2239,6 +2265,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             origenTipo: "cheque_endosado", origenId: String(id),
           });
         }
+      } else if (accion === "editar") {
+        // Editar datos del cheque en cartera (monto, fecha de cobro, de quién)
+        await storage.patchCheque(id, {
+          ...(monto !== undefined ? { monto: parseFloat(monto) } : {}),
+          ...(fechaCobro !== undefined ? { fechaCobro } : {}),
+          ...(contraparte !== undefined ? { contraparte } : {}),
+        });
       }
       return res.json(await storage.getCheques().then(cs => (cs as any[]).find(c => c.id === id)));
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
