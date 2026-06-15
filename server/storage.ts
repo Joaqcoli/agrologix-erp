@@ -2760,6 +2760,48 @@ export const storage = {
     return rows;
   },
 
+  // ─── GALPÓN (solo lectura, SIN costos) ───────────────────────────────────────
+  // REGLA DE ORO: estos SELECT NUNCA incluyen avg_cost, cost_per_unit, ni ninguna
+  // columna de costo/precio. Los costos no salen del servidor para el rol galpón.
+  async getGalponStock(): Promise<{ productId: number; productName: string; category: string | null; unit: string; stockQty: string; weightPerUnit: string | null }[]> {
+    const PACKAGE_UNITS = new Set(['CAJON', 'BOLSA', 'BANDEJA']);
+    const rows = await db.select({
+      productId: productUnits.productId,
+      productName: products.name,
+      category: products.category,
+      unit: productUnits.unit,
+      stockQty: productUnits.stockQty,
+      weightPerUnit: productUnits.weightPerUnit,
+    })
+      .from(productUnits)
+      .innerJoin(products, eq(productUnits.productId, products.id))
+      .where(and(
+        eq(productUnits.isActive, true),
+        eq(products.active, true),
+        drizzleSql`${productUnits.stockQty} > 0`,
+      ));
+    return rows
+      .filter((r) => !PACKAGE_UNITS.has(r.unit))
+      .sort((a, b) => a.productName.localeCompare(b.productName));
+  },
+
+  // Últimas compras de un producto SIN precios (para la vista galpón)
+  async getGalponProductPurchaseHistory(productId: number, limit = 10): Promise<{ purchaseDate: Date; supplierName: string; purchaseQty: string | null; purchaseUnit: string | null; weightPerPackage: string | null; quantity: string }[]> {
+    return db.select({
+      purchaseDate: purchases.purchaseDate,
+      supplierName: purchases.supplierName,
+      purchaseQty: purchaseItems.purchaseQty,
+      purchaseUnit: purchaseItems.purchaseUnit,
+      weightPerPackage: purchaseItems.weightPerPackage,
+      quantity: purchaseItems.quantity,
+    })
+      .from(purchaseItems)
+      .innerJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
+      .where(eq(purchaseItems.productId, productId))
+      .orderBy(desc(purchases.purchaseDate), desc(purchases.id))
+      .limit(limit);
+  },
+
   // ── Helper: peso por envase para CAJON/BOLSA/BANDEJA ─────────────────────────
   // Busca el weightPerPackage de la última compra con ese purchaseUnit para el producto.
   // Si no encuentra (o es 0), cae al fallback (weightPerUnit del row base).

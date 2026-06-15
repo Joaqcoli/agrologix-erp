@@ -1802,6 +1802,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
+  // ─── GALPÓN (requireGalpon) — NUNCA devolver costos/precios/márgenes ──────────
+  app.get("/api/galpon/stock", requireGalpon, async (_req, res) => {
+    try {
+      return res.json(await storage.getGalponStock());
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/galpon/products/:id/purchase-history", requireGalpon, async (req, res) => {
+    try {
+      return res.json(await storage.getGalponProductPurchaseHistory(Number(req.params.id)));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Facturas Electrónicas ARCA ───────────────────────────────────────────────
 
   // Diagnóstico WSAA — solo para admin, eliminar en producción estable
