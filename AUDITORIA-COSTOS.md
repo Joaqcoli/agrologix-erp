@@ -277,4 +277,16 @@ Igual que el recalc-al-FIFO del Paso 4: el WMA propuesto **lee `stock_qty` + `av
 
 Mi lectura (decide el usuario): si su forma de pensar el costo es el promedio ponderado y le molesta el "vendido-abajo", el **WMA bien hecho (opción 1) es coherente y barato en el camino normal** — el costo está en definir cómo se comporta al **editar compras viejas y corregir pesos**, que es donde el WMA es aproximado. Conviene decidir esa política antes de tocar código.
 
-**Solo lectura. Nada cambiado ni tocado.**
+## 21. ✅ APLICADO (2026-06-15, commit `ed155da`) — modelo cambiado a WMA
+
+Decisión tomada y **aplicada**: el modelo oficial pasó de FIFO a **promedio ponderado móvil (WMA)**. 3 cambios en `storage.ts` neutralizando las 3 pisadas del FIFO:
+- `createPurchase`: `_recomputeCostFromStock` → `_recalcProductSummary` (el WMA inline queda oficial).
+- `updatePurchase`: quitar FIFO + guards (`newCost===0` conserva; `puStock<0` EDGE conserva; stock 0 resetea).
+- `galponSetPurchaseItemWeight`: FIFO → WMA con des-mezcla de la línea (EDGE/dato inconsistente → conserva). Stock por delta y recompute de PESO intactos.
+
+`_recomputeCostFromStock` queda **definido pero sin callers** (para diagnóstico). **NO** se resincronizaron los costos guardados (FIFO) — paso aparte pendiente.
+
+**Verificado en vivo (apply+restore reversible, producción restaurada):**
+- Conservación: BANANA 185@$1.647 + 30kg@$824 → **$1.532** (stock1·avg1 = stock0·avg0 + q·c). ✅
+- EDGE editar ya-vendida: PAPA CEPILLADA stock 51<68 → costo **$882 conservado**, stock 51→47, sin negativo. ✅
+- Galpón normal: NARANJA JUGO stock 356>300 → **$867→$918** (des-mezcla), stock 356→336. ✅
