@@ -28,6 +28,11 @@ export function Layout({ children, title }: LayoutProps) {
     return <Redirect to="/login" />;
   }
 
+  // Guard por rol: las páginas que usan este Layout son SOLO para admin/operator.
+  // Un galpón o vendedor que llegue por URL directa es rebotado a su propia vista.
+  if (user.role === "galpon") return <Redirect to="/galpon/stock" />;
+  if (user.role === "vendedor") return <Redirect to="/vendedor/dashboard" />;
+
   return (
     <SidebarProvider>
       <div className="flex h-screen w-full bg-background">

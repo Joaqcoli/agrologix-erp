@@ -17,7 +17,10 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   if (user) {
-    setLocation("/");
+    const home = user.role === "vendedor" ? "/vendedor/dashboard"
+      : user.role === "galpon" ? "/galpon/stock"
+      : "/";
+    setLocation(home);
     return null;
   }
 

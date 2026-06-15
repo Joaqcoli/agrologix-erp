@@ -60,6 +60,18 @@ function requireGalpon(req: Request, res: Response, next: NextFunction) {
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
 
+  // ─── Default-deny para el rol galpón ─────────────────────────────────────────
+  // El galpón SOLO puede llamar a /api/galpon/* y /api/auth/*. Cualquier otro endpoint
+  // (caja, bancos, costos, proveedores, etc.) le responde 403, aunque use solo requireAuth.
+  // Seguridad real en backend: los costos/caja nunca salen para esta cuenta.
+  app.use((req, res, next) => {
+    if (req.session?.userRole === "galpon" && req.path.startsWith("/api/")) {
+      const allowed = req.path.startsWith("/api/galpon/") || req.path.startsWith("/api/auth/");
+      if (!allowed) return res.status(403).json({ error: "Forbidden" });
+    }
+    next();
+  });
+
   // ─── Auth ──────────────────────────────────────────────────────────────────
   app.post("/api/auth/login", async (req, res) => {
     try {
