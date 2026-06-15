@@ -214,6 +214,29 @@ export default function NewPurchasePage() {
     }
 
     setItems(updated);
+
+    // Sugerencia de peso por envase según el ÚLTIMO peso de ese producto+proveedor.
+    // Solo precarga (sigue editable). Fallback: el peso genérico ya seteado arriba (getKnownWPU).
+    if (field === "productId") void suggestSupplierWeight(i, Number(value), updated[i].unit);
+    if (field === "unit") void suggestSupplierWeight(i, Number(updated[i].productId), String(value));
+  };
+
+  // Precarga el weight_per_package con el último usado para ese producto+proveedor (si existe).
+  // Excluye huevos (peso especial) y solo aplica a unidades por envase. No pisa si devuelve null.
+  const suggestSupplierWeight = async (idx: number, productId: number, unit: string, sid: number | null = supplierId) => {
+    if (!sid || !productId || !isPackageUnit(unit) || isEggsProduct(productId)) return;
+    try {
+      const res = await fetch(`/api/purchases/last-weight?productId=${productId}&supplierId=${sid}`, { credentials: "include" });
+      const data = await res.json();
+      const w = data?.weightPerPackage;
+      if (w != null && parseFloat(w) > 0) {
+        setItems((prev) => prev.map((it, i) =>
+          (i === idx && Number(it.productId) === productId && isPackageUnit(it.unit) && !isEggsProduct(productId))
+            ? { ...it, weightPerPackage: String(parseFloat(w)) }
+            : it
+        ));
+      }
+    } catch { /* silencioso: si falla, queda el peso genérico */ }
   };
 
   const getTotalBaseUnits = (item: PurchaseItem): number => {
@@ -362,7 +385,12 @@ export default function NewPurchasePage() {
                         value={supplierId ? String(supplierId) : "manual"}
                         onValueChange={(v) => {
                           if (v === "manual") { setSupplierId(null); }
-                          else { setSupplierId(Number(v)); setSupplierName(""); }
+                          else {
+                            const sid = Number(v);
+                            setSupplierId(sid); setSupplierName("");
+                            // Re-sugerir peso para los items ya cargados con producto + envase
+                            items.forEach((it, i) => { if (it.productId && isPackageUnit(it.unit)) void suggestSupplierWeight(i, Number(it.productId), it.unit, sid); });
+                          }
                         }}
                       >
                         <SelectTrigger data-testid="select-supplier">

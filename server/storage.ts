@@ -2848,6 +2848,24 @@ export const storage = {
       .limit(limit);
   },
 
+  // Último weight_per_package usado para un producto + proveedor (sugerencia de compra).
+  // Devuelve null si no hay compras previas de esa combinación.
+  async getLastWeightForProductSupplier(productId: number, supplierId: number): Promise<number | null> {
+    const [row] = await db
+      .select({ wpp: purchaseItems.weightPerPackage })
+      .from(purchaseItems)
+      .innerJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
+      .where(and(
+        eq(purchaseItems.productId, productId),
+        eq(purchases.supplierId, supplierId),
+        drizzleSql`${purchaseItems.weightPerPackage} IS NOT NULL`,
+        drizzleSql`${purchaseItems.weightPerPackage}::numeric > 0`,
+      ))
+      .orderBy(desc(purchases.purchaseDate), desc(purchaseItems.id))
+      .limit(1);
+    return row?.wpp != null ? parseFloat(row.wpp as string) : null;
+  },
+
   // Corregir el peso por envase (weight_per_package) de UNA línea de compra.
   // Enfoque TARGETED y seguro (NO usa updatePurchase, que tiene el bug de piso-en-0 al
   // revertir y además cambia el id del item): aplica el DELTA exacto de stock, recalcula

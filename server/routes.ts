@@ -506,6 +506,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ folio: await storage.generatePurchaseFolio() });
   });
 
+  // Sugerencia de peso por envase: último weight_per_package usado para ese producto+proveedor.
+  // Solo sugerencia para la pantalla de compra; null si no hay compras previas de esa combinación.
+  app.get("/api/purchases/last-weight", requireAuth, async (req, res) => {
+    try {
+      const productId = Number(req.query.productId);
+      const supplierId = Number(req.query.supplierId);
+      if (!productId || !supplierId) return res.json({ weightPerPackage: null });
+      const w = await storage.getLastWeightForProductSupplier(productId, supplierId);
+      return res.json({ weightPerPackage: w });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   app.get("/api/purchases/:id", requireAuth, async (req, res) => {
     const p = await storage.getPurchase(Number(req.params.id));
     if (!p) return res.status(404).json({ error: "Not found" });
