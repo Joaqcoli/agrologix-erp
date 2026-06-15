@@ -811,10 +811,14 @@ export const storage = {
           .limit(1);
         if (pu) {
           const newStock = Number(pu.stockQty) - Number(item.quantity);
-          // Preserve avgCost — solo zerear stock si queda negativo
-          // Deactivate row if it reaches 0 so it doesn't appear as a ghost when unit changes
+          // C3 FIX: permitir el negativo intermedio (NO floorear acá). Si esta línea
+          // se reaplica en PHASE 2 (mismo prod+unidad: cambio de cantidad/peso/precio),
+          // el negativo se netea con el reaplique y queda el DELTA correcto. El floor
+          // final (post-PHASE 2) limpia los que queden negativos (líneas removidas o
+          // reaplicadas que no recuperan stock) y los desactiva. Preserva avgCost.
+          // Antes flooreaba a 0 acá → inflaba el stock al editar compras viejas ya vendidas.
           await tx.update(productUnits)
-            .set({ stockQty: newStock <= 0 ? "0" : newStock.toFixed(4), ...(newStock <= 0 ? { isActive: false } : {}) })
+            .set({ stockQty: newStock.toFixed(4) })
             .where(eq(productUnits.id, pu.id));
         }
       }
@@ -916,6 +920,21 @@ export const storage = {
         }
 
       }
+
+      // ── C3 FIX: floor final de negativos ──────────────────────────────────────
+      // Tras netear revert (PHASE 1) + reaplique (PHASE 2), cualquier fila que haya
+      // quedado en negativo (línea removida, o reaplicada que no recupera stock) se
+      // floorea a 0 y se desactiva (evita stock fantasma). Corre ANTES del resumen y
+      // del FIFO para que lean stock limpio. lte(...,"0") también desactiva las filas
+      // que quedaron en 0 exacto, replicando la prevención de fantasma del PHASE 1 viejo.
+      if (stockEnabled) {
+        for (const pid of allProductIds) {
+          await tx.update(productUnits)
+            .set({ stockQty: "0", isActive: false })
+            .where(and(eq(productUnits.productId, pid), lte(productUnits.stockQty, "0")));
+        }
+      }
+
       const newProductIds = Array.from(new Set(data.items.map((i) => i.productId)));
       for (const pid of newProductIds) {
         await this._recalcProductSummary(pid, tx);
