@@ -418,10 +418,14 @@ export const storage = {
         });
       }
 
-      // Costo basado en stock: recalcular con las compras recientes que componen el stock actual
+      // Costo = PROMEDIO PONDERADO MÓVIL (WMA), el modelo oficial. El avg ya se calculó
+      // inline arriba (product_units y products) con (stock·costo + qty·compra)/(stock+qty);
+      // con stock 0 resetea limpio al costo de la compra. Acá sólo propagamos
+      // products.average_cost desde las filas base. NO se pisa con FIFO (fijo al comprar,
+      // quieto al vender). Ver AUDITORIA-COSTOS.md §14-20.
       const affectedPids = Array.from(new Set(data.items.map((i) => i.productId)));
       for (const pid of affectedPids) {
-        await this._recomputeCostFromStock(pid, tx);
+        await this._recalcProductSummary(pid, tx);
       }
 
       return purchase;
@@ -868,8 +872,17 @@ export const storage = {
         if (existingPU) {
           const puStock = Number(existingPU.stockQty);
           const puCost = Number(existingPU.avgCost);
-          // Costo promedio ponderado = ((stock * costo_actual) + (qty * costo_compra)) / stock_total
-          newPuAvgCost = (puStock + newQty) === 0
+          // Costo PROMEDIO PONDERADO MÓVIL (WMA) al editar. Política (AUDITORIA-COSTOS.md §16):
+          //  · newCost===0 (bonificación/rinde) → conservar el costo actual
+          //  · puStock < 0 (post-revert negativo = stock < cantidad de la línea, mercadería ya
+          //    vendida): NO recalcular, dejar el costo como está. La des-mezcla del WMA no es
+          //    válida ahí; el ajuste de STOCK sí se aplica normal. Nunca rompe ni da negativo.
+          //  · normal: (stock·costo + qty·compra)/(stock+qty); stock 0 → reset al costo nuevo.
+          newPuAvgCost = newCost === 0
+            ? puCost
+            : puStock < 0
+            ? puCost
+            : (puStock + newQty) === 0
             ? newCost
             : (puStock * puCost + newQty * newCost) / (puStock + newQty);
 
@@ -1007,12 +1020,10 @@ export const storage = {
         });
       }
 
-      // ── Costo basado en stock ─────────────────────────────────────────────────
-      // Recalcular el costo de cada producto afectado usando sólo las compras más
-      // recientes que componen el stock actual (ignora picos históricos ya vendidos).
-      for (const pid of allProductIds) {
-        await this._recomputeCostFromStock(pid, tx);
-      }
+      // ── Costo = PROMEDIO PONDERADO MÓVIL (WMA) ────────────────────────────────
+      // El avg se calculó en PHASE 2 (product_units) con la política de edición y se
+      // propagó a products via _recalcProductSummary (arriba). NO se pisa con FIFO: el
+      // modelo oficial es WMA (fijo al comprar, quieto al vender). Ver AUDITORIA-COSTOS.md §14-20.
 
       // Nota: costos en pedidos borrador del mismo día se actualizan al aprobar
       // via _getCostForUnit (el SYNC era fuente de transacciones lentas).
@@ -2842,6 +2853,7 @@ export const storage = {
 
       const pq = parseFloat(item.purchaseQty as string);
       const oldQty = parseFloat(item.quantity as string);
+      const oldCost = parseFloat(item.costPerUnit as string); // costo/u de la línea ANTES de corregir (para des-mezclar el WMA)
       // Precio del envase (cost_per_purchase_unit) NO cambia. Si faltara, se deriva.
       const cpp = item.costPerPurchaseUnit != null
         ? parseFloat(item.costPerPurchaseUnit as string)
@@ -2870,19 +2882,37 @@ export const storage = {
         eq(stockMovements.productId, item.productId),
       ));
 
-      // 3) Stock actual: aplicar SOLO el delta (cada envase pesa newWeight-oldWeight menos)
+      // 3) Stock actual: aplicar SOLO el delta y recalcular el costo con PROMEDIO PONDERADO
+      //    MÓVIL (WMA). Política (AUDITORIA-COSTOS.md §17): des-mezcla la línea vieja y mezcla
+      //    la corregida; si stock < oldQty (mercadería ya vendida) o el dato es inconsistente,
+      //    deja el costo como está. Nunca rompe ni da negativo.
       const [pu] = await tx.select().from(productUnits)
         .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
         .for('update').limit(1);
       if (pu) {
-        const ns = Math.max(0, parseFloat(pu.stockQty as string) + deltaQty);
-        await tx.update(productUnits).set({ stockQty: ns.toFixed(4) }).where(eq(productUnits.id, pu.id));
+        const stock = parseFloat(pu.stockQty as string);
+        const avg = parseFloat(pu.avgCost as string);
+        const ns = Math.max(0, stock + deltaQty);
+        const EPS = 1e-6;
+        let newAvg = avg;                                   // default: conservar (cubre el caso borde)
+        const exLine = stock - oldQty;                      // stock SIN esta línea
+        if (exLine > EPS) {
+          const preCost = (stock * avg - oldQty * oldCost) / exLine; // costo del stock sin esta línea
+          if (preCost >= 0) {
+            const newStock = exLine + newQty;
+            if (newStock > EPS) newAvg = (preCost * exLine + newQty * newCost) / newStock;
+          }
+        } else if (exLine > -EPS) {
+          newAvg = newCost;                                 // todo el stock es esta línea → costo corregido
+        } // else stock < oldQty (ya vendido) → conservar avg
+        await tx.update(productUnits)
+          .set({ stockQty: ns.toFixed(4), avgCost: newAvg.toFixed(4) })
+          .where(eq(productUnits.id, pu.id));
       }
 
-      // 4) Recomputar resumen + costo + peso por envase del producto (FIFO sobre compras
-      //    recientes que cubren el stock) → la vista grande refleja el peso corregido.
+      // 4) Propagar el costo (WMA, seteado arriba) a products via _recalcProductSummary, y
+      //    recomputar el peso por envase (independiente del costo). NO se pisa con FIFO.
       await this._recalcProductSummary(item.productId, tx);
-      await this._recomputeCostFromStock(item.productId, tx);
       await this._recomputeWeightPerUnitFromStock(item.productId, tx);
 
       return { ok: true, weightPerPackage: newWeight };
