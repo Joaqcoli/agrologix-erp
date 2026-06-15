@@ -193,3 +193,88 @@ La bomba era peligrosa porque (a) usaba otro modelo, (b) leía un ledger roto, (
 4. **(Estructural, aparte)** evaluar correr `_recomputeCostFromStock` también **al aprobar pedido** (no solo en compras) para que el costo no se quede atrás cuando se vende-abajo. Es un cambio de código, a decidir por separado.
 
 **Solo lectura. Nada recalculado ni tocado.**
+
+---
+
+# Análisis — ¿Cambiar el modelo de FIFO a promedio ponderado móvil? (solo lectura, 2026-06-15)
+
+> **Contexto:** el usuario entiende el costo como **promedio ponderado móvil (WMA)** bien hecho, NO como FIFO. Su lógica: 120 kg @ $180.000 ($1.500/kg); vende 80 kg → cuestan $1.500 c/u, quedan 40 kg @ $1.500; compra 40 kg @ $1.000 → stock 80 kg @ (40×1.500 + 40×1.000)/80 = **$1.250/kg**. El costo **se fija al comprar y NO se mueve al vender**. **Importante:** esto NO es el WMA roto del botón eliminado (que leía `stock_movements`, ledger que mezcla kg con bultos). Es el WMA **calculado desde compras + stock**. Son cosas distintas. **No se cambió nada; es análisis para decidir.**
+
+## 14. ¿El WMA bien hecho es viable acá? — Sí, y casi todo YA existe
+
+**Hallazgo clave:** el sistema **ya calcula exactamente la fórmula del usuario** en cada compra, y recién después la pisa el FIFO:
+- `product_units.avg_cost` (storage.ts:342-344): `newCost===0 ? puCost : (puStock+newQty===0 ? newCost : (puStock·puCost + newQty·newCost)/(puStock+newQty))`
+- `products.average_cost` (storage.ts:393-395): misma fórmula.
+- Luego `_recomputeCostFromStock` (FIFO) **sobrescribe ambos** (storage.ts:424 crear, 1014 editar, 2885 galpón).
+
+→ **Cambiar a WMA = dejar de pisar con FIFO.** La columna `avg_cost`/`average_cost` pasa a ser el "costo promedio del stock", que se actualiza **solo al comprar** y se deja quieto al vender. No hace falta columna nueva: las que hay ya guardan ese valor; hoy lo machaca el FIFO al final.
+
+**Confirmado además:** la **venta NO toca el costo del producto** (al aprobar pedido, storage.ts:453 escribe `order_items.cost_per_unit` —la foto del costo de ESE pedido— no el `avg_cost` del producto). Así que el sistema ya cumple "fijo al comprar, quieto al vender". El WMA encaja sin pelear con el flujo de ventas.
+
+## 15. Alcance real del cambio (de los ~8 lugares que tocan el costo)
+
+| # | Lugar | Hoy | Con WMA |
+|---|---|---|---|
+| 1 | `createPurchase` product_units (361) | WMA, luego pisado | **WMA queda** (quitar pisada) ✅ trivial |
+| 2 | `createPurchase` products (400) | WMA, luego pisado | **WMA queda** ✅ trivial |
+| 3 | `_recalcProductSummary` (626) | ponderado de filas base | compatible, se mantiene ✅ |
+| 4 | `_recomputeCostFromStock` FIFO (666-667) | **el que pisa** | **neutralizar sus 3 call sites** (424, 1014, 2885) |
+| 5 | `updatePurchase` (892) | WMA inline + FIFO pisa | **necesita política de edición** ⚠️ |
+| 6 | `adjustProductUnitStock` (2528/2540) | manual (toma costo) | compatible ✅ |
+| 7 | `_getCostForUnit` (lectura, aprobar) | lee costo | compatible, no escribe ✅ |
+| 8 | galpón `galponSetPurchaseItemWeight` (2885) | ajusta stock + FIFO recalcula | **necesita política de corrección** ⚠️ |
+
+**Camino feliz (compra normal): cambio de ~3 líneas** (quitar las llamadas al FIFO; el WMA ya está). **Riesgo concentrado en 2 lugares**, ambos features que construimos: **editar compra** (#5) y **corregir peso del galpón** (#8). El FIFO se llama también en `_recomputeWeightPerUnitFromStock`? No — ese es de **peso**, independiente del costo, se mantiene igual.
+
+## 16. Casos borde — el talón de Aquiles del WMA: editar/corregir el pasado
+
+El WMA es **path-dependiente** (depende del orden compras/ventas). Eso trae problemas justo donde FIFO brilla:
+
+- **Stock → 0 y reingreso:** ✅ **limpio.** Fórmula con `puStock=0` → `(0 + newQty·newCost)/newQty = newCost`. Resetea al costo de la compra nueva. Sin división por cero (denominador = newQty).
+- **Merma / pérdida de stock:** ✅ **ventaja del WMA.** Bajar stock no toca el costo → el promedio se conserva, la plata cuadra. (FIFO también, pero acá es naturalmente correcto.)
+- **Rinde (mercadería que sale de un proceso):** costo explícito, **igual en ambos modelos** (no se deriva del promedio).
+- **Ajuste de stock manual hacia arriba:** necesita un costo para mezclar (hoy `adjustProductUnitStock` lo pide). Compatible.
+- **Editar una compra VIEJA (admin, `updatePurchase`):** ⚠️ **mal definido en WMA.** El WMA ya absorbió esa compra; cambiarle cantidad/precio/peso requiere "des-mezclarla", y la des-mezcla (`(stock·avg − qty·cost)/(stock − qty)`) **rompe cuando `stock < qty`** — exactamente el escenario del floor bug (mercadería ya vendida). FIFO no tiene este problema porque recomputa desde el estado actual. **El WMA convierte la edición de compras viejas en una aproximación.**
+- **Dato malo (typo de precio, ej. PUERRO $230):** ⚠️ en WMA el error **contamina el promedio** hasta diluirse por volumen; en FIFO solo impacta cuando la ventana lo alcanza. WMA tiene "memoria larga" de los errores (y de los picos legítimos).
+
+## 17. Relación con el editar-peso del galpón que ya construimos
+
+Hoy `galponSetPurchaseItemWeight` (método targeted): ajusta stock por el **delta exacto** (`deltaQty = newQty − oldQty`) y recalcula el costo vía **FIFO**. Con WMA:
+- **El ajuste de STOCK sigue igual** ✅ — el delta exacto es model-agnóstico, el método targeted se mantiene tal cual.
+- **El COSTO es lo que cambia.** Opciones bajo WMA:
+  - (a) **No tocar el costo** en la corrección de peso (la compra original ya fijó el promedio; un retoque de peso lo deja como está). Simple, pero el costo no refleja del todo el peso corregido.
+  - (b) **Re-mezclar el delta** al costo por unidad de esa línea: si el peso sube (delta>0) `avg = (stock·avg + delta·lineCost)/(stock+delta)`; si baja (delta<0) hay que des-mezclar → **mismo borde que rompe si `stock < |delta|`**.
+- → El **método targeted sobrevive** (su parte de stock es la difícil y ya está resuelta); solo se reemplaza el paso de costo FIFO por una de estas políticas. La (a) es la más segura y predecible; la (b) es más "exacta" pero arrastra el borde de la des-mezcla.
+
+## 18. Comparación honesta FIFO vs WMA para esta verdulería
+
+| Eje | FIFO-cubre-stock (actual) | Promedio ponderado móvil (propuesto) |
+|---|---|---|
+| Modelo mental del usuario | no es el suyo | **es exactamente el suyo** ✅ |
+| Conserva la plata (costo vendido + valor stock = gastado) | **NO** — recomputa la ventana, puede inflar el stock restante | **SÍ** — fijo al comprar, quieto al vender ✅ |
+| Problema "vendido-abajo" (el que detectó el usuario) | **lo sufre** | **inmune** ✅ |
+| Refleja precio de reposición reciente | **SÍ** (siempre compras recientes) ✅ | parcial (arrastra historia hasta diluir) |
+| Memoria de un pico/typo de precio | corta (solo cubre el stock) ✅ | larga (queda hasta diluirse por volumen) |
+| Editar compra vieja (admin) | **bien definido** (recomputa desde estado) ✅ | mal definido (des-mezcla rompe si stock<línea) |
+| Corrección de peso del galpón | bien definido (FIFO recomputa) ✅ | requiere política; el borde de des-mezcla reaparece |
+| Stock 0 → reingreso | recomputa al comprar ✅ | resetea limpio al costo nuevo ✅ |
+| Merma / pérdida | no afecta costo ✅ | no afecta costo ✅ (naturalmente correcto) |
+| Implementación | ya existe (`_recomputeCostFromStock`) | **ya existe inline**; falta quitar la pisada FIFO + política de edición/corrección |
+| Fuente de datos | `purchase_items` + `stock_qty` (limpia) | `stock_qty` + `avg_cost` mantenido (limpia, **NO** el ledger) |
+| Riesgo del cambio | — | **bajo** al comprar, **medio** al editar/corregir |
+
+**Resumen del trade-off:** el WMA le da al usuario **su modelo mental y la conservación de la plata** (mata el "vendido-abajo"), a cambio de **memoria más larga** de precios viejos/errores y de que **editar/corregir compras viejas pasa a ser aproximado** (donde FIFO es exacto). Para un negocio que **rota rápido**, la memoria larga es leve (el volumen diluye rápido). El punto fino a aceptar es el comportamiento de las **ediciones de compra y correcciones de peso del galpón**.
+
+## 19. ¿Esto revive la bomba del botón? — No (otra vez, distinto)
+
+Igual que el recalc-al-FIFO del Paso 4: el WMA propuesto **lee `stock_qty` + `avg_cost` mantenido**, calculado desde las compras — **NUNCA** `stock_movements`. El botón eliminado era WMA **mal implementado** (replay del ledger roto). Este es WMA **bien implementado** (incremental al comprar, como ya hace el código). Misma etiqueta, implementación opuesta. **No es la bomba.**
+
+## 20. Para decidir juntos (nada aplicado)
+
+1. **Cambiar a WMA bien hecho:** neutralizar las 3 pisadas del FIFO (el WMA ya queda), y definir la política de costo para (a) editar compra y (b) corregir peso del galpón. Resuelve el "vendido-abajo" y matchea el modelo mental del usuario.
+2. **Quedarse en FIFO** y mitigar el "vendido-abajo" recalculando también al vender (Paso 4, opción 4).
+3. **Híbrido:** WMA como costo oficial, y dejar el FIFO solo como herramienta de diagnóstico (no como el valor guardado).
+
+Mi lectura (decide el usuario): si su forma de pensar el costo es el promedio ponderado y le molesta el "vendido-abajo", el **WMA bien hecho (opción 1) es coherente y barato en el camino normal** — el costo está en definir cómo se comporta al **editar compras viejas y corregir pesos**, que es donde el WMA es aproximado. Conviene decidir esa política antes de tocar código.
+
+**Solo lectura. Nada cambiado ni tocado.**
