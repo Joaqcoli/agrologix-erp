@@ -290,3 +290,61 @@ Decisión tomada y **aplicada**: el modelo oficial pasó de FIFO a **promedio po
 - Conservación: BANANA 185@$1.647 + 30kg@$824 → **$1.532** (stock1·avg1 = stock0·avg0 + q·c). ✅
 - EDGE editar ya-vendida: PAPA CEPILLADA stock 51<68 → costo **$882 conservado**, stock 51→47, sin negativo. ✅
 - Galpón normal: NARANJA JUGO stock 356>300 → **$867→$918** (des-mezcla), stock 356→336. ✅
+
+---
+
+# Resync al WMA — diagnóstico (solo lectura, 2026-06-15)
+
+> Tras cambiar a WMA (commit `ed155da`), los costos guardados se calcularon con el FIFO viejo. ¿Conviene "resincronizarlos" al WMA? Antes hay que responder algo de fondo: **¿se puede reconstruir el WMA histórico?** **No se recalculó ni tocó nada.**
+
+## 22. La verdad incómoda: el WMA NO se puede reconstruir hacia atrás de forma confiable
+
+**El WMA es path-dependiente: depende del ORDEN exacto de compras Y ventas.** El costo solo se mueve al comprar, y el peso de cada compra en la mezcla depende del **stock que había en ese momento** — que depende de todas las ventas anteriores. Ejemplo:
+- Compro 100 @ $10 (stock 100, avg $10). **Vendo 90** (stock 10) y **compro 10 @ $20** → avg = (10·10 + 10·20)/20 = **$15**.
+- Mismas operaciones, **orden invertido**: compro 10 @ $20 primero (stock 110, avg $10,91), después vendo 90 → avg = **$10,91**.
+- Mismas compras y ventas, **distinto resultado** ($15 vs $10,91). El orden importa.
+
+**Para reconstruirlo necesitaría la secuencia cronológica exacta de compras + ventas** (el stock en cada compra). Las **compras** las tengo limpias (`purchase_items` + fecha). Las **ventas** salen del **ledger `stock_movements`, que está ROTO** (C2: mezcla kg con bultos) → **no puedo saber el stock real en cada compra histórica.** Reconstruir desde `order_items` tampoco es confiable (conversión de unidad que driftea, bolsa/rinde/bonificación).
+
+**La única reconstrucción "hacia atrás" que NO necesita ventas es el promedio PERPETUO** (Σ qty·costo / Σ qty de todas las compras). Pero ese **es OTRO modelo** (el promedio de todo lo comprado desde el principio, que nunca olvida) — **no** el WMA con ventas. Y da números muy distintos:
+
+| Métrica (guardado FIFO vs perpetuo reconstruido) | Valor |
+|---|---|
+| Productos con stock | 52 |
+| Difieren > $0,50 | **49 de 52** |
+| > 20% | **20** · 10–20%: 9 · 5–10%: 3 · < 5%: 17 |
+| Mediana | **11,6%** · Peor: **144,9%** |
+
+| Producto | Guardado (FIFO) | Perpetuo | Δ |
+|---|---|---|---|
+| CILANTRO | $500 | $1.225 | **+144,9%** |
+| ZAPALLITO REDONDO | $1.071 | $1.916 | +78,8% |
+| PALTA HASS CHILE | $1.500 | $630 | −58,0% |
+| CEBOLLA DE VERDEO | $2.500 | $1.077 | −56,9% |
+| ZUCCINI | $1.286 | $2.011 | +56,4% |
+| RUCULA | $472 | $271 | −42,6% |
+| LIMON | $571 | $797 | +39,5% |
+| TOMATE CHERRY | $5.000 | $3.082 | −38,4% |
+| …y 12 más > 20% | | | |
+
+**Esto es revelador:** el perpetuo reconstruido **≈ los mismos números del botón eliminado** (CILANTRO, ZAPALLITO, LIMON, etc. — comparar con §4). Es lógico: el botón era WMA-perpetuo (desde el ledger); el perpetuo-desde-compras es el mismo modelo equivocado desde otra fuente. **Reconstruir hacia atrás = revivir esos números** (que el usuario ya rechazó), solo que con datos más limpios pero igual de mal-modelo.
+
+## 23. ¿Y la semilla FIFO actual? — es BUENA, no hay que tocarla
+
+El costo guardado hoy (FIFO) representa **"lo que costó el stock que tengo ahora"** (las compras recientes que cubren el stock). Como **semilla** para arrancar el WMA, es razonable y honesta: es el valor del inventario actual. Y el problema del "vendido-abajo" que motivó el cambio **ya no aplica**: era un efecto del FIFO **recalculándose** en cada compra; ahora el WMA **no recalcula al vender**, solo mezcla hacia adelante. La semilla FIFO es un punto de partida de una vez; de ahí en más, cada compra la promedia.
+
+## 24. El resync NO es la bomba… pero reconstruir igual es riesgoso
+
+- **Fuente:** reconstruir desde `purchase_items` es fuente limpia ✅ (el botón usaba el ledger roto ❌). **Esa distinción es cierta.**
+- **PERO** el WMA verdadero necesita el **orden de las ventas**, que solo está en el ledger roto → la reconstrucción fiel es inviable. Y la reconstrucción sin ventas (perpetuo) **es el modelo equivocado** (= números del botón). **Conclusión: reconstruir hacia atrás es poco confiable, aunque la fuente de compras sea limpia.**
+
+## 25. Recomendación honesta
+
+**Opción (c): dejar que cada producto se realinee en su próxima compra. NO resincronizar.**
+- Reconstruir el WMA histórico no es confiable (path-dependence + ventas en ledger roto).
+- La semilla FIFO actual es un buen punto de partida (= costo del stock actual) y el "vendido-abajo" ya no la mueve.
+- En la próxima compra de cada producto, el WMA mezcla el costo nuevo con la semilla → converge rápido para los que rotan (la mayoría); para los lentos, la semilla FIFO es de todas formas razonable.
+- **(a) resincronizar todos = revivir los números del botón** (±145%) que ya se descartaron. **No.**
+- **(b) resync puntual:** no hay un subconjunto "seguro" — cualquier reconstrucción arrastra el mismo problema. A lo sumo, si un producto puntual tiene una semilla obviamente mala (ej. un typo de compra como PUERRO $230, §10), eso se arregla **corrigiendo el dato de la compra**, no resincronizando el modelo.
+
+**Solo lectura. Nada recalculado ni tocado.**
