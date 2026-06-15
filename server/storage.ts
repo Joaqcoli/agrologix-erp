@@ -667,6 +667,29 @@ export const storage = {
     await tx.execute(drizzleSql`UPDATE products SET average_cost = ${cost} WHERE id = ${pid}`);
   },
 
+  // Refresca product_units.weight_per_unit (kg por envase del producto) al peso de la
+  // compra por envase MÁS RECIENTE. Es "el último cajón conocido": así la vista grande
+  // refleja el peso que el galpón corrigió en la última compra (no un promedio que lo diluye).
+  async _refreshWeightPerUnitFromLatest(pid: number, tx: any = db): Promise<void> {
+    const baseRes: any = await tx.execute(drizzleSql`
+      SELECT id, unit FROM product_units
+      WHERE product_id = ${pid} AND unit NOT IN ('CAJON','BOLSA','BANDEJA')
+      ORDER BY (base_unit IS NOT NULL) DESC, stock_qty::float DESC LIMIT 1
+    `);
+    const baseRow = (baseRes.rows ?? baseRes)[0];
+    if (!baseRow) return;
+    const latestRes: any = await tx.execute(drizzleSql`
+      SELECT pi.weight_per_package::float AS wpp
+      FROM purchase_items pi JOIN purchases p ON p.id = pi.purchase_id
+      WHERE pi.product_id = ${pid} AND pi.unit = ${baseRow.unit}
+        AND pi.weight_per_package IS NOT NULL AND pi.weight_per_package::float > 0
+      ORDER BY p.purchase_date DESC, pi.id DESC LIMIT 1
+    `);
+    const latest = (latestRes.rows ?? latestRes)[0];
+    if (!latest) return; // no hay compras por envase → no tocar
+    await tx.execute(drizzleSql`UPDATE product_units SET weight_per_unit = ${Number(latest.wpp).toFixed(4)} WHERE id = ${baseRow.id}`);
+  },
+
   async deletePurchase(id: number): Promise<void> {
     await db.transaction(async (tx) => {
       const items = await tx.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, id));
@@ -2857,9 +2880,11 @@ export const storage = {
         await tx.update(productUnits).set({ stockQty: ns.toFixed(4) }).where(eq(productUnits.id, pu.id));
       }
 
-      // 4) Recomputar resumen + costo del producto (FIFO sobre compras recientes que cubren el stock)
+      // 4) Recomputar resumen + costo + peso por envase del producto (FIFO sobre compras
+      //    recientes que cubren el stock) → la vista grande refleja el peso corregido.
       await this._recalcProductSummary(item.productId, tx);
       await this._recomputeCostFromStock(item.productId, tx);
+      await this._refreshWeightPerUnitFromLatest(item.productId, tx);
 
       return { ok: true, weightPerPackage: newWeight };
     });
