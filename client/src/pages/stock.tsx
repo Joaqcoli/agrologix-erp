@@ -750,16 +750,6 @@ export default function StockPage() {
     onError: (e: any) => toast({ title: "Error al cargar stock", description: e.message, variant: "destructive" }),
   });
 
-  const recalcMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/stock/recalc-costs", {}).then((r) => r.json()),
-    onSuccess: (data: { updated: number }) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/products/stock"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      toast({ title: "Costos recalculados", description: `${data.updated} producto${data.updated !== 1 ? "s" : ""} actualizado${data.updated !== 1 ? "s" : ""} con promedio ponderado móvil correcto` });
-    },
-    onError: (e: any) => toast({ title: "Error al recalcular", description: e.message, variant: "destructive" }),
-  });
-
   // Always hide zero-stock rows
   const filteredStock = useMemo(() => {
     const all = Array.isArray(stockData) ? stockData : [];
@@ -847,19 +837,6 @@ export default function StockPage() {
             <p className="text-sm text-muted-foreground mt-0.5">Stock actual por producto y unidad</p>
           </div>
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                if (confirm("¿Recalcular costos promedio de todo el stock usando promedio ponderado móvil? Esto puede tardar unos segundos.")) {
-                  recalcMutation.mutate();
-                }
-              }}
-              disabled={recalcMutation.isPending}
-            >
-              <RefreshCw className={`mr-2 h-3.5 w-3.5 ${recalcMutation.isPending ? "animate-spin" : ""}`} />
-              {recalcMutation.isPending ? "Recalculando..." : "Recalcular Costos"}
-            </Button>
             <Button
               variant="outline"
               size="sm"

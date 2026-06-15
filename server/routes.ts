@@ -475,13 +475,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
-  app.post("/api/stock/recalc-costs", requireAuth, async (req, res) => {
-    try {
-      const result = await storage.recalcAllStockCosts();
-      return res.json(result);
-    } catch (e: any) { return res.status(500).json({ error: e.message }); }
-  });
-
   app.post("/api/stock/reset", requireAuth, async (req, res) => {
     try {
       const { asMerma } = z.object({ asMerma: z.boolean() }).parse(req.body);
