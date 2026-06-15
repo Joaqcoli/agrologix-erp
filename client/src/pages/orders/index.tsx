@@ -249,6 +249,9 @@ export default function OrdersPage() {
                                 {o.hasIva && (
                                   <Badge variant="outline" className="text-[10px] text-primary border-primary/40">Con IVA</Badge>
                                 )}
+                                {(o as any).galponConfirmed && (
+                                  <Badge variant="outline" className="text-[10px] text-blue-700 border-blue-400/50">Confirmado galpón</Badge>
+                                )}
                               </div>
                               <p className="text-sm font-semibold text-foreground mt-1 truncate">{o.customerName}</p>
                               <div className="flex flex-wrap items-center gap-3 mt-0.5">

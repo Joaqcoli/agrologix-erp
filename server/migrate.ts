@@ -414,6 +414,11 @@ export async function runMigrations() {
   // ─── orders: número de remito del papel (del Excel de días) ───────────────
   await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS remito_num integer`);
 
+  // Puente galpón→admin: flag de "confirmado por galpón" (NO toca el enum de estados)
+  try { await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS galpon_confirmed BOOLEAN NOT NULL DEFAULT false`); } catch {}
+  try { await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS galpon_confirmed_at TIMESTAMP`); } catch {}
+  try { await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS galpon_confirmed_by INTEGER REFERENCES users(id)`); } catch {}
+
   // ─── Grupos de clientes con precios compartidos ───────────────────────────
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS client_groups (

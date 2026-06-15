@@ -150,6 +150,10 @@ export const orders = pgTable("orders", {
   approvedBy: integer("approved_by").references(() => users.id),
   approvedAt: timestamp("approved_at"),
   invoiceNumber: text("invoice_number"),
+  // Puente galpón→admin: el galpón "confirma" el armado (no es el approve; el pedido sigue en borrador)
+  galponConfirmed: boolean("galpon_confirmed").notNull().default(false),
+  galponConfirmedAt: timestamp("galpon_confirmed_at"),
+  galponConfirmedBy: integer("galpon_confirmed_by").references(() => users.id),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 

@@ -1324,6 +1324,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 )
               )}
               <Badge variant={sc.variant}>{sc.label}</Badge>
+              {(order as any).galponConfirmed && <Badge variant="outline" className="text-[10px] text-blue-700 border-blue-400/50">Confirmado galpón</Badge>}
               {hasIva && <Badge variant="outline" className="text-[10px] text-primary border-primary/40">Con IVA</Badge>}
               {hasBolsaFv && <Badge variant="outline" className="text-[10px] text-green-600 border-green-300">Bolsa FV</Badge>}
               {order.lowMarginConfirmed && (

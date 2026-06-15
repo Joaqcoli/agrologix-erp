@@ -2912,6 +2912,66 @@ export const storage = {
     });
   },
 
+  // ─── GALPÓN: Pedidos (SIN dinero) ────────────────────────────────────────────
+  // REGLA DE ORO: estos SELECT NUNCA incluyen price_per_unit, cost_per_unit, margin,
+  // subtotal ni total. Solo cliente, producto, cantidad, unidad, estado y el flag galpón.
+  async getGalponOrders(date?: string): Promise<any[]> {
+    const dateCond = date ? drizzleSql`WHERE o.order_date::date = ${date}::date` : drizzleSql``;
+    const rows: any = await db.execute(drizzleSql`
+      SELECT o.id, o.folio, o.order_date AS "orderDate", o.status,
+             o.galpon_confirmed AS "galponConfirmed",
+             c.name AS "customerName",
+             u.name AS "createdByName",
+             (SELECT COUNT(*)::int FROM order_items oi WHERE oi.order_id = o.id) AS "itemCount"
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      LEFT JOIN users u ON u.id = o.created_by
+      ${dateCond}
+      ORDER BY o.created_at DESC
+    `);
+    return rows.rows ?? rows;
+  },
+
+  async getGalponOrder(id: number): Promise<any | undefined> {
+    const ordRes: any = await db.execute(drizzleSql`
+      SELECT o.id, o.folio, o.order_date AS "orderDate", o.status, o.notes,
+             o.galpon_confirmed AS "galponConfirmed",
+             c.name AS "customerName", c.address, c.city, c.phone,
+             u.name AS "createdByName"
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      LEFT JOIN users u ON u.id = o.created_by
+      WHERE o.id = ${id}
+    `);
+    const order = (ordRes.rows ?? ordRes)[0];
+    if (!order) return undefined;
+    const itemsRes: any = await db.execute(drizzleSql`
+      SELECT oi.id, oi.product_id AS "productId", oi.quantity, oi.unit,
+             COALESCE(p.name, oi.raw_product_name) AS "productName"
+      FROM order_items oi
+      LEFT JOIN products p ON p.id = oi.product_id
+      WHERE oi.order_id = ${id}
+      ORDER BY oi.id
+    `);
+    return { ...order, items: itemsRes.rows ?? itemsRes };
+  },
+
+  // Lista de productos para el selector del galpón (SIN costo)
+  async getGalponProducts(): Promise<{ id: number; name: string; unit: string; category: string | null }[]> {
+    const rows = await db.select({ id: products.id, name: products.name, unit: products.unit, category: products.category })
+      .from(products).where(eq(products.active, true)).orderBy(asc(products.name));
+    return rows as any;
+  },
+
+  async confirmGalponOrder(id: number, userId: number): Promise<{ id: number; galponConfirmed: boolean }> {
+    const res: any = await db.execute(drizzleSql`
+      UPDATE orders SET galpon_confirmed = true, galpon_confirmed_at = NOW(), galpon_confirmed_by = ${userId}
+      WHERE id = ${id}
+      RETURNING id, galpon_confirmed AS "galponConfirmed"
+    `);
+    return (res.rows ?? res)[0];
+  },
+
   // ── Helper: peso por envase para CAJON/BOLSA/BANDEJA ─────────────────────────
   // Busca el weightPerPackage de la última compra con ese purchaseUnit para el producto.
   // Si no encuentra (o es 0), cae al fallback (weightPerUnit del row base).

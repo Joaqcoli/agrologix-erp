@@ -1187,3 +1187,67 @@ export async function generateInvoicePDF(data: {
 
   doc.save(`Factura-${invoice.invoiceNumber}.pdf`);
 }
+
+// ─── Hoja de armado del galpón (SIN precios) ─────────────────────────────────
+// Lista por pedido: cantidad · unidad · producto, con el cliente y quién hizo el pedido.
+// Empaqueta varios pedidos en la misma hoja para no malgastar papel.
+export type ArmadoOrder = {
+  folio: string;
+  customerName: string;
+  createdByName?: string | null;
+  items: { quantity: string; unit: string; productName: string | null }[];
+};
+
+export function generateArmadoPDF(orders: ArmadoOrder[], dateLabel: string) {
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const pageW = 210, pageH = 297, margin = 12;
+  const lineH = 5;
+  const fmtQty = (q: string) => {
+    const n = parseFloat(q);
+    return Number.isFinite(n) ? String(+n.toFixed(2)) : q;
+  };
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text(`HOJA DE ARMADO — ${dateLabel}`, pageW / 2, margin, { align: "center" });
+  let y = margin + 8;
+
+  for (const ord of orders) {
+    const blockH = 11 + ord.items.length * lineH + 5;
+    // Si el bloque entero no entra, ir a hoja nueva (pero si el pedido es enorme, igual fluye y parte)
+    if (y > margin + 8 && y + Math.min(blockH, 60) > pageH - margin) {
+      doc.addPage();
+      y = margin;
+    }
+
+    // separador + header del pedido
+    doc.setDrawColor(170); doc.setLineWidth(0.3);
+    doc.line(margin, y, pageW - margin, y);
+    y += 5;
+    doc.setFont("helvetica", "bold"); doc.setFontSize(11);
+    doc.text(ord.customerName, margin, y);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+    const meta = `${ord.folio}${ord.createdByName ? "  ·  Pedido por: " + ord.createdByName : ""}`;
+    doc.text(meta, pageW - margin, y, { align: "right" });
+    y += 5;
+
+    // encabezados de columna
+    doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(110);
+    doc.text("CANT.", margin, y); doc.text("UN.", margin + 18, y); doc.text("PRODUCTO", margin + 32, y);
+    doc.setTextColor(0);
+    y += 1.5; doc.setDrawColor(220); doc.line(margin, y, pageW - margin, y); y += 4;
+
+    // ítems
+    doc.setFont("helvetica", "normal"); doc.setFontSize(9.5);
+    for (const it of ord.items) {
+      if (y > pageH - margin) { doc.addPage(); y = margin; }
+      doc.text(fmtQty(it.quantity), margin, y);
+      doc.text(it.unit ?? "", margin + 18, y);
+      doc.text(it.productName ?? "—", margin + 32, y);
+      y += lineH;
+    }
+    y += 5;
+  }
+
+  doc.save(`armado-${dateLabel}.pdf`);
+}

@@ -1838,6 +1838,81 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
+  app.get("/api/galpon/products", requireGalpon, async (_req, res) => {
+    try {
+      return res.json(await storage.getGalponProducts());
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── GALPÓN: Pedidos (sin precios/costos/márgenes) ───────────────────────────
+  app.get("/api/galpon/orders", requireGalpon, async (req, res) => {
+    try {
+      return res.json(await storage.getGalponOrders((req.query.date as string) || undefined));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/galpon/orders/:id", requireGalpon, async (req, res) => {
+    try {
+      const o = await storage.getGalponOrder(Number(req.params.id));
+      if (!o) return res.status(404).json({ error: "Pedido no encontrado" });
+      return res.json(o);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // El galpón solo edita pedidos en BORRADOR (no toca stock; se materializa al aprobar el admin).
+  async function galponAssertDraft(orderId: number, res: Response): Promise<any | null> {
+    const order = await storage.getOrder(orderId);
+    if (!order) { res.status(404).json({ error: "Pedido no encontrado" }); return null; }
+    if (order.status !== "draft") { res.status(400).json({ error: "Solo se pueden editar pedidos en borrador" }); return null; }
+    return order;
+  }
+
+  app.patch("/api/galpon/orders/:id/items/:itemId", requireGalpon, async (req, res) => {
+    try {
+      const orderId = Number(req.params.id);
+      const order = await galponAssertDraft(orderId, res);
+      if (!order) return;
+      // SOLO cantidad/unidad/producto — se ignora cualquier campo de precio/costo
+      const patch: any = {};
+      if (req.body.quantity !== undefined) patch.quantity = String(req.body.quantity);
+      if (req.body.unit !== undefined) patch.unit = String(req.body.unit);
+      if (req.body.productId !== undefined) patch.productId = req.body.productId;
+      await storage.updateOrderItem(orderId, Number(req.params.itemId), patch, order.customerId);
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.post("/api/galpon/orders/:id/items", requireGalpon, async (req, res) => {
+    try {
+      const orderId = Number(req.params.id);
+      const order = await galponAssertDraft(orderId, res);
+      if (!order) return;
+      await storage.addOrderItem(orderId, {
+        quantity: String(req.body.quantity),
+        unit: String(req.body.unit),
+        productId: req.body.productId ?? null,
+      });
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.delete("/api/galpon/orders/:id/items/:itemId", requireGalpon, async (req, res) => {
+    try {
+      const orderId = Number(req.params.id);
+      const order = await galponAssertDraft(orderId, res);
+      if (!order) return;
+      await storage.deleteOrderItem(orderId, Number(req.params.itemId));
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.post("/api/galpon/orders/:id/confirm", requireGalpon, async (req, res) => {
+    try {
+      const result = await storage.confirmGalponOrder(Number(req.params.id), req.session.userId!);
+      return res.json(result);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   // ─── Facturas Electrónicas ARCA ───────────────────────────────────────────────
 
   // Diagnóstico WSAA — solo para admin, eliminar en producción estable
