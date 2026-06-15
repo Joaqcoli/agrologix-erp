@@ -104,3 +104,9 @@ Unificar los dos default-deny (galpon + vendedor) en un solo middleware con un m
 **Verificado:** vendedor→`/api/caja|products|ap` = 403; vendedor→`/api/vendedor/*` + `/api/auth/me` = 200; galpón igual que antes (caja 403, galpon/stock 200); admin = 200 a todo; login de operator rechazado; **0 de los 8 endpoints del vendedor y 10 del galpón quedaron bloqueados**.
 
 **Pendiente / decisión aparte:** si en el futuro se reactiva o usa un rol `operator`, definir su lista blanca en `ROLE_API_WHITELIST` (hoy no tiene entrada = acceso total si lograra loguearse, pero está desactivado). Caveat menor: una sesión `operator` ya abierta no se corta sola (el chequeo de `active` es solo en login); la cuenta estaba sin uso.
+
+## 9. ✅ Nota menor resuelta (2026-06-15, commit `5d9cb39`) — revalidación de cuenta activa
+
+El middleware central de `/api/*` ahora revalida `active=true` en **cada request** (no solo en login): si la cuenta fue desactivada, el siguiente request responde 401 + destruye la sesión. Cubre todos los roles. Costo: una lectura por PK por request (despreciable). → Desactivar una cuenta (incluido un futuro cliente) corta el acceso **al instante**, sin esperar al próximo login.
+
+**Verificado:** activos sin cambios; `operator` inactivo → 401 (incl. `/api/auth/me`); mid-sesión: vendedor activo 200 → desactivado misma sesión 401 → reactivado 200.
