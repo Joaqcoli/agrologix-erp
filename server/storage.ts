@@ -667,27 +667,49 @@ export const storage = {
     await tx.execute(drizzleSql`UPDATE products SET average_cost = ${cost} WHERE id = ${pid}`);
   },
 
-  // Refresca product_units.weight_per_unit (kg por envase del producto) al peso de la
-  // compra por envase MÁS RECIENTE. Es "el último cajón conocido": así la vista grande
-  // refleja el peso que el galpón corrigió en la última compra (no un promedio que lo diluye).
-  async _refreshWeightPerUnitFromLatest(pid: number, tx: any = db): Promise<void> {
+  // Recomputa product_units.weight_per_unit (kg por envase del producto) como el promedio
+  // ponderado por CANTIDAD DE ENVASES de los pesos de las compras que cubren el stock actual,
+  // recorriendo de la más reciente hacia atrás (MISMA ventana que el costo FIFO en
+  // _recomputeCostFromStock) → costo y peso quedan coherentes (mismo conjunto de compras).
+  // Ej.: stock 244kg cubierto por 11 cajón@16 (176kg) + 4 cajón@17 (68kg) → (11×16+4×17)/15 = 16.27.
+  async _recomputeWeightPerUnitFromStock(pid: number, tx: any = db): Promise<void> {
     const baseRes: any = await tx.execute(drizzleSql`
-      SELECT id, unit FROM product_units
+      SELECT id, unit, stock_qty::float AS st FROM product_units
       WHERE product_id = ${pid} AND unit NOT IN ('CAJON','BOLSA','BANDEJA')
       ORDER BY (base_unit IS NOT NULL) DESC, stock_qty::float DESC LIMIT 1
     `);
     const baseRow = (baseRes.rows ?? baseRes)[0];
     if (!baseRow) return;
-    const latestRes: any = await tx.execute(drizzleSql`
-      SELECT pi.weight_per_package::float AS wpp
+    const stock = Number(baseRow.st);
+    const itemsRes: any = await tx.execute(drizzleSql`
+      SELECT pi.quantity::float AS q, pi.weight_per_package::float AS wpp
       FROM purchase_items pi JOIN purchases p ON p.id = pi.purchase_id
       WHERE pi.product_id = ${pid} AND pi.unit = ${baseRow.unit}
-        AND pi.weight_per_package IS NOT NULL AND pi.weight_per_package::float > 0
-      ORDER BY p.purchase_date DESC, pi.id DESC LIMIT 1
+      ORDER BY p.purchase_date DESC, pi.id DESC
     `);
-    const latest = (latestRes.rows ?? latestRes)[0];
-    if (!latest) return; // no hay compras por envase → no tocar
-    await tx.execute(drizzleSql`UPDATE product_units SET weight_per_unit = ${Number(latest.wpp).toFixed(4)} WHERE id = ${baseRow.id}`);
+    const items = itemsRes.rows ?? itemsRes;
+    if (items.length === 0) return;
+
+    // Sin stock: usar el peso por envase de la compra más reciente (no hay stock que ponderar)
+    if (stock <= 0) {
+      const latestPkg = items.find((it: any) => Number(it.wpp) > 0);
+      if (latestPkg) await tx.execute(drizzleSql`UPDATE product_units SET weight_per_unit = ${Number(latestPkg.wpp).toFixed(4)} WHERE id = ${baseRow.id}`);
+      return;
+    }
+
+    // Ventana FIFO: cubrir el stock (en kg base) de la más reciente hacia atrás.
+    // El peso es el promedio ponderado por envases: weight_per_unit = kg_cubiertos / envases_cubiertos.
+    let remaining = stock, totalKg = 0, totalEnvases = 0;
+    for (const it of items) {
+      if (remaining <= 0) break;
+      const take = Math.min(Number(it.q), remaining);
+      remaining -= take;
+      const wpp = Number(it.wpp);
+      if (wpp > 0) { totalKg += take; totalEnvases += take / wpp; }
+    }
+    if (totalEnvases <= 0) return; // no hay compras por envase en la ventana → no tocar
+    const wpu = totalKg / totalEnvases;
+    await tx.execute(drizzleSql`UPDATE product_units SET weight_per_unit = ${wpu.toFixed(4)} WHERE id = ${baseRow.id}`);
   },
 
   async deletePurchase(id: number): Promise<void> {
@@ -2884,7 +2906,7 @@ export const storage = {
       //    recientes que cubren el stock) → la vista grande refleja el peso corregido.
       await this._recalcProductSummary(item.productId, tx);
       await this._recomputeCostFromStock(item.productId, tx);
-      await this._refreshWeightPerUnitFromLatest(item.productId, tx);
+      await this._recomputeWeightPerUnitFromStock(item.productId, tx);
 
       return { ok: true, weightPerPackage: newWeight };
     });
