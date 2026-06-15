@@ -81,12 +81,23 @@ export function isApiAllowedForRole(role: string | undefined, path: string): boo
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
 
-  // ─── Default-deny por rol (lista blanca central ROLE_API_WHITELIST) ───────────
-  // Mismo patrón que tenía el galpón, ahora generalizado a la tabla de arriba:
-  // cada rol con lista blanca solo puede llamar a sus prefijos; el resto 403.
-  app.use((req, res, next) => {
-    if (!isApiAllowedForRole(req.session?.userRole, req.path)) {
-      return res.status(403).json({ error: "Forbidden" });
+  // ─── Seguridad central: revalidar cuenta ACTIVA + default-deny por rol ────────
+  // Corre en TODO /api/* → cubre admin, vendedor, galpón y los requireAuth en un solo
+  // lugar (a diferencia de requireAuth, que no protege /api/vendedor|galpon/*).
+  // 1) Si hay sesión, revalida en CADA request que la cuenta siga `active=true`. Así
+  //    desactivar una cuenta la corta AL INSTANTE (próximo request → 401 + sesión
+  //    destruida), sin esperar al próximo login. Pensado para cuentas de clientes a
+  //    futuro. La lectura es por PK (índice, tabla chica) → costo despreciable.
+  // 2) Default-deny por rol (ROLE_API_WHITELIST): lo que no matchea su lista → 403.
+  app.use(async (req, res, next) => {
+    if (req.session?.userId && req.path.startsWith("/api/")) {
+      const user = await storage.getUserById(req.session.userId);
+      if (!user || !user.active) {
+        return req.session.destroy(() => res.status(401).json({ error: "Not authenticated" }));
+      }
+      if (!isApiAllowedForRole(req.session.userRole, req.path)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
     }
     next();
   });
