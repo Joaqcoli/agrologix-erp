@@ -58,16 +58,35 @@ function requireGalpon(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+// ─── Seguridad por rol: LISTA BLANCA CENTRAL (un solo lugar) ──────────────────
+// Define, por ROL, qué prefijos de /api/* puede llamar. Si un rol aparece acá es
+// DEFAULT-DENY: todo lo que NO matchee su lista responde 403 (aunque el endpoint
+// use solo requireAuth → caja/costos/proveedores/bancos nunca salen para ese rol).
+// Roles SIN entrada (admin) = acceso total. Para sumar un rol o cambiar permisos,
+// editar SOLO este mapa.
+export const ROLE_API_WHITELIST: Record<string, string[]> = {
+  galpon:   ["/api/galpon/", "/api/auth/"],
+  vendedor: ["/api/vendedor/", "/api/auth/"],
+  // admin: sin entrada → acceso total.
+  // operator: cuenta deprecada, desactivada a nivel login (users.active=false). Sin entrada acá.
+};
+
+// Pura y testeable: decide si un rol puede llamar a un path de /api/*.
+export function isApiAllowedForRole(role: string | undefined, path: string): boolean {
+  if (!role || !path.startsWith("/api/")) return true;
+  const allowed = ROLE_API_WHITELIST[role];
+  if (!allowed) return true; // rol sin lista blanca (admin) → acceso total
+  return allowed.some((prefix) => path.startsWith(prefix));
+}
+
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
 
-  // ─── Default-deny para el rol galpón ─────────────────────────────────────────
-  // El galpón SOLO puede llamar a /api/galpon/* y /api/auth/*. Cualquier otro endpoint
-  // (caja, bancos, costos, proveedores, etc.) le responde 403, aunque use solo requireAuth.
-  // Seguridad real en backend: los costos/caja nunca salen para esta cuenta.
+  // ─── Default-deny por rol (lista blanca central ROLE_API_WHITELIST) ───────────
+  // Mismo patrón que tenía el galpón, ahora generalizado a la tabla de arriba:
+  // cada rol con lista blanca solo puede llamar a sus prefijos; el resto 403.
   app.use((req, res, next) => {
-    if (req.session?.userRole === "galpon" && req.path.startsWith("/api/")) {
-      const allowed = req.path.startsWith("/api/galpon/") || req.path.startsWith("/api/auth/");
-      if (!allowed) return res.status(403).json({ error: "Forbidden" });
+    if (!isApiAllowedForRole(req.session?.userRole, req.path)) {
+      return res.status(403).json({ error: "Forbidden" });
     }
     next();
   });
