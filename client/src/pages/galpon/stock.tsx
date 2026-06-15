@@ -1,11 +1,14 @@
 import { useState, useMemo, Fragment } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { GalponLayout } from "./layout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Search, Package, ChevronDown } from "lucide-react";
+import { Search, Package, ChevronDown, Pencil, Check, X } from "lucide-react";
 
 // REGLA DE ORO: esta vista NO muestra ningún costo/precio. El endpoint /api/galpon/stock
 // tampoco los devuelve (seguridad real en backend, no solo ocultar acá).
@@ -20,6 +23,7 @@ type StockRow = {
 };
 
 type HistRow = {
+  itemId: number;
   purchaseDate: string;
   supplierName: string;
   purchaseQty: string | null;
@@ -49,6 +53,22 @@ export default function GalponStock() {
     queryKey: ["/api/galpon/products", expandedProductId, "purchase-history"],
     queryFn: () => fetch(`/api/galpon/products/${expandedProductId}/purchase-history`, { credentials: "include" }).then((r) => r.json()),
     enabled: expandedProductId != null,
+  });
+
+  const { toast } = useToast();
+  const [editItemId, setEditItemId] = useState<number | null>(null);
+  const [editWeight, setEditWeight] = useState("");
+
+  const weightMut = useMutation({
+    mutationFn: ({ itemId, weight }: { itemId: number; weight: number }) =>
+      apiRequest("PATCH", `/api/galpon/purchase-item/${itemId}`, { weightPerPackage: weight }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/galpon/stock"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/galpon/products", expandedProductId, "purchase-history"] });
+      setEditItemId(null);
+      toast({ title: "Peso actualizado", description: "Se recalculó el stock y el costo." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const filtered = useMemo(
@@ -168,12 +188,14 @@ export default function GalponStock() {
                                                 </tr>
                                               </thead>
                                               <tbody>
-                                                {history.map((ph, i) => {
+                                                {history.map((ph) => {
                                                   const wpp = parseFloat(ph.weightPerPackage ?? "0");
                                                   const pqty = ph.purchaseQty ? parseFloat(ph.purchaseQty) : null;
                                                   const qty = parseFloat(ph.quantity);
+                                                  const isPackage = !!ph.purchaseUnit && pqty != null;
+                                                  const isEditing = editItemId === ph.itemId;
                                                   return (
-                                                    <tr key={i} className="border-b border-border/50 last:border-0">
+                                                    <tr key={ph.itemId} className="border-b border-border/50 last:border-0">
                                                       <td className="py-1.5 pr-4 text-muted-foreground whitespace-nowrap">{fmtDate(ph.purchaseDate)}</td>
                                                       <td className="py-1.5 pr-4 font-medium">{ph.supplierName}</td>
                                                       <td className="py-1.5 pr-4 text-right whitespace-nowrap">
@@ -181,8 +203,36 @@ export default function GalponStock() {
                                                           ? `${pqty} ${ph.purchaseUnit.toLowerCase()}`
                                                           : `${fmtStock(qty)} ${pu.unit}`}
                                                       </td>
-                                                      <td className="py-1.5 text-right whitespace-nowrap text-muted-foreground">
-                                                        {wpp > 0 ? `${wpp} KG` : "—"}
+                                                      <td className="py-1.5 text-right whitespace-nowrap">
+                                                        {isEditing ? (
+                                                          <div className="flex items-center justify-end gap-1">
+                                                            <Input
+                                                              type="number" min="0.01" step="0.01" autoFocus
+                                                              value={editWeight}
+                                                              onChange={(e) => setEditWeight(e.target.value)}
+                                                              className="h-7 w-20 text-xs text-right px-1.5"
+                                                            />
+                                                            <span className="text-muted-foreground">KG</span>
+                                                            <Button size="icon" variant="ghost" className="h-7 w-7"
+                                                              disabled={!(parseFloat(editWeight) > 0) || weightMut.isPending}
+                                                              onClick={() => weightMut.mutate({ itemId: ph.itemId, weight: parseFloat(editWeight) })}>
+                                                              <Check className="h-3.5 w-3.5 text-green-600" />
+                                                            </Button>
+                                                            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditItemId(null)}>
+                                                              <X className="h-3.5 w-3.5 text-muted-foreground" />
+                                                            </Button>
+                                                          </div>
+                                                        ) : (
+                                                          <div className="flex items-center justify-end gap-1.5">
+                                                            <span className="text-muted-foreground">{wpp > 0 ? `${wpp} KG` : "—"}</span>
+                                                            {isPackage && (
+                                                              <Button size="icon" variant="ghost" className="h-6 w-6" title="Corregir kg por envase"
+                                                                onClick={() => { setEditItemId(ph.itemId); setEditWeight(wpp > 0 ? String(wpp) : ""); }}>
+                                                                <Pencil className="h-3 w-3 text-muted-foreground" />
+                                                              </Button>
+                                                            )}
+                                                          </div>
+                                                        )}
                                                       </td>
                                                     </tr>
                                                   );

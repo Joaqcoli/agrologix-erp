@@ -1827,6 +1827,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // Corregir SOLO el peso por envase de una línea de compra (dispara recálculo de costo/stock).
+  // La respuesta NO incluye costos: solo confirma el guardado.
+  app.patch("/api/galpon/purchase-item/:id", requireGalpon, async (req, res) => {
+    try {
+      const weight = parseFloat(req.body?.weightPerPackage);
+      if (!(weight > 0)) return res.status(400).json({ error: "Peso inválido" });
+      const result = await storage.galponSetPurchaseItemWeight(Number(req.params.id), weight);
+      return res.json(result);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   // ─── Facturas Electrónicas ARCA ───────────────────────────────────────────────
 
   // Diagnóstico WSAA — solo para admin, eliminar en producción estable

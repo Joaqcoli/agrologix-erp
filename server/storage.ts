@@ -2786,8 +2786,9 @@ export const storage = {
   },
 
   // Últimas compras de un producto SIN precios (para la vista galpón)
-  async getGalponProductPurchaseHistory(productId: number, limit = 10): Promise<{ purchaseDate: Date; supplierName: string; purchaseQty: string | null; purchaseUnit: string | null; weightPerPackage: string | null; quantity: string }[]> {
+  async getGalponProductPurchaseHistory(productId: number, limit = 10): Promise<{ itemId: number; purchaseDate: Date; supplierName: string; purchaseQty: string | null; purchaseUnit: string | null; weightPerPackage: string | null; quantity: string }[]> {
     return db.select({
+      itemId: purchaseItems.id,
       purchaseDate: purchases.purchaseDate,
       supplierName: purchases.supplierName,
       purchaseQty: purchaseItems.purchaseQty,
@@ -2800,6 +2801,68 @@ export const storage = {
       .where(eq(purchaseItems.productId, productId))
       .orderBy(desc(purchases.purchaseDate), desc(purchases.id))
       .limit(limit);
+  },
+
+  // Corregir el peso por envase (weight_per_package) de UNA línea de compra.
+  // Enfoque TARGETED y seguro (NO usa updatePurchase, que tiene el bug de piso-en-0 al
+  // revertir y además cambia el id del item): aplica el DELTA exacto de stock, recalcula
+  // el costo por kg de esa línea (precio del envase fijo) y recomputa el costo del producto
+  // (FIFO). Mantiene el mismo id de la línea. SOLO toca el peso, nada de precios/cantidades.
+  async galponSetPurchaseItemWeight(itemId: number, newWeight: number): Promise<{ ok: true; weightPerPackage: number }> {
+    if (!(newWeight > 0)) throw new Error("Peso inválido");
+    return db.transaction(async (tx) => {
+      const [item] = await tx.select().from(purchaseItems).where(eq(purchaseItems.id, itemId)).for('update').limit(1);
+      if (!item) throw new Error("Línea de compra no encontrada");
+      if (!item.purchaseUnit || item.purchaseQty == null) throw new Error("Esta línea no es por envase (cajón/bolsa); no tiene peso por envase");
+
+      // Lock del producto para serializar con compras/aprobaciones concurrentes
+      await tx.select({ id: products.id }).from(products).where(eq(products.id, item.productId)).for('update').limit(1);
+
+      const pq = parseFloat(item.purchaseQty as string);
+      const oldQty = parseFloat(item.quantity as string);
+      // Precio del envase (cost_per_purchase_unit) NO cambia. Si faltara, se deriva.
+      const cpp = item.costPerPurchaseUnit != null
+        ? parseFloat(item.costPerPurchaseUnit as string)
+        : parseFloat(item.costPerUnit as string) * parseFloat((item.weightPerPackage as string) ?? "0");
+      const newQty = pq * newWeight;
+      const newCost = cpp / newWeight;
+      const deltaQty = newQty - oldQty;
+      const canonicalUnit = dbEnumToCanonical(item.unit as any);
+
+      // 1) La línea de compra (mismo id)
+      await tx.update(purchaseItems).set({
+        quantity: newQty.toFixed(4),
+        costPerUnit: newCost.toFixed(4),
+        weightPerPackage: newWeight.toFixed(4),
+        costPerPurchaseUnit: cpp.toFixed(2),
+        // subtotal = cpp × purchase_qty → no cambia
+      }).where(eq(purchaseItems.id, itemId));
+
+      // 2) Movimiento de stock de esa compra (auditoría + consistencia con "Recalcular Costos")
+      await tx.update(stockMovements).set({
+        quantity: newQty.toFixed(4),
+        unitCost: newCost.toFixed(4),
+      }).where(and(
+        eq(stockMovements.referenceType, "purchase"),
+        eq(stockMovements.referenceId, item.purchaseId),
+        eq(stockMovements.productId, item.productId),
+      ));
+
+      // 3) Stock actual: aplicar SOLO el delta (cada envase pesa newWeight-oldWeight menos)
+      const [pu] = await tx.select().from(productUnits)
+        .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
+        .for('update').limit(1);
+      if (pu) {
+        const ns = Math.max(0, parseFloat(pu.stockQty as string) + deltaQty);
+        await tx.update(productUnits).set({ stockQty: ns.toFixed(4) }).where(eq(productUnits.id, pu.id));
+      }
+
+      // 4) Recomputar resumen + costo del producto (FIFO sobre compras recientes que cubren el stock)
+      await this._recalcProductSummary(item.productId, tx);
+      await this._recomputeCostFromStock(item.productId, tx);
+
+      return { ok: true, weightPerPackage: newWeight };
+    });
   },
 
   // ── Helper: peso por envase para CAJON/BOLSA/BANDEJA ─────────────────────────
