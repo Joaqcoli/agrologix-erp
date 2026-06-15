@@ -5,7 +5,7 @@ export type AuthUser = {
   id: number;
   name: string;
   email: string;
-  role: "admin" | "operator" | "vendedor";
+  role: "admin" | "operator" | "vendedor" | "galpon";
   active: boolean;
   createdAt: string;
 };
@@ -43,7 +43,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     const data = await r.json();
     setUser(data.user);
-    setLocation(data.user.role === "vendedor" ? "/vendedor/dashboard" : "/");
+    const home = data.user.role === "vendedor" ? "/vendedor/dashboard"
+      : data.user.role === "galpon" ? "/galpon/stock"
+      : "/";
+    setLocation(home);
   };
 
   const logout = async () => {

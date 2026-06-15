@@ -48,11 +48,15 @@ import VendedorDashboard from "@/pages/vendedor/dashboard";
 import VendedorOrders from "@/pages/vendedor/orders";
 import VendedorOrderDetail from "@/pages/vendedor/order-detail";
 import VendedorCustomers from "@/pages/vendedor/customers";
+import GalponStock from "@/pages/galpon/stock";
+import GalponOrders from "@/pages/galpon/orders";
+import GalponAjustes from "@/pages/galpon/ajustes";
 import NotFound from "@/pages/not-found";
 
 function RootPage() {
   const { user } = useAuth();
   if (user?.role === "vendedor") return <Redirect to="/vendedor/dashboard" />;
+  if (user?.role === "galpon") return <Redirect to="/galpon/stock" />;
   return <DashboardPage />;
 }
 
@@ -111,6 +115,9 @@ function Router() {
         {(params) => <VendedorOrderDetail id={Number(params.id)} />}
       </Route>
       <Route path="/vendedor/customers" component={VendedorCustomers} />
+      <Route path="/galpon/stock" component={GalponStock} />
+      <Route path="/galpon/orders" component={GalponOrders} />
+      <Route path="/galpon/ajustes" component={GalponAjustes} />
       <Route component={NotFound} />
     </Switch>
   );

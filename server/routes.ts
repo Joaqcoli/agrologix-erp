@@ -48,6 +48,16 @@ function requireVendedor(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+// Encargado de galpón: solo galpon + admin. Los endpoints /api/galpon/* (próximos bloques)
+// NUNCA deben devolver precios de venta, costos de venta ni márgenes.
+function requireGalpon(req: Request, res: Response, next: NextFunction) {
+  if (!req.session.userId) return res.status(401).json({ error: "Not authenticated" });
+  if (req.session.userRole !== "galpon" && req.session.userRole !== "admin") {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  next();
+}
+
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
 
   // ─── Auth ──────────────────────────────────────────────────────────────────
