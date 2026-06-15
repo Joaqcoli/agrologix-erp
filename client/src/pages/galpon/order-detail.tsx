@@ -17,7 +17,7 @@ const UNITS = ["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"];
 
 type Item = { id: number; productId: number | null; productName: string | null; quantity: string; unit: string };
 type GalponOrder = {
-  id: number; folio: string; orderDate: string; status: string; notes: string | null;
+  id: number; folio: string; remitoNum: number | null; orderDate: string; status: string; notes: string | null;
   galponConfirmed: boolean; customerName: string; address: string | null; city: string | null;
   phone: string | null; createdByName: string | null; items: Item[];
 };
@@ -63,7 +63,7 @@ export default function GalponOrderDetail({ id }: { id: number }) {
   const printRemito = () => {
     if (!order) return;
     generateRemitoPDF({
-      folio: order.folio,
+      folio: order.remitoNum != null ? String(order.remitoNum) : order.folio,
       issuedAt: new Date(),
       order: {
         folio: order.folio,
@@ -87,7 +87,7 @@ export default function GalponOrderDetail({ id }: { id: number }) {
   const isDraft = order.status === "draft";
 
   return (
-    <GalponLayout title={`Pedido ${order.folio}`}>
+    <GalponLayout title={order.remitoNum != null ? `Remito N° ${order.remitoNum}` : `Pedido ${order.folio}`}>
       <div className="p-6 max-w-3xl mx-auto space-y-4">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => setLocation("/galpon/orders")}><ArrowLeft className="h-4 w-4" /></Button>
@@ -96,7 +96,7 @@ export default function GalponOrderDetail({ id }: { id: number }) {
               <h2 className="text-lg font-semibold text-foreground">{order.customerName}</h2>
               {order.galponConfirmed && <Badge className="bg-blue-100 text-blue-700 border-blue-300"><CheckCircle2 className="h-3 w-3 mr-1" /> Confirmado</Badge>}
             </div>
-            <p className="text-xs text-muted-foreground">{order.folio}{order.createdByName ? ` · Pedido por: ${order.createdByName}` : ""}</p>
+            <p className="text-xs text-muted-foreground">{order.remitoNum != null ? `Remito N° ${order.remitoNum}` : order.folio}{order.createdByName ? ` · Pedido por: ${order.createdByName}` : ""}</p>
           </div>
         </div>
 

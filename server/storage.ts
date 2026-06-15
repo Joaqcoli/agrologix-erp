@@ -2918,7 +2918,7 @@ export const storage = {
   async getGalponOrders(date?: string): Promise<any[]> {
     const dateCond = date ? drizzleSql`WHERE o.order_date::date = ${date}::date` : drizzleSql``;
     const rows: any = await db.execute(drizzleSql`
-      SELECT o.id, o.folio, o.order_date AS "orderDate", o.status,
+      SELECT o.id, o.folio, o.remito_num AS "remitoNum", o.order_date AS "orderDate", o.status,
              o.galpon_confirmed AS "galponConfirmed",
              c.name AS "customerName",
              u.name AS "createdByName",
@@ -2934,7 +2934,7 @@ export const storage = {
 
   async getGalponOrder(id: number): Promise<any | undefined> {
     const ordRes: any = await db.execute(drizzleSql`
-      SELECT o.id, o.folio, o.order_date AS "orderDate", o.status, o.notes,
+      SELECT o.id, o.folio, o.remito_num AS "remitoNum", o.order_date AS "orderDate", o.status, o.notes,
              o.galpon_confirmed AS "galponConfirmed",
              c.name AS "customerName", c.address, c.city, c.phone,
              u.name AS "createdByName"

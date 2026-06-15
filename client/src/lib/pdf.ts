@@ -1212,10 +1212,15 @@ export function generateArmadoPDF(orders: ArmadoOrder[], dateLabel: string) {
   doc.text(`HOJA DE ARMADO — ${dateLabel}`, pageW / 2, margin, { align: "center" });
   let y = margin + 8;
 
+  const bottom = pageH - margin;
   for (const ord of orders) {
-    const blockH = 11 + ord.items.length * lineH + 5;
-    // Si el bloque entero no entra, ir a hoja nueva (pero si el pedido es enorme, igual fluye y parte)
-    if (y > margin + 8 && y + Math.min(blockH, 60) > pageH - margin) {
+    // Alto COMPLETO del pedido (separador + header + encabezados + ítems + espacio)
+    const fullBlockH = 5 + 5 + 5.5 + ord.items.length * lineH + 5;
+    const fitsOnEmptyPage = fullBlockH <= bottom - margin;
+    // Si el pedido NO entra completo en lo que queda de la hoja, y sí entra en una hoja
+    // vacía → arrancar en hoja nueva. Así nunca se parte un mismo pedido entre dos hojas.
+    // (Si el pedido es tan grande que no entra ni en una hoja vacía, se deja fluir/partir.)
+    if (y > margin + 8 && y + fullBlockH > bottom && fitsOnEmptyPage) {
       doc.addPage();
       y = margin;
     }

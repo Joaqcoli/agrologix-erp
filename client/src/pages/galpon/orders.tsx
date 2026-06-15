@@ -12,9 +12,12 @@ import { Printer, ChevronRight, CheckCircle2, FileText } from "lucide-react";
 
 // Sin precios: esta vista nunca muestra ni recibe total/costo/margen.
 type GalponOrderRow = {
-  id: number; folio: string; customerName: string; createdByName: string | null;
+  id: number; folio: string; remitoNum: number | null; customerName: string; createdByName: string | null;
   orderDate: string; status: "draft" | "approved" | "cancelled"; itemCount: number; galponConfirmed: boolean;
 };
+
+const remitoLabel = (o: { remitoNum: number | null; folio: string }) =>
+  o.remitoNum != null ? `Remito N° ${o.remitoNum}` : o.folio;
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   draft:     { label: "Borrador", cls: "bg-muted text-muted-foreground" },
@@ -44,7 +47,7 @@ export default function GalponOrders() {
         orders.map((o) => fetch(`/api/galpon/orders/${o.id}`, { credentials: "include" }).then((r) => r.json()))
       );
       generateArmadoPDF(
-        details.map((d: any) => ({ folio: d.folio, customerName: d.customerName, createdByName: d.createdByName, items: d.items })),
+        details.map((d: any) => ({ folio: remitoLabel(d), customerName: d.customerName, createdByName: d.createdByName, items: d.items })),
         dateLabel,
       );
     } finally { setPrinting(false); }
@@ -90,7 +93,7 @@ export default function GalponOrders() {
                         )}
                       </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {o.folio} · {hora} · {o.itemCount} ítem{o.itemCount !== 1 ? "s" : ""}
+                        {remitoLabel(o)} · {hora} · {o.itemCount} ítem{o.itemCount !== 1 ? "s" : ""}
                         {o.createdByName ? ` · ${o.createdByName}` : ""}
                       </p>
                     </div>
