@@ -90,3 +90,17 @@ Unificar los dos default-deny (galpon + vendedor) en un solo middleware con un m
 **Sobre etapas:** con default-deny **no hace falta etapas para el vendedor** — es un solo middleware que cierra todo de una. El `operator` es una **decisión aparte** (definir si se limita y con qué lista blanca).
 
 **Solo lectura. Nada tocado.**
+
+---
+
+## 8. ✅ APLICADO (2026-06-15, commit `9bd25f3`) — enfoque (c)
+
+- **`ROLE_API_WHITELIST` + `isApiAllowedForRole`** (exportadas, `server/routes.ts`): tabla central rol→whitelist con default-deny. Reemplazó el bloque específico del galpón.
+  - `galpon` → `/api/galpon/` + `/api/auth/` (sin cambio de comportamiento, solo migrado).
+  - `vendedor` → `/api/vendedor/` + `/api/auth/` (**NUEVO** — cierra M1).
+  - `admin` → sin entrada = acceso total.
+- **Cuenta `operator` desactivada** (`users.active=false`); el login ya rechaza inactivos. No se borró (preserva FKs; tenía 0 registros propios).
+
+**Verificado:** vendedor→`/api/caja|products|ap` = 403; vendedor→`/api/vendedor/*` + `/api/auth/me` = 200; galpón igual que antes (caja 403, galpon/stock 200); admin = 200 a todo; login de operator rechazado; **0 de los 8 endpoints del vendedor y 10 del galpón quedaron bloqueados**.
+
+**Pendiente / decisión aparte:** si en el futuro se reactiva o usa un rol `operator`, definir su lista blanca en `ROLE_API_WHITELIST` (hoy no tiene entrada = acceso total si lograra loguearse, pero está desactivado). Caveat menor: una sesión `operator` ya abierta no se corta sola (el chequeo de `active` es solo en login); la cuenta estaba sin uso.
