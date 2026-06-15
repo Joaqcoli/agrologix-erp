@@ -117,3 +117,79 @@ El bug vive en la PHASE 1 de `updatePurchase` (`storage.ts`), que floorea en 0 e
 5. **M4 (overrides):** riesgo bajo. Solo limpiar los 19 redundantes (cosmético). Los genuinos son históricos y se dejan.
 
 **Nada de esto está decidido ni aplicado.** Es el análisis para elegir el camino.
+
+---
+
+# Fase 3 · Paso 4 — Diagnóstico: costos guardados vs FIFO actual (solo lectura, 2026-06-15)
+
+> Estado de la hoja de ruta: ✅ modelo FIFO adoptado · ✅ botón "Recalcular Costos" eliminado · ✅ C3 floor bug arreglado · ✅ M4 (19 redundantes) limpiados. Este paso **diagnostica** los costos guardados que quedaron desactualizados respecto del FIFO. **No se recalculó ni tocó nada.**
+
+## 8. Magnitud del desfasaje
+
+Repliqué `_recomputeCostFromStock` (el FIFO oficial) **en memoria, sin escribir**, para cada producto con stock, y lo comparé contra el `avg_cost` guardado de la fila base.
+
+- **Productos con stock evaluados: 52**
+- **Sin compras que matcheen (FIFO no calcula → preserva costo): 0** → todos tienen FIFO computable.
+- **Difieren (> $0,50): 11** (los otros 41 ya están sincronizados).
+  - **> 10%: 2** · **5–10%: 3** · **1–5%: 6** · **< 1%: 0**
+  - **Desfasaje % mediano: 4,88%** · **Peor caso: +61,7% (PUERRO)**
+
+→ No son "centavos" pero tampoco un descalabro: 9 de 11 están bajo 10%, y el grueso es ~5%. El único grande (PUERRO) es un caso de poco stock + un dato sospechoso (ver abajo).
+
+## 9. Tabla completa de los 11 que difieren (por % desc)
+
+| Producto | Unidad | Stock | Guardado | FIFO | Δ $ | Δ % | Causa |
+|---|---|---|---|---|---|---|---|
+| PUERRO | KG | 7,3 | $1.361 | $2.200 | +$839 | **+61,7%** | vendido-abajo + dato sospechoso ($230 en OC-00368) |
+| PEPINO | KG | 5,3 | $1.750 | $1.571 | −$179 | −10,2% | vendido-abajo |
+| TOMATE PERITA | KG | 22 | $1.719 | $1.600 | −$119 | −6,9% | **artefacto de test (bloque 2b)** |
+| LECHUGA MORADA | KG | 0,5 | $2.407 | $2.250 | −$157 | −6,5% | vendido-abajo (stock 0,5 → impacto $ nulo) |
+| MORRON VERDE | KG | 10 | $2.136 | $2.250 | +$114 | +5,3% | vendido-abajo |
+| COLIFLOR | UNIDAD | 10 | $1.367 | $1.300 | −$67 | −4,9% | vendido-abajo |
+| PALTA HASS BRASIL | UNIDAD | 62 | $635 | $661 | +$26 | +4,1% | **artefacto de test (Paso 2 C3)** |
+| POMELO | KG | 36,5 | $793 | $824 | +$31 | +3,9% | vendido-abajo |
+| ALBAHACA | ATADO | 19 | $639 | $625 | −$14 | −2,2% | vendido-abajo |
+| KIWI | KG | 7,5 | $6.273 | $6.400 | +$127 | +2,0% | vendido-abajo |
+| RUCULA | ATADO | 126 | $472 | $480 | +$8 | +1,7% | vendido-abajo |
+
+## 10. ¿Por qué se desfasaron? (causa raíz)
+
+**Causa dominante (9 de 11): "vendido-abajo" — un desfasaje ESTRUCTURAL, no un bug.**
+`_recomputeCostFromStock` solo corre al **crear/editar compra** y al **editar peso del galpón** — NO corre al **vender** (aprobar pedido descuenta stock pero no recalcula el costo). El FIFO es "lo que pagué por el stock que tengo HOY": cuando un producto se vende por debajo de su última compra, la ventana FIFO se achica a los lotes más recientes y el costo FIFO cambia, pero el guardado quedó **congelado en el valor del día de la última compra**.
+- Ej. PUERRO: última compra OC-00374 (12/06) 10 KG @ $2.200. Ese día el FIFO mezcló ese lote con otros más baratos → guardó $1.361. Después se vendió hasta 7,3 KG (todos del lote @ $2.200) → el FIFO de hoy es $2.200, pero nadie volvió a recalcular porque no hubo otra compra de puerro. (Además OC-00368 tiene **10 KG @ $230**, que parece un **error de carga** —debería ser ~$2.300— y arrastró hacia abajo el guardado viejo.)
+- Mismo patrón en PEPINO, MORRON, COLIFLOR, POMELO, LECHUGA, ALBAHACA, KIWI, RUCULA: stock por debajo de la última compra → FIFO de hoy ≈ precio del último lote ≠ guardado del día de compra.
+
+**Causa secundaria (2 de 11): artefactos de mis tests con apply+restore.**
+- **TOMATE PERITA** ($1.719 vs $1.600) y **PALTA HASS BRASIL** ($635 vs $661): en los tests del bloque 2b y del Paso 2 (C3) restauré el `avg_cost` al valor **viejo** para "dejar producción igual que como la encontré". Ese valor viejo era justamente un costo stale → ahora figuran como desfasados. Honestidad: en parte yo los dejé así a propósito (para no alterar nada durante un test), pero el valor "correcto" según el modelo es el FIFO.
+
+**Floor bug (C3) como causa: 0 casos visibles.** El floor bug inflaba `stock_qty` (no el costo directo). En el set actual ningún desfasaje se explica por stock inflado; se explican por ventana-vendida-abajo. Y el bug ya está arreglado para adelante.
+
+**Dato de calidad a revisar aparte (no es del costo):** PUERRO OC-00368 `10 KG @ $230` huele a typo (faltó un dígito). PALTA tiene una fila base muerta KG con `$3.750` (compra OC-00352 de 8 KG, stock 0) que el FIFO ignora (la base viva es UNIDAD). Ninguno impide recalcular; son a chequear por separado.
+
+## 11. ¿Recalcular al FIFO es seguro? — Sí, es "ponerlo al día", no "cambiar de modelo"
+
+- Recalcular = correr `_recomputeCostFromStock` para estos productos → deja el guardado **exactamente** en lo que el sistema ya considera correcto y ya calcula en cada compra. No es un modelo nuevo.
+- **Los 11 tienen FIFO computable** (nocalc = 0) → todos se actualizarían limpio, sin casos "raros sin dato".
+- **No afecta los overrides genuinos:** esos viven en `order_items.override_cost_per_unit` (márgenes congelados de pedidos aprobados). Recalcular `product_units.avg_cost` / `products.average_cost` **no toca** los order_items ni sus márgenes históricos. Riesgo ahí: nulo.
+- Único cuidado: PUERRO quedaría en $2.200 (FIFO limpio del lote actual), pero si se sigue vendiendo y la ventana llega al typo de $230, el FIFO bajaría → conviene **corregir el typo** antes o después, pero no bloquea el recalc.
+
+## 12. Esto NO es revivir la bomba del botón — son cosas distintas
+
+| | Botón viejo "Recalcular Costos" (ELIMINADO) | Recalcular al FIFO (lo de acá) |
+|---|---|---|
+| Modelo | **WMA** (promedio perpetuo) | **FIFO** (el oficial, ya en uso) |
+| Fuente de datos | `stock_movements` (ledger **roto**, mezcla kg+bultos) | `purchase_items` + `stock_qty` (fuente limpia) |
+| Cuántos cambiaban | **94% (50/53)** | **21% (11/52)** |
+| Magnitud | ±230%, ±29% típico | mediana ~5%, peor 62% (un outlier de poco stock) |
+| Efecto | **cambiaba el modelo** → corrompía | **alinea** al modelo ya vigente |
+
+La bomba era peligrosa porque (a) usaba otro modelo, (b) leía un ledger roto, (c) movía casi todo el catálogo drásticamente. Recalcular-al-FIFO es lo opuesto en los tres ejes. **No es la bomba.** Si algún día se hace un "resincronizar todo", debe llamar a `_recomputeCostFromStock` (FIFO), **nunca** recrear un camino WMA-desde-ledger.
+
+## 13. Opciones para decidir juntos (nada aplicado aún)
+
+1. **Resincronizar los 11** corriendo `_recomputeCostFromStock` por producto (los 41 sincronizados no cambian). Bajo riesgo, trae todo al modelo oficial.
+2. **Resincronizar solo los 2 artefactos de test** (TOMATE PERITA, PALTA) y dejar el resto, asumiendo que la próxima compra de cada producto los realinea sola.
+3. **Dejarlo** — el desfasaje se autocorrige en la próxima compra de cada producto (cuando vuelve a correr el FIFO). El costo solo se usa para márgenes de pedidos NUEVOS; los aprobados ya tienen su costo congelado.
+4. **(Estructural, aparte)** evaluar correr `_recomputeCostFromStock` también **al aprobar pedido** (no solo en compras) para que el costo no se quede atrás cuando se vende-abajo. Es un cambio de código, a decidir por separado.
+
+**Solo lectura. Nada recalculado ni tocado.**
