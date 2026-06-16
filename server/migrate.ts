@@ -289,6 +289,9 @@ export async function runMigrations() {
   await db.execute(sql`ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS purchase_unit unit`);
   await db.execute(sql`ALTER TABLE purchase_items ADD COLUMN IF NOT EXISTS weight_per_package NUMERIC(12,4)`);
 
+  // ─── stock_movements: quién generó el movimiento (ajustes) ──────────────────
+  await db.execute(sql`ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS created_by INTEGER`);
+
   // ─── product_units: base unit tracking for composite unit model ──────────────
   await db.execute(sql`ALTER TABLE product_units ADD COLUMN IF NOT EXISTS weight_per_unit NUMERIC(10,4) DEFAULT 0`);
   await db.execute(sql`ALTER TABLE product_units ADD COLUMN IF NOT EXISTS base_unit TEXT`);

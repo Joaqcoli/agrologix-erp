@@ -121,6 +121,7 @@ export const stockMovements = pgTable("stock_movements", {
   referenceId: integer("reference_id"),
   referenceType: text("reference_type"),
   notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id), // quién generó el movimiento (ajustes); null = histórico/desconocido
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 

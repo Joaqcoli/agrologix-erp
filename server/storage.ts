@@ -1051,10 +1051,13 @@ export const storage = {
         sm.quantity::text AS quantity,
         COALESCE(pu.avg_cost, p.average_cost)::text AS "avgCost",
         sm.notes,
+        sm.created_by AS "createdBy",
+        u.name AS "createdByName",
         sm.created_at::text AS "createdAt"
       FROM stock_movements sm
       JOIN products p ON p.id = sm.product_id
       LEFT JOIN product_units pu ON pu.id = sm.reference_id
+      LEFT JOIN users u ON u.id = sm.created_by
       WHERE sm.reference_type = 'adjustment'
       ORDER BY sm.created_at DESC
       LIMIT 1000
@@ -2100,6 +2103,7 @@ export const storage = {
               referenceId: id,
               referenceType: "order",
               notes: `Rinde — Pedido ${order.folio}`,
+              createdBy: userId,
             });
           }
         } else if (decision === "prorate") {
@@ -2144,6 +2148,7 @@ export const storage = {
             referenceId: id,
             referenceType: "order",
             notes: movementNotes,
+            createdBy: userId,
           });
         }
 
@@ -2599,7 +2604,7 @@ export const storage = {
   // Revierte (total o parcial) un ajuste de Merma/Rinde, limitado a hoy/ayer.
   // Atómico. No toca fórmulas: reduce/marca el movimiento original (los totales se recalculan en vivo)
   // y corrige el stock guardado (product_units + products). Registra un movimiento de auditoría neutro.
-  async revertStockAdjustment(movementId: number, qtyToRevert: number): Promise<{ ok: boolean }> {
+  async revertStockAdjustment(movementId: number, qtyToRevert: number, userId?: number): Promise<{ ok: boolean }> {
     return db.transaction(async (tx) => {
       const [mv] = await tx.select().from(stockMovements)
         .where(and(eq(stockMovements.id, movementId), eq(stockMovements.referenceType, "adjustment")))
@@ -2656,6 +2661,7 @@ export const storage = {
         referenceType: "adjustment",
         referenceId: puId,
         notes: `Reversión — ${prod?.name ?? ""} (${qty.toFixed(2)} de ${origQty.toFixed(2)})`,
+        createdBy: userId ?? null,
       });
 
       return { ok: true };
@@ -2883,7 +2889,7 @@ export const storage = {
   // revertir y además cambia el id del item): aplica el DELTA exacto de stock, recalcula
   // el costo por kg de esa línea (precio del envase fijo) y recomputa el costo del producto
   // (FIFO). Mantiene el mismo id de la línea. SOLO toca el peso, nada de precios/cantidades.
-  async galponSetPurchaseItemWeight(itemId: number, newWeight: number): Promise<{ ok: true; weightPerPackage: number }> {
+  async galponSetPurchaseItemWeight(itemId: number, newWeight: number, userId?: number): Promise<{ ok: true; weightPerPackage: number }> {
     if (!(newWeight > 0)) throw new Error("Peso inválido");
     return db.transaction(async (tx) => {
       const [item] = await tx.select().from(purchaseItems).where(eq(purchaseItems.id, itemId)).for('update').limit(1);
@@ -2956,6 +2962,23 @@ export const storage = {
       //    recomputar el peso por envase (independiente del costo). NO se pisa con FIFO.
       await this._recalcProductSummary(item.productId, tx);
       await this._recomputeWeightPerUnitFromStock(item.productId, tx);
+
+      // 5) Movimiento de AUDITORÍA (solo RASTRO; NO mueve stock ni costo — eso ya lo hizo el
+      //    targeted via product_units arriba). Es un registro para el historial de ajustes.
+      //    Como el stock/costo salen de product_units (no de sumar movimientos), insertar este
+      //    log NO genera doble descuento ni recalcula nada.
+      const [prodRow] = await tx.select({ name: products.name }).from(products).where(eq(products.id, item.productId)).limit(1);
+      const oldWeight = parseFloat(item.weightPerPackage as string ?? "0");
+      await tx.insert(stockMovements).values({
+        productId: item.productId,
+        movementType: deltaQty < 0 ? "out" : "in",
+        quantity: Math.abs(deltaQty).toFixed(4),
+        unitCost: newCost.toFixed(4),
+        referenceType: "adjustment",
+        referenceId: pu?.id ?? null,
+        notes: `Ajuste peso galpón: ${prodRow?.name ?? ""} ${item.purchaseUnit} ${oldWeight}→${newWeight}kg (Δ ${deltaQty >= 0 ? "+" : ""}${deltaQty.toFixed(2)} kg)`,
+        createdBy: userId ?? null,
+      });
 
       return { ok: true, weightPerPackage: newWeight };
     });
@@ -3135,6 +3158,7 @@ export const storage = {
   async setStockAdjustments(
     items: { productId: number; unit: string; qty: number }[],
     mode: "merma_rinde" | "correction",
+    userId?: number,
   ): Promise<void> {
     const PACKAGE_UNITS = new Set(['CAJON', 'BOLSA', 'BANDEJA']);
 
@@ -3234,6 +3258,7 @@ export const storage = {
           referenceType: "adjustment",
           referenceId: r.puId,
           notes: diff < 0 ? "Merma" : "Rinde",
+          createdBy: userId ?? null,
         });
       }
 
@@ -3263,6 +3288,7 @@ export const storage = {
           referenceType: "adjustment",
           referenceId: pu.id,
           notes: "Merma",
+          createdBy: userId ?? null,
         });
       }
       await db.update(productUnits).set({ stockQty: "0.0000", isActive: false }).where(eq(productUnits.id, pu.id));

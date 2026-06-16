@@ -470,7 +470,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/stock-movements/:id/revert", requireAuth, async (req, res) => {
     try {
       const { qty } = z.object({ qty: z.number().positive() }).parse(req.body);
-      const result = await storage.revertStockAdjustment(Number(req.params.id), qty);
+      const result = await storage.revertStockAdjustment(Number(req.params.id), qty, req.session.userId);
       return res.json(result);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
@@ -500,7 +500,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         })).min(1),
         mode: z.enum(["merma_rinde", "correction"]),
       }).parse(req.body);
-      await storage.setStockAdjustments(items, mode);
+      await storage.setStockAdjustments(items, mode, req.session.userId);
       return res.json({ ok: true });
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
@@ -1877,7 +1877,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const weight = parseFloat(req.body?.weightPerPackage);
       if (!(weight > 0)) return res.status(400).json({ error: "Peso inválido" });
-      const result = await storage.galponSetPurchaseItemWeight(Number(req.params.id), weight);
+      const result = await storage.galponSetPurchaseItemWeight(Number(req.params.id), weight, req.session.userId);
       return res.json(result);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
