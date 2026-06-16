@@ -27,6 +27,7 @@ import {
   Receipt,
   Banknote,
   Landmark,
+  Scale,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +42,7 @@ const navItems = [
   { title: "Productos", url: "/products", icon: Package },
   { title: "Compras", url: "/purchases", icon: ShoppingCart },
   { title: "Stock", url: "/stock", icon: Warehouse },
+  { title: "Ajustes de Stock", url: "/ajustes-stock", icon: Scale },
   { title: "Pedidos", url: "/orders", icon: FileText },
   { title: "Facturas", url: "/invoices", icon: Receipt },
   { title: "Caja", url: "/caja", icon: Banknote },

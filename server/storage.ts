@@ -1059,10 +1059,116 @@ export const storage = {
       LEFT JOIN product_units pu ON pu.id = sm.reference_id
       LEFT JOIN users u ON u.id = sm.created_by
       WHERE sm.reference_type = 'adjustment'
+        AND sm.notes NOT ILIKE 'Ajuste peso galpón%'  -- los de peso van en la vista unificada (reference_id = purchase_item)
       ORDER BY sm.created_at DESC
       LIMIT 1000
     `);
     return rows.rows as any[];
+  },
+
+  // ─── Vista unificada de Ajustes de stock (pre-venta + post-venta) ────────────
+  // Consolida desde stock_movements: ajuste de peso del galpón (pre), merma/rinde
+  // (manual + de pedidos, post), correcciones. SOLO LECTURA (no recalcula nada).
+  // includeMoney=false → versión galpón (sin unitCost/value).
+  async getStockAdjustments(includeMoney = true): Promise<any[]> {
+    const res: any = await db.execute(drizzleSql`
+      SELECT
+        sm.id,
+        sm.created_at::text AS created_at,
+        sm.product_id,
+        p.name AS product_name,
+        COALESCE(p.category, 'Sin categoría') AS category,
+        COALESCE(p.unit::text, 'KG') AS unit,
+        sm.movement_type,
+        sm.quantity::float AS quantity,
+        sm.unit_cost::float AS unit_cost,
+        sm.reference_type,
+        sm.reference_id,
+        sm.notes,
+        sm.created_by,
+        u.name AS created_by_name
+      FROM stock_movements sm
+      JOIN products p ON p.id = sm.product_id
+      LEFT JOIN users u ON u.id = sm.created_by
+      WHERE (
+              sm.reference_type = 'adjustment'
+              OR (sm.reference_type = 'order' AND sm.notes ILIKE '%Rinde%')
+            )
+        AND sm.notes NOT ILIKE 'Reversión%'
+        AND COALESCE(sm.notes,'') <> 'REVERTIDO'
+      ORDER BY sm.created_at DESC
+      LIMIT 2000
+    `);
+    const rows = (res.rows ?? res) as any[];
+    const today = new Date(); const yest = new Date(Date.now() - 86400000);
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    const todayISO = iso(today), yestISO = iso(yest);
+
+    return rows.map((r) => {
+      const notes: string = r.notes ?? "";
+      const rt: string = r.reference_type;
+      // Clasificación del tipo
+      let tipo = "correccion", label = "Ajuste", section = "post", revert: string | null = null;
+      if (/^Ajuste peso galpón/i.test(notes)) { tipo = "ajuste_peso"; label = "Ajuste de peso"; section = "pre"; revert = notes.includes("(deshecho)") ? null : "galpon_weight"; }
+      else if (notes === "Merma") { tipo = "merma"; label = "Merma"; section = "post"; revert = "merma_rinde"; }
+      else if (notes === "Rinde") { tipo = "rinde"; label = "Rinde"; section = "post"; revert = "merma_rinde"; }
+      else if (rt === "order" && /Rinde/i.test(notes)) { tipo = "rinde_pedido"; label = "Rinde (pedido)"; section = "post"; revert = null; }
+
+      const qty = Number(r.quantity) || 0;
+      const sign = r.movement_type === "out" ? -1 : 1; // out = perdido, in = ganado/apareció
+      const unitCost = r.unit_cost != null ? Number(r.unit_cost) : 0;
+      const value = sign * qty * unitCost; // ganado/perdido en $
+      const dateISO = (r.created_at ?? "").slice(0, 10);
+      const revertible = revert != null && (dateISO === todayISO || dateISO === yestISO);
+
+      const base: any = {
+        id: r.id,
+        createdAt: r.created_at,
+        productId: r.product_id,
+        productName: r.product_name,
+        category: r.category,
+        unit: r.unit,
+        movementType: r.movement_type,
+        quantity: qty,            // Δ en unidad base (siempre positivo; el signo va por movementType)
+        tipo, label, section,
+        createdBy: r.created_by ?? null,
+        createdByName: r.created_by_name ?? null,
+        revertKind: revertible ? revert : null,
+        revertible,
+        notes,
+      };
+      if (includeMoney) { base.unitCost = unitCost; base.value = value; }
+      return base;
+    });
+  },
+
+  // Deshacer un AJUSTE DE PESO del galpón: vuelve al peso anterior reusando el método
+  // targeted (galponSetPurchaseItemWeight). Límite hoy/ayer. Marca el original (deshecho).
+  async revertGalponWeightAdjustment(movementId: number, userId?: number): Promise<{ ok: true }> {
+    const [mv] = await db.select().from(stockMovements).where(eq(stockMovements.id, movementId)).limit(1);
+    if (!mv) throw new Error("Ajuste no encontrado");
+    const notes = mv.notes ?? "";
+    if (!/^Ajuste peso galpón/i.test(notes)) throw new Error("Este ajuste no es un ajuste de peso del galpón");
+    if (notes.includes("(deshecho)")) throw new Error("Este ajuste ya fue deshecho");
+    const d = (mv.createdAt as Date).toISOString().slice(0, 10);
+    const today = new Date().toISOString().slice(0, 10);
+    const yest = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    if (d !== today && d !== yest) throw new Error("Solo se pueden deshacer ajustes de hoy o ayer");
+
+    // Peso anterior: parsear "OLD→NEW" de las notas
+    const m = notes.match(/(\d+(?:[.,]\d+)?)\s*→/);
+    if (!m) throw new Error("No se pudo determinar el peso anterior");
+    const oldWeight = parseFloat(m[1].replace(",", "."));
+    if (!(oldWeight > 0)) throw new Error("Peso anterior inválido");
+
+    const purchaseItemId = mv.referenceId as number;
+    if (!purchaseItemId) throw new Error("No se pudo ubicar la línea de compra del ajuste");
+
+    // Volver al peso anterior (el targeted reajusta stock + costo WMA, mismo que validamos)
+    await this.galponSetPurchaseItemWeight(purchaseItemId, oldWeight, userId);
+    // Marcar el original como deshecho (oculta el botón; no se vuelve a deshacer)
+    await db.update(stockMovements).set({ notes: `${notes} (deshecho)` }).where(eq(stockMovements.id, movementId));
+    return { ok: true };
   },
 
   // Elementos extra del dashboard del vendedor — TODO filtrado por su salesperson_name (sus clientes/pedidos).
@@ -2975,7 +3081,7 @@ export const storage = {
         quantity: Math.abs(deltaQty).toFixed(4),
         unitCost: newCost.toFixed(4),
         referenceType: "adjustment",
-        referenceId: pu?.id ?? null,
+        referenceId: itemId, // purchase_item id → permite "deshacer" (volver al peso anterior)
         notes: `Ajuste peso galpón: ${prodRow?.name ?? ""} ${item.purchaseUnit} ${oldWeight}→${newWeight}kg (Δ ${deltaQty >= 0 ? "+" : ""}${deltaQty.toFixed(2)} kg)`,
         createdBy: userId ?? null,
       });

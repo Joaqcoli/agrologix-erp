@@ -35,6 +35,7 @@ import NewOrderPage from "@/pages/orders/new";
 import OrderDetailPage from "@/pages/orders/detail";
 import LoadListPage from "@/pages/load-list";
 import StockPage from "@/pages/stock";
+import AjustesStockPage from "@/pages/ajustes-stock";
 import IntakePage from "@/pages/intake";
 import CuentasCorrientesPage from "@/pages/cuentas-corrientes/index";
 import CCCustomerDetailPage from "@/pages/cuentas-corrientes/detail";
@@ -83,6 +84,7 @@ function Router() {
       </Route>
       <Route path="/load-list" component={LoadListPage} />
       <Route path="/stock" component={StockPage} />
+      <Route path="/ajustes-stock" component={AjustesStockPage} />
       <Route path="/intake" component={IntakePage} />
       <Route path="/cuentas-corrientes" component={CuentasCorrientesPage} />
       <Route path="/cuentas-corrientes/:id">

@@ -475,6 +475,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
+  // Vista unificada de ajustes de stock (admin, con plata)
+  app.get("/api/stock-adjustments", requireAuth, async (_req, res) => {
+    try {
+      return res.json(await storage.getStockAdjustments(true));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // Deshacer un ajuste de peso del galpón (vuelve al peso anterior; límite hoy/ayer)
+  app.post("/api/stock-adjustments/:id/revert-weight", requireAuth, async (req, res) => {
+    try {
+      const result = await storage.revertGalponWeightAdjustment(Number(req.params.id), req.session.userId);
+      return res.json(result);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   // ─── Stock Adjustments ─────────────────────────────────────────────────────
   app.post("/api/stock/adjust", requireAuth, async (req, res) => {
     try {
