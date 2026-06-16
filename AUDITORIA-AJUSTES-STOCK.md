@@ -90,3 +90,31 @@
 **Resumen:** construir es **menos de lo que parece** — la mayoría es consolidar consultas que ya existen. Lo nuevo concreto es: **(1) grabar el ajuste de peso del galpón** (imprescindible para la parte pre-venta), **(2) opcional `created_by`**, y **(3) opcional extender el revert** a esos tipos. La separación admin/galpón es la misma de siempre (con/sin plata, endpoint `/api/galpon/*`).
 
 **Solo lectura. Nada tocado.**
+
+---
+
+## 8. ✅ Parte 1 APLICADA (2026-06-16, commit `859bd2a`)
+
+- `galponSetPurchaseItemWeight` inserta un movimiento de **auditoría** ("Ajuste peso galpón: PRODUCTO ENVASE 17→16kg (Δ -X kg)", `reference_type='adjustment'`). **Solo rastro**: stock/costo los maneja el targeted via `product_units` (no se suman movimientos) → NO genera doble descuento ni recalcula. Verificado: stock/avg quedaron = WMA esperado, el audit no los movió.
+- `stock_movements.created_by` (int, nullable) — quién. Poblado en ajuste galpón, merma/rinde manual, reversión, y venta/rinde de approveOrder. Históricos = null. `getAdjustmentMovements` trae `created_by` + nombre. Verificado: galpón→"Encargado Galpón", merma→"Admin Sistema", históricos null no rompen nada.
+
+## 9. Parte 2 — Análisis: extender el "deshacer" (NO implementado)
+
+### (i) Deshacer un AJUSTE DE PESO del galpón — **complejidad BAJA-MEDIA, riesgo BAJO-MEDIO**
+- "Deshacer" = volver el peso al valor anterior. Eso **ya es** una edición de peso al revés → se puede reusar `galponSetPurchaseItemWeight(itemId, pesoViejo)` (el peso viejo está en las notas del audit "17→16", o se guarda aparte). El galpón **ya puede** hacerlo a mano desde "Últimas compras".
+- **No crashea**: el método ya maneja los bordes (conserva costo si `stock < oldQty`, floorea en 0). Es lo que probamos en los tests.
+- **Trampa (por eso no es "BAJO" puro):** el WMA es **path-dependiente**. Si entre el ajuste y el "deshacer" hubo compras/ventas del producto, volver el peso **re-mezcla desde el avg actual**, no restaura el avg exacto previo (mismo efecto "vendido-abajo" que ya vimos). El stock sí vuelve por el delta; el costo puede no volver clavado. El **límite hoy/ayer mitiga** (poco tiempo para que el stock se mueva).
+- **Veredicto:** factible y seguro (no rompe). Es casi plomería de UI: un botón "deshacer" que llama al edit-de-peso con el valor viejo. La única honestidad a aclararle al usuario: el costo puede quedar levemente distinto si el stock se movió en el medio.
+
+### (ii) Deshacer el RINDE DE PEDIDOS — **complejidad ALTA, riesgo ALTO**
+- El rinde de pedido se genera al **aprobar** un pedido con stock insuficiente: la mercadería "apareció" para cubrir una **venta que ya ocurrió** (cliente facturado, stock consumido). El movimiento es `reference_type='order'` (parte del ledger del pedido), no un ajuste suelto.
+- "Deshacer el rinde" en aislamiento **rompe la consistencia**: el pedido sigue aprobado/facturado/cobrado, pero el registro de stock cambiaría. La mercadería del rinde **ya se vendió** — no hay stock que "devolver".
+- Para revertirlo de verdad habría que **des-aprobar el pedido completo** (revertir venta + stock + cuenta corriente + costo + posible factura/NC) — una operación mucho más grande y acoplada.
+- **Veredicto:** NO conviene extender el revert a esto. Si un rinde quedó mal, lo correcto es **arreglar/des-aprobar el pedido**, no "revertir el movimiento de rinde" suelto.
+
+### Recomendación
+- **Sí** vale la pena el "deshacer" del **ajuste de peso del galpón** (bajo riesgo; el galpón ya puede editar el peso de vuelta — sería un botón que lo automatiza, con el aviso del costo path-dependiente). Mantener el **límite hoy/ayer**.
+- **No** extender el revert al **rinde de pedidos** por ahora (acoplado a la venta; pertenece a "editar/des-aprobar el pedido", no al historial de ajustes).
+- La merma/rinde **manual** seguir como está (ya revertible).
+
+**Parte 2: solo análisis. Reversión NO tocada.**
