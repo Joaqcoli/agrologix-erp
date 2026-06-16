@@ -2323,7 +2323,9 @@ export const storage = {
       const stockVal = parseFloat(pu.stockQty as string ?? "0");
       stockMap.set(`${pu.productId}-${canonUnit}`, stockVal);
       if (!["CAJON", "BOLSA", "BANDEJA"].includes(canonUnit)) {
-        baseStockMap.set(pu.productId, stockVal);
+        // Quedarse con la fila base de MÁS stock (evita que una fila vieja en 0 de otra
+        // unidad base pise la real). Coherente con la selección de approveOrder.
+        if (stockVal > (baseStockMap.get(pu.productId) ?? -Infinity)) baseStockMap.set(pu.productId, stockVal);
         const wpu = parseFloat(pu.weightPerUnit as string ?? "0");
         if (Number.isFinite(wpu) && wpu > 0) wpuMap.set(`${pu.productId}`, wpu);
       }
@@ -2378,35 +2380,74 @@ export const storage = {
       }
     }
 
-    // Consolidate by productId + unit
-    type Row = { productId: number; productName: string; category: string; unit: string; totalQty: number; stockQty: number; diffQty: number; customerSet: Set<number>; customerNames: string[]; allProductStock: Array<{ unit: string; qty: number }> };
-    const rowMap = new Map<string, Row>();
+    // ── Consolidación por PRODUCTO (fix doble conteo entre unidades) ───────────
+    // Toda la demanda del producto se lleva a unidad BASE (kg), se resta el stock UNA
+    // sola vez, y el faltante se expresa en la unidad de compra (envase si se pidió en
+    // envase; si no, la unidad base). El desglose por unidad queda informativo
+    // (demandByUnit). ANTES cada unidad se comparaba contra el stock ENTERO → el mismo
+    // stock se contaba N veces y escondía faltantes. Ver AUDITORIA-LISTA-CARGA.md.
+    const PACKAGE_UNITS = ["CAJON", "BOLSA", "BANDEJA"];
+    // wpu = unidades base por 1 unidad de pedido. Base → 1. Envase → wpu del tipo (guarda
+    // contra NaN/≤0: si no hay wpu confiable devuelve 0 = "no convertible").
+    const wpuForUnit = (pid: number, canonUnit: string): number => {
+      if (!PACKAGE_UNITS.includes(canonUnit)) return 1;
+      const wpu = wpuMap.get(`${pid}-${canonUnit}`) ?? wpuMap.get(`${pid}`) ?? 0;
+      return Number.isFinite(wpu) && wpu > 0 ? wpu : 0;
+    };
+
+    type Row = { productId: number; productName: string; category: string; unit: string; totalQty: number; stockQty: number; diffQty: number; customerSet: Set<number>; customerNames: string[]; allProductStock: Array<{ unit: string; qty: number }>; demandByUnit: Array<{ unit: string; qty: number }> };
+
+    // Agrupar líneas por PRODUCTO
+    const byProduct = new Map<number, typeof resolvedItems>();
     for (const item of resolvedItems) {
       const pid = item.productId as number;
-      const key = `${pid}-${item.unit}`;
-      const qty = item.quantity ? parseFloat(item.quantity as string) : 0;
-      const cid = orderCustomerMap.get(item.orderId);
-      if (!rowMap.has(key)) {
-        const canonUnit = dbEnumToCanonical(item.unit as string);
-        const stock = stockForUnit(pid, canonUnit);
-        rowMap.set(key, {
-          productId: pid,
-          productName: productNameMap.get(pid) ?? "?",
-          category: productCategoryMap.get(pid) ?? "",
-          unit: item.unit,
-          totalQty: qty,
-          stockQty: stock,
-          diffQty: stock - qty,
-          customerSet: new Set(cid !== undefined ? [cid] : []),
-          customerNames: [],
-          allProductStock: productAllStock.get(pid) ?? [],
-        });
-      } else {
-        const row = rowMap.get(key)!;
-        row.totalQty += qty;
-        row.diffQty = row.stockQty - row.totalQty;
-        if (cid !== undefined) row.customerSet.add(cid);
+      if (!byProduct.has(pid)) byProduct.set(pid, []);
+      byProduct.get(pid)!.push(item);
+    }
+
+    const rowMap = new Map<number, Row>();
+    for (const [pid, lines] of byProduct) {
+      const demandByUnitMap = new Map<string, number>();   // unidad de pedido → qty (informativo)
+      const customerSet = new Set<number>();
+      const packageBaseDemand = new Map<string, number>(); // envase canónico → demanda en base
+      const baseDemand = new Map<string, number>();        // unidad base canónica → qty
+      let totalDemandBase = 0;
+      for (const item of lines) {
+        const qty = item.quantity ? parseFloat(item.quantity as string) : 0;
+        const canon = dbEnumToCanonical(item.unit as string);
+        demandByUnitMap.set(item.unit, (demandByUnitMap.get(item.unit) ?? 0) + qty);
+        const cid = orderCustomerMap.get(item.orderId);
+        if (cid !== undefined) customerSet.add(cid);
+        if (PACKAGE_UNITS.includes(canon)) {
+          const wpu = wpuForUnit(pid, canon);
+          // guard: si no hay wpu confiable, sumar crudo (no rompe; no infla con NaN)
+          const baseQty = wpu > 0 ? qty * wpu : qty;
+          totalDemandBase += baseQty;
+          packageBaseDemand.set(canon, (packageBaseDemand.get(canon) ?? 0) + baseQty);
+        } else {
+          totalDemandBase += qty;
+          baseDemand.set(canon, (baseDemand.get(canon) ?? 0) + qty);
+        }
       }
+      // Unidad de compra: el envase de mayor demanda si se pidió en envase; si no, la base más pedida.
+      let buyUnit: string;
+      if (packageBaseDemand.size > 0) buyUnit = [...packageBaseDemand.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      else if (baseDemand.size > 0) buyUnit = [...baseDemand.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      else buyUnit = dbEnumToCanonical(lines[0].unit as string);
+      const wpuBuy = wpuForUnit(pid, buyUnit) || 1; // base → 1; envase → wpu (>0); guard → 1
+      const stockBase = baseStockMap.get(pid) ?? 0;
+      const totalQty = totalDemandBase / wpuBuy;  // demanda total en unidad de compra
+      const stockQty = stockBase / wpuBuy;        // stock en unidad de compra (restado UNA sola vez)
+      rowMap.set(pid, {
+        productId: pid,
+        productName: productNameMap.get(pid) ?? "?",
+        category: productCategoryMap.get(pid) ?? "",
+        unit: buyUnit,
+        totalQty, stockQty, diffQty: stockQty - totalQty,
+        customerSet, customerNames: [],
+        allProductStock: productAllStock.get(pid) ?? [],
+        demandByUnit: [...demandByUnitMap.entries()].map(([unit, qty]) => ({ unit, qty })),
+      });
     }
 
     const CATEGORY_ORDER: Record<string, number> = {
@@ -2425,6 +2466,7 @@ export const storage = {
       customersCount: r.customerSet.size,
       customerNames: Array.from(r.customerSet).map((id) => customerMap.get(id) ?? "?"),
       allProductStock: r.allProductStock,
+      demandByUnit: r.demandByUnit,
     }));
 
     rows.sort((a, b) => {
