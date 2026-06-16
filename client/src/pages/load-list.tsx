@@ -27,6 +27,7 @@ type LoadListRow = {
   customersCount: number;
   customerNames: string[];
   allProductStock: Array<{ unit: string; qty: number }>;
+  demandByUnit?: Array<{ unit: string; qty: number }>;
 };
 
 const CATEGORY_ORDER = [
@@ -438,9 +439,16 @@ export default function LoadListPage() {
                                 data-testid={`load-row-${row.productId}-${row.unit}`}
                               >
                                 <td className="py-3 px-4 text-muted-foreground text-xs">{globalIdx}</td>
-                                <td className="py-3 px-3 font-medium text-foreground flex items-center gap-1.5">
-                                  {isDuda && <HelpCircle className="h-3.5 w-3.5 text-yellow-500 shrink-0" />}
-                                  {row.productName}
+                                <td className="py-3 px-3 font-medium text-foreground">
+                                  <div className="flex items-center gap-1.5">
+                                    {isDuda && <HelpCircle className="h-3.5 w-3.5 text-yellow-500 shrink-0" />}
+                                    {row.productName}
+                                  </div>
+                                  {row.demandByUnit && row.demandByUnit.length > 1 && (
+                                    <div className="text-[10px] text-muted-foreground font-normal mt-0.5" data-testid={`demand-breakdown-${row.productId}`}>
+                                      {row.demandByUnit.map((d) => `${fmtQty(d.qty, d.unit)} ${d.unit.toLowerCase()}`).join(" + ")}
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="py-3 px-3">
                                   <Badge variant="outline" className="text-[10px] font-mono">{row.unit}</Badge>
