@@ -67,3 +67,15 @@ La pantalla puede seguir **mostrando el desglose por unidad** (cuántos cajones,
 **Cuidado para el fix:** toca exactamente cómo se descuenta el stock entre unidades (define qué se compra). El punto delicado es la **conversión con `wpu` por tipo de envase** (cajón vs bolsa pueden tener distinto peso) y productos sin `wpu` confiable (`NaN`, ya hay guardas). El fix debe consolidar en base usando el `wpu` correcto por unidad y manejar el faltante negativo/positivo con claridad.
 
 **Solo lectura. Nada tocado.**
+
+---
+
+## 6. ✅ APLICADO (2026-06-16, commit `53722c1`)
+
+`getLoadListByDate` ahora **consolida por producto**: suma toda la demanda en kg base, resta el stock UNA vez, y expresa el faltante en la unidad de compra (envase si se pidió en envase; si no, la base). Una fila por producto; el desglose por unidad queda informativo (`demandByUnit`). Los exports (PDF lista y compra) heredan el fix (usan la misma función).
+
+**Bonus:** se corrigió un bug latente en `baseStockMap` (tomaba la "última" fila base → una fila vieja en 0 de otra unidad base podía pisar la real y generar un **faltante falso**). Ahora toma la fila base de **más stock** (coherente con `approveOrder`).
+
+**Confirmado aparte:** el descuento de stock al aprobar (`approveOrder`) **NO** tenía este bug — descuenta acumulativo (cada línea relee el stock ya reducido). El stock real nunca estuvo en riesgo.
+
+**Verificado en vivo (función real, 16-06):** BANANA/ZAPALLITO consolidan al total correcto; LIMON (multi-unidad con excedente) → NO comprar (no inventa faltante); KIWI (una sola unidad) → idéntico al cálculo previo; sin NaN.
