@@ -1134,12 +1134,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       ws.columns = [
         { width: 30 },  // PRODUCTO
         { width: 10 },  // UNIDAD
-        { width: 12 },  // CANTIDAD
+        { width: 12 },  // CANTIDAD (a comprar, consolidado)
+        { width: 26 },  // PEDIDO (desglose por unidad, informativo)
       ];
 
       // Fila título
-      const titleRow = ws.addRow([`LISTA DE COMPRA — ${dateLabel}`, "", ""]);
-      ws.mergeCells(`A${titleRow.number}:C${titleRow.number}`);
+      const titleRow = ws.addRow([`LISTA DE COMPRA — ${dateLabel}`, "", "", ""]);
+      ws.mergeCells(`A${titleRow.number}:D${titleRow.number}`);
       titleRow.getCell(1).font = { name: "Arial", bold: true, size: 13 };
       titleRow.getCell(1).alignment = { horizontal: "center" };
       titleRow.height = 22;
@@ -1171,8 +1172,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (rows.length === 0) continue;
 
         // Encabezado de categoría
-        const catRow = ws.addRow([cat.toUpperCase(), "", ""]);
-        ws.mergeCells(`A${catRow.number}:C${catRow.number}`);
+        const catRow = ws.addRow([cat.toUpperCase(), "", "", ""]);
+        ws.mergeCells(`A${catRow.number}:D${catRow.number}`);
         catRow.getCell(1).font = { name: "Arial", bold: true, size: 10, color: { argb: CAT_TEXT[cat] ?? "FF000000" } };
         catRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: CAT_COLORS[cat] ?? "FFF5F5F5" } };
         catRow.getCell(1).alignment = { horizontal: "left", indent: 1 };
@@ -1180,7 +1181,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         catRow.commit();
 
         // Encabezados de columna
-        const hRow = ws.addRow(["PRODUCTO", "UNIDAD", "CANTIDAD"]);
+        const hRow = ws.addRow(["PRODUCTO", "UNIDAD", "CANTIDAD", "PEDIDO"]);
         hRow.eachCell((cell) => {
           cell.font = { name: "Arial", bold: true, size: 9 };
           cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE0E0E0" } };
@@ -1197,7 +1198,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           const toBuy = Math.abs(row.diffQty);
           const qtyValue = parseFloat(toBuy.toFixed(2));
 
-          const itemRow = ws.addRow([row.productName, row.unit, qtyValue]);
+          // Desglose informativo del pedido por unidad (solo si se pidió en >1 unidad)
+          const dbu = (row as any).demandByUnit as Array<{ unit: string; qty: number }> | undefined;
+          const pedidoStr = dbu && dbu.length > 1
+            ? dbu.map((d) => `${Number(d.qty.toFixed(2))} ${d.unit.toLowerCase()}`).join(" + ")
+            : "";
+
+          const itemRow = ws.addRow([row.productName, row.unit, qtyValue, pedidoStr]);
           itemRow.getCell(1).font = { name: "Arial", size: 10 };
           itemRow.getCell(2).font = { name: "Arial", size: 10 };
           itemRow.getCell(2).alignment = { horizontal: "center" };
@@ -1209,6 +1216,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             // 0.## → muestra decimales exactos sin redondear (0.5 → "0.5", 2 → "2")
             itemRow.getCell(3).numFmt = `#,##0.##" ${row.unit}"`;
           }
+          itemRow.getCell(4).font = { name: "Arial", size: 9, color: { argb: "FF757575" } };
+          itemRow.getCell(4).alignment = { horizontal: "left" };
           itemRow.height = 15;
           itemRow.commit();
         }
