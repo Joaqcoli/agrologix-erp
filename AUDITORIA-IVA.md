@@ -88,3 +88,13 @@ Agregar `products.iva_rate` (o `iva_pct`, default 0.105). Backfill de los existe
 - **Lo sensible (no romper la factura):** antes de aplicar, verificar producto por producto que la tasa backfilleada == la tasa que la factura aplica hoy → cero cambios en comprobantes existentes. Recién después unificar los lugares de display/reporte.
 
 **Solo lectura. Nada tocado.**
+
+---
+
+## 7. ✅ M6 RESUELTO (2026-06-17) — Bloque 1 (d071db5) + Bloque 2 (a7ecb83)
+
+- **Bloque 1:** `products.iva_rate` (default 0,105) + selector 10,5%/21% en Productos + backfill con el criterio de la factura (criterio A). Verificado: 250 productos, 0 mismatches, 5 en 21% (los huevos).
+- **Bloque 2:** única fuente = `products.iva_rate` vía `shared/iva.ts` (`ivaRateOf`). Se eliminó la lógica por nombre en los ~15 lugares (back JS, SQL `(1 + COALESCE(p.iva_rate,0.105))`, factura/NC/CAE, front pdf/orders/vendedor).
+- **Verificación fiscal:** NEW(campo) == OLD(nombre) en el 100% de las 230 facturas, en el total facturado c/IVA de todos los aprobados, y a nivel producto. Cero cambios en comprobantes. (Nota: discrepancias recompute-vs-declarado en algunas facturas son artefactos del script de verificación —bolsa/ivaIncluido—, presentes igual en old y new; no son del cambio.)
+
+**Fragilidad resuelta:** el IVA ya no se adivina por nombre; es un dato del producto. Un huevo "DOCENA" o "MAPLE" ahora se marca con el selector y factura bien.
