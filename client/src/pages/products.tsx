@@ -235,7 +235,7 @@ function UnitSelector({ selected, onChange }: { selected: Set<string>; onChange:
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
-const EMPTY_FORM = { name: "", description: "", unit: "KG" as const, category: "Verdura" as ProductCategory };
+const EMPTY_FORM = { name: "", description: "", unit: "KG" as const, category: "Verdura" as ProductCategory, ivaRate: "0.105" };
 
 export default function ProductsPage() {
   const { toast } = useToast();
@@ -320,7 +320,7 @@ export default function ProductsPage() {
 
   const openEdit = async (p: Product) => {
     setEditing(p);
-    setForm({ name: p.name, description: p.description ?? "", unit: p.unit as any, category: (p.category as ProductCategory) ?? "Verdura" });
+    setForm({ name: p.name, description: p.description ?? "", unit: p.unit as any, category: (p.category as ProductCategory) ?? "Verdura", ivaRate: parseFloat(String((p as any).ivaRate ?? "0.105")) >= 0.2 ? "0.21" : "0.105" });
     // Fetch all active units (including CAJON/BOLSA/BANDEJA) directly from the endpoint
     const res = await fetch(`/api/products/${p.id}/units`, { credentials: "include" });
     const units: { unit: string }[] = res.ok ? await res.json() : [];
@@ -429,6 +429,18 @@ export default function ProductsPage() {
                   {PRODUCT_CATEGORIES.map((cat) => (
                     <SelectItem key={cat} value={cat} data-testid={`select-category-option-${cat.toLowerCase().replace(/[^a-z]/g, "-")}`}>{cat}</SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="piva">IVA *</Label>
+              <Select value={form.ivaRate} onValueChange={(v) => setForm({ ...form, ivaRate: v })}>
+                <SelectTrigger id="piva" data-testid="select-product-iva">
+                  <SelectValue placeholder="Tasa de IVA" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0.105" data-testid="select-iva-105">10,5% (general)</SelectItem>
+                  <SelectItem value="0.21" data-testid="select-iva-21">21% (huevos)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

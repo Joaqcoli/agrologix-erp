@@ -292,6 +292,11 @@ export async function runMigrations() {
   // ─── stock_movements: quién generó el movimiento (ajustes) ──────────────────
   await db.execute(sql`ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS created_by INTEGER`);
 
+  // ─── products.iva_rate: tasa de IVA como dato fiscal del producto (M6) ──────
+  // El backfill de los existentes se hizo UNA vez aparte (criterio factura/CAE);
+  // acá solo se garantiza la columna con el default general (10,5%).
+  await db.execute(sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS iva_rate NUMERIC(5,4) NOT NULL DEFAULT 0.105`);
+
   // ─── product_units: base unit tracking for composite unit model ──────────────
   await db.execute(sql`ALTER TABLE product_units ADD COLUMN IF NOT EXISTS weight_per_unit NUMERIC(10,4) DEFAULT 0`);
   await db.execute(sql`ALTER TABLE product_units ADD COLUMN IF NOT EXISTS base_unit TEXT`);

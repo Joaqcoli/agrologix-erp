@@ -52,6 +52,7 @@ export const products = pgTable("products", {
   category: text("category").default("Verdura"),                    // NEW
   averageCost: numeric("average_cost", { precision: 12, scale: 4 }).notNull().default("0"),
   currentStock: numeric("current_stock", { precision: 12, scale: 4 }).notNull().default("0"),
+  ivaRate: numeric("iva_rate", { precision: 5, scale: 4 }).notNull().default("0.105"), // tasa de IVA (0.1050 general | 0.2100 huevos). Dato fiscal explícito.
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
@@ -255,6 +256,7 @@ export const insertProductSchema = createInsertSchema(products)
   .omit({ id: true, createdAt: true, averageCost: true, currentStock: true, sku: true })
   .extend({
     category: z.enum(PRODUCT_CATEGORIES).default("Verdura"),
+    ivaRate: z.union([z.string(), z.number()]).optional().transform((v) => v == null ? undefined : String(v)), // "0.105" | "0.21"
   });
 export const insertPurchaseSchema = createInsertSchema(purchases).omit({ id: true, createdAt: true, createdBy: true, total: true }).extend({
   purchaseDate: z.union([z.string(), z.date()]),
