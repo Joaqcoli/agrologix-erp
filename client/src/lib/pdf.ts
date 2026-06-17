@@ -1,4 +1,5 @@
 import jsPDF from "jspdf";
+import { ivaRateOf } from "@shared/iva";
 
 type RemitoData = {
   folio: string;
@@ -27,8 +28,9 @@ type RemitoData = {
   };
 };
 
-function itemIvaRate(name: string): number {
-  return /huevo/i.test(name) ? 0.21 : 0.105;
+// La tasa de IVA sale de product.iva_rate (helper compartido). Ver M6.
+function itemIvaRate(product?: { ivaRate?: string | number | null } | null): number {
+  return ivaRateOf(product);
 }
 
 /** Merge items with the same product name+unit into a single row (bolsa/bolsa_propia + normal). */
@@ -116,7 +118,7 @@ export async function generateRemitoPDF(data: RemitoData, opts?: { hidePrecios?:
   for (const item of displayItems) {
     const sub = parseFloat(item.subtotal);
     totalSinIva += sub;
-    totalConIva += sub * (1 + itemIvaRate(item.product?.name ?? ""));
+    totalConIva += sub * (1 + itemIvaRate(item.product));
   }
 
   // ── Layout constants ───────────────────────────────────────────────────────
@@ -323,7 +325,7 @@ export async function generateRemitoPDF(data: RemitoData, opts?: { hidePrecios?:
     const isBonif = !!(item as any).isBonification;
     const pName  = (item.product?.name ?? "Producto sin nombre") + (isBonif ? " (Bonificacion)" : "");
     const unit   = item.unit.toUpperCase();
-    const iva    = itemIvaRate(pName);
+    const iva    = itemIvaRate(item.product);
     const subIva = sub * (1 + iva);
 
     // Alternate row bg (odd index = gray)
@@ -1021,8 +1023,7 @@ export async function generateInvoicePDF(data: {
   // Pre-compute gross item subtotals per category (always from order items, unmodified)
   let subtotalFrutas = 0, subtotalHuevos = 0;
   for (const item of order.items) {
-    const pName = (item.product?.name ?? (item as any).rawProductName ?? "").toUpperCase();
-    const isHuevo = pName.includes("HUEVO") || pName.includes("MAPLE");
+    const isHuevo = ivaRateOf(item.product) >= 0.2; // bucket 21% (huevos)
     const sub = parseFloat((item as any).subtotal) || 0;
     if (isHuevo) subtotalHuevos += sub; else subtotalFrutas += sub;
   }
@@ -1063,7 +1064,7 @@ export async function generateInvoicePDF(data: {
     const seen = new Set<string>();
     for (const item of order.items) {
       const pName = (item.product?.name ?? (item as any).rawProductName ?? "").toUpperCase();
-      if ((pName.includes("HUEVO") || pName.includes("MAPLE")) && !seen.has(pName)) {
+      if (ivaRateOf(item.product) >= 0.2 && !seen.has(pName)) {
         seen.add(pName);
         huevoNames.push(item.product?.name ?? (item as any).rawProductName ?? pName);
       }
@@ -1083,7 +1084,7 @@ export async function generateInvoicePDF(data: {
     const mergedItems = mergeForPDF(order.items);
     pdfRows = mergedItems.map((item) => {
       const pName = item.product?.name ?? item.rawProductName ?? "Producto sin nombre";
-      const rate  = itemIvaRate(pName);
+      const rate  = itemIvaRate(item.product);
       const rawPrice = parseFloat(item.pricePerUnit ?? "0");
       const rawSub   = parseFloat(item.subtotal) || 0;
       // Factura B: siempre brutos. Factura A + ivaIncluido: dividir por (1+tasa).

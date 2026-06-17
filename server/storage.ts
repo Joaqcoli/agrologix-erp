@@ -23,20 +23,14 @@ import {
 } from "@shared/schema";
 import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
+import { ivaRateOf } from "@shared/iva";
 import bcrypt from "bcryptjs";
 import { getHistoricalMonthStats, isHistoricalMonth } from "./historical-stats";
 
 // ─── CC Helpers ────────────────────────────────────────────────────────────────
-const IVA_HUEVO = 0.21;
-const IVA_DEFAULT = 0.105;
-function ivaRate(productName: string, productCategory?: string): number {
-  const n = productName.toUpperCase();
-  const cat = (productCategory ?? "").toUpperCase();
-  if (n.includes("HUEVO") || n.includes("MAPLE") || cat.includes("HUEVO")) return IVA_HUEVO;
-  return IVA_DEFAULT;
-}
+// La tasa de IVA sale de products.iva_rate (única fuente, helper compartido). Ver M6.
 
-// Items enriched with product name/category for IVA computation
+// Items enriched with product name/category + tasa de IVA para el cálculo
 type RawOrderItem = {
   orderId: number;
   customerId: number;
@@ -48,13 +42,14 @@ type RawOrderItem = {
   unit: string;
   productName: string;
   productCategory: string;
+  ivaRate?: string | null; // tasa del producto (products.iva_rate)
 };
 
 // Compute billing amount for one item (with or without IVA)
 function itemBilling(item: RawOrderItem, hasIva: boolean): number {
   if (!item.pricePerUnit || parseFloat(item.pricePerUnit) === 0) return 0;
   const subtotal = parseFloat(item.quantity) * parseFloat(item.pricePerUnit);
-  return hasIva ? subtotal * (1 + ivaRate(item.productName, item.productCategory)) : subtotal;
+  return hasIva ? subtotal * (1 + ivaRateOf(item)) : subtotal;
 }
 
 // Compute gross profit for one item (revenue with IVA minus cost)
@@ -1176,9 +1171,7 @@ export const storage = {
     // Venta con IVA (misma lógica que /api/vendedor/dashboard)
     const iva = drizzleSql`CASE
       WHEN oi.price_per_unit::numeric = 0 THEN 0
-      WHEN c.has_iva = true AND (p.name ILIKE '%huevo%' OR p.category ILIKE '%huevo%')
-        THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
-      WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+      WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
       ELSE oi.quantity::numeric * oi.price_per_unit::numeric END`;
     const monthStart = drizzleSql`date_trunc('month', CURRENT_DATE)`;
     const monthEnd = drizzleSql`date_trunc('month', CURRENT_DATE) + interval '1 month'`;
@@ -1267,9 +1260,7 @@ export const storage = {
         COALESCE(SUM(
           CASE
             WHEN oi.price_per_unit::numeric = 0 THEN 0
-            WHEN c.has_iva = true AND (p.name ILIKE '%huevo%' OR p.category ILIKE '%huevo%')
-              THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
-            WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+            WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
             ELSE oi.quantity::numeric * oi.price_per_unit::numeric
           END
         ), 0)::float AS facturacion,
@@ -1344,8 +1335,7 @@ export const storage = {
             if (!item.pricePerUnit) return sum;
             const subtotal = parseFloat(item.quantity as string) * parseFloat(item.pricePerUnit as string);
             const productRow = item.productId ? products_cache.get(item.productId) : null;
-            const productName = productRow?.name ?? "";
-            const rate = productName.toUpperCase().includes("HUEVO") ? 0.21 : 0.105;
+            const rate = ivaRateOf(productRow);
             return sum + subtotal * (1 + rate);
           }, 0);
         }
@@ -3635,11 +3625,7 @@ export const storage = {
           CASE WHEN c.has_iva THEN
             COALESCE(ROUND(SUM(CASE
               WHEN oi.price_per_unit::numeric = 0 THEN 0
-              WHEN (COALESCE(p.name, oi.raw_product_name, '') ILIKE '%huevo%'
-                    OR COALESCE(p.name, oi.raw_product_name, '') ILIKE '%maple%'
-                    OR COALESCE(p.category, '') ILIKE '%huevo%')
-              THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
-              ELSE oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+              ELSE oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
             END)), 0)
           ELSE
             COALESCE(ROUND(SUM(CASE
@@ -3819,7 +3805,8 @@ export const storage = {
         oi.override_cost_per_unit::text AS "overrideCostPerUnit",
         oi.unit::text AS "unit",
         COALESCE(p.name, oi.raw_product_name, '') AS "productName",
-        COALESCE(p.category, '') AS "productCategory"
+        COALESCE(p.category, '') AS "productCategory",
+        p.iva_rate::text AS "ivaRate"
       FROM orders o
       JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN products p ON p.id = oi.product_id
@@ -4576,22 +4563,14 @@ export const storage = {
         COALESCE(SUM(
           CASE
             WHEN oi.price_per_unit::numeric = 0 THEN 0
-            WHEN c.has_iva = true AND (
-              p.name ILIKE '%huevo%' OR p.name ILIKE '%maple%' OR p.category ILIKE '%huevo%'
-            ) THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
-            WHEN c.has_iva = true
-            THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+            WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
             ELSE oi.quantity::numeric * oi.price_per_unit::numeric
           END
         ), 0) AS ventas,
         COALESCE(SUM(
           CASE
             WHEN oi.price_per_unit::numeric = 0 THEN 0
-            WHEN c.has_iva = true AND (
-              p.name ILIKE '%huevo%' OR p.name ILIKE '%maple%' OR p.category ILIKE '%huevo%'
-            ) THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
-            WHEN c.has_iva = true
-            THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+            WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
             ELSE oi.quantity::numeric * oi.price_per_unit::numeric
           END
           - oi.quantity::numeric * COALESCE(oi.override_cost_per_unit, oi.cost_per_unit)::numeric
@@ -4687,11 +4666,7 @@ export const storage = {
           SUM(
             CASE
               WHEN oi.price_per_unit::numeric = 0 THEN 0
-              WHEN c.has_iva = true AND (
-                p.name ILIKE '%huevo%' OR p.name ILIKE '%maple%' OR p.category ILIKE '%huevo%'
-              ) THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
-              WHEN c.has_iva = true
-              THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+              WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
               ELSE oi.quantity::numeric * oi.price_per_unit::numeric
             END
           ) AS facturacion
@@ -4817,8 +4792,7 @@ export const storage = {
         COALESCE(SUM(
           CASE
             WHEN oi.price_per_unit::numeric = 0 THEN 0
-            WHEN c.has_iva = true AND (p.name ILIKE '%huevo%' OR p.name ILIKE '%maple%' OR p.category ILIKE '%huevo%') THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
-            WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+            WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
             ELSE oi.quantity::numeric * oi.price_per_unit::numeric
           END
         ), 0) AS ventas

@@ -25,6 +25,7 @@ import { generateRemitoPDF, generateInvoicePDF } from "@/lib/pdf";
 import { useState } from "react";
 import type { Customer, Product } from "@shared/schema";
 import type { Order, OrderItem } from "@shared/schema";
+import { ivaRateOf } from "@shared/iva";
 import { dbEnumToCanonical, ALL_CANONICAL_UNITS } from "@shared/units";
 
 const WhatsAppIcon = ({ className }: { className?: string }) => (
@@ -42,13 +43,8 @@ const fmtWaPhone = (phone: string): string | null => {
   return "54" + d;
 };
 
-const IVA_DEFAULT = 0.105;
-const IVA_HUEVO = 0.21;
 const LOW_MARGIN = 0.30;
-
-function getIvaRate(productName: string) {
-  return productName.toUpperCase().includes("HUEVO") ? IVA_HUEVO : IVA_DEFAULT;
-}
+// La tasa de IVA sale de product.iva_rate (helper compartido ivaRateOf). Ver M6.
 
 const fmt = (v: number, dec = 2) => v.toLocaleString("es-MX", { minimumFractionDigits: dec, maximumFractionDigits: dec });
 const fmtPct = (v: number) => (v * 100).toFixed(1) + "%";
@@ -1229,7 +1225,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
     const effectiveCostPerUnit = hasOverride ? parseFloat(override as string) : storedCost;
     const name = getItemName(item);
     const subtotal = qty * price;
-    const ivaRate = getIvaRate(name);
+    const ivaRate = ivaRateOf(item.product);
     const totalConIva = subtotal * (1 + ivaRate);
     const totalCompra = qty * effectiveCostPerUnit;
     const base = hasIva ? totalConIva : subtotal;

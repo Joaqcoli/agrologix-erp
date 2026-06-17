@@ -8,20 +8,16 @@ import { sql as drizzleSql } from "drizzle-orm";
 import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema, insertPaymentSchema, insertWithholdingSchema, insertSupplierSchema, insertSupplierPaymentSchema, insertPriceListItemSchema, insertCajaMovementSchema } from "@shared/schema";
 import { z } from "zod";
 import { canonicalizeUnit } from "@shared/units";
+import { ivaRateOf } from "@shared/iva";
 import { getHistoricalMonthStats } from "./historical-stats";
 import { getLastVoucher, createVoucher } from "./arca";
 import { syncMpReport } from "./mp-report-sync";
 
-// IVA helpers
-const IVA_HUEVO = 0.21;
-const IVA_DEFAULT = 0.105;
-function getIvaRate(productName: string): number {
-  return productName.toUpperCase().includes("HUEVO") ? IVA_HUEVO : IVA_DEFAULT;
-}
-function calcTotalConIva(items: { productName: string; pricePerUnit: string; quantity: string }[]): number {
+// IVA: la tasa sale de products.iva_rate (única fuente: helper ivaRateOf). Ver M6.
+function calcTotalConIva(items: { ivaRate?: string | number | null; pricePerUnit: string; quantity: string }[]): number {
   return items.reduce((sum, item) => {
     const subtotal = parseFloat(item.quantity) * parseFloat(item.pricePerUnit);
-    return sum + subtotal * (1 + getIvaRate(item.productName));
+    return sum + subtotal * (1 + ivaRateOf(item));
   }, 0);
 }
 
@@ -838,7 +834,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const price = parseFloat(item.pricePerUnit as string);
         const cost = parseFloat(item.costPerUnit as string);
         const subtotal = qty * price;
-        const ivaRate = getIvaRate(item.product.name);
+        const ivaRate = ivaRateOf(item.product);
         const totalConIva = subtotal * (1 + ivaRate);
         const totalCompra = qty * cost;
         const base = hasIva ? subtotal * (1 + ivaRate) : subtotal;
@@ -854,7 +850,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const total = parseFloat(fullOrder.total);
       if (hasIva) {
-        const totalIva = calcTotalConIva(fullOrder.items.map(i => ({ productName: i.product.name, pricePerUnit: i.pricePerUnit as string, quantity: i.quantity as string })));
+        const totalIva = calcTotalConIva(fullOrder.items.map(i => ({ ivaRate: (i.product as any)?.ivaRate, pricePerUnit: i.pricePerUnit as string, quantity: i.quantity as string })));
         const totalCosto = fullOrder.items.reduce((s, i) => s + parseFloat(i.quantity as string) * parseFloat(i.costPerUnit as string), 0);
         const diff = totalIva - totalCosto;
         rows.push(["TOTAL", "", "", "", total, totalIva, "", totalCosto, diff, totalIva > 0 ? ((diff / totalIva) * 100).toFixed(1) + "%" : "0%"]);
@@ -897,7 +893,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const price = parseFloat(item.pricePerUnit as string);
       const cost = parseFloat(item.costPerUnit as string);
       const subtotal = qty * price;
-      const ivaRate = getIvaRate(item.product.name);
+      const ivaRate = ivaRateOf(item.product);
       const totalConIva = subtotal * (1 + ivaRate);
       const totalCompra = qty * cost;
       const base = hasIva ? totalConIva : subtotal;
@@ -1018,10 +1014,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         let rowIdx = startRow;
         for (const item of order.items) {
           if ((item as any).bolsaType) continue;
-          const productName = (item.product?.name ?? (item as any).rawProductName ?? "") as string;
-          const pCat = ((item.product as any)?.category ?? "").toUpperCase() as string;
-          const isHuevo = productName.toUpperCase().includes("HUEVO") || productName.toUpperCase().includes("MAPLE") || pCat.includes("HUEVO");
-          const ivaRate = isHuevo ? 0.21 : 0.105;
+          const ivaRate = ivaRateOf(item.product);
           const subtotal = parseFloat(String(item.subtotal ?? "0"));
           const totalConIva = parseFloat((subtotal * (1 + ivaRate)).toFixed(2));
 
@@ -1682,10 +1675,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           COALESCE(SUM(
             CASE
               WHEN oi.price_per_unit::numeric = 0 THEN 0
-              WHEN c.has_iva = true AND (p.name ILIKE '%huevo%' OR p.category ILIKE '%huevo%')
-                THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
-              WHEN c.has_iva = true
-                THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+              WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
               ELSE oi.quantity::numeric * oi.price_per_unit::numeric
             END
           ), 0) AS ventas,
@@ -1767,10 +1757,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           COALESCE(SUM(
             CASE
               WHEN oi.price_per_unit::numeric = 0 THEN 0
-              WHEN c.has_iva = true AND (p.name ILIKE '%huevo%' OR p.category ILIKE '%huevo%')
-                THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.21
-              WHEN c.has_iva = true
-                THEN oi.quantity::numeric * oi.price_per_unit::numeric * 1.105
+              WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
               ELSE oi.quantity::numeric * oi.price_per_unit::numeric
             END
           ), 0)::text AS "totalConIva"
@@ -2077,20 +2064,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Calculate IVA breakdown
       let neto105 = 0, iva105 = 0, neto21 = 0, iva21 = 0;
       for (const item of order.items) {
-        const pName = (item.product?.name ?? item.rawProductName ?? "").toUpperCase();
-        const pCat = (item.product as any)?.category ?? "";
-        const isHuevo = pName.includes("HUEVO") || pName.includes("MAPLE") || pCat.toUpperCase().includes("HUEVO");
+        // Tasa del producto (products.iva_rate, única fuente). Bucket 21% si rate ≥ 0,2.
+        const rate = ivaRateOf(item.product);
+        const is21 = rate >= 0.2;
         const sub = parseFloat(item.subtotal ?? "0") || 0;
-        // Para Factura B el precio ya incluye IVA (no discriminado).
-        // Para Factura A con ivaIncluido=true, ídem.
-        const rate = isHuevo ? IVA_HUEVO : IVA_DEFAULT;
+        // Para Factura B el precio ya incluye IVA (no discriminado). Para A con ivaIncluido=true, ídem.
         const netSub = (invoiceType === "B" || ivaIncluido) ? sub / (1 + rate) : sub;
-        if (isHuevo) {
+        if (is21) {
           neto21 += netSub;
-          iva21  += netSub * IVA_HUEVO;
+          iva21  += netSub * rate;
         } else {
           neto105 += netSub;
-          iva105  += netSub * IVA_DEFAULT;
+          iva105  += netSub * rate;
         }
       }
       const totalNeto = neto105 + neto21;
@@ -2208,15 +2193,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Recalculate IVA breakdown from order items (same logic as invoice creation)
       let neto105 = 0, iva105 = 0, neto21 = 0, iva21 = 0;
       for (const item of order.items) {
-        const pName = ((item.product?.name ?? (item as any).rawProductName ?? "") as string).toUpperCase();
-        const pCat  = ((item.product as any)?.category ?? "") as string;
-        const isHuevo = pName.includes("HUEVO") || pName.includes("MAPLE") || pCat.toUpperCase().includes("HUEVO");
+        const rate = ivaRateOf(item.product); // products.iva_rate (única fuente)
+        const is21 = rate >= 0.2;
         const sub  = parseFloat((item as any).subtotal ?? "0") || 0;
-        const rate = isHuevo ? IVA_HUEVO : IVA_DEFAULT;
         const isFacturaB = invoice.invoiceType === "B";
         const netSub = isFacturaB ? sub / (1 + rate) : sub;
-        if (isHuevo) { neto21 += netSub; iva21 += netSub * IVA_HUEVO; }
-        else         { neto105 += netSub; iva105 += netSub * IVA_DEFAULT; }
+        if (is21) { neto21 += netSub; iva21 += netSub * rate; }
+        else      { neto105 += netSub; iva105 += netSub * rate; }
       }
       const totalNeto = neto105 + neto21;
       const totalIVA  = iva105 + iva21;

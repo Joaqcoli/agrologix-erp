@@ -8,14 +8,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, Download, CheckCircle2, Clock, XCircle, FileText, Calendar } from "lucide-react";
 import { generateRemitoPDF } from "@/lib/pdf";
 import type { Customer } from "@shared/schema";
+import { ivaRateOf } from "@shared/iva";
 
 const fmt = (v: string | number, dec = 2) =>
   Number(v).toLocaleString("es-MX", { minimumFractionDigits: dec, maximumFractionDigits: dec });
 const fmtMoney = (v: string | number) => "$" + fmt(v);
-
-function getIvaRate(name: string) {
-  return /huevo/i.test(name) ? 0.21 : 0.105;
-}
+// La tasa de IVA sale de product.iva_rate (helper compartido). Ver M6.
 
 const STATUS_CONFIG = {
   draft:     { label: "Borrador",  icon: Clock,        variant: "secondary"   as const },
@@ -92,8 +90,7 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
     ? order.items.reduce((sum, item) => {
         if (!item.pricePerUnit || parseFloat(item.pricePerUnit) === 0) return sum;
         const sub = parseFloat(item.quantity) * parseFloat(item.pricePerUnit);
-        const name = item.product?.name ?? item.rawProductName ?? "";
-        return sum + sub * (1 + getIvaRate(name));
+        return sum + sub * (1 + ivaRateOf((item as any).product));
       }, 0)
     : parseFloat(order.total);
 
