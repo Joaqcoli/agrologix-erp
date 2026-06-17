@@ -1880,6 +1880,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // Ajustes de stock del galpón — SIN plata (includeMoney=false)
+  app.get("/api/galpon/stock-adjustments", requireGalpon, async (_req, res) => {
+    try {
+      return res.json(await storage.getStockAdjustments(false));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // Deshacer un ajuste de peso (el galpón puede deshacer SUS correcciones; límite hoy/ayer)
+  app.post("/api/galpon/stock-adjustments/:id/revert-weight", requireGalpon, async (req, res) => {
+    try {
+      const result = await storage.revertGalponWeightAdjustment(Number(req.params.id), req.session.userId);
+      return res.json(result);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   app.get("/api/galpon/products/:id/purchase-history", requireGalpon, async (req, res) => {
     try {
       return res.json(await storage.getGalponProductPurchaseHistory(Number(req.params.id)));
