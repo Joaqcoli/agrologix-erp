@@ -108,3 +108,13 @@ Mapa de **lectores** y si los toca el cambio:
 - **Bonus opcional (no requerido):** borrar `getStockMovements` (`:1037`), que es código muerto.
 
 **Solo lectura. Nada tocado.**
+
+---
+
+## 8. ✅ C2 RESUELTO (2026-06-18, commit `32d4e9a`)
+
+- **Fix (`approveOrder` rama normal, `storage.ts:2218-2227`):** el movimiento OUT se loguea en **kg base** igual que rinde/prorate. `outQty = deductQty.toFixed(4)` (antes `item.quantity` en bultos) y `movementCostStr = baseCostStr / wpuForBase` (costo por kg). `wpuForBase` ya estaba disponible (mismo número del descuento de stock). **`effectiveCostStr` NO cambió** → order_items/margen idénticos. Ramas rinde/prorate intactas.
+- **Históricos:** se dejaron como están (opción a). Reconstruir = path-dependence / precisión falsa, y nada los lee.
+- **Limpieza:** borrado `getStockMovements` (código muerto sin callers) + `type StockMovement` colgado del import.
+
+**Verificado (apply+restore en pedido real por envase VA-000201):** stock baja igual (prod81 BOLSA×3 → 45 kg; prod74 KG → 1.5 kg); movimiento nuevo en kg con **valor conservado** (45×657.88 = 29.604,47 = 3×9.868,16 por BOLSA); order_items/margen idénticos (el cambio 7999→9868 es el refresh de costo que `approveOrder` ya hacía, no el fix); dashboards merma/rinde/KPIs sin cambio (notes "Pedido…", no los leen); restore exacto (estado idéntico al inicial). Build ✓, sin referencias colgadas.
