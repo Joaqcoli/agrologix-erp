@@ -129,3 +129,12 @@ SELECT 1 sobre conexión tibia (x8):          ~103 ms promedio
 → **Recomendación:** el fix real es **(1) co-locar server y DB en la misma región** — explica casi todo el 2–5 s parejo y es infra, no código. Mientras tanto, (2)+(3)+(4) son mitigaciones de código/config de bajo riesgo que recortan round-trips. Confirmar primero la región de Render y medir el `SELECT 1` desde el server.
 
 **Solo lectura. Nada tocado.**
+
+## 7. ✅ Mitigaciones #3 y #4 aplicadas (2026-06-18, commit `5256b4c`)
+
+- **#3 Cache de auth M1 (`server/routes.ts`):** cache en memoria del flag `active` por usuario, **TTL 8s**. Saca el `getUserById` de cada `/api/*` request (era ~1 round-trip ~150ms por acción). **Seguridad M1 preservada:** desactivar una cuenta la corta **a más tardar en 8s** (antes instantáneo) — trade-off aceptado. El "inactivo" no se cachea (re-alta sin espera). Login/logout no dependen del cache → inmediatos. (No hay endpoint de la app que desactive usuarios → el TTL es el mecanismo de corte.)
+- **#4 Pool (`server/db.ts`):** `keepAlive: true` + `idleTimeoutMillis` 30s→**5min**. Evita repagar la reconexión (~850ms) tras pausas. No cambia el pooler (6543) ni queries.
+
+**Verificado:** 10 requests activos → 1 lectura DB (era 10); cuenta desactivada sigue ≤8s y al expirar → 401 (M1 vigente); login/logout inmediatos; pool reutiliza 1 conexión física para 12 queries con pausa. Build ✓. **NO se tocaron approveOrder ni getDashboardStats** (flujos críticos).
+
+**Pendiente (mayor impacto, infra):** #1 co-locar server+DB en misma región (Fly.io `gru` / AWS sa-east-1). #2 paralelizar/batchear round-trips por request — para cuando se decida.
