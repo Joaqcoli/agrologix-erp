@@ -1,5 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { fmtFecha } from "@/lib/format";
 import { useLocation } from "wouter";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -93,7 +94,7 @@ function weekRange(weekStr: string): [string, string] {
   monday.setDate(jan4.getDate() - dayOfWeek + (week - 1) * 7);
   const nextMonday = new Date(monday);
   nextMonday.setDate(monday.getDate() + 7);
-  const fmt = (d: Date) => d.toISOString().split("T")[0];
+  const fmt = fmtFecha;
   return [fmt(monday), fmt(nextMonday)];
 }
 

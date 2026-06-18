@@ -18,7 +18,8 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
-const fmt = (v: number) => "$" + Math.round(v).toLocaleString("es-AR");
+import { fmtPesos } from "@/lib/format";
+const fmt = fmtPesos;
 
 // Normaliza variaciones de nombres de categoría al mismo label canónico
 function normalizeCategory(cat: string): string {

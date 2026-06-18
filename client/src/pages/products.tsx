@@ -19,7 +19,8 @@ import type { Product, ProductUnit } from "@shared/schema";
 import { PRODUCT_CATEGORIES, type ProductCategory } from "@shared/schema";
 import { canonicalizeUnit, ALL_CANONICAL_UNITS, CANONICAL_UNIT_LABEL } from "@shared/units";
 
-const fmt = (v: number) => Math.round(v).toLocaleString("es-MX");
+import { fmtMiles } from "@/lib/format";
+const fmt = fmtMiles;
 const fmtStock = (v: number) => v.toLocaleString("es-MX", { maximumFractionDigits: 2 });
 
 type ProductUnitWithProduct = ProductUnit & { product: Product };

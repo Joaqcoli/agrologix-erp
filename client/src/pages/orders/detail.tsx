@@ -46,7 +46,9 @@ const fmtWaPhone = (phone: string): string | null => {
 const LOW_MARGIN = 0.30;
 // La tasa de IVA sale de product.iva_rate (helper compartido ivaRateOf). Ver M6.
 
-const fmt = (v: number, dec = 2) => v.toLocaleString("es-MX", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+import { fmtDecimal, fmtCantidad } from "@/lib/format";
+// Montos con decimales en es-AR. Las CANTIDADES editables usan fmtCantidad (no localizado).
+const fmt = (v: number, dec = 2) => fmtDecimal(v, dec);
 const fmtPct = (v: number) => (v * 100).toFixed(1) + "%";
 const fmtInt = (v: number) => Math.round(v).toLocaleString("es-MX");
 
@@ -115,7 +117,7 @@ type StockIssueState = {
 } | null;
 
 function hasDraftChanges(draft: ItemDraft, calc: CalcItem): boolean {
-  const origQty = fmt(calc.qty, 4).replace(/\.?0+$/, "");
+  const origQty = fmtCantidad(calc.qty);
   const origUnit = dbEnumToCanonical(calc.unit);
   const origPrice = calc.hasPrice ? String(Math.round(calc.pricePerUnit!)) : "";
   const origCost = String(Math.round(calc.effectiveCostPerUnit));
@@ -274,7 +276,7 @@ function ItemRow({
             className={canEdit ? "cursor-pointer hover:underline" : ""}
             onClick={canEdit ? onStartEdit : undefined}
           >
-            {fmt(calc.qty, 4).replace(/\.?0+$/, "")}
+            {fmtCantidad(calc.qty)}
           </span>
         )}
       </td>
@@ -837,7 +839,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
       setDrafts((prev) => ({
         ...prev,
         [calc.id]: {
-          qty: fmt(calc.qty, 4).replace(/\.?0+$/, ""),
+          qty: fmtCantidad(calc.qty),
           unit: dbEnumToCanonical(calc.unit),
           price: calc.hasPrice ? String(Math.round(calc.pricePerUnit!)) : "",
           cost: String(Math.round(calc.effectiveCostPerUnit)),

@@ -17,8 +17,10 @@ import { Search, Package, Plus, CheckCircle2, AlertCircle, Warehouse, ChevronDow
 import type { Product, ProductUnit } from "@shared/schema";
 import { PRODUCT_CATEGORIES } from "@shared/schema";
 import { parseQuantityAndUnit } from "@/lib/parseQuantityAndUnit";
+import { normalize } from "@/lib/orderParser";
+import { fmtMiles } from "@/lib/format";
 
-const fmt = (v: number) => Math.round(v).toLocaleString("es-MX");
+const fmt = fmtMiles;
 function formatDate(s: string) {
   try { return new Date(s).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit", timeZone: "UTC" }); }
   catch { return s.slice(0, 10); }
@@ -665,9 +667,6 @@ type StagedItem = {
   status: "ok" | "no_product" | "no_qty";
 };
 
-function normalize(s: string) {
-  return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-}
 
 function matchProduct(rawName: string, products: Product[]): Product | null {
   const normRaw = normalize(rawName);

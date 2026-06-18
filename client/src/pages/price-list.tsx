@@ -17,10 +17,11 @@ const CATEGORY_ORDER = [
   "Fruta", "Verdura", "Hortaliza Liviana", "Hortaliza Pesada", "Hongos/Hierbas", "Huevos",
 ];
 
+import { fmtPesos } from "@/lib/format";
+// Particularidad de price-list: muestra "—" si el precio es 0 o inválido.
 const fmt = (v: string | number) => {
   const n = parseFloat(String(v));
-  if (!n) return "—";
-  return `$${n.toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  return n ? fmtPesos(n) : "—";
 };
 
 type ItemFormState = {

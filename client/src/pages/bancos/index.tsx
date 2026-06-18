@@ -12,7 +12,9 @@ import { apiRequest } from "@/lib/queryClient";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-const fmt = (v: number) => "$" + Math.round(Math.abs(v)).toLocaleString("es-AR");
+import { fmtPesos } from "@/lib/format";
+// Particularidad de Bancos: muestra el valor absoluto (el signo +/- se agrega aparte).
+const fmt = (v: number) => fmtPesos(Math.abs(v));
 
 // Formatea el identificador único para mostrar en UI
 const OWN_EMAIL = "vegetalesargentinos.srl@gmail.com";

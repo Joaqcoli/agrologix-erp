@@ -10,9 +10,9 @@ import { generateRemitoPDF } from "@/lib/pdf";
 import type { Customer } from "@shared/schema";
 import { ivaRateOf } from "@shared/iva";
 
-const fmt = (v: string | number, dec = 2) =>
-  Number(v).toLocaleString("es-MX", { minimumFractionDigits: dec, maximumFractionDigits: dec });
-const fmtMoney = (v: string | number) => "$" + fmt(v);
+import { fmtDecimal, fmtCantidad } from "@/lib/format";
+const fmt = (v: string | number, dec = 2) => fmtDecimal(v, dec);
+const fmtMoney = (v: string | number) => "$" + fmtDecimal(v);
 // La tasa de IVA sale de product.iva_rate (helper compartido). Ver M6.
 
 const STATUS_CONFIG = {
@@ -234,7 +234,7 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
                         )}
                       </td>
                       <td className="py-2.5 px-3 text-right tabular-nums">
-                        {fmt(qty, qty % 1 === 0 ? 0 : 2)}
+                        {fmtCantidad(qty)}
                       </td>
                       <td className="py-2.5 px-3 text-muted-foreground">{item.unit}</td>
                       <td className="py-2.5 px-3 text-right tabular-nums">

@@ -12,9 +12,9 @@ import { TrendingUp, Package, Truck, AlertTriangle, Users, Download, Info, Credi
 import { generateBolsaFvPDF, generateComisionesPDF, type BolsaFvRow, type ComisionRow } from "@/lib/pdf";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const fmt = (n: number) =>
-  "$" + Math.round(n).toLocaleString("es-MX");
-const fmtInt = (n: number) => Math.round(n).toLocaleString("es-MX");
+import { fmtPesos, fmtMiles } from "@/lib/format";
+const fmt = fmtPesos;
+const fmtInt = fmtMiles;
 
 function localStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;

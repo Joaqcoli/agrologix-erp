@@ -10,7 +10,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { BarChart3, Users, AlertTriangle, Trophy, ListOrdered, Clock, MessageCircle } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ComposedChart, Line, Legend } from "recharts";
 
-const fmt = (n: number) => "$" + Math.round(n).toLocaleString("es-MX");
+import { fmtPesos } from "@/lib/format";
+const fmt = fmtPesos;
 
 type ExtraData = {
   inactivos: { id: number; name: string; phone: string | null; dias: number; bucket: "naranja" | "roja" }[];

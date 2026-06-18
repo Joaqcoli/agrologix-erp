@@ -34,7 +34,8 @@ const STATUS_CONFIG = {
   cancelled: { label: "Cancelado", icon: XCircle, variant: "destructive" as const },
 };
 
-const fmt = (v: number) => v.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+import { fmtDecimal } from "@/lib/format";
+const fmt = (v: number) => fmtDecimal(v);
 
 const formatRemito = (order: { remitoNum?: number | null; folio?: string | null }) => {
   if (order.remitoNum != null) return `VA-${String(order.remitoNum).padStart(6, "0")}`;

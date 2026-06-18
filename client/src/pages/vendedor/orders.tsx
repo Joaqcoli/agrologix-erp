@@ -13,7 +13,8 @@ import {
   FileText, Calendar, TrendingUp, Users,
 } from "lucide-react";
 
-const fmt = (v: string | number) => "$" + Math.round(Number(v)).toLocaleString("es-MX");
+import { fmtPesos } from "@/lib/format";
+const fmt = fmtPesos;
 
 const STATUS_CONFIG = {
   draft:     { label: "Borrador",  icon: Clock,         variant: "secondary"    as const },
