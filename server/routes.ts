@@ -67,6 +67,11 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
   // operator: cuenta deprecada, desactivada a nivel login (users.active=false). Sin entrada acá.
 };
 
+// Cache en memoria de la revalidación de cuenta activa (M1). Saca 1 round-trip a la
+// base de cada request. TTL corto = ventana máxima del corte al desactivar una cuenta.
+const ACTIVE_TTL_MS = 8000; // 8s: cubre el burst de llamadas de una pantalla; corte ≤8s
+const activeCache = new Map<number, { active: boolean; at: number }>();
+
 // Pura y testeable: decide si un rol puede llamar a un path de /api/*.
 export function isApiAllowedForRole(role: string | undefined, path: string): boolean {
   if (!role || !path.startsWith("/api/")) return true;
@@ -80,15 +85,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Seguridad central: revalidar cuenta ACTIVA + default-deny por rol ────────
   // Corre en TODO /api/* → cubre admin, vendedor, galpón y los requireAuth en un solo
   // lugar (a diferencia de requireAuth, que no protege /api/vendedor|galpon/*).
-  // 1) Si hay sesión, revalida en CADA request que la cuenta siga `active=true`. Así
-  //    desactivar una cuenta la corta AL INSTANTE (próximo request → 401 + sesión
-  //    destruida), sin esperar al próximo login. Pensado para cuentas de clientes a
-  //    futuro. La lectura es por PK (índice, tabla chica) → costo despreciable.
+  // 1) Si hay sesión, revalida que la cuenta siga `active=true`. Originalmente leía la
+  //    DB en CADA request (corte AL INSTANTE al desactivar). Con la base lejana eso
+  //    sumaba ~1 round-trip (~150ms) a cada acción. Ahora se CACHEA el flag `active`
+  //    por usuario unos segundos: requests seguidos del mismo usuario no repiten la
+  //    lectura. Trade-off de seguridad M1: desactivar una cuenta la corta a más tardar
+  //    en ACTIVE_TTL_MS (en vez de instantáneo) — aceptado. Login/logout no dependen de
+  //    este cache (manipulan la sesión directo) → siguen inmediatos.
   // 2) Default-deny por rol (ROLE_API_WHITELIST): lo que no matchea su lista → 403.
   app.use(async (req, res, next) => {
     if (req.session?.userId && req.path.startsWith("/api/")) {
-      const user = await storage.getUserById(req.session.userId);
-      if (!user || !user.active) {
+      const uid = req.session.userId;
+      const now = Date.now();
+      const cached = activeCache.get(uid);
+      let active: boolean;
+      if (cached && now - cached.at < ACTIVE_TTL_MS) {
+        active = cached.active;
+      } else {
+        const user = await storage.getUserById(uid);
+        active = !!(user && user.active); // usuario inexistente o inactivo → false
+        activeCache.set(uid, { active, at: now });
+      }
+      if (!active) {
+        activeCache.delete(uid); // no cachear el "inactivo" para no retrasar un re-alta
         return req.session.destroy(() => res.status(401).json({ error: "Not authenticated" }));
       }
       if (!isApiAllowedForRole(req.session.userRole, req.path)) {
