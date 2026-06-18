@@ -58,3 +58,14 @@
 - Es un fix **acotado y de bajo riesgo** (sólo agrega un guard "no pisar si tocado" en el front; no toca el guardado ni el server).
 
 **Solo lectura. Nada tocado.**
+
+---
+
+## 7. ✅ M5 RESUELTO (2026-06-18, commit `c7b935c`) — B + C (G ya estaba cubierto)
+
+- **B — sugerencia de peso (`purchases/new.tsx`):** flag `wpuTouched` por ítem. Se marca `true` al tipear el peso a mano; se resetea a `false` al cambiar producto/unidad. `suggestSupplierWeight` aplica **solo si `!wpuTouched`** (guard dentro del `setItems` funcional → lee el estado al resolver el fetch). Campo vacío → precarga igual que antes; peso tipeado → ya no se pisa (eso movía el costo por kg).
+- **C — prefill de precio en intake (`intake.tsx`):** no hay input manual de precio (se completan en el detalle). El race era entre **dos fetches** del mismo ítem (el de fondo al abrir preview + el de cambio de unidad): ganaba el que resolvía último. Fix: token `priceFetchSeq[idx]` (useRef) que incrementa en cada fetch disparado; al resolver, aplica **solo si su token sigue siendo el último**. Reset del map en cada parseo nuevo (invalida fetches en vuelo).
+- **G — doble-click add línea galpón:** **falso positivo del diagnóstico.** El botón (`galpon/order-detail.tsx:182`) ya tenía `disabled={… || addMut.isPending}` desde el commit de la feature (d3c3b6c, 15/06), confirmado con `git blame`. Sin cambio.
+- **A / E / F:** ya estaban resueltos (prefill server-side / recálculo secuencial / disabled). Sin cambio.
+
+**Verificado:** build (vite+esbuild) ✓; tsc 100 errores baseline = 100 con cambios, 0 en los 2 archivos. Trazas de los 3 escenarios de B (vacío precarga / tipeado no se pisa / cambio de unidad re-precarga) y de los 3 de C (prefill solo / unidad nueva gana al de fondo / parseo nuevo descarta viejos). Solo guards en el front: no toca guardado, server ni cálculo de costo/precio.
