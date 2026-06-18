@@ -9,7 +9,7 @@ import {
   creditNotes,
   cuentasFinancieras,
   type User, type Customer, type Product, type Purchase,
-  type PurchaseItem, type StockMovement, type Order,
+  type PurchaseItem, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
   type Payment, type Withholding, type InsertPayment, type InsertWithholding,
   type Supplier, type SupplierPayment, type InsertSupplier, type InsertSupplierPayment,
@@ -1032,13 +1032,6 @@ export const storage = {
 
       return updated;
     });
-  },
-
-  async getStockMovements(productId?: number): Promise<StockMovement[]> {
-    if (productId) {
-      return db.select().from(stockMovements).where(eq(stockMovements.productId, productId)).orderBy(desc(stockMovements.createdAt));
-    }
-    return db.select().from(stockMovements).orderBy(desc(stockMovements.createdAt));
   },
 
   async getAdjustmentMovements(): Promise<Array<{ id: number; productId: number; productName: string; category: string; unit: string; movementType: string; quantity: string; avgCost: string | null; notes: string | null; createdAt: string }>> {
@@ -2221,11 +2214,13 @@ export const storage = {
           deductFromStock = Math.max(0, availableQtyBase);
           outQty = (deductFromStock).toFixed(4);
         } else {
-          // Flujo normal (sin decisión = stock suficiente): quantity OUT en unidad de pedido
-          effectiveCostStr = baseCostStr;
-          movementCostStr = baseCostStr;
+          // Flujo normal (sin decisión = stock suficiente): el MOVIMIENTO se loguea en unidad
+          // BASE (kg) igual que rinde/prorate, para que el ledger sea consistente.
+          // effectiveCostStr (order_items + margen) sigue por unidad de PEDIDO — NO cambia.
+          effectiveCostStr = baseCostStr;                          // por unidad de pedido (margen/order_items)
+          movementCostStr = (parseFloat(baseCostStr) / wpuForBase).toFixed(4); // costo por unidad base (acompaña outQty base)
           deductFromStock = deductQty;
-          outQty = item.quantity as string;
+          outQty = deductQty.toFixed(4);                           // kg base (antes: item.quantity en bultos)
         }
 
         const movementNotes = (decision === "rinde" || decision === "prorate")
