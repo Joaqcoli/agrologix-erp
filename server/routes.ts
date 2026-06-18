@@ -2545,7 +2545,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const cuenta = cuentaPagoId ? cuentas.find((c: any) => c.id === parseInt(cuentaPagoId)) : null;
         const isMP = cuenta?.tipo === "mp";
 
-        // Crear movimiento de cuenta si no es MP
+        // (M8-c) Aplicar el pago a la obligación Y registrar el pago en el historial de forma
+        // ATÓMICA: si el registro falla, se revierte todo y el error se propaga (es imposible que
+        // quede una obligación pagada sin su registro de pago, y no pasa en silencio).
+        const { obligacion: updated } = await storage.payObligacion(id, patch, {
+          fecha: new Date().toISOString().slice(0, 10),
+          monto: montoNum,
+          moneda: ob.moneda ?? "ARS",
+          cotizacion: isUSD ? cotz : null,
+          montoArs: montoARS,
+          cuentaPagoId: cuentaPagoId ? parseInt(cuentaPagoId) : null,
+        });
+
+        // Recién con el pago YA aplicado + registrado, generamos los movimientos de plata (feeds).
+        // (Si la operación atómica de arriba falla, no se mueve nada de plata.)
         if (cuenta && !isMP) {
           await storage.createMovimientoCuenta({
             cuentaId: cuenta.id,
@@ -2575,21 +2588,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             }, req.session.userId!);
           } catch (e) { console.error("caja_movement creation failed:", e); }
         }
-
-        const updated = await storage.patchObligacion(id, patch);
-
-        // Registrar el pago (parcial o total) en el historial
-        try {
-          await storage.addObligacionPago({
-            obligacionId: id,
-            fecha: new Date().toISOString().slice(0, 10),
-            monto: montoNum,
-            moneda: ob.moneda ?? "ARS",
-            cotizacion: isUSD ? cotz : null,
-            montoArs: montoARS,
-            cuentaPagoId: cuentaPagoId ? parseInt(cuentaPagoId) : null,
-          });
-        } catch (e) { console.error("addObligacionPago failed:", e); }
 
         // Si es pago completo, marcar cheque vinculado como cobrado
         if (isFullPayment) {

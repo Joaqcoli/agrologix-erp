@@ -560,3 +560,18 @@ export const obligaciones = pgTable("obligaciones", {
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 export type Obligacion = typeof obligaciones.$inferSelect;
+
+// Historial de pagos (parciales/total) de una obligación (M8: matchea la tabla ya existente)
+export const obligacionPagos = pgTable("obligacion_pagos", {
+  id: serial("id").primaryKey(),
+  obligacionId: integer("obligacion_id").notNull().references(() => obligaciones.id, { onDelete: "cascade" }),
+  fecha: text("fecha").notNull(), // YYYY-MM-DD
+  monto: numeric("monto", { precision: 14, scale: 2 }).notNull(),
+  moneda: text("moneda").notNull().default("ARS"), // ARS | USD
+  cotizacion: numeric("cotizacion", { precision: 14, scale: 4 }),
+  montoArs: numeric("monto_ars", { precision: 14, scale: 2 }).notNull(),
+  cuentaPagoId: integer("cuenta_pago_id").references(() => cuentasFinancieras.id),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type ObligacionPago = typeof obligacionPagos.$inferSelect;
+export type InsertObligacionPago = typeof obligacionPagos.$inferInsert;

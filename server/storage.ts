@@ -59,6 +59,13 @@ function itemProfit(item: RawOrderItem, hasIva: boolean): number {
   return itemBilling(item, hasIva) - qty * cost;
 }
 
+// Forma REAL que devuelven las queries crudas de obligacion_pagos: snake_case + numeric
+// casteado a float (distinta del $inferSelect de Drizzle, que es camelCase + string). M8.
+type ObligacionPagoRow = {
+  id: number; obligacion_id: number; fecha: string; monto: number; moneda: string;
+  cotizacion: number | null; monto_ars: number; cuenta_pago_id: number | null; created_at: string | Date;
+};
+
 // Is this unit a "bulto" (physical box/bag)?
 const BULTO_UNITS = new Set(["CAJON", "BOLSA", "BANDEJA"]);
 function isBulto(unit: string): boolean {
@@ -5789,26 +5796,43 @@ export const storage = {
   },
 
   // Historial de pagos (parciales/total) de una obligación
-  async getObligacionPagos(obligacionId: number): Promise<any[]> {
+  async getObligacionPagos(obligacionId: number): Promise<ObligacionPagoRow[]> {
     const rows = await db.execute(drizzleSql`
       SELECT id, obligacion_id, fecha, monto::float, moneda, cotizacion::float, monto_ars::float, cuenta_pago_id, created_at
       FROM obligacion_pagos WHERE obligacion_id = ${obligacionId}
       ORDER BY created_at ASC, id ASC
     `);
-    return rows.rows as any[];
+    return rows.rows as ObligacionPagoRow[];
   },
 
+  // tx opcional → permite registrar el pago dentro de la misma transacción que el pago a la
+  // obligación (ver payObligacion), para que no quede una obligación pagada sin su registro.
   async addObligacionPago(data: {
     obligacionId: number; fecha: string; monto: number; moneda: string;
     cotizacion?: number | null; montoArs: number; cuentaPagoId?: number | null;
-  }): Promise<any> {
-    const row = await db.execute(drizzleSql`
+  }, tx: any = db): Promise<ObligacionPagoRow> {
+    const row = await tx.execute(drizzleSql`
       INSERT INTO obligacion_pagos (obligacion_id, fecha, monto, moneda, cotizacion, monto_ars, cuenta_pago_id)
       VALUES (${data.obligacionId}, ${data.fecha}, ${data.monto}, ${data.moneda},
         ${data.cotizacion ?? null}, ${data.montoArs}, ${data.cuentaPagoId ?? null})
       RETURNING id, obligacion_id, fecha, monto::float, moneda, cotizacion::float, monto_ars::float, cuenta_pago_id, created_at
     `);
-    return (row.rows as any[])[0];
+    return (row.rows as ObligacionPagoRow[])[0];
+  },
+
+  // (c) Pagar una obligación de forma ATÓMICA: aplica el pago a la obligación Y registra el
+  // pago en el historial en UNA sola transacción. Si el registro falla, se revierte todo →
+  // es IMPOSIBLE que quede una obligación pagada sin su registro de pago.
+  async payObligacion(
+    id: number,
+    patch: Parameters<typeof storage.patchObligacion>[1],
+    pago: { fecha: string; monto: number; moneda: string; cotizacion?: number | null; montoArs: number; cuentaPagoId?: number | null },
+  ): Promise<{ obligacion: any; pago: ObligacionPagoRow }> {
+    return db.transaction(async (tx) => {
+      const obligacion = await this.patchObligacion(id, patch, tx);
+      const pagoRow = await this.addObligacionPago({ obligacionId: id, ...pago }, tx);
+      return { obligacion, pago: pagoRow };
+    });
   },
 
   async createObligaciones(items: {
@@ -5836,8 +5860,8 @@ export const storage = {
     estado?: string; cuentaPagoId?: number | null; pagadoAt?: string | null;
     monto?: string; moneda?: string; concepto?: string; tipo?: string;
     fechaVencimiento?: string; notas?: string | null; pagoParcial?: boolean;
-  }): Promise<any> {
-    const row = await db.execute(drizzleSql`
+  }, tx: any = db): Promise<any> {
+    const row = await tx.execute(drizzleSql`
       UPDATE obligaciones
       SET estado = COALESCE(${data.estado ?? null}, estado),
           cuenta_pago_id = CASE WHEN ${data.cuentaPagoId !== undefined} THEN ${data.cuentaPagoId ?? null} ELSE cuenta_pago_id END,
