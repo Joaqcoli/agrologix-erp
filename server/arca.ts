@@ -187,7 +187,9 @@ async function wsfeSoap(action: string, bodyInner: string): Promise<string> {
     `</soap:Envelope>`,
   ].join("\n");
 
-  if (action === "FECAESolicitar") {
+  // Gateado: el SOAP completo lleva CUIT y montos fiscales. Solo loguear si se pide
+  // explícitamente (DEBUG_ARCA=1). Apagado en producción por defecto.
+  if (action === "FECAESolicitar" && process.env.DEBUG_ARCA) {
     console.log(`[ARCA] FECAESolicitar payload:\n${envelope}`);
   }
 
@@ -206,7 +208,7 @@ async function wsfeSoap(action: string, bodyInner: string): Promise<string> {
     throw new Error(`WSFE HTTP error (${action}): ${e.message} — ${String(body).slice(0, 2000)}`);
   }
 
-  if (action === "FECAESolicitar") {
+  if (action === "FECAESolicitar" && process.env.DEBUG_ARCA) {
     console.log(`[ARCA] FECAESolicitar respuesta:\n${respData}`);
   }
 

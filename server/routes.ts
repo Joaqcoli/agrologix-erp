@@ -146,31 +146,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(stats);
   });
 
-  // Diagnostic: show raw cost data for a product (temp endpoint)
-  app.get("/api/debug/product-cost", requireAuth, async (req, res) => {
-    try {
-      const name = (req.query.name as string) ?? "";
-      const rows = await db.execute(drizzleSql`
-        SELECT
-          p.id, p.name,
-          pu.unit, pu.avg_cost, pu.stock_qty, pu.weight_per_unit, pu.base_unit,
-          pi.id AS pi_id, pi.purchase_unit, pi.unit AS pi_unit,
-          pi.cost_per_unit, pi.cost_per_purchase_unit,
-          pi.quantity, pi.purchase_qty, pi.weight_per_package, pi.subtotal,
-          sm.id AS sm_id, sm.movement_type, sm.unit_cost AS sm_unit_cost,
-          sm.quantity AS sm_qty, sm.notes, sm.reference_type
-        FROM products p
-        LEFT JOIN product_units pu ON pu.product_id = p.id
-        LEFT JOIN purchase_items pi ON pi.product_id = p.id
-        LEFT JOIN stock_movements sm ON sm.product_id = p.id
-        WHERE LOWER(p.name) ILIKE ${('%' + name.toLowerCase() + '%')}
-        ORDER BY pi.id DESC, sm.id DESC
-        LIMIT 30
-      `);
-      return res.json(rows.rows);
-    } catch (e: any) { return res.status(500).json({ error: e.message }); }
-  });
-
   app.get("/api/dashboard/rinde-detail", requireAuth, async (req, res) => {
     try {
       const { from, to } = req.query as { from?: string; to?: string };
@@ -2673,56 +2648,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return _mpMerchantId;
   }
 
-  // Diagnostic endpoint — tests multiple MP endpoints and returns which ones respond
-  app.get("/api/mp/test", requireAuth, async (_req, res) => {
-    const token = process.env.MP_ACCESS_TOKEN;
-    if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });
-    const candidates = [
-      "https://api.mercadopago.com/v1/account/balance",
-      "https://api.mercadopago.com/v1/payments/search?limit=5",
-      "https://api.mercadopago.com/merchant_orders/search?limit=5",
-    ];
-    const results: Record<string, { status: number; ok: boolean; body: any }> = {};
-    for (const url of candidates) {
-      try {
-        const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-        const body = await r.json().catch(() => null);
-        results[url] = { status: r.status, ok: r.ok, body };
-      } catch (e: any) {
-        results[url] = { status: 0, ok: false, body: { error: e.message } };
-      }
-    }
-    return res.json(results);
-  });
-
-  // Debug: devuelve los primeros 3 pagos crudos (sin normalizar) + merchant_id + users/me
-  app.get("/api/mp/raw", requireAuth, async (_req, res) => {
-    const token = process.env.MP_ACCESS_TOKEN;
-    if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });
-    try {
-      // 1. Obtener info del usuario
-      const meRes  = await fetch("https://api.mercadopago.com/v1/users/me", { headers: { Authorization: `Bearer ${token}` } });
-      const meBody = await meRes.json();
-
-      // 2. Pagos últimos 30 días con fechas explícitas
-      const now  = new Date();
-      const from = new Date(now); from.setDate(now.getDate() - 29);
-      const pad  = (n: number) => String(n).padStart(2, "0");
-      const isoFrom = `${from.getFullYear()}-${pad(from.getMonth()+1)}-${pad(from.getDate())}T00:00:00.000-03:00`;
-      const isoTo   = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T23:59:59.999-03:00`;
-      const url = `https://api.mercadopago.com/v1/payments/search?range=date_created&begin_date=${encodeURIComponent(isoFrom)}&end_date=${encodeURIComponent(isoTo)}&sort=date_created&criteria=desc&limit=3`;
-      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      const body = await r.json();
-
-      return res.json({
-        me_status: meRes.status,
-        me: meBody,
-        payments_status: r.status,
-        payments: body?.results ?? body,
-      });
-    } catch (e: any) { return res.status(500).json({ error: e.message }); }
-  });
-
   app.get("/api/mp/balance", requireAuth, async (_req, res) => {
     const token = process.env.MP_ACCESS_TOKEN;
     if (!token) return res.json({ available_balance: null, unavailable: true });
@@ -2741,63 +2666,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       console.warn("[MP balance] exception:", e.message);
       return res.json({ available_balance: null, unavailable: true });
     }
-  });
-
-  // Diagnostic: returns raw fields of first 10 incoming payments + report list
-  app.get("/api/mp/income-diag", requireAuth, async (_req, res) => {
-    const token = process.env.MP_ACCESS_TOKEN;
-    if (!token) return res.status(503).json({ error: "MP_ACCESS_TOKEN no configurado" });
-    try {
-      const now = new Date();
-      const from = new Date(now); from.setDate(now.getDate() - 60);
-      const pad2 = (n: number) => String(n).padStart(2, "0");
-      const isoFrom = `${from.getFullYear()}-${pad2(from.getMonth()+1)}-${pad2(from.getDate())}T00:00:00.000-03:00`;
-      const isoTo   = `${now.getFullYear()}-${pad2(now.getMonth()+1)}-${pad2(now.getDate())}T23:59:59.999-03:00`;
-      const url = `https://api.mercadopago.com/v1/payments/search?range=date_created&begin_date=${encodeURIComponent(isoFrom)}&end_date=${encodeURIComponent(isoTo)}&sort=date_created&criteria=desc&limit=50`;
-      const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      const body = await r.json();
-      const payments = body?.results ?? [];
-
-      // Detect merchantId
-      const freq = new Map<string, number>();
-      for (const p of payments) {
-        const cid = String(p.collector_id ?? p.collector?.id ?? "");
-        if (cid && cid !== "0") freq.set(cid, (freq.get(cid) ?? 0) + 1);
-      }
-      let merchantId = "";
-      let best = 0;
-      for (const [id, n] of freq) { if (n > best) { best = n; merchantId = id; } }
-
-      // Filter income (non-outgoing)
-      const income = payments.filter((p: any) => {
-        const cid = String(p.collector_id ?? p.collector?.id ?? "");
-        return cid === merchantId;
-      });
-
-      const diagData = income.slice(0, 10).map((p: any) => ({
-        id: p.id,
-        date_created: p.date_created,
-        operation_type: p.operation_type,
-        payment_type_id: p.payment_type_id,
-        status: p.status,
-        transaction_amount: p.transaction_amount,
-        collector_id: p.collector_id,
-        payer_id: p.payer_id,
-        payer: { id: p.payer?.id, email: p.payer?.email, first_name: p.payer?.first_name, last_name: p.payer?.last_name, identification: p.payer?.identification },
-        transaction_details: p.transaction_details,
-        description: p.description,
-        statement_descriptor: p.statement_descriptor,
-      }));
-
-      // Also check report list
-      let reportList: any = null;
-      try {
-        const rl = await fetch("https://api.mercadopago.com/v1/account/release_report/list", { headers: { Authorization: `Bearer ${token}` } });
-        reportList = await rl.json();
-      } catch (_) {}
-
-      return res.json({ merchantId, totalFetched: payments.length, incomeCount: income.length, diagData, reportList });
-    } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
   app.get("/api/mp/movements", requireAuth, async (req, res) => {
@@ -3047,10 +2915,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let contactsMap: Map<string, any> = new Map();
       try {
         contactsMap = await storage.getBankContactsByIdentifiers(allCandidates);
-        // Log diagnóstico (visible en Render)
-        console.log(`[contacts] ${withCandidates.length} movimientos → ${allCandidates.length} candidatos → ${contactsMap.size} matches`);
-        if (contactsMap.size > 0) console.log(`[contacts] matched keys:`, [...contactsMap.keys()]);
-        if (allCandidates.length > 0) console.log(`[contacts] candidatos MP:`, allCandidates.slice(0, 10));
       } catch (e: any) { console.warn("[contacts] lookup failed:", e.message); }
 
       // Batch-fetch bank_payment_links for all movements

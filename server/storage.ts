@@ -5406,10 +5406,7 @@ export const storage = {
     if (identifiers.length === 0) return new Map();
     const all = await db.select().from(bankContacts);
     const lowerSet = new Set(identifiers.map(i => i.toLowerCase().trim()));
-    console.log(`[contacts-storage] DB has ${all.length} contacts: [${all.map(c => c.identifier).join(', ')}]`);
-    console.log(`[contacts-storage] looking for: [${[...lowerSet].join(', ')}]`);
     const matching = all.filter(r => lowerSet.has(r.identifier.toLowerCase().trim()));
-    console.log(`[contacts-storage] found ${matching.length} matching contacts`);
     return new Map(matching.map(r => [r.identifier.toLowerCase().trim(), r]));
   },
 
@@ -5469,15 +5466,6 @@ export const storage = {
               synced_at            = NOW()
       `);
     }
-    // Verify fee_amount was written for first row
-    try {
-      const first = rows[0];
-      const check = await db.execute(drizzleSql.raw(
-        `SELECT mp_id, monto_bruto::float, fee_amount::float FROM mp_xlsx_movements WHERE mp_id = '${first.mpId}' LIMIT 1`
-      ));
-      const v = check.rows[0] as any;
-      console.log(`[upsert-verify] mpId=${first.mpId} monto_bruto=${v?.monto_bruto ?? "NULL"} fee_amount=${v?.fee_amount ?? "NULL"} (input feeAmount=${first.feeAmount ?? "null"})`);
-    } catch (_) {}
   },
 
   async getMpXlsxMovements(from?: string, to?: string): Promise<any[]> {
