@@ -156,6 +156,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // Serie de evolución mensual (ventas + margen % por mes, últimos 12). Fija: no
+  // depende del selector de período de las cards → se llama una vez.
+  app.get("/api/dashboard/monthly-trend", requireAuth, async (_req, res) => {
+    try {
+      return res.json(await storage.getMonthlyTrend());
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   app.get("/api/dashboard/historical", requireAuth, (req, res) => {
     const month = parseInt(req.query.month as string);
     const year  = parseInt(req.query.year  as string);

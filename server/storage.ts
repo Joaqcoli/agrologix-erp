@@ -25,7 +25,7 @@ import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between, inArr
 import { dbEnumToCanonical } from "@shared/units";
 import { ivaRateOf } from "@shared/iva";
 import bcrypt from "bcryptjs";
-import { getHistoricalMonthStats, isHistoricalMonth } from "./historical-stats";
+import { getHistoricalMonthStats, isHistoricalMonth, listHistoricalMonths } from "./historical-stats";
 
 // ─── CC Helpers ────────────────────────────────────────────────────────────────
 // La tasa de IVA sale de products.iva_rate (única fuente, helper compartido). Ver M6.
@@ -4874,6 +4874,61 @@ export const storage = {
         total: parseFloat(r.comision_total ?? "0"),
       })),
     };
+  },
+
+  // ─── Evolución mensual (ventas + margen bruto % por mes, ventana de 12) ────────
+  // Serie para los gráficos del dashboard. UNA query con GROUP BY mes, replicando
+  // EXACTO el criterio de ventas/ganancia de getDashboardStats (mismo CASE de IVA por
+  // producto, mismo costo override, mismos filtros: approved + sin facturación
+  // histórica importada). Los meses históricos (ene/feb/mar 2026) se mergean con el
+  // mismo override hardcodeado que usa getDashboardStats → coinciden con lo que el
+  // dashboard muestra para esos meses. Margen = ganancia_bruta / ventas × 100.
+  async getMonthlyTrend(): Promise<{ ym: string; ventas: number; margen: number }[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT
+        to_char(date_trunc('month', o.order_date), 'YYYY-MM') AS ym,
+        COALESCE(SUM(
+          CASE
+            WHEN oi.price_per_unit::numeric = 0 THEN 0
+            WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+            ELSE oi.quantity::numeric * oi.price_per_unit::numeric
+          END
+        ), 0) AS ventas,
+        COALESCE(SUM(
+          CASE
+            WHEN oi.price_per_unit::numeric = 0 THEN 0
+            WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+            ELSE oi.quantity::numeric * oi.price_per_unit::numeric
+          END
+          - oi.quantity::numeric * COALESCE(oi.override_cost_per_unit, oi.cost_per_unit)::numeric
+        ), 0) AS ganancia_bruta
+      FROM orders o
+      JOIN customers c ON c.id = o.customer_id
+      JOIN order_items oi ON oi.order_id = o.id
+      LEFT JOIN products p ON p.id = oi.product_id
+      WHERE o.status = 'approved'
+        AND (o.notes IS NULL OR o.notes NOT LIKE '%Facturación histórica importada%')
+      GROUP BY 1
+    `);
+
+    const map = new Map<string, { ventas: number; ganancia: number }>();
+    for (const r of rows.rows as any[]) {
+      map.set(String(r.ym), { ventas: parseFloat(r.ventas ?? "0"), ganancia: parseFloat(r.ganancia_bruta ?? "0") });
+    }
+    // Override de meses históricos (mismo dato que getDashboardStats)
+    for (const h of listHistoricalMonths()) {
+      map.set(h.ym, { ventas: h.ventas, ganancia: h.ganancia_bruta });
+    }
+
+    return [...map.entries()]
+      .filter(([, v]) => v.ventas > 0)                 // solo meses con ventas reales
+      .sort(([a], [b]) => a.localeCompare(b))          // cronológico (más viejo → nuevo)
+      .slice(-12)                                      // ventana móvil: últimos 12
+      .map(([ym, v]) => ({
+        ym,
+        ventas: v.ventas,
+        margen: v.ventas > 0 ? +((v.ganancia / v.ventas) * 100).toFixed(2) : 0,
+      }));
   },
 
   // ─── Commissions Detail ───────────────────────────────────────────────────

@@ -70,6 +70,18 @@ export function getHistoricalMonthStats(month: number, year: number): Historical
 }
 
 /**
+ * Lista los meses históricos en formato YYYY-MM con sus ventas/ganancia hardcodeadas.
+ * Se usa para mergear estos meses en la serie de evolución mensual (mismo override
+ * que getDashboardStats aplica cuando el período es exactamente uno de estos meses).
+ */
+export function listHistoricalMonths(): { ym: string; ventas: number; ganancia_bruta: number }[] {
+  return Object.entries(STATS).map(([key, v]) => {
+    const [y, m] = key.split("-").map(Number);
+    return { ym: `${y}-${String(m).padStart(2, "0")}`, ventas: v.ventas, ganancia_bruta: v.ganancia_bruta };
+  });
+}
+
+/**
  * Returns { month, year } if [from, to) maps exactly to a full historical month,
  * or null otherwise.
  * Expects from/to in YYYY-MM-DD or ISO timestamp format.
