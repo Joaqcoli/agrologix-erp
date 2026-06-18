@@ -71,3 +71,61 @@
 → **Recomendación:** NO empezar por el code-splitting. Primero **confirmar el plan de Render**: si hay spin-down, el keep-alive (+ gatear migraciones) ataca el 80 % del problema percibido con casi nada de trabajo. El code-splitting queda para mejorar la carga steady-state después.
 
 **Solo lectura. Nada tocado.**
+
+---
+
+# Apéndice — Lentitud generalizada ~2–5 s por acción (diagnóstico, solo lectura, 2026-06-18)
+
+> **Nuevo dato:** NO es cold start (ya hay keep-alive) ni el bundle. **TODAS** las acciones tardan parejo ~2–5 s. Patrón uniforme → algo que afecta **cada round-trip a la base por igual**.
+> **Conclusión:** la causa es **latencia por query alta × muchas queries secuenciales por request**. La latencia alta viene de **región cruzada: la base está en Supabase `sa-east-1` (São Paulo) y Render no tiene región en Sudamérica** → el server corre lejos de la DB y cada query paga ~100–180 ms de ida y vuelta. Un request hace 1 query de auth (M1) + N queries de la lógica, **en serie** → 2–5 s. El pooling y el pooler **están bien**; el cuello es la distancia × cantidad de round-trips.
+
+## 1. Región y pooling (sospecha #1)
+
+- **Supabase:** host `aws-1-sa-east-1.pooler.supabase.com`, **puerto 6543**, `?pgbouncer=true` → **usa el pooler (pgbouncer), región `sa-east-1` (São Paulo)**. ✅ El pooler está bien configurado — NO es falta de pooling.
+- **Pool de la app** (`server/db.ts`): `pg.Pool` con `max: 5`, `idleTimeoutMillis: 30000`, sin `keepAlive`. Reutiliza conexiones (bien), pero las cierra tras 30 s de idle.
+- **Render:** la región no se ve desde el repo (**hay que confirmarla en el dashboard de Render**). Dato decisivo: **Render no ofrece región en Sudamérica** (sus regiones son Oregon, Ohio, Virginia, Frankfurt, Singapur). Por lo tanto, esté donde esté, **el server está en otro continente respecto de São Paulo** → latencia cruzada en cada query.
+
+## 2. Medición real del round-trip (desde una máquina en Sudamérica)
+
+```
+1er SELECT 1 (abrir conexión: TLS + auth):   857 ms
+SELECT 1 sobre conexión tibia (x8):          ~103 ms promedio
+```
+- **Abrir una conexión nueva cuesta ~850 ms** (TLS + auth por el pooler). Con `idleTimeoutMillis: 30000`, si el tráfico es esporádico el pool se vacía y el próximo request paga esos ~850 ms.
+- **Cada query sobre conexión tibia ya cuesta ~100 ms** desde acá (Sudamérica, *cerca* de São Paulo). **Desde Render (otro continente) será peor (~120–180 ms).** En una DB en la MISMA región el round-trip sería ~1–5 ms — o sea, hoy se paga ~20–100× de más por query.
+
+## 3. Cuántos round-trips paga un request (la latencia se multiplica)
+
+- **Middleware M1 (cada `/api/*`):** `storage.getUserById(req.session.userId)` en **CADA** request (revalidación de `active`). Es un PK lookup trivial **en CPU**, pero es **1 round-trip de red completo por request**. A ~150 ms, son 150 ms fijos antes de hacer nada.
+- **Lógica del endpoint, en serie:**
+  - `getDashboardStats`: **9 `db.execute` secuenciales** → ~9 × 150 ms ≈ **1,35 s**.
+  - `approveOrder`: **~22 queries awaited** dentro del loop de ítems → ~22 × 150 ms ≈ **3,3 s** solo de latencia.
+  - Hasta un GET "simple" paga auth (1) + sus 2–4 queries → ~0,5–0,8 s.
+- **Fórmula del síntoma:** `tiempo ≈ (1 auth + N queries del endpoint) × latencia_por_query`. Con latencia cruzada (~150 ms) y N entre 3 y 22, da **~0,5 a 3,3 s**, más reconexiones ocasionales de ~850 ms → **2–5 s parejos**. Coincide exacto con lo que se ve.
+
+## 4. Separando "base lejos" de "demasiada lógica"
+
+- **Query trivial tibia = ~100 ms** (debería ser ~1–5 ms en misma región) → el grueso del tiempo es **transporte de red, no procesamiento**. Confirma que la base está *lejos*, no que las queries sean pesadas en sí.
+- Las queries en sí no son patológicas (sin N+1 sobre listados gigantes; `getDashboardStats` son agregados acotados a "hoy"). El problema es **cuántos round-trips se hacen en serie a una base lejana**, no una query lenta puntual.
+
+## 5. Causas, en orden de impacto
+
+| # | Causa | Efecto | Fix |
+|---|---|---|---|
+| 1 | **Región cruzada Render↔Supabase (sa-east-1)** | ~100–180 ms POR query × N queries → **2–5 s** | **Co-locar**: mismo continente/región server↔DB |
+| 2 | **Muchas queries secuenciales/request** (approveOrder ~22, stats 9) | multiplica la latencia de (1) | Paralelizar (`Promise.all`) / batch / reducir round-trips |
+| 3 | **Auth M1: 1 query/request** | +1 round-trip fijo a cada acción | Cachear el `active` unos segundos / no re-fetch innecesario |
+| 4 | **`idleTimeoutMillis: 30000`, sin keepAlive** | reconexión de ~850 ms tras idle | Subir idle timeout / `keepAlive: true` para conservar conexiones tibias |
+
+## 6. Solución y prioridad (mayor impacto / menor riesgo)
+
+1. **Co-locar server y base en la misma región (EL fix de fondo).** Pasa la latencia por query de ~150 ms a ~1–5 ms → un dashboard de 9 queries cae de ~1,35 s a ~50 ms; un approveOrder de 22 queries de ~3,3 s a ~150 ms. Opciones:
+   - Deployar el server en un proveedor **con región en São Paulo / sa-east-1** (ej. **Fly.io tiene `gru` São Paulo**, o AWS sa-east-1), **manteniendo** Supabase donde está. **O** mover la base a la región donde corra el server. Es un cambio de **infraestructura, no de código** — el de mayor impacto por lejos.
+   - **Cómo confirmar la causa antes de mover nada:** ver la **región del servicio en el dashboard de Render**; y medir un `SELECT 1` **desde el server de Render** (un log de timing en el endpoint de keep-alive). Si desde Render el round-trip tibio es ≫ 100 ms y desde un server co-locado sería ~1–5 ms, queda confirmado.
+2. **Reducir round-trips por request** (sin mover infra, ayuda ya): `Promise.all` en `getDashboardStats` (9→1 ronda), y revisar los loops de `approveOrder`/`createOrder` para batchear. Mitiga el síntoma incluso con la base lejos. Riesgo medio (tocar flujos críticos — con verificación).
+3. **Cachear la revalidación de auth M1** unos segundos (o por request) para sacar 1 round-trip de cada acción. Riesgo bajo.
+4. **Pool: `keepAlive: true` + subir `idleTimeoutMillis`** para no pagar los ~850 ms de reconexión. Riesgo bajo, ayuda al tráfico esporádico.
+
+→ **Recomendación:** el fix real es **(1) co-locar server y DB en la misma región** — explica casi todo el 2–5 s parejo y es infra, no código. Mientras tanto, (2)+(3)+(4) son mitigaciones de código/config de bajo riesgo que recortan round-trips. Confirmar primero la región de Render y medir el `SELECT 1` desde el server.
+
+**Solo lectura. Nada tocado.**
