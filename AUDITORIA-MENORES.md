@@ -96,3 +96,15 @@
 - **Dejar documentados los 🔴** (partir archivos, code-splitting) — como se hizo con la evaluación de C2: laburo grande, beneficio marginal para una app interna. No tocar salvo que duela.
 
 **Solo lectura. Nada tocado.**
+
+---
+
+## 6. ✅ TANDA 1 (🟢 limpieza) RESUELTA (2026-06-18, commit `e7b3626`)
+
+- **Endpoints diagnósticos borrados (sin callers):** `/api/debug/product-cost`, `/api/mp/test`, `/api/mp/raw`, `/api/mp/income-diag`. **Conservados** `/api/mp/balance` (usado en `bancos/index.tsx:282`) y `/api/mp/movements` (usado). 0 referencias colgadas.
+- **console.log de debug borrados (7):** `[contacts-storage]` ×3 + `[upsert-verify]` (con su query extra) en storage.ts; `[contacts]` resumen/matched/candidatos ×3 en routes.ts. **Conservados** los logs operativos de la sync MP (`[mp]`, `[caja reconcile]`, `[mp-xlsx merge]`, `[xlsx-contacts]`, request logger) y todos los `console.warn`/`console.error`.
+- **Logs de ARCA gateados:** los 2 `console.log` que imprimían el SOAP completo (CUIT + montos) ahora corren solo con `DEBUG_ARCA` seteado. Apagado por defecto → sin datos fiscales en logs de prod. Lógica de emisión intacta.
+
+**Verificado:** build (vite+esbuild) ✓; 0 referencias colgadas; diff de `arca.ts` solo toca las condiciones de log (axios.post/return intactos) → facturación idéntica. −150 líneas, +4. Sin lógica de negocio tocada.
+
+**Pendiente (cuando se decida):** Tanda 2 🟢 (unificar `fmt` en 14 archivos + `normalize` ×2). 🟡 y 🔴 quedan documentados.
