@@ -107,4 +107,14 @@
 
 **Verificado:** build (vite+esbuild) ✓; 0 referencias colgadas; diff de `arca.ts` solo toca las condiciones de log (axios.post/return intactos) → facturación idéntica. −150 líneas, +4. Sin lógica de negocio tocada.
 
-**Pendiente (cuando se decida):** Tanda 2 🟢 (unificar `fmt` en 14 archivos + `normalize` ×2). 🟡 y 🔴 quedan documentados.
+## 7. ✅ TANDA 2 (🟢 helpers) RESUELTA (2026-06-18, commit `24c3688`)
+
+- **Nuevo módulo `client/src/lib/format.ts`:** `fmtPesos`/`fmtMiles`/`fmtDecimal` (es-AR), `fmtFecha`, `fmtCantidad` (NO localizado).
+- **`normalize`** unificado (stock.tsx → importa el de orderParser; copia local borrada).
+- **14 call-sites de `fmt` migrados.** Montos es-MX → **es-AR** (dashboard/stock/products/vendedor/orders). caja/bancos ya eran es-AR (sin cambio visible). Particularidades preservadas: bancos `Math.abs`, price-list `"—"` si 0. Fechas (suppliers, cuentas-corrientes) → `fmtFecha` sin cambio.
+- **⚠️ Caso crítico hallado y blindado:** el campo de cantidad de `orders/detail` se sembraba con `fmt`, se reparseaba con `parseFloat` y se enviaba al backend (`quantity: d.qty`). Pasarlo a es-AR (coma decimal) habría corrompido cantidades. Ahora usa `fmtCantidad` (punto decimal, sin separador de miles): 2.5 → guarda 2.5, y **arregla un bug latente** — una cantidad ≥1000 se guardaba como **1** (`parseFloat('1,234.5')`).
+- **Cosmético deliberado:** vendedor/order-detail muestra cantidades como "2.5" (antes "2.50"), consistente con admin. Display puro.
+
+**Verificado:** montos es-AR; caja/bancos idénticos; fechas idénticas; round-trip de cantidad (2.5→2.5, ≥1000 arreglado); 0 parseos de número formateado restantes; valores al backend/ARCA crudos; build ✓; 97 errores tsc = 97 baseline (0 nuevos).
+
+**Pendiente de los menores:** 🟡 (m5 timezone ya sano / m3 N+1 / m4 fetch→apiRequest / m6 CUIT-PV a config) y 🔴 (partir archivos, code-splitting) — documentados, sin urgencia.
