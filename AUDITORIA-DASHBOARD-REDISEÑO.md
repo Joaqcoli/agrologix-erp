@@ -96,3 +96,16 @@ Devuelve el objeto `Stats`. Cada campo sale de su propia query SQL en el backend
 - Riesgo del rediseño = solo visual/JSX. Verificación natural: que cada número del diseño nuevo coincida con el actual para un mismo período.
 
 **Solo lectura. Nada tocado.**
+
+---
+
+## 7. ✅ ETAPA 1 — Backend de la serie de evolución mensual (2026-06-18, commit `a8283d0`)
+
+- **Endpoint nuevo:** `GET /api/dashboard/monthly-trend` → `storage.getMonthlyTrend()`. Devuelve `[{ ym, ventas, margen }]`, hasta 12 meses (ventana móvil), orden cronológico, solo meses con ventas.
+- **UNA query** con `GROUP BY date_trunc('month', order_date)`, replicando EXACTO el `CASE` de ventas/ganancia de `getDashboardStats` (IVA por producto, costo override, filtros approved + sin facturación histórica importada). Margen = ganancia_bruta / ventas × 100.
+- **Override histórico** (ene/feb/mar 2026) mergeado con el mismo dato hardcodeado (`listHistoricalMonths`, nuevo en `historical-stats.ts`) → coincide con lo que el dashboard muestra para esos meses.
+- **Endpoint aparte** (no dentro de `getDashboardStats`): el gráfico es fijo, se llama una vez, no recarga al cambiar el período de las cards, no infla la query pesada de stats.
+
+**Verificado:** mes actual (2026-06) **coincide EXACTO** con `getDashboardStats` (ventas=48.589.157,27; margen=36,93%); 6 meses hoy (todos con ventas, márgenes 34-37%, orden correcto, sin huecos). **`getDashboardStats` y el front (`dashboard.tsx`) NO se tocaron** → dashboard actual idéntico. Build ✓.
+
+**Pendiente:** Etapa 2 = rediseño visual del front conectado a estos mismos endpoints + la serie nueva.
