@@ -187,6 +187,9 @@ export default function IntakePage() {
 
   // Last-price prefills: parsedIdx → price string
   const [pricePrefills, setPricePrefills] = useState<Record<number, string>>({});
+  // Token de request por ítem: solo aplica la respuesta del ÚLTIMO fetch disparado
+  // (evita que el prefill de fondo pise el precio re-buscado al cambiar la unidad, o viceversa).
+  const priceFetchSeq = useRef<Record<number, number>>({});
 
   // Merge dialog state
   const [mergeDialog, setMergeDialog] = useState<{ existingId: number; folio: string } | null>(null);
@@ -245,15 +248,19 @@ export default function IntakePage() {
     });
     setUnitOverrides(initialUnitOverrides);
     setPricePrefills({});
+    priceFetchSeq.current = {}; // invalida fetches en vuelo de un parseo anterior
     setStep("preview");
 
     // Background-fetch last price per product+unit for this customer
     result.forEach((line, idx) => {
       if (!line.productId || line.status === "no_qty") return;
       const effectiveUnit = initialUnitOverrides[idx] ?? line.unit ?? "KG";
+      const seq = (priceFetchSeq.current[idx] ?? 0) + 1;
+      priceFetchSeq.current[idx] = seq;
       fetch(`/api/products/${line.productId}/last-price?customerId=${customerId}&unit=${encodeURIComponent(effectiveUnit)}`, { credentials: "include" })
         .then((r) => (r.ok ? r.json() : null))
         .then((data) => {
+          if (priceFetchSeq.current[idx] !== seq) return; // un fetch más nuevo ya ganó
           if (data?.price != null) {
             setPricePrefills((prev) => ({ ...prev, [idx]: String(Math.round(parseFloat(data.price))) }));
           }
@@ -584,9 +591,12 @@ export default function IntakePage() {
                                         try { localStorage.setItem(`lastUnit_${resolvedProductId}`, v); } catch { /* quota exceeded */ }
                                         // Re-fetch last price for the new unit
                                         if (customerId) {
+                                          const seq = (priceFetchSeq.current[idx] ?? 0) + 1;
+                                          priceFetchSeq.current[idx] = seq;
                                           fetch(`/api/products/${resolvedProductId}/last-price?customerId=${customerId}&unit=${encodeURIComponent(v)}`, { credentials: "include" })
                                             .then((r) => (r.ok ? r.json() : null))
                                             .then((data) => {
+                                              if (priceFetchSeq.current[idx] !== seq) return; // un fetch más nuevo ya ganó
                                               setPricePrefills((prev) => {
                                                 const next = { ...prev };
                                                 if (data?.price != null) next[idx] = String(Math.round(parseFloat(data.price)));

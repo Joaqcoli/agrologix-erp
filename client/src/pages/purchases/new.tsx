@@ -50,6 +50,8 @@ type PurchaseItem = {
   baseUnit: string;
   costPerUnit: string;
   emptyCost: string;
+  // true cuando el usuario tipeó el peso a mano → la sugerencia async no lo pisa
+  wpuTouched?: boolean;
 };
 
 const isPackageUnit = (unit: string) => PACKAGE_UNIT_SET.has(unit);
@@ -177,6 +179,11 @@ export default function NewPurchasePage() {
     const updated = [...items];
     updated[i] = { ...updated[i], [field]: String(value) };
 
+    // El usuario tipeó el peso a mano → no dejar que la sugerencia async lo pise.
+    if (field === "weightPerPackage") updated[i].wpuTouched = true;
+    // Cambió producto/unidad → es un peso "nuevo": la sugerencia vuelve a poder precargar.
+    if (field === "productId" || field === "unit") updated[i].wpuTouched = false;
+
     if (field === "productId") {
       const product = activeProducts.find((p) => p.id === Number(value));
       if (product) {
@@ -231,7 +238,8 @@ export default function NewPurchasePage() {
       const w = data?.weightPerPackage;
       if (w != null && parseFloat(w) > 0) {
         setItems((prev) => prev.map((it, i) =>
-          (i === idx && Number(it.productId) === productId && isPackageUnit(it.unit) && !isEggsProduct(productId))
+          // No pisar si el usuario ya tipeó el peso a mano (wpuTouched).
+          (i === idx && Number(it.productId) === productId && isPackageUnit(it.unit) && !isEggsProduct(productId) && !it.wpuTouched)
             ? { ...it, weightPerPackage: String(parseFloat(w)) }
             : it
         ));
