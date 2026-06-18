@@ -77,3 +77,12 @@ export type Obligacion = typeof obligaciones.$inferSelect;
 **Recomendación: (a) como base obligatoria** — elimina el drift de tipos con riesgo nulo (solo declarás el tipo que ya existe en la base y tipás el retorno de los 2 métodos). Es exactamente lo que M8 pide. **(c) como complemento de valor:** el `catch` que traga el error del INSERT es el riesgo más concreto; conviene que un pago que no se registra **no pase desapercibido**. **(b) es opcional** (las queries crudas ya andan y matchean; migrarlas es prolijidad, no urgencia).
 
 **Solo lectura. Nada tocado.**
+
+---
+
+## 7. ✅ M8 RESUELTO (2026-06-18, commit `8b50fb6`) — (a) + (c)
+
+- **(a)** `obligacionPagos` declarada en `shared/schema.ts` (`pgTable`, 9 columnas + FKs + tipos), matcheando EXACTO la tabla existente (no se tocó la tabla). `getObligacionPagos`/`addObligacionPago` dejan de devolver `any` → tipo explícito `ObligacionPagoRow` (snake_case + float, la forma real de las queries crudas). Queries siguen SQL crudo.
+- **(c)** Nuevo `storage.payObligacion` hace UPDATE de la obligación + INSERT del pago en **una transacción** (`patchObligacion`/`addObligacionPago` aceptan `tx`). Se eliminó el `try/catch` que tragaba el error del INSERT; ahora propaga. Los movimientos de plata (cuenta/caja) corren después del pago confirmado.
+
+**Verificado (apply+restore):** pgTable matchea 9/9 columnas; pago parcial normal aplica + queda registrado; con FK inválida → `payObligacion` lanza error, obligación sin cambios, 0 pagos (rollback atómico) → imposible una obligación pagada sin su registro. Cero cambios en el flujo normal de pago.
