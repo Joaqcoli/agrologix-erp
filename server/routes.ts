@@ -1011,11 +1011,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
         r3.commit();
 
-        // Item rows
+        // Item rows — productos en ORDEN ALFABÉTICO (como se ven en el sistema),
+        // excluyendo las líneas de bolsa. (Antes iban en orden de carga y la celda
+        // PRODUCTO referenciaba una variable inexistente `productName`.)
+        const nombreProducto = (it: typeof order.items[number]) =>
+          String(it.product?.name ?? (it as any).rawProductName ?? "");
+        const itemsOrdenados = [...order.items]
+          .filter((it) => !(it as any).bolsaType)
+          .sort((a, b) => nombreProducto(a).localeCompare(nombreProducto(b), "es", { sensitivity: "base" }));
+
         const startRow = 4;
         let rowIdx = startRow;
-        for (const item of order.items) {
-          if ((item as any).bolsaType) continue;
+        for (const item of itemsOrdenados) {
+          const productName = nombreProducto(item);
           const ivaRate = ivaRateOf(item.product);
           const subtotal = parseFloat(String(item.subtotal ?? "0"));
           const totalConIva = parseFloat((subtotal * (1 + ivaRate)).toFixed(2));
