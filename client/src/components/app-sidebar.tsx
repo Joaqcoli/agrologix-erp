@@ -10,6 +10,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import {
   LayoutDashboard,
@@ -55,6 +56,9 @@ const navItems = [
 export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
+  // En mobile el sidebar es un drawer (Sheet): al tocar una opción, lo cerramos.
+  const { isMobile, setOpenMobile } = useSidebar();
+  const closeOnMobile = () => { if (isMobile) setOpenMobile(false); };
 
   const initials = user?.name
     .split(" ")
@@ -86,7 +90,7 @@ export function AppSidebar() {
                       className="mx-2 rounded-md"
                       data-testid={`nav-${item.title.toLowerCase().replace(/\s/g, "-")}`}
                     >
-                      <Link href={item.url}>
+                      <Link href={item.url} onClick={closeOnMobile}>
                         <item.icon className="h-4 w-4 shrink-0" />
                         <span>{item.title}</span>
                       </Link>

@@ -263,6 +263,30 @@ const DASH_CSS = `
 .va-pbtn:hover{color:var(--ink)}
 .va-pbtn.active{background:var(--ink);color:#fff;font-weight:700;padding:8px 16px}
 .va-link{font-size:12.5px;font-weight:600;color:var(--primary);text-decoration:none;cursor:pointer;background:none;border:none;padding:0}
+
+/* ── Grillas de las secciones (valores de escritorio idénticos a los inline previos) ── */
+.va-dash .va-wrap{max-width:1480px;margin:0 auto;padding:34px 40px 60px}
+.va-dash .va-hero{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
+.va-dash .va-charts{display:grid;grid-template-columns:1.25fr 1fr;gap:18px;margin-bottom:18px}
+.va-dash .va-real{display:grid;grid-template-columns:300px 1fr;gap:48px;align-items:center}
+.va-dash .va-wfrow{display:grid;grid-template-columns:72px 1fr 124px;align-items:center;gap:14px}
+.va-dash .va-fin3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-bottom:18px}
+.va-dash .va-bottom{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+
+/* ── Mobile (≤768px): apila las grillas, achica padding/título. Escritorio intacto. ── */
+@media (max-width:768px){
+  .va-dash .va-wrap{padding:16px 14px 40px}
+  .va-dash .va-hero{grid-template-columns:repeat(2,1fr);gap:10px}
+  .va-dash .va-charts{grid-template-columns:1fr;gap:14px}
+  .va-dash .va-fin3{grid-template-columns:1fr;gap:14px}
+  .va-dash .va-real{grid-template-columns:1fr;gap:18px}
+  .va-dash .va-bottom{grid-template-columns:1fr;gap:14px}
+  .va-dash .va-wfrow{grid-template-columns:64px 1fr 96px;gap:10px}
+  .va-dash h1{font-size:26px !important}
+  .va-dash .va-hero-val{font-size:21px !important}
+  .va-dash .va-real-val{font-size:27px !important}
+  .va-dash .va-fin-val{font-size:19px !important}
+}
 `;
 
 const LABEL: React.CSSProperties = { fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--muted)" };
@@ -404,7 +428,7 @@ export default function DashboardPage() {
     <Layout title="Dashboard">
       <style dangerouslySetInnerHTML={{ __html: DASH_CSS }} />
       <div className="va-dash">
-        <div style={{ maxWidth: 1480, margin: "0 auto", padding: "34px 40px 60px" }}>
+        <div className="va-wrap">
 
           {/* ── Header ── */}
           <header style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 20, marginBottom: 28 }}>
@@ -413,7 +437,7 @@ export default function DashboardPage() {
               <h1 style={{ margin: 0, fontSize: 34, fontWeight: 800, letterSpacing: "-.02em", lineHeight: 1 }}>{RESUMEN[period]}</h1>
               <div style={{ fontSize: 14, color: "var(--muted)", marginTop: 7 }}>{fmtFechaCorta(from)} — {fmtFechaCorta(toDisp)}</div>
             </div>
-            <div style={{ display: "flex", gap: 6, background: "var(--surface)", padding: 5, borderRadius: 13, border: "1px solid var(--line)", boxShadow: "0 1px 2px rgba(20,39,13,.04)" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, background: "var(--surface)", padding: 5, borderRadius: 13, border: "1px solid var(--line)", boxShadow: "0 1px 2px rgba(20,39,13,.04)" }}>
               {(["hoy", "semana", "mes", "año", "pormes", "custom"] as Period[]).map((p) => (
                 <button key={p} className={`va-pbtn ${period === p ? "active" : ""}`} onClick={() => setPeriod(p)}>{PERIOD_LABELS[p]}</button>
               ))}
@@ -444,11 +468,11 @@ export default function DashboardPage() {
           )}
 
           {/* ── Hero KPIs ── */}
-          <section style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 18 }}>
+          <section className="va-hero">
             {/* Ventas */}
             <div style={{ position: "relative", overflow: "hidden", borderRadius: 14, padding: "17px 19px", background: "linear-gradient(135deg,var(--grad-a) 0%,var(--grad-mid) 55%,var(--grad-b) 100%)", color: "#fff", boxShadow: "0 10px 26px rgba(20,39,13,.2)" }}>
               <span style={{ ...LABEL, color: "rgba(255,255,255,.85)", letterSpacing: ".1em" }}>Ventas</span>
-              <div style={{ fontSize: 27, fontWeight: 800, letterSpacing: "-.02em", marginTop: 13 }}>{isLoading ? "…" : (s ? fmt(s.ventas) : "—")}</div>
+              <div className="va-hero-val" style={{ fontSize: 27, fontWeight: 800, letterSpacing: "-.02em", marginTop: 13 }}>{isLoading ? "…" : (s ? fmt(s.ventas) : "—")}</div>
               <div style={{ fontSize: 12, color: "rgba(255,255,255,.8)", marginTop: 5 }}>{diasPeriodo} día{diasPeriodo !== 1 ? "s" : ""} en el período</div>
             </div>
             {/* Ganancia bruta */}
@@ -457,7 +481,7 @@ export default function DashboardPage() {
                 <span style={LABEL}>Ganancia bruta</span>
                 <span style={{ fontSize: 12, fontWeight: 700, color: "var(--pos)" }}>{isLoading ? "" : `${fmtPct1(margenPct)}%`}</span>
               </div>
-              <div style={{ fontSize: 25, fontWeight: 800, letterSpacing: "-.02em", marginTop: 13, color: "var(--pos)" }}>{isLoading ? "…" : (s ? fmt(s.ganancia_bruta) : "—")}</div>
+              <div className="va-hero-val" style={{ fontSize: 25, fontWeight: 800, letterSpacing: "-.02em", marginTop: 13, color: "var(--pos)" }}>{isLoading ? "…" : (s ? fmt(s.ganancia_bruta) : "—")}</div>
               <div style={{ marginTop: 9, height: 5, borderRadius: 99, background: "var(--primary-soft)", overflow: "hidden" }}>
                 <div style={{ width: `${Math.min(100, margenPct)}%`, height: "100%", background: "linear-gradient(90deg,var(--primary),var(--grad-a))" }} />
               </div>
@@ -465,19 +489,19 @@ export default function DashboardPage() {
             {/* Venta prom diario */}
             <div className="va-card" style={{ padding: "17px 19px" }}>
               <span style={LABEL}>Venta · prom. diario</span>
-              <div style={{ fontSize: 25, fontWeight: 800, letterSpacing: "-.02em", marginTop: 13, color: "var(--ink)" }}>{isLoading ? "…" : (s ? fmt(ventasDia) : "—")}</div>
+              <div className="va-hero-val" style={{ fontSize: 25, fontWeight: 800, letterSpacing: "-.02em", marginTop: 13, color: "var(--ink)" }}>{isLoading ? "…" : (s ? fmt(ventasDia) : "—")}</div>
               <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 7 }}>sobre {diasTrabajados} día{diasTrabajados !== 1 ? "s" : ""} operado{diasTrabajados !== 1 ? "s" : ""}</div>
             </div>
             {/* Ganancia prom diario */}
             <div className="va-card" style={{ padding: "17px 19px" }}>
               <span style={LABEL}>Ganancia · prom. diario</span>
-              <div style={{ fontSize: 25, fontWeight: 800, letterSpacing: "-.02em", marginTop: 13, color: "var(--ink)" }}>{isLoading ? "…" : (s ? fmt(gananciaDia) : "—")}</div>
+              <div className="va-hero-val" style={{ fontSize: 25, fontWeight: 800, letterSpacing: "-.02em", marginTop: 13, color: "var(--ink)" }}>{isLoading ? "…" : (s ? fmt(gananciaDia) : "—")}</div>
               <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 7 }}>real neto promedio por día</div>
             </div>
           </section>
 
           {/* ── Gráficos mes a mes (serie monthly-trend) ── */}
-          <section style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: 18, marginBottom: 18 }}>
+          <section className="va-charts">
             {/* Ventas mes a mes (barras) */}
             <div className="va-card" style={{ padding: "24px 26px", borderRadius: 18 }}>
               <div>
@@ -537,10 +561,10 @@ export default function DashboardPage() {
           </section>
 
           {/* ── Ganancia real (cascada) ── */}
-          <section className="va-card" style={{ padding: "24px 28px", borderRadius: 18, marginBottom: 18, display: "grid", gridTemplateColumns: "300px 1fr", gap: 48, alignItems: "center" }}>
+          <section className="va-card va-real" style={{ padding: "24px 28px", borderRadius: 18, marginBottom: 18 }}>
             <div>
               <span style={{ ...LABEL, fontSize: 12.5 }}>Ganancia real del período</span>
-              <div style={{ fontSize: 34, fontWeight: 800, letterSpacing: "-.025em", marginTop: 12, lineHeight: 1 }}>{isLoading ? "…" : (s ? fmt(s.ganancia_real) : "—")}</div>
+              <div className="va-real-val" style={{ fontSize: 34, fontWeight: 800, letterSpacing: "-.025em", marginTop: 12, lineHeight: 1 }}>{isLoading ? "…" : (s ? fmt(s.ganancia_real) : "—")}</div>
               {s && Math.abs(ajusteNeto) > 0 && (
                 <div style={{ display: "inline-flex", alignItems: "center", gap: 7, marginTop: 14, fontSize: 13, fontWeight: 700, color: ajustePositivo ? "var(--pos)" : "var(--neg)", background: ajustePositivo ? "var(--pos-soft)" : "var(--neg-soft)", padding: "7px 13px", borderRadius: 999 }}>
                   {ajustePositivo ? "▲" : "▼"} {ajustePositivo ? "+" : "−"}{fmt(Math.abs(ajusteNeto))} sobre la bruta
@@ -549,23 +573,23 @@ export default function DashboardPage() {
               <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 12, lineHeight: 1.5 }}>{isLoading ? "" : realText}</div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "72px 1fr 124px", alignItems: "center", gap: 14 }}>
+              <div className="va-wfrow">
                 <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>Bruta</span>
                 <div style={{ height: 22, borderRadius: 6, background: "var(--bar-dim)", width: wPct(s?.ganancia_bruta ?? 0) }} />
                 <span style={{ textAlign: "right", fontSize: 14.5, fontWeight: 700 }}>{s ? fmt(s.ganancia_bruta) : "—"}</span>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "72px 1fr 124px", alignItems: "center", gap: 14 }}>
+              <div className="va-wfrow">
                 <button className="va-link" style={{ fontSize: 13, fontWeight: 600, color: "var(--pos)", textAlign: "left" }} onClick={() => setRindeOpen(true)}>+ Rinde</button>
                 <div style={{ height: 22, borderRadius: 6, background: "var(--pos)", width: wPct(s?.rindeTotal ?? 0) }} />
                 <span style={{ textAlign: "right", fontSize: 14.5, fontWeight: 700, color: "var(--pos)" }}>+{s ? fmt(s.rindeTotal) : "—"}</span>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "72px 1fr 124px", alignItems: "center", gap: 14 }}>
+              <div className="va-wfrow">
                 <button className="va-link" style={{ fontSize: 13, fontWeight: 600, color: "var(--neg)", textAlign: "left" }} onClick={() => setMermaOpen(true)}>− Merma</button>
                 <div style={{ height: 22, borderRadius: 6, background: "var(--neg)", width: wPct(s?.mermaTotal ?? 0) }} />
                 <span style={{ textAlign: "right", fontSize: 14.5, fontWeight: 700, color: "var(--neg)" }}>−{s ? fmt(s.mermaTotal) : "—"}</span>
               </div>
               <div style={{ height: 1, background: "var(--line)", margin: "2px 0" }} />
-              <div style={{ display: "grid", gridTemplateColumns: "72px 1fr 124px", alignItems: "center", gap: 14 }}>
+              <div className="va-wfrow">
                 <span style={{ fontSize: 13, fontWeight: 800, color: "var(--ink)" }}>= Real</span>
                 <div style={{ height: 26, borderRadius: 6, background: "linear-gradient(90deg,var(--grad-mid),var(--grad-b))", width: wPct(s?.ganancia_real ?? 0) }} />
                 <span style={{ textAlign: "right", fontSize: 15, fontWeight: 800 }}>{s ? fmt(s.ganancia_real) : "—"}</span>
@@ -574,7 +598,7 @@ export default function DashboardPage() {
           </section>
 
           {/* ── Estado financiero ── */}
-          <section style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 18, marginBottom: 18 }}>
+          <section className="va-fin3">
             <FinCard color="var(--pos)" soft="var(--pos-soft)" title="Por cobrar" icon={IconCobrar}
               a={{ label: "Deuda de clientes", value: s ? fmt(s.deudaClientes) : "—" }}
               b={{ label: "Cheques en cartera", value: s ? fmt(s.chequesEnCartera) : "—" }} loading={isLoading} />
@@ -619,7 +643,7 @@ export default function DashboardPage() {
           </section>
 
           {/* ── Bolsa FV + Comisiones + Bultos ── */}
-          <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+          <section className="va-bottom">
             {/* Bolsa FV */}
             <div style={{ borderRadius: 18, border: "1px solid var(--line)", overflow: "hidden", background: "transparent" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px 10px", flexWrap: "wrap", gap: 8 }}>
@@ -833,7 +857,7 @@ function FinCard({ color, soft, title, titleColor, iconColor, icon, a, b, loadin
         {[a, b].map((x, i) => (
           <div key={i}>
             <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 5 }}>{x.label}</div>
-            {loading ? <Skeleton className="h-6 w-20" /> : <div style={{ fontSize: 22, fontWeight: 800, color, letterSpacing: "-.015em" }}>{x.value}</div>}
+            {loading ? <Skeleton className="h-6 w-20" /> : <div className="va-fin-val" style={{ fontSize: 22, fontWeight: 800, color, letterSpacing: "-.015em" }}>{x.value}</div>}
           </div>
         ))}
       </div>
