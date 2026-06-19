@@ -132,7 +132,7 @@ function ComisionesModal({ open, onClose }: { open: boolean; onClose: () => void
                 <SelectValue placeholder="Seleccionar vendedor" />
               </SelectTrigger>
               <SelectContent>
-                {(salespersons ?? []).map((s) => (
+                {(Array.isArray(salespersons) ? salespersons : []).map((s) => (
                   <SelectItem key={s} value={s}>{s}</SelectItem>
                 ))}
               </SelectContent>
@@ -350,7 +350,9 @@ export default function DashboardPage() {
   const toDisp = (() => { const d = new Date(to + "T12:00:00"); d.setDate(d.getDate() - 1); return localStr(d); })();
 
   // ── Datos de los gráficos (serie monthly-trend) ──
-  const trend = trendData ?? [];
+  // Guarda defensiva: el endpoint puede devolver un objeto de error (ej. {error}) ante
+  // un 401/500, o undefined mientras carga → forzamos array para no romper el .map.
+  const trend = Array.isArray(trendData) ? trendData : [];
   const nT = trend.length;
   const maxV = Math.max(...trend.map((t) => t.ventas), 1);
   const lastT = trend[nT - 1];
@@ -376,12 +378,14 @@ export default function DashboardPage() {
     return "Rinde y merma se compensaron: la ganancia real quedó igual a la bruta.";
   })();
 
-  // ── Ventas por semana ──
-  const maxWeek = Math.max(...(s?.semanas ?? []).map((w) => w.ventas), 1);
+  // ── Arrays con guarda defensiva (pueden venir undefined / objeto de error) ──
+  const semanas = Array.isArray(s?.semanas) ? s!.semanas : [];
+  const comisiones = Array.isArray(s?.comisiones) ? s!.comisiones : [];
+  const maxWeek = Math.max(...semanas.map((w) => w.ventas), 1);
   // ── Bolsa FV: últimos movimientos (preview) ──
-  const bolsaRows = bolsaData?.rows ?? [];
+  const bolsaRows = Array.isArray(bolsaData?.rows) ? bolsaData!.rows : [];
   const bolsaPreview = bolsaRows.slice(0, 6);
-  const comisionesTotal = (s?.comisiones ?? []).reduce((acc, c) => acc + c.total, 0);
+  const comisionesTotal = comisiones.reduce((acc, c) => acc + c.total, 0);
 
   return (
     <Layout title="Dashboard">
@@ -571,11 +575,11 @@ export default function DashboardPage() {
               <span style={{ ...LABEL, fontSize: 12.5 }}>Ventas y bultos por semana</span>
               <span style={{ fontSize: 13, color: "var(--muted)" }}>Bultos del período <b style={{ color: "var(--ink)", fontSize: 15 }}>{isLoading ? "…" : fmtInt(s?.bultosTotal ?? 0)}</b></span>
             </div>
-            {isLoading ? <Skeleton className="h-24 w-full" /> : (s?.semanas ?? []).length === 0 ? (
+            {isLoading ? <Skeleton className="h-24 w-full" /> : semanas.length === 0 ? (
               <p style={{ fontSize: 13, color: "var(--muted)" }}>Sin datos en el período.</p>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                {s?.semanas.map((w) => (
+                {semanas.map((w) => (
                   <div key={w.label}>
                     <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 7 }}>
                       <span style={{ fontSize: 14, fontWeight: 600 }}>{w.label}</span>
@@ -648,11 +652,11 @@ export default function DashboardPage() {
                   <span style={{ ...LABEL, fontSize: 11.5, letterSpacing: ".1em" }}>Comisiones vendedores</span>
                   <button className="va-link" onClick={() => setComisionesOpen(true)}>Detalle</button>
                 </div>
-                {isLoading ? <Skeleton className="h-12 w-full mt-3" /> : (s?.comisiones ?? []).length === 0 ? (
+                {isLoading ? <Skeleton className="h-12 w-full mt-3" /> : comisiones.length === 0 ? (
                   <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 12 }}>Sin comisiones en el período</p>
                 ) : (
                   <>
-                    {(s?.comisiones ?? []).map((c) => (
+                    {comisiones.map((c) => (
                       <div key={c.vendedor} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
                           <div style={{ width: 32, height: 32, borderRadius: "50%", background: "var(--primary-soft)", color: "var(--pos)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 13 }}>{c.vendedor.charAt(0).toUpperCase()}</div>
@@ -691,7 +695,7 @@ export default function DashboardPage() {
             <DialogTitle>Detalle de Rinde — {from} al {to}</DialogTitle>
           </DialogHeader>
           <div className="overflow-y-auto flex-1">
-            {!rindeDetail ? (
+            {!Array.isArray(rindeDetail) ? (
               <div className="space-y-2">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
             ) : rindeDetail.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">Sin movimientos de rinde en el período</p>
@@ -745,7 +749,7 @@ export default function DashboardPage() {
             <DialogTitle>Detalle de Merma — {from} al {to}</DialogTitle>
           </DialogHeader>
           <div className="overflow-y-auto flex-1">
-            {!mermaDetail ? (
+            {!Array.isArray(mermaDetail) ? (
               <div className="space-y-2">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
             ) : mermaDetail.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">Sin movimientos de merma en el período</p>
