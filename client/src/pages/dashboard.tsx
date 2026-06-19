@@ -357,15 +357,26 @@ export default function DashboardPage() {
   const trend = Array.isArray(trendData) ? trendData : [];
   const nT = trend.length;
   const maxV = Math.max(...trend.map((t) => t.ventas), 1);
+  // Barras: alto en PX, proporcional a maxV desde 0. BAR_MAX = espacio disponible
+  // para la barra más alta dentro de la columna de 200px (deja lugar a los labels
+  // arriba y abajo). La barra lleva flexShrink:0 para que NO la encoja el flexbox
+  // (si no, las barras altas que desbordan se achican y se invierte la proporción).
+  const BAR_MAX = 144;
   const lastT = trend[nT - 1];
   const prevT = trend[nT - 2];
   const margenActual = lastT?.margen ?? 0;
   const margenDelta = lastT && prevT ? lastT.margen - prevT.margen : 0;
   const margenes = trend.map((t) => t.margen);
-  const maxM = Math.max(...margenes, 0);
-  const minM = Math.min(...margenes, maxM);
+  // Línea: rango del eje Y = [min, max] reales del array, con padding para que los
+  // puntos no queden pegados a los bordes.
+  const maxM = nT ? Math.max(...margenes) : 0;
+  const minM = nT ? Math.min(...margenes) : 0;
+  const padM = (maxM - minM) * 0.18 || 1; // 18% del rango (mín 1 pt si son todos iguales)
+  const loM = minM - padM;
+  const hiM = maxM + padM;
   const lineX = (i: number) => (nT <= 1 ? 150 : 10 + (280 * i) / (nT - 1));
-  const lineY = (m: number) => (maxM === minM ? 73 : 110 - ((m - minM) / (maxM - minM)) * 74);
+  const lineY = (m: number) => (hiM === loM ? 73 : 110 - ((m - loM) / (hiM - loM)) * 74);
+  const lineYpx = (m: number) => (lineY(m) / 130) * 170; // y del viewBox (130) → px reales (svg height 170)
   const linePts = trend.map((t, i) => `${lineX(i).toFixed(1)},${lineY(t.margen).toFixed(1)}`).join(" ");
   const areaPts = nT > 0 ? `${linePts} ${lineX(nT - 1).toFixed(1)},110 ${lineX(0).toFixed(1)},110` : "";
 
@@ -479,9 +490,9 @@ export default function DashboardPage() {
                     const last = i === nT - 1;
                     return (
                       <div key={t.ym} className="va-barcol" style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%", gap: 9 }}>
-                        <span style={{ fontSize: 12.5, fontWeight: 700, color: last ? "var(--ink)" : "var(--muted)" }}>{fmtMill(t.ventas)}</span>
-                        <div className="va-bar" style={{ width: "100%", maxWidth: 46, height: `${(t.ventas / maxV) * 100}%`, borderRadius: "8px 8px 4px 4px", background: last ? "var(--primary)" : "var(--bar-dim)" }} />
-                        <span style={{ fontSize: 13, fontWeight: 600, color: last ? "var(--ink)" : "var(--muted)" }}>{monthAbbrev(t.ym)}</span>
+                        <span style={{ flexShrink: 0, fontSize: 12.5, fontWeight: 700, color: last ? "var(--ink)" : "var(--muted)" }}>{fmtMill(t.ventas)}</span>
+                        <div className="va-bar" style={{ flexShrink: 0, width: "100%", maxWidth: 46, height: `${(t.ventas / maxV) * BAR_MAX}px`, borderRadius: "8px 8px 4px 4px", background: last ? "var(--primary)" : "var(--bar-dim)" }} />
+                        <span style={{ flexShrink: 0, fontSize: 13, fontWeight: 600, color: last ? "var(--ink)" : "var(--muted)" }}>{monthAbbrev(t.ym)}</span>
                       </div>
                     );
                   })}
@@ -502,7 +513,7 @@ export default function DashboardPage() {
                 </div>
               </div>
               {nT === 0 ? <Skeleton className="h-[170px] w-full mt-5" /> : (
-                <div style={{ marginTop: 20 }}>
+                <div style={{ marginTop: 20, position: "relative" }}>
                   <svg viewBox="0 0 300 130" width="100%" height="170" preserveAspectRatio="none" style={{ overflow: "visible" }}>
                     <line x1="10" y1="36.5" x2="290" y2="36.5" stroke="var(--line)" strokeWidth="1" />
                     <line x1="10" y1="73" x2="290" y2="73" stroke="var(--line)" strokeWidth="1" />
@@ -513,6 +524,10 @@ export default function DashboardPage() {
                       <circle key={t.ym} cx={lineX(i)} cy={lineY(t.margen)} r={i === nT - 1 ? 4.5 : 3.2} fill={i === nT - 1 ? "var(--primary)" : "var(--surface)"} style={{ stroke: "var(--primary)" }} strokeWidth="2.2" />
                     ))}
                   </svg>
+                  {/* % de margen de cada mes, encima de su punto */}
+                  {trend.map((t, i) => (
+                    <span key={`m-${t.ym}`} style={{ position: "absolute", left: `${(lineX(i) / 300) * 100}%`, top: `${lineYpx(t.margen) - 24}px`, transform: "translateX(-50%)", fontSize: 11, fontWeight: 700, color: i === nT - 1 ? "var(--ink)" : "var(--muted)", whiteSpace: "nowrap", pointerEvents: "none" }}>{fmtPct1(t.margen)}%</span>
+                  ))}
                   <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 12.5, fontWeight: 600, color: "var(--muted)" }}>
                     {trend.map((t, i) => <span key={t.ym} style={{ color: i === nT - 1 ? "var(--ink)" : "var(--muted)" }}>{monthAbbrev(t.ym)}</span>)}
                   </div>
