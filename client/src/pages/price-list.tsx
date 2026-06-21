@@ -211,7 +211,7 @@ export default function PriceListPage() {
   return (
     <Layout>
       <div className="p-6 max-w-4xl mx-auto space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Lista de Precios</h1>
             <p className="text-sm text-muted-foreground mt-0.5">Precios semanales para clientes</p>
@@ -246,6 +246,7 @@ export default function PriceListPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
+                <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b bg-gray-50 text-xs text-muted-foreground uppercase">
@@ -293,6 +294,7 @@ export default function PriceListPage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </CardContent>
             </Card>
           ))
