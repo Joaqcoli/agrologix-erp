@@ -652,6 +652,7 @@ export default function SupplierCCPage({
               <p className="text-sm text-muted-foreground p-4 text-center">Sin compras en este período</p>
             ) : (
               <>
+                <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-border bg-muted/30">
@@ -705,6 +706,7 @@ export default function SupplierCCPage({
                     ))}
                   </tbody>
                 </table>
+                </div>
                 {pendingPurchasesTotal > 0 && (
                   <div className="flex items-center justify-between px-3 py-2 border-t border-border bg-muted/20 text-xs">
                     <span className="text-muted-foreground font-medium">
@@ -732,6 +734,7 @@ export default function SupplierCCPage({
             {(data?.payments.length ?? 0) === 0 ? (
               <p className="text-xs text-muted-foreground p-3 text-center">Sin pagos registrados</p>
             ) : (
+              <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-border bg-muted/20">
@@ -773,6 +776,7 @@ export default function SupplierCCPage({
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -894,6 +898,7 @@ export default function SupplierCCPage({
                 {!emptiesData || (emptiesData.empties.length === 0 && emptiesData.vales.length === 0) ? (
                   <p className="text-sm text-muted-foreground p-4 text-center">Sin movimientos de vacíos registrados</p>
                 ) : (
+                  <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-border bg-muted/30">
@@ -945,6 +950,7 @@ export default function SupplierCCPage({
                         ))}
                     </tbody>
                   </table>
+                  </div>
                 )}
               </CardContent>
             </Card>

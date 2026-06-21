@@ -520,7 +520,7 @@ export default function LoadListPage() {
           </DialogHeader>
           {detailRow && (
             <div className="space-y-3 text-sm">
-              <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center">
                 <div className="bg-muted rounded-lg p-3">
                   <p className="text-xs text-muted-foreground mb-0.5">Total pedido</p>
                   <p className="font-bold text-foreground">{fmtQty(detailRow.totalQty, detailRow.unit)}</p>

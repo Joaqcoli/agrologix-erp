@@ -197,6 +197,7 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
         {/* Items table */}
         <Card>
           <CardContent className="p-0">
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
@@ -270,6 +271,7 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
                 </tr>
               </tfoot>
             </table>
+            </div>
           </CardContent>
         </Card>
 

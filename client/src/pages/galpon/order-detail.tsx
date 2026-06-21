@@ -109,6 +109,7 @@ export default function GalponOrderDetail({ id }: { id: number }) {
         {/* Ítems — SIN precios */}
         <Card>
           <CardContent className="p-0">
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b-2 border-border bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
@@ -159,6 +160,7 @@ export default function GalponOrderDetail({ id }: { id: number }) {
                 )}
               </tbody>
             </table>
+            </div>
           </CardContent>
         </Card>
 

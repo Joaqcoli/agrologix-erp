@@ -64,7 +64,7 @@ export default function PurchasesPage() {
 
         {/* Resumen del día */}
         {!isLoading && list.length > 0 && (
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Card>
               <CardContent className="p-4">
                 <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">

@@ -640,7 +640,7 @@ export default function BancosPage() {
           )}
 
           {/* Cards — solo mostrar saldo si está disponible, siempre cobrado/comisiones */}
-          <div className={`grid gap-4 ${!balance?.unavailable && balance?.available_balance != null ? "grid-cols-3" : "grid-cols-2"}`}>
+          <div className={`grid gap-4 ${!balance?.unavailable && balance?.available_balance != null ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-1 sm:grid-cols-2"}`}>
             {!balanceLoading && !balance?.unavailable && balance?.available_balance != null && (
               <Card>
                 <CardHeader className="pb-2">
