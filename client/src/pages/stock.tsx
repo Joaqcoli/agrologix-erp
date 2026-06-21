@@ -1229,7 +1229,7 @@ export default function StockPage() {
               Los siguientes <strong>{productsToZero.length}</strong> productos tienen stock y <strong>no están en tu conteo</strong>. Al reemplazar quedarán en 0. Verificá que no falte ninguno antes de continuar.
             </DialogDescription>
           </DialogHeader>
-          <div className="max-h-52 overflow-y-auto border border-border rounded-md">
+          <div className="max-h-52 overflow-auto border border-border rounded-md">
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
