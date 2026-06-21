@@ -844,7 +844,7 @@ export default function CajaPage() {
           </div>
 
           {/* Resumen */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Card className="border-red-200 bg-red-50/40">
               <CardContent className="pt-4 pb-3 px-4">
                 <div className="flex items-center gap-2 mb-1">
@@ -886,7 +886,7 @@ export default function CajaPage() {
           {/* Lista pendientes */}
           {oblVisible.length > 0 && (
             <div className="border rounded-lg overflow-hidden">
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full text-sm">
                 <thead className="bg-muted/50">
                   <tr>
                     <th className="text-left px-3 py-2 font-medium w-6" />
@@ -960,7 +960,7 @@ export default function CajaPage() {
                     );
                   })}
                 </tbody>
-              </table>
+              </table></div>
             </div>
           )}
           {oblVisible.length === 0 && (
@@ -1335,7 +1335,7 @@ export default function CajaPage() {
             <p className="text-sm text-muted-foreground border rounded-lg px-3 py-4 text-center">No hay cheques en cartera.</p>
           ) : (
             <div className="border rounded-lg overflow-hidden">
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full text-sm">
                 <thead className="bg-muted/50">
                   <tr>
                     <th className="text-left px-3 py-2 font-medium">Cobro</th>
@@ -1374,7 +1374,7 @@ export default function CajaPage() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table></div>
             </div>
           )}
         </section>
@@ -1652,7 +1652,7 @@ export default function CajaPage() {
         </div>
 
         {/* Totals row */}
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
@@ -1692,7 +1692,7 @@ export default function CajaPage() {
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
             Por método de pago — {label}
           </p>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {(["EFECTIVO", "TRANSFERENCIA", "CHEQUE"] as MethodKey[]).map(k => {
               const cfg = METHOD_CONFIG[k];
               const mb = methodBreakdown[k];

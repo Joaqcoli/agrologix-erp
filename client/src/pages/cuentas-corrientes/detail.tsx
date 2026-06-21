@@ -212,7 +212,7 @@ function SubsidiaryDetailModal({
           {subOrders.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-4">Sin pedidos en este período</p>
           ) : (
-            <table className="w-full text-xs">
+            <div className="overflow-x-auto"><table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-border bg-muted/30">
                   <th className="text-left py-2 px-3">Folio</th>
@@ -239,7 +239,7 @@ function SubsidiaryDetailModal({
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           )}
         </div>
         <DialogFooter>
@@ -1830,7 +1830,7 @@ export default function CCCustomerDetailPage({
               <p className="text-sm text-muted-foreground p-4 text-center">Sin pedidos en este período</p>
             ) : (
               <>
-                <table className="w-full text-xs">
+                <div className="overflow-x-auto"><table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-border bg-muted/30">
                       <th className="w-8 py-2 px-2"></th>
@@ -1888,7 +1888,7 @@ export default function CCCustomerDetailPage({
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
                 {/* Footer: pending total */}
                 {pendingOrdersTotal > 0 && (
                   <div className="flex items-center justify-between px-3 py-2 border-t border-border bg-muted/20 text-xs">
@@ -1921,7 +1921,7 @@ export default function CCCustomerDetailPage({
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
-                <table className="w-full text-xs">
+                <div className="overflow-x-auto"><table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-border bg-muted/30">
                       <th className="w-8 py-1.5 px-2"></th>
@@ -1952,7 +1952,7 @@ export default function CCCustomerDetailPage({
                       );
                     })}
                   </tbody>
-                </table>
+                </table></div>
                 <div className="flex items-center justify-between px-3 py-2 border-t border-border bg-amber-50/50 dark:bg-amber-950/20 text-xs">
                   <span className="text-muted-foreground font-medium">{prevPendingOrders.length} pedido{prevPendingOrders.length > 1 ? "s" : ""} de períodos anteriores</span>
                   <span className="font-bold text-destructive">${fmtInt(prevTotal)}</span>
@@ -1977,7 +1977,7 @@ export default function CCCustomerDetailPage({
               {(data?.payments.length ?? 0) === 0 ? (
                 <p className="text-xs text-muted-foreground p-3 text-center">Sin cobros en el período</p>
               ) : (
-                <table className="w-full text-xs">
+                <div className="overflow-x-auto"><table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-border bg-muted/20">
                       <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Fecha</th>
@@ -2023,7 +2023,7 @@ export default function CCCustomerDetailPage({
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               )}
             </CardContent>
           </Card>
@@ -2042,7 +2042,7 @@ export default function CCCustomerDetailPage({
               {(data?.withholdings.length ?? 0) === 0 ? (
                 <p className="text-xs text-muted-foreground p-3 text-center">Sin retenciones en el período</p>
               ) : (
-                <table className="w-full text-xs">
+                <div className="overflow-x-auto"><table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-border bg-muted/20">
                       <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Fecha</th>
@@ -2072,7 +2072,7 @@ export default function CCCustomerDetailPage({
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               )}
             </CardContent>
           </Card>
@@ -2088,7 +2088,7 @@ export default function CCCustomerDetailPage({
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
-              <table className="w-full text-xs">
+              <div className="overflow-x-auto"><table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-border bg-muted/30">
                     <th className="text-left py-2 px-3 font-semibold text-muted-foreground">Sede</th>
@@ -2111,7 +2111,7 @@ export default function CCCustomerDetailPage({
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table></div>
             </CardContent>
           </Card>
         )}
