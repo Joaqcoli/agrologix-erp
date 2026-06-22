@@ -172,3 +172,66 @@ Por el formulario de **movimiento manual**: `POST /api/caja/movements` (routes.t
 **Orden confirmado: 1 → 2 → 3 → 4 → 5** (impacto/riesgo). El #1 (saldos, sobre todo Galicia) es el arranque obvio: bajo riesgo, alto impacto, y desbloquea ver si el disponible empieza a tener sentido.
 
 **Solo lectura. Nada tocado.**
+
+---
+
+# 🔵 PASO 2 — MercadoPago al disponible: ¿se sostiene solo? (diseño, solo lectura, 2026-06-22)
+
+> **Solo lectura. Nada tocado.** Paso 1 cerrado y verificado (saldo_base MP = cierre de ayer $406.023 + mpDelta API +$142.181 = $548.204; disponible total $550.538 positivo). Pregunta de este paso: ¿el mecanismo actual se mantiene solo o hay que recargar? ¿Conviene el balance directo de la API?
+
+## 1. ¿El mecanismo actual (saldo_base + mpDelta) se mantiene solo? → **NO indefinidamente**
+
+`saldo MP = saldo_base + ajuste + mpDelta`, donde **`mpDelta` = TODOS los movimientos de la API de MP entre las 00:00 de `saldo_base_fecha` y hoy**, traídos paginando de a 50 (`routes.ts:2730-2767`):
+```js
+baseParams.set("begin_date", `${effectiveFrom}T00:00:00.000-03:00`);  // 00:00 del día de carga
+// while: pagina de a 50 …
+if (page.length < LIMIT) break;
+if (offset >= 10000) break;   // ← TOPE de seguridad: 10.000 movimientos
+```
+
+**Dos formas en que se degrada con el tiempo si NO se recarga el saldo_base:**
+
+1. **Performance (el problema práctico, aparece a las semanas):** cada vez que se abre la Caja, el front **re-trae TODOS los movimientos MP desde `saldo_base_fecha` hasta hoy**, paginando de a 50. Cuanto más viejo el `saldo_base`, más páginas → más llamadas a la API de MP → la Caja tarda cada vez más (encima de la latencia de región ya conocida). A ~1.200 movimientos/mes (MP es ~70% del negocio), al mes son ~24 páginas; a los 3 meses ~70 páginas en CADA apertura.
+2. **Exactitud (el problema de fondo, aparece a los meses):** `sort=date_created desc` + tope `offset >= 10000` → si entre la fecha de corte y hoy hay **más de 10.000 movimientos**, la paginación corta y deja afuera los **más viejos** → `mpDelta` quedaría incompleto → **el saldo se desfasa hacia abajo**. A ~1.200/mes, el tope se alcanza en **~8 meses**.
+
+→ **Conclusión: NO es "cargar una vez y listo".** Es exacto hoy y por **semanas/pocos meses**, pero **requiere recargar el `saldo_base` cada tanto** (recargar acorta el rango → menos páginas y aleja el tope de 10.000). Es **mantenimiento recurrente**, justo lo que se quería evitar.
+
+## 2. ¿Conviene el balance directo de la API? → **Sí, es más sólido — si la API responde confiable**
+
+**La API de MP SÍ expone el balance total** y el endpoint **ya existe** en el sistema (`routes.ts:2686`):
+```js
+app.get("/api/mp/balance", ... fetch("https://api.mercadopago.com/v1/account/balance") ...)
+// devuelve { available_balance } o { available_balance: null, unavailable: true } si falla
+```
+- `available_balance` = el **saldo disponible** de la cuenta MP (lo que el usuario ve en su app). **Una sola llamada O(1)**, siempre el saldo real, **sin rango creciente, sin paginación, sin tope de 10.000, cero mantenimiento.**
+- **HOY solo lo usa Bancos** (`bancos/index.tsx:283`), **NO la Caja**. La Caja usa el mecanismo (a).
+
+**El riesgo (por qué no es automático):** el código trata el balance como **potencialmente no disponible** — `bancos/index.tsx:644` lo muestra solo `if (!unavailable && available_balance != null)`, y lo oculta si falla. Es decir, **el endpoint de balance a veces no responde** (permisos del token / endpoint legacy de MP). *No se pudo probar en vivo: el `MP_ACCESS_TOKEN` solo está en producción (Render), no en local.* → **Antes de migrar hay que confirmar en producción que `/api/mp/balance` devuelve un número estable** (no `unavailable`) de forma consistente.
+
+**Matiz adicional:** `available_balance` es el saldo **disponible** (plata liberada). MP suele tener plata **"a liberar"** (en proceso). El balance disponible puede ser menor que "toda mi plata en MP". Hay que decidir si el disponible de la Caja usa el **disponible** (conservador, plata que ya puedo mover) o disponible + a liberar.
+
+## 3. Comparación
+
+| | (a) Actual: `saldo_base` + `mpDelta` | (b) Balance directo de la API |
+|---|---|---|
+| **Exactitud hoy** | ✅ exacta (verificada) | ✅ exacta (el saldo real de MP) |
+| **Mantenimiento** | ❌ recargar `saldo_base` cada tanto | ✅ cero (siempre live) |
+| **Performance** | ❌ se degrada (repagina todo en cada apertura) | ✅ O(1), una llamada |
+| **Tope/desfase a futuro** | ❌ tope 10.000 movs (~8 meses) | ✅ sin tope |
+| **Riesgo** | bajo (pero molesto: mantenimiento) | la API de balance debe responder confiable; matiz "disponible vs a liberar" |
+
+→ **(b) es claramente más sólida y confiable a largo plazo** (cero mantenimiento, sin degradación), **siempre que la API de balance responda de forma estable.** (a) es correcta pero arrastra mantenimiento recurrente y se degrada.
+
+## 4. Doble conteo — meter MP al disponible NO lo agrava
+
+Los cobros van **"nunca MP"** (no crean `movimiento_cuenta` en la cuenta MP), así que **dentro del DISPONIBLE (Sistema A) no hay doble conteo de MP**: MP entra solo por `saldo_base + mpDelta` (o por el balance directo). El mismo cobro por MP también aparece en `payments` y/o en `caja_movements` "Cobro de cliente" sincronizado, **pero eso es el Sistema B (reportes de ingresos), un total distinto del disponible.** → El doble conteo del **paso 5** es entre `payments` y `caja_movements` **dentro de los reportes de ingresos**; el disponible es otro eje ("cuánta plata tengo" vs "cuánto vendí"). **Meter MP al disponible no toca ni agrava ese doble conteo.**
+
+## 5. Recomendación de diseño
+
+1. **Confirmar en producción** que `GET /api/mp/balance` devuelve `available_balance` estable (no `unavailable`) durante unos días. *(Sin esto, no migrar.)*
+2. Si responde confiable → **migrar la cuenta MP de la Caja a usar el balance directo** (opción b), con **fallback al mecanismo actual** (a) si la API de balance falla puntualmente. Decidir si se usa `available_balance` (disponible) o se suma lo "a liberar".
+3. Si NO responde confiable → quedarse en (a), pero **acotar el costo**: recargar el `saldo_base` periódicamente (mensual) y/o cambiar `mpDelta` para que el rango no crezca sin fin (recortar a, p. ej., últimos 60 días desde un `saldo_base` que se auto-actualice).
+
+**Orden sugerido:** primero el chequeo (1) — es solo mirar Bancos/MP unos días y ver si el balance aparece siempre. Con eso decidimos (b) vs (a)-acotado.
+
+**Solo lectura. Nada tocado.**
