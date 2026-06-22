@@ -307,33 +307,32 @@ export default function CajaPage() {
     queryFn: () => fetch("/api/caja/cuentas", { credentials: "include" }).then(r => r.json()),
   });
 
-  const mpCuenta = cuentas?.find(c => c.tipo === "mp");
-  const mpBaseFecha = mpCuenta?.saldo_base_fecha ? mpCuenta.saldo_base_fecha.slice(0, 10) : null;
   const todayIso = new Date().toISOString().slice(0, 10);
 
-  const { data: mpMovData } = useQuery<{ results?: any[] }>({
-    queryKey: ["/api/mp/movements/cuentas", mpBaseFecha, todayIso],
-    queryFn: () =>
-      fetch(`/api/mp/movements?from=${mpBaseFecha}&to=${todayIso}`, { credentials: "include" }).then(r => r.json()),
-    enabled: !!mpBaseFecha,
-    staleTime: 3 * 60 * 1000,
+  // MercadoPago: el saldo viene DIRECTO del balance de la API (/api/mp/balance →
+  // /v1/account/balance, available_balance), la misma fuente que Bancos. Reemplaza el
+  // mecanismo viejo (saldo_base + ajuste + mpDelta) que repaginaba todos los movimientos
+  // y se degradaba con el tiempo. Una sola llamada O(1), siempre el saldo real.
+  const { data: mpBalance } = useQuery<{ available_balance?: number | null; unavailable?: boolean }>({
+    queryKey: ["/api/mp/balance"],
+    queryFn: () => fetch("/api/mp/balance", { credentials: "include" }).then(r => r.json()),
+    retry: false,
+    staleTime: 60 * 1000,
+    refetchInterval: 5 * 60 * 1000, // refresca solo cada 5 min mientras la Caja está abierta
   });
-
-  const mpDelta = useMemo(() => {
-    if (!mpBaseFecha || !mpMovData?.results) return 0;
-    let delta = 0;
-    for (const m of mpMovData.results) {
-      const net = m.netAmount ?? 0;
-      if (m.isOutgoing) delta -= net;
-      else delta += net;
-    }
-    return delta;
-  }, [mpBaseFecha, mpMovData]);
+  // ¿la API respondió con un número usable?
+  const mpLive = !!mpBalance && !mpBalance.unavailable && mpBalance.available_balance != null;
 
   function getSaldoActual(c: CuentaFinanciera): number {
     const base = parseFloat(String(c.saldo_base ?? 0));
     const ajuste = c.ajuste ?? 0;
-    if (c.tipo === "mp") return base + ajuste + mpDelta;
+    if (c.tipo === "mp") {
+      // Fuente única: balance directo de la API. Fallback robusto si la API no responde:
+      // usar el último saldo_base cargado a mano (número razonable, NO rompe el disponible
+      // ni lo muestra absurdo). Cuando la API vuelve, toma el balance solo. NUNCA se suman
+      // balance + saldo_base (sería doble) ni se usa el mpDelta viejo.
+      return mpLive ? Number(mpBalance!.available_balance) : base;
+    }
     if (c.tipo === "cheque") return chequesEnCartera.reduce((s, ch) => s + ch.monto, 0);
     return base + ajuste;
   }
@@ -713,15 +712,21 @@ export default function CajaPage() {
                         <Pencil className="h-3 w-3 text-muted-foreground/40 flex-shrink-0" />
                       </div>
                       <p className={`text-xl font-bold ${saldo >= 0 ? "text-foreground" : "text-red-600"}`}>{fmt(saldo)}</p>
-                      {cuenta.saldo_base_fecha && (
-                        <p className="text-[10px] text-muted-foreground mt-0.5">
-                          base {new Date(cuenta.saldo_base_fecha).toLocaleDateString("es-AR", { day: "numeric", month: "short" })}
-                          {cuenta.tipo === "mp" && mpDelta !== 0 && (
-                            <span className={mpDelta > 0 ? " text-green-600" : " text-red-600"}>
-                              {" "}{mpDelta > 0 ? "+" : ""}{fmt(mpDelta)}
-                            </span>
-                          )}
-                        </p>
+                      {cuenta.tipo === "mp" ? (
+                        // MP toma el balance directo de la API. Indicador de fuente.
+                        mpLive ? (
+                          <p className="text-[10px] text-green-600 mt-0.5 flex items-center gap-1">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500" /> saldo en vivo
+                          </p>
+                        ) : (
+                          <p className="text-[10px] text-amber-600 mt-0.5">⚠ MP no disponible — último saldo conocido</p>
+                        )
+                      ) : (
+                        cuenta.saldo_base_fecha && (
+                          <p className="text-[10px] text-muted-foreground mt-0.5">
+                            base {new Date(cuenta.saldo_base_fecha).toLocaleDateString("es-AR", { day: "numeric", month: "short" })}
+                          </p>
+                        )
                       )}
                     </CardContent>
                   </Card>
@@ -815,7 +820,7 @@ export default function CajaPage() {
               />
               {editCuenta?.tipo === "mp" && (
                 <p className="text-xs text-muted-foreground">
-                  Ingresá el saldo exacto de MP ahora. A partir de esta fecha los movimientos del feed se suman automáticamente.
+                  El saldo de MP se toma automáticamente del balance en vivo de MercadoPago. Este número solo se usa como <b>respaldo</b> si la API de MP no responde en algún momento.
                 </p>
               )}
             </div>
