@@ -300,3 +300,13 @@ Si la API devuelve un status no-OK (404/403/401), el código lo marca `unavailab
 - **Mejora opcional** para no degradarse: acotar el rango del `mpDelta` (p. ej. últimos 45-60 días) y recargar `saldo_base` periódicamente, o auto-consolidar el saldo. Pero lo primero es **volver al mecanismo que funciona**.
 
 **Solo lectura. Nada tocado.** (La migración del paso 2 sigue deployada y mostrando el fallback; el siguiente paso es revertirla.)
+
+---
+
+## ✅ PASO 2 REVERTIDO + acotado (2026-06-22, commit `a8c2c14`)
+
+- **Revertido al mecanismo que funciona:** `getSaldoActual(mp) = saldo_base + ajuste + mpDelta`, con `mpDelta` de `/api/mp/movements` (`/v1/payments/search`, la fuente que responde — la misma que alimenta "Cobrado"/"Comisiones" en Bancos). Se descartó el `available_balance` (no responde).
+- **Rango acotado (resuelve la degradación):** `from = max(saldo_base_fecha, hoy−60d)`. Mientras el usuario recargue el `saldo_base` cada ≤60 días, `from = saldo_base_fecha` → exacto, no deja afuera ningún movimiento posterior al corte. El tope de 60d es salvaguarda de performance. Aviso "↻ recargá el saldo de MP" si la base > 45 días.
+- **Fallback:** si `/api/mp/movements` fallara → `saldo_base + ajuste` (último conocido). Galicia/Efectivo sin cambios.
+- **Verificado:** `saldo_base_fecha` 22-jun fresca → `from = saldo_base_fecha` (rango no deja nada afuera); `ajuste = $0`; mecanismo idéntico al que dio exacto $548.204 en el paso 1; Galicia $2.333 / Efectivo $0 idénticos. El número real (mpDelta) lo confirma el usuario en la Caja real (token solo en prod).
+- **Lección:** `/v1/account/balance` no es fuente confiable para esta credencial; el saldo de MP se calcula de los movimientos (`/v1/payments/search`), que sí responde. **Paso 2 cerrado por esta vía** (saldo_base + mpDelta acotado). Pendientes: 3 Galicia Excel · 4 transferencia interna · 5 doble conteo.
