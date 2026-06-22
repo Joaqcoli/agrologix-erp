@@ -365,3 +365,67 @@ No se puede tomar la respuesta de la API desde acá: **el `MP_ACCESS_TOKEN` solo
 - **El arreglo (próximo paso, no ahora):** clasificar la dirección de forma robusta — no depender solo de `payer_id === merchantId`, sino usar `operation_type` y el signo real, y/o detectar egresos por `collector_id === merchantId` (ingreso) vs lo contrario, contemplando los pagos a comercio. Y **filtrar por `status === 'approved'`**. Antes de tocar, confirmar con la respuesta cruda (§6) qué campo distingue bien la dirección en los movimientos problemáticos.
 
 **Solo lectura. Nada tocado.**
+
+---
+
+# 🔴🔴 PASO 2 — por qué NINGUNA combinación reproduce el saldo: `date_created` vs `money_release_date` (diagnóstico, solo lectura, 2026-06-22)
+
+> **Solo lectura.** Causa raíz hallada en el código: el `mpDelta` suma los pagos **CREADOS** en el día (`date_created`), pero el **saldo disponible** de MP se mueve según **cuándo se LIBERA la plata** (`money_release_date`). Son dos conjuntos distintos → por eso **ninguna combinación de los 9 movimientos de hoy reproduce el saldo real**.
+
+## 1. La causa raíz en el código
+
+El endpoint pide a MP por **`date_created`** (`routes.ts:2722,2726`):
+```js
+baseParams.set("range", "date_created");   // ← filtra por fecha de CREACIÓN del pago
+baseParams.set("sort", "date_created");
+```
+Y el `mpDelta` (front) **suma todos los del rango sin mirar `money_release`** (ni status):
+```js
+for (const m of mpMovData.results) { if (m.isOutgoing) delta -= net; else delta += net; }
+```
+**El saldo disponible de MP NO se mueve cuando se crea un pago, sino cuando la plata se LIBERA** (`money_release_date` / `money_release_status='released'`). Un cobro con tarjeta puede estar `approved` HOY pero liberarse en días; una transferencia se libera al instante. **El `mpDelta` mezcla peras (creación) con manzanas (liberación).**
+
+→ **Dato a favor:** el endpoint **sí preserva** `money_release_date` y `money_release_status` (el movimiento es `{ ...p, ... }`, `routes.ts:2853`), así que **el JSON que ves ya los trae** — solo que el cálculo no los usa.
+
+## 2. La matemática confirma la desconexión
+
+```
+saldo_base (cierre 21-jun) = 406.023,21
+saldo app HOY             = 445.957,60   → neto real = +39.934,39
+```
+Movimientos de hoy (por `date_created`):
+- Ingresos (net_received): TORIBIO 127.749,84 + MAREA 442.975,20 = **570.725,04**
+- Egresos approved (total_paid): Joaquin 50.300 + Mario 6.840,80 + BAR 3.018 + Bendita 166.996 = **227.154,80**
+- Egresos pending_capture (3 peajes ~$48k): no debitados.
+
+Para que el neto sea **+39.934,39** con esos egresos (227.154,80) debitados:
+```
+ingresos_que_movieron_el_saldo = 39.934,39 + 227.154,80 = 267.089,19
+```
+**Pero NINGÚN ingreso ni suma de hoy da 267.089,19** (TORIBIO=127.749, MAREA=442.975, suma=570.725). → **Los ingresos que movieron el saldo HOY no son los creados hoy.** Hay liberaciones de pagos de **días anteriores** que entraron hoy, y pagos creados hoy (MAREA) que **todavía no se liberaron**. El conjunto "movimientos por `date_created` de hoy" ≠ "movimientos que mueven el saldo hoy (por `money_release`)". **Por eso no cierra.**
+
+## 3. La hipótesis del usuario es correcta — y es la mitad del problema
+
+- **Mitad A (lo que sobra):** ingresos `approved` HOY pero **no liberados** (ej. MAREA, si su `money_release_date` es futura) → el `mpDelta` los suma, el saldo no. Infla.
+- **Mitad B (lo que falta):** pagos creados **antes** de hoy pero **liberados hoy** → el saldo sube, pero el `mpDelta` no los ve (su `date_created` quedó fuera del rango del día). Faltan.
+
+Ambas mitades vienen del mismo error: **filtrar por `date_created` en vez de `money_release_date`.**
+
+## 4. La regla correcta (y por qué es frágil)
+
+Para que el cálculo reproduzca el **saldo disponible**:
+- **Ingresos:** contar solo los `money_release_status === 'released'` **con `money_release_date <= ahora`** — y filtrar por **`money_release_date`** dentro del rango, NO por `date_created`.
+- **Egresos:** contar los `captured/approved` cuando se debitan (los `pending_capture` afuera).
+- **Problema:** la API filtra por `date_created` (`range=date_created`). Para sumar por `money_release_date` habría que **traer un rango de creación MÁS AMPLIO** (ej. últimos 10-15 días) y filtrar en código por `money_release_date` dentro del día — porque un pago liberado hoy pudo crearse hace una semana. Es **más llamadas, más complejo y aún aproximado** (MP puede liberar en cualquier momento).
+
+## 5. Implicación y recomendación
+
+**Reconstruir el saldo disponible de MP sumando movimientos es estructuralmente frágil**, porque el saldo se mueve por liberación (`money_release_date`), un evento que no coincide con la creación del pago y que la API no deja filtrar directo. Opciones:
+
+1. **(Más confiable y simple) Saldo_base manual recargado seguido + delta solo informativo.** El `saldo_base` es el saldo disponible REAL (lo mirás en la app); recargándolo a diario/cada par de días, el "disponible" de la Caja es exacto. El `mpDelta` queda como estimación del movimiento del día (con sus arreglos: status, total_paid/net_received, TZ), sabiendo que **no será exacto al centavo** por el desfase de liberación. → Es el camino realista.
+2. **(Complejo) Calcular por `money_release_date`:** traer ~15 días de pagos, sumar ingresos liberados (`released`, release_date en el día) − egresos capturados. Más fiel, pero más llamadas y nunca 100% (liberaciones intradía). Alto esfuerzo, beneficio incierto.
+3. **(Ideal pero no disponible) El `available_balance` de la API** sería lo correcto — pero ya vimos que `/v1/account/balance` no responde para esta credencial.
+
+→ **Recomendación: opción 1.** El saldo disponible de MP **no se puede reconstruir exacto por API** con esta credencial; lo honesto es que el `saldo_base` (recargado seguido) sea la fuente del disponible, y el delta una estimación corregida. Para confirmar el detalle, hace falta el `money_release_date`/`money_release_status` de TORIBIO y MAREA del JSON (ahí se ve cuál está liberado y cuál no).
+
+**Solo lectura. Nada tocado.**
