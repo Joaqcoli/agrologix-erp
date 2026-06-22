@@ -309,29 +309,57 @@ export default function CajaPage() {
 
   const todayIso = new Date().toISOString().slice(0, 10);
 
-  // MercadoPago: el saldo viene DIRECTO del balance de la API (/api/mp/balance →
-  // /v1/account/balance, available_balance), la misma fuente que Bancos. Reemplaza el
-  // mecanismo viejo (saldo_base + ajuste + mpDelta) que repaginaba todos los movimientos
-  // y se degradaba con el tiempo. Una sola llamada O(1), siempre el saldo real.
-  const { data: mpBalance } = useQuery<{ available_balance?: number | null; unavailable?: boolean }>({
-    queryKey: ["/api/mp/balance"],
-    queryFn: () => fetch("/api/mp/balance", { credentials: "include" }).then(r => r.json()),
+  // MercadoPago: el saldo = saldo_base + ajuste + mpDelta, donde mpDelta = movimientos
+  // de la API (/api/mp/movements, /v1/payments/search — la fuente que SÍ responde; el
+  // /v1/account/balance NO responde para esta credencial, ver AUDITORIA-CAJA.md).
+  // RANGO ACOTADO: el fetch arranca en max(saldo_base_fecha, hoy−60d). Mientras el
+  // usuario recargue el saldo_base cada ≤60 días, from = saldo_base_fecha → cuenta TODOS
+  // los movimientos posteriores al corte (exacto, no deja afuera ninguno). El tope de 60
+  // días es solo una salvaguarda de performance si el saldo quedara viejo (evita repaginar
+  // meses). Si el saldo está a >45 días, se avisa para recargar (mpStale).
+  const mpCuenta = cuentas?.find(c => c.tipo === "mp");
+  const mpBaseFechaRaw = mpCuenta?.saldo_base_fecha ?? null;
+  const RANGO_DIAS = 60;
+  const mpFrom = useMemo(() => {
+    const cap = new Date(Date.now() - RANGO_DIAS * 86400000);            // hoy − 60 días
+    const baseF = mpBaseFechaRaw ? new Date(mpBaseFechaRaw) : null;
+    const from = baseF && baseF > cap ? baseF : cap;                     // max(saldo_base_fecha, hoy−60d)
+    return from.toISOString().slice(0, 10);
+  }, [mpBaseFechaRaw]);
+  // Antigüedad del saldo_base (para avisar de recargar antes de que el tope subcuente)
+  const mpDiasDesdeBase = mpBaseFechaRaw
+    ? Math.floor((Date.now() - new Date(mpBaseFechaRaw).getTime()) / 86400000) : null;
+  const mpStale = mpDiasDesdeBase != null && mpDiasDesdeBase > 45;
+
+  const { data: mpMovData, isError: mpMovError } = useQuery<{ results?: any[] }>({
+    queryKey: ["/api/mp/movements/cuentas", mpFrom, todayIso],
+    queryFn: () => fetch(`/api/mp/movements?from=${mpFrom}&to=${todayIso}`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!mpBaseFechaRaw,
     retry: false,
-    staleTime: 60 * 1000,
-    refetchInterval: 5 * 60 * 1000, // refresca solo cada 5 min mientras la Caja está abierta
+    staleTime: 3 * 60 * 1000,
+    refetchInterval: 5 * 60 * 1000,
   });
-  // ¿la API respondió con un número usable?
-  const mpLive = !!mpBalance && !mpBalance.unavailable && mpBalance.available_balance != null;
+  const mpDelta = useMemo(() => {
+    if (!Array.isArray(mpMovData?.results)) return 0;
+    let delta = 0;
+    for (const m of mpMovData!.results!) {
+      const net = m.netAmount ?? 0;
+      if (m.isOutgoing) delta -= net; else delta += net;
+    }
+    return delta;
+  }, [mpMovData]);
+  // ¿la fuente de movimientos respondió? (para el fallback)
+  const mpLive = !mpMovError && Array.isArray(mpMovData?.results);
 
   function getSaldoActual(c: CuentaFinanciera): number {
     const base = parseFloat(String(c.saldo_base ?? 0));
     const ajuste = c.ajuste ?? 0;
     if (c.tipo === "mp") {
-      // Fuente única: balance directo de la API. Fallback robusto si la API no responde:
-      // usar el último saldo_base cargado a mano (número razonable, NO rompe el disponible
-      // ni lo muestra absurdo). Cuando la API vuelve, toma el balance solo. NUNCA se suman
-      // balance + saldo_base (sería doble) ni se usa el mpDelta viejo.
-      return mpLive ? Number(mpBalance!.available_balance) : base;
+      // Fuente principal: saldo_base + ajuste + mpDelta (movimientos de la API, rango acotado).
+      // Fallback robusto: si la API de movimientos fallara, usar saldo_base + ajuste (último
+      // conocido, sin el delta) → número razonable, NO rompe el disponible. Cuando la API
+      // vuelve, suma el delta de nuevo.
+      return mpLive ? base + ajuste + mpDelta : base + ajuste;
     }
     if (c.tipo === "cheque") return chequesEnCartera.reduce((s, ch) => s + ch.monto, 0);
     return base + ajuste;
@@ -713,13 +741,20 @@ export default function CajaPage() {
                       </div>
                       <p className={`text-xl font-bold ${saldo >= 0 ? "text-foreground" : "text-red-600"}`}>{fmt(saldo)}</p>
                       {cuenta.tipo === "mp" ? (
-                        // MP toma el balance directo de la API. Indicador de fuente.
-                        mpLive ? (
-                          <p className="text-[10px] text-green-600 mt-0.5 flex items-center gap-1">
-                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500" /> saldo en vivo
-                          </p>
-                        ) : (
+                        // MP = saldo_base + movimientos de la API (rango acotado a 60 días).
+                        !mpLive ? (
                           <p className="text-[10px] text-amber-600 mt-0.5">⚠ MP no disponible — último saldo conocido</p>
+                        ) : mpStale ? (
+                          <p className="text-[10px] text-amber-600 mt-0.5">↻ recargá el saldo de MP (base de hace {mpDiasDesdeBase} días)</p>
+                        ) : (
+                          <p className="text-[10px] text-muted-foreground mt-0.5">
+                            {cuenta.saldo_base_fecha && <>base {new Date(cuenta.saldo_base_fecha).toLocaleDateString("es-AR", { day: "numeric", month: "short" })}</>}
+                            {mpDelta !== 0 && (
+                              <span className={mpDelta > 0 ? " text-green-600" : " text-red-600"}>
+                                {" "}{mpDelta > 0 ? "+" : ""}{fmt(mpDelta)}
+                              </span>
+                            )}
+                          </p>
                         )
                       ) : (
                         cuenta.saldo_base_fecha && (
@@ -820,7 +855,7 @@ export default function CajaPage() {
               />
               {editCuenta?.tipo === "mp" && (
                 <p className="text-xs text-muted-foreground">
-                  El saldo de MP se toma automáticamente del balance en vivo de MercadoPago. Este número solo se usa como <b>respaldo</b> si la API de MP no responde en algún momento.
+                  Ingresá el saldo exacto de MP de <b>ahora</b> (o el cierre de ayer). A partir de esta fecha el sistema le suma automáticamente los movimientos de MP. Recargalo aprox. una vez por mes para mantenerlo preciso.
                 </p>
               )}
             </div>
