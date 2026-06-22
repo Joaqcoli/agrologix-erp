@@ -96,3 +96,79 @@ Por el formulario de **movimiento manual**: `POST /api/caja/movements` (routes.t
 5. **(Conciliación)** evaluar unificar/concordar los 3 sistemas y revisar el posible doble conteo cobros (`caja_movements` vs `payments`).
 
 **Solo lectura. Nada tocado.**
+
+---
+
+# 🔄 FOTO ACTUAL (re-diagnóstico solo lectura, 2026-06-22)
+
+> **Solo lectura. Nada tocado/conciliado.** Estado real de la base HOY vs. el diagnóstico del 2026-06-15. **Conclusión:** el modelo no cambió; se cargaron 2 saldos de prueba ínfimos pero **Galicia sigue en $0** y el **disponible total da −$3,3M (negativo, sin sentido)**. Los 6 problemas siguen vigentes; ninguno se resolvió.
+
+## 1. Cuentas financieras HOY (`cuentas_financieras`)
+
+| # | Nombre | tipo | saldo_base ANTES (15-jun) | **saldo_base HOY** | fecha | Cambió |
+|---|---|---|---|---|---|---|
+| 1 | Mercado Pago | `mp` | $0 / NULL | **$4.398** | 15-jun | ✅ cargado, pero **ínfimo** (MP es ~70% del negocio) |
+| 2 | Galicia | `banco` | $0 / NULL | **$0** | NULL | ❌ **SIGUE EN $0** |
+| 3 | Efectivo | `efectivo` | $0 | **$35.000** | 15-jun | ✅ cargado |
+| 4 | Cheques en cartera | `cheque` | $0 / NULL | **$0** | NULL | ❌ sigue $0 |
+
+→ **El usuario cargó saldos de prueba el 15-jun (MP $4.398, Efectivo $35.000)** pero NO los reales (MP debería ser millones). **Galicia y Cheques siguen en $0.**
+
+## 2. Disponible total HOY = **−$3.292.269** (negativo, irreal)
+
+| Cuenta | saldo_base | + movimientos | = saldo |
+|---|---|---|---|
+| Mercado Pago | $4.398 | 2 movs −$114.000 | **−$109.602** |
+| Galicia | $0 | 7 movs −$3.217.667 | **−$3.217.667** |
+| Efectivo | $35.000 | 0 movs | $35.000 |
+| Cheques en cartera | $0 | 10 movs +$33.957.852 | $33.957.852 *(no entra al disponible)* |
+| **DISPONIBLE TOTAL** (sin cheques, sin mpDelta live) | | | **−$3.292.269** |
+
+→ **Galicia arrastra el disponible a negativo**: su `saldo_base=$0` pero tiene obligaciones/cobros (−$3,2M) cargados a mano sin el saldo real que los respalde. Sigue dando "cualquier número".
+
+## 3. MercadoPago — sigue VIVIENDO APARTE
+
+- **Cobros siguen "nunca MP"** (`routes.ts:1369`: "solo banco/efectivo, nunca MP"). La cuenta MP del Sistema A no recibe los ingresos de MP.
+- `mp_xlsx_movements` hoy: **893 filas** (antes 824), rango hasta 2026-06-21, bruto **$76.966.077**. Ese MP real **NO entra al disponible** (la cuenta MP solo tiene base $4.398 + 2 pagos).
+- **`mp_xlsx_movements.comision` está TODA en $0** (0 filas con comisión ≠ 0). Las comisiones reales se sincronizan a `caja_movements` categoría **"Comisiones"** (283 mov, $1.087.869) vía la reconciliación de Bancos.
+
+## 4. Galicia — sigue sub-cargada, sin upload
+
+- **7 `movimientos_cuenta`** hoy (antes 6): 4 obligación, 2 cobro, 1 cheque-destino. Un extracto Galicia mensual tiene decenas de líneas → **sigue incompleta**.
+- **NO existe upload de Excel** (sin `multer` en package.json, sin endpoint de subida). Se sigue cargando **a mano** (`POST /api/caja/movements`).
+
+## 5. Transferencias internas "Banco propio" — CRECIERON, siguen inflando
+
+- Hoy: **`[ingreso] Banco propio: 25 mov $5.016.000`** + **`[egreso] Banco propio: 5 mov $2.890.000`** (antes ingreso 15/$3,4M + egreso 2/$370k → **creció**).
+- **`getCajaSummary` (storage.ts:5190) las cuenta como ingreso/egreso del negocio**: `totalIngresos = sumPayments + sumManualIn` donde `sumManualIn` = TODOS los `caja_movements` ingreso **sin excluir "Banco propio"**. → infla los ingresos $5M. **Sigue sin marca de "transferencia interna"** (origen_tipo no tiene `transferencia`).
+
+## 6. M7 / Doble conteo — mecanismo CONFIRMADO
+
+- **`caja_movements` categoría "Cobro de cliente": 40 filas ($11.453.011), TODAS con `source_id`** → vienen del **sync de Bancos/MP** (ej. "Bank Transfer", "Viva Fit", "TODO CASERITO").
+- **`payments`: 244 filas ($310.231.822)** — TRANSFERENCIA 170/$213M, CHEQUE 19/$73M, EFECTIVO 32/$18M, RETENCION 23/$5M.
+- **`getCajaSummary` suma `payments` (todos) + `caja_movements` ingreso (todos, incl. los 40 "Cobro de cliente" del sync)** → si un cobro por transferencia/MP entró **como `payment` Y como `caja_movement` sincronizado**, se cuenta **dos veces**. El mecanismo de doble conteo está confirmado (falta el match 1-a-1 para cuantificar, pero la summary no deduplica).
+
+## 7. ¿Qué cambió vs. 2026-06-15 y qué sigue?
+
+| Problema (2026-06-15) | Estado HOY |
+|---|---|
+| Saldos iniciales en $0 | **Parcial**: MP/Efectivo con valores de prueba; **Galicia y Cheques siguen $0** → disponible aún negativo |
+| MP no entra al disponible | ❌ **Igual** (cobros "nunca MP"; MP real aparte) |
+| Galicia sub-cargada, sin Excel | ❌ **Igual** (7 movs a mano, sin upload) |
+| "Banco propio" como negocio | ❌ **Peor** (creció a $5M ingreso + $2,9M egreso) |
+| 3 sistemas no concilian | ❌ Igual |
+| Doble conteo cobros | ⚠️ **Confirmado el mecanismo** (summary no deduplica payments vs caja_movements sync) |
+
+→ **Ninguno se resolvió.** El modelo es el mismo; solo se tantearon 2 saldos.
+
+## 8. Plan actualizado — el orden previo SIGUE siendo el correcto
+
+1. **Saldos iniciales (mayor impacto / menor riesgo).** Cargar `saldo_base` REAL de cada cuenta a una fecha de corte — **empezando por Galicia (en $0) y corrigiendo MP/Efectivo** (hoy de prueba). Mecanismo ya existe (`PUT /api/caja/cuentas/:id` + UI). Esto solo ya arregla el "disponible total" negativo.
+2. **MP al disponible.** Que la cuenta MP tome su saldo del balance live de la API (`mpDelta`) con `saldo_base`/fecha bien seteados, para que MP (70%) entre al disponible de forma correcta.
+3. **Galicia por Excel.** Construir upload (`multer`) + parser de Galicia (reusa el parsing de MP) + dedupe → cargar el extracto como `movimientos_cuenta`. Reemplaza la carga a mano.
+4. **Marca de transferencia interna.** Categoría/flag reservada que mueva saldo entre cuentas (Sistema A) **sin** contar como ingreso/egreso del negocio (Sistema B) → excluir "Banco propio" de `getCajaSummary`.
+5. **Conciliar + doble conteo.** Deduplicar `payments` vs `caja_movements` sincronizados en `getCajaSummary`; evaluar unificar los 3 sistemas.
+
+**Orden confirmado: 1 → 2 → 3 → 4 → 5** (impacto/riesgo). El #1 (saldos, sobre todo Galicia) es el arranque obvio: bajo riesgo, alto impacto, y desbloquea ver si el disponible empieza a tener sentido.
+
+**Solo lectura. Nada tocado.**
