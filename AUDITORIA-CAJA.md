@@ -310,3 +310,58 @@ Si la API devuelve un status no-OK (404/403/401), el código lo marca `unavailab
 - **Fallback:** si `/api/mp/movements` fallara → `saldo_base + ajuste` (último conocido). Galicia/Efectivo sin cambios.
 - **Verificado:** `saldo_base_fecha` 22-jun fresca → `from = saldo_base_fecha` (rango no deja nada afuera); `ajuste = $0`; mecanismo idéntico al que dio exacto $548.204 en el paso 1; Galicia $2.333 / Efectivo $0 idénticos. El número real (mpDelta) lo confirma el usuario en la Caja real (token solo en prod).
 - **Lección:** `/v1/account/balance` no es fuente confiable para esta credencial; el saldo de MP se calcula de los movimientos (`/v1/payments/search`), que sí responde. **Paso 2 cerrado por esta vía** (saldo_base + mpDelta acotado). Pendientes: 3 Galicia Excel · 4 transferencia interna · 5 doble conteo.
+
+---
+
+# 🔴 PASO 2 — el mpDelta cuenta de MÁS: causa en `isOutgoing` (diagnóstico, solo lectura, 2026-06-22)
+
+> **Solo lectura.** App MP hoy: $406.023 (cierre ayer) → $445.957 (neto real +$39.934). Caja: MP = $675.954 = base $406.023 + mpDelta **+$269.931**. El mpDelta cuenta **~$230.000 de MÁS**. Causa: **egresos que no se marcan `isOutgoing` y se suman como ingresos.**
+
+## 1. Cómo se calcula la dirección (la causa)
+
+`routes.ts:2789-2811` — para cada movimiento de `/v1/payments/search`:
+```js
+const payerIdRaw = String(p.payer_id ?? p.payer?.id ?? "");
+const collIdRaw  = String(p.collector_id ?? p.collector?.id ?? "");
+// Egreso SOLO si yo soy el payer top-level Y no soy el collector:
+const isOutgoing = merchantId ? (payerIdRaw === merchantId && collIdRaw !== merchantId) : false;
+const grossAmount = Math.abs(parseFloat(p.transaction_amount ?? 0));
+const netAmount   = isOutgoing ? grossAmount + feeAmount : grossAmount - feeAmount;
+```
+Y el front (caja) suma: `if (m.isOutgoing) delta -= net; else delta += net`.
+
+**El punto de falla:** `isOutgoing` es `true` **solo si `p.payer_id` (top-level) === merchantId**. Si un egreso **no trae `payer_id` top-level igual al merchantId**, cae en `isOutgoing = false` → se **SUMA** como ingreso (en vez de restarse). Como `grossAmount = Math.abs(...)`, el monto entra positivo. **Un egreso de $E mal clasificado cambia el delta en +2·E** (deja de restar E y suma E).
+
+## 2. Por qué algunos egresos no traen `payer_id = merchantId`
+
+`/v1/payments/search` con el token del comercio devuelve los pagos **desde la perspectiva del comercio**. Hay dos clases de egreso del usuario hoy:
+- **Transferencias enviadas** (a Vegetales, Joaquin Coli, Carlos Daniel, personas): suelen tener `payer_id` top-level = el comercio → `isOutgoing = true` → restan bien. ✅ probablemente OK.
+- **Pagos a comercios / QR / peajes / SUBE** (BENDITA TIERRA, ESTACION MOSCONI, Autopistas, Camino buen ayre): en estos el usuario es el **pagador externo**, y MP **no siempre expone `payer_id` top-level = el comercio** (viene vacío o con el ID del receptor). → `payerIdRaw !== merchantId` → `isOutgoing = false` → **se suman como ingreso.** ❌ **Hipótesis principal.**
+
+## 3. Comisiones — no son la causa
+
+`netAmount`: ingreso `gross − fee`, egreso `gross + fee`. La dirección de la comisión depende de `isOutgoing` (que es el bug). Las comisiones del día (~$11.825 en MAREA + otras) son **chicas** frente a los $230.000 de diferencia → **no explican el desfase**; el desfase es de **dirección** (egresos no restados), no de comisión.
+
+## 4. Cuantificación
+
+`delta_sistema − neto_real = 269.931 − 39.934 = +$229.997 ≈ $230.000` de más. Como cada egreso mal clasificado cuenta **+2·E**, equivale a **~$115.000 de egresos sumados en vez de restados**. Candidatos por monto (pagos a comercio/peaje, los que más riesgo tienen de venir sin `payer_id`): BENDITA TIERRA −$166.996, ESTACION MOSCONI, Autopistas −$12.560, Camino buen ayre −$9.578. **El monto exacto y el set preciso requieren la respuesta cruda de la API** (ver §5).
+
+## 5. Factor secundario: el mpDelta NO filtra por `status`
+
+El endpoint trae **todos** los payments del rango sin filtrar `status`; el front (caja) los suma sin filtrar. Si MP devuelve pagos `rejected` / `cancelled` / `refunded` / `in_process`, **también entran al delta** → otra fuente posible de descuadre. (Bancos sí filtra `if (raw > 0)` para "Cobrado", pero el delta de caja no.)
+
+## 6. Lo que falta para el detalle exacto (movimiento por movimiento)
+
+No se puede tomar la respuesta de la API desde acá: **el `MP_ACCESS_TOKEN` solo está en producción**. Para identificar EXACTAMENTE qué movimientos están mal clasificados, hace falta la respuesta de:
+```
+/api/mp/movements?from=2026-06-22&to=2026-06-22
+```
+(se puede abrir en el navegador estando logueado, o agregar un log temporal). Cada movimiento trae `isOutgoing`, `payer_id`, `collector_id`, `operation_type`, `status`, `grossAmount`, `netAmount`, `displayName`. Con eso se ve **cuáles egresos tienen `isOutgoing=false` mal** (los pagos a comercio/peaje con `payer_id` vacío) y se suma el monto → debe dar ~$115.000.
+
+## 7. Conclusión
+
+- **Causa confirmada por código:** la clasificación `isOutgoing = (payer_id === merchantId)` **falla para los egresos que MP no expone con `payer_id` top-level** (pagos a comercios/QR/peajes) → se suman como ingreso → el delta infla ~2× esos egresos.
+- **No es comisiones** (chicas). **Sí puede sumarse** el factor de `status` no filtrado.
+- **El arreglo (próximo paso, no ahora):** clasificar la dirección de forma robusta — no depender solo de `payer_id === merchantId`, sino usar `operation_type` y el signo real, y/o detectar egresos por `collector_id === merchantId` (ingreso) vs lo contrario, contemplando los pagos a comercio. Y **filtrar por `status === 'approved'`**. Antes de tocar, confirmar con la respuesta cruda (§6) qué campo distingue bien la dirección en los movimientos problemáticos.
+
+**Solo lectura. Nada tocado.**
