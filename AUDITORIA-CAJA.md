@@ -245,3 +245,58 @@ Los cobros van **"nunca MP"** (no crean `movimiento_cuenta` en la cuenta MP), as
 - **Galicia/Efectivo sin cambios.** Disponible total = MP (balance directo) + Galicia + Efectivo.
 - **Verificado:** API ok → MP $548.204 (= Bancos/app), disponible $550.537; API caída → fallback $406.023 (no roto); Galicia/Efectivo idénticos al cálculo viejo. Build OK, tsc sin errores. El usuario verifica en la Caja real contra su app de MP.
 - **Pendiente del plan:** 3 Galicia por Excel · 4 marca transferencia interna ("Banco propio") · 5 conciliar + doble conteo (payments vs caja_movements).
+
+---
+
+# 🔴 PASO 2 — el balance directo NO responde: la premisa era equivocada (diagnóstico, solo lectura, 2026-06-22)
+
+> **Solo lectura.** Tras migrar MP al `available_balance`, la Caja muestra el fallback ("MP no disponible") y no se arregla ni sincronizando. **Conclusión: el `available_balance` de `/v1/account/balance` no responde (probablemente NUNCA respondió para esta credencial). La migración no se sostiene → hay que revertir al mecanismo anterior**, que usa los movimientos (`/api/mp/movements`), la fuente que SÍ funciona.
+
+## 1. Qué números de Bancos SÍ aparecen y de dónde salen
+
+| Card en Bancos | Sale de | Endpoint | ¿Responde? |
+|---|---|---|---|
+| **"Cobrado (período)" $23.379.106** | `cobradoMes` = Σ de `movData.results` (bancos:582) | **`/api/mp/movements`** (`/v1/payments/search`) | ✅ **SÍ** |
+| **"Comisiones (período)" $487.997** | `comisionesMes` = Σ fee de `movData.results` | **`/api/mp/movements`** | ✅ **SÍ** |
+| Lista de movimientos | `movData.results` | **`/api/mp/movements`** | ✅ **SÍ** |
+| **"Saldo disponible"** | `balance.available_balance` (bancos:650) | **`/api/mp/balance`** (`/v1/account/balance`) | ❌ **NO** |
+
+→ Lo que el usuario ve en Bancos (Cobrado, Comisiones, movimientos) viene **todo de `/api/mp/movements`**, que responde bien. El balance es otro endpoint distinto.
+
+## 2. ⚠️ CRÍTICO — Bancos NUNCA mostró el `available_balance` (la premisa de la migración estaba mal)
+
+El código de Bancos lo dice **literal** (bancos:642-644):
+```jsx
+{/* Cards — solo mostrar saldo si está disponible, siempre cobrado/comisiones */}
+<div className={... balance?.available_balance != null ? "grid-cols-3" : "grid-cols-2"}>
+  {!balanceLoading && !balance?.unavailable && balance?.available_balance != null && (
+    <Card> Saldo disponible: {fmt(balance.available_balance)} </Card>   // ← CONDICIONAL
+  )}
+  <Card> Cobrado (período) ... </Card>     // ← SIEMPRE
+  <Card> Comisiones (período) ... </Card>  // ← SIEMPRE
+```
+La card "Saldo disponible" **solo aparece si la API de balance responde**; si no, **desaparece** y el grid pasa de 3 a 2 columnas. Como el usuario **siempre vio 2 cards** ("Cobrado" + "Comisiones"), **el "Saldo disponible" nunca se mostró.** Cuando dijo *"el saldo de MP en Bancos aparece siempre con número"*, estaba viendo el **"Cobrado"** (de movimientos), **no** el `available_balance`. → **La premisa de la migración (que el balance respondía estable) era incorrecta.**
+
+## 3. Qué devuelve `/api/mp/balance` y por qué falla
+
+El endpoint (`routes.ts:2686`):
+```js
+const r = await fetch("https://api.mercadopago.com/v1/account/balance", { headers: { Authorization: `Bearer ${token}` }});
+if (!r.ok) { console.warn(`[MP balance] HTTP ${r.status}:`, ...); return { available_balance: null, unavailable: true }; }
+```
+Si la API devuelve un status no-OK (404/403/401), el código lo marca `unavailable`. **No se pudo probar la respuesta cruda desde acá: el `MP_ACCESS_TOKEN` solo está en producción (Render), no en local.** El status exacto **quedó logueado en Render** como `[MP balance] HTTP {status}` (visible en los logs de Render). El síntoma (movimientos OK, balance no) indica que `/v1/account/balance` responde **no-OK** para esta credencial.
+
+## 4. `/v1/account/balance` — endpoint legacy/restringido de MP
+
+`/v1/account/balance` **no es un endpoint público estable** de MercadoPago. Para los access tokens estándar (los que sirven para `/v1/payments/search`, que SÍ anda) suele devolver **404/403** — MP no expone el "saldo disponible" de la cuenta por API pública general; ese saldo se ve en la **app/panel**, no por API. Por eso el código siempre tuvo el manejo defensivo `unavailable`. Esto es consistente con: movimientos ✅, balance ❌.
+
+**Dato:** el botón **"Sincronizar"** (`POST /api/mp/sync-report`) corre el sync del XLSX a `mp_xlsx_movements` (reportes) — **no toca `/v1/account/balance`**. Por eso sincronizar no arregla el balance: son cosas distintas.
+
+## 5. Conclusión y recomendación → **revertir al mecanismo anterior**
+
+- El `available_balance` **no es confiable** (no responde para esta credencial; probablemente nunca lo hizo). **La migración del paso 2 no se sostiene.**
+- **La fuente que SÍ funciona es `/api/mp/movements`** (lo prueba que "Cobrado"/"Comisiones" cargan siempre). El **saldo real de MP se puede calcular de los movimientos**: `saldo = saldo_base + Σ(ingresos − egresos − comisiones)` desde la fecha de corte — que es **exactamente el mecanismo anterior** (`saldo_base + mpDelta`).
+- → **Recomendación: revertir la cuenta MP al mecanismo `saldo_base + mpDelta`** (usa los movimientos que responden). Era **exacto** (verificado en el paso 1: cierre de ayer + mpDelta = saldo correcto). El "problema" que nos hizo migrar era la **degradación a futuro** (repaginar + tope 10.000 a ~8 meses) — eso se mitiga **recargando el `saldo_base` cada tanto** (acorta el rango), no migrando a una fuente que no responde.
+- **Mejora opcional** para no degradarse: acotar el rango del `mpDelta` (p. ej. últimos 45-60 días) y recargar `saldo_base` periódicamente, o auto-consolidar el saldo. Pero lo primero es **volver al mecanismo que funciona**.
+
+**Solo lectura. Nada tocado.** (La migración del paso 2 sigue deployada y mostrando el fallback; el siguiente paso es revertirla.)
