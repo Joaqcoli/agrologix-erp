@@ -235,3 +235,13 @@ Los cobros van **"nunca MP"** (no crean `movimiento_cuenta` en la cuenta MP), as
 **Orden sugerido:** primero el chequeo (1) — es solo mirar Bancos/MP unos días y ver si el balance aparece siempre. Con eso decidimos (b) vs (a)-acotado.
 
 **Solo lectura. Nada tocado.**
+
+---
+
+## ✅ PASO 2 APLICADO (2026-06-22, commit `e030715`)
+
+- **MP migrado al balance directo:** `getSaldoActual` para `mp` devuelve `available_balance` de `/api/mp/balance` (misma fuente que Bancos). Se eliminó la query a `/api/mp/movements` + el cálculo de `mpDelta` → sin repaginación ni degradación.
+- **Fallback:** si la API responde `unavailable`, MP cae al `saldo_base` (último cargado a mano) y la card muestra "⚠ MP no disponible — último saldo conocido". El disponible no se rompe. Cuando la API vuelve, toma el balance solo. Nunca suma balance + saldo_base.
+- **Galicia/Efectivo sin cambios.** Disponible total = MP (balance directo) + Galicia + Efectivo.
+- **Verificado:** API ok → MP $548.204 (= Bancos/app), disponible $550.537; API caída → fallback $406.023 (no roto); Galicia/Efectivo idénticos al cálculo viejo. Build OK, tsc sin errores. El usuario verifica en la Caja real contra su app de MP.
+- **Pendiente del plan:** 3 Galicia por Excel · 4 marca transferencia interna ("Banco propio") · 5 conciliar + doble conteo (payments vs caja_movements).
