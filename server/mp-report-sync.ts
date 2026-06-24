@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { storage } from "./storage";
+import { normHeader, parseXlsxDate, parseXlsxTimestamp, parseNum } from "./xlsx-helpers";
 
 const OWN_COLLECTOR_ID = "1852295299";
 const OWN_EMAIL = "vegetalesargentinos.srl@gmail.com";
@@ -14,53 +15,6 @@ function classifyMpId(value: string, merchantId: string): string | null {
   if (!v || v === "0" || v === merchantId || v === OWN_COLLECTOR_ID) return null;
   if (/^\d{4,}$/.test(v)) return `mp:${v}`;
   return null;
-}
-
-/** Normalize header string: uppercase, remove accents, trim */
-function normHeader(s: string): string {
-  return String(s ?? "").toUpperCase().trim()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-}
-
-/** Parse date from XLSX cell value to YYYY-MM-DD */
-function parseXlsxDate(val: any): string {
-  if (!val) return "";
-  if (val instanceof Date) {
-    return val.toISOString().slice(0, 10);
-  }
-  const s = String(val).trim();
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-  // DD/MM/YYYY
-  const dm = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (dm) return `${dm[3]}-${String(dm[2]).padStart(2, "0")}-${String(dm[1]).padStart(2, "0")}`;
-  return s.slice(0, 10);
-}
-
-/** Parse full timestamp from XLSX cell — returns ISO string with time if available, else YYYY-MM-DD */
-function parseXlsxTimestamp(val: any): string {
-  if (!val) return "";
-  if (val instanceof Date) {
-    // XLSX parsed with cellDates:true — UTC internally, but sheet values are ART (UTC-3)
-    // Adjust: subtract 0 hours (store as UTC ISO) — sorting/display will show the right relative time
-    return val.toISOString();
-  }
-  const s = String(val).trim();
-  // Already ISO with time: 2026-05-30T08:38:00 or 2026-05-30T08:38:00-03:00
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) return s;
-  // DD/MM/YYYY HH:MM or DD/MM/YYYY HH:MM:SS
-  const dm = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{2}:\d{2}(?::\d{2})?)/);
-  if (dm) return `${dm[3]}-${String(dm[2]).padStart(2, "0")}-${String(dm[1]).padStart(2, "0")}T${dm[4]}-03:00`;
-  // YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS
-  const dm2 = s.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}(?::\d{2})?)/);
-  if (dm2) return `${dm2[1]}T${dm2[2]}-03:00`;
-  // No time component — fallback to date only
-  return parseXlsxDate(val);
-}
-
-/** Parse numeric value from XLSX cell (may be number or string with comma decimal) */
-function parseNum(val: any): number {
-  if (typeof val === "number") return val;
-  return parseFloat(String(val ?? "0").replace(",", ".")) || 0;
 }
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));

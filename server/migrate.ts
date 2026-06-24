@@ -1,5 +1,6 @@
 import { db, pool } from "./db";
 import { sql } from "drizzle-orm";
+import { GALICIA_SEED_RULES } from "./galicia-parser";
 
 export async function runMigrations() {
   console.log("Running migrations...");
@@ -1138,6 +1139,50 @@ export async function runNcMigrations() {
     )
   `);
   try { await db.execute(sql`CREATE INDEX IF NOT EXISTS obligacion_pagos_obl_idx ON obligacion_pagos(obligacion_id)`); } catch {}
+
+  // ── Lector Galicia (paso 2/4): staging de movimientos + reglas de clasificación ──
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS galicia_movements (
+      id TEXT PRIMARY KEY,
+      fecha TEXT NOT NULL,
+      descripcion TEXT,
+      debito NUMERIC(14,2),
+      credito NUMERIC(14,2),
+      grupo_concepto TEXT,
+      concepto TEXT,
+      comprobante TEXT,
+      leyendas TEXT,
+      saldo NUMERIC(14,2),
+      tipo_movimiento TEXT,
+      category TEXT,
+      categoria_auto BOOLEAN NOT NULL DEFAULT TRUE,
+      synced_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS galicia_rules (
+      id SERIAL PRIMARY KEY,
+      match_concepto TEXT NOT NULL,
+      match_leyenda TEXT,
+      category_name TEXT NOT NULL,
+      prioridad INTEGER NOT NULL DEFAULT 0,
+      origen TEXT NOT NULL DEFAULT 'seed',
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+  // Seed de reglas: solo si la tabla está vacía (idempotente — no pisa reglas aprendidas)
+  try {
+    const cnt = await db.execute(sql`SELECT COUNT(*)::int AS n FROM galicia_rules`);
+    if (((cnt.rows[0] as any)?.n ?? 0) === 0) {
+      for (const r of GALICIA_SEED_RULES) {
+        await db.execute(sql`
+          INSERT INTO galicia_rules (match_concepto, match_leyenda, category_name, prioridad, origen)
+          VALUES (${r.matchConcepto}, ${r.matchLeyenda}, ${r.categoryName}, ${r.prioridad}, 'seed')
+        `);
+      }
+      console.log(`[migrate] galicia_rules seed: ${GALICIA_SEED_RULES.length} reglas`);
+    }
+  } catch (e) { console.error("galicia_rules seed failed:", e); }
 
   // ── Fix: CAJÓN purchases where cost_per_unit was stored as per-cajón instead of per-KG ──
   // Detectable when: cost_per_unit ≈ cost_per_purchase_unit AND weight_per_package > 1

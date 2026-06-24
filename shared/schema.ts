@@ -477,6 +477,42 @@ export const bankPaymentLinks = pgTable("bank_payment_links", {
 });
 export type BankPaymentLink = typeof bankPaymentLinks.$inferSelect;
 
+// ─── Galicia: staging de movimientos del extracto (paso 2 lector Galicia) ─────
+// Espejo de mp_xlsx_movements: guarda el crudo de cada movimiento del extracto
+// (CSV/XLSX) para dedup, clasificación y re-categorización sin re-subir el archivo.
+export const galiciaMovements = pgTable("galicia_movements", {
+  id: text("id").primaryKey(),                                    // clave de dedup (fecha:comprobante:monto:saldo o hash)
+  fecha: text("fecha").notNull(),                                 // YYYY-MM-DD
+  descripcion: text("descripcion"),
+  debito: numeric("debito", { precision: 14, scale: 2 }),         // salió plata (egreso); null si es crédito
+  credito: numeric("credito", { precision: 14, scale: 2 }),       // entró plata (ingreso); null si es débito
+  grupoConcepto: text("grupo_concepto"),
+  concepto: text("concepto"),                                     // "907355 - DEBITO DEBIN"
+  comprobante: text("comprobante"),                               // Número de Comprobante
+  leyendas: text("leyendas"),                                     // Leyendas Adicionales 1-4 concatenadas
+  saldo: numeric("saldo", { precision: 14, scale: 2 }),           // running balance de la línea
+  tipoMovimiento: text("tipo_movimiento"),
+  category: text("category"),                                     // categoría asignada (auto o manual) — texto, igual que caja_movements
+  categoriaAuto: boolean("categoria_auto").notNull().default(true), // true=auto por regla, false=corregida a mano
+  syncedAt: timestamp("synced_at").notNull().default(sql`now()`),
+});
+export type GaliciaMovement = typeof galiciaMovements.$inferSelect;
+export type InsertGaliciaMovement = typeof galiciaMovements.$inferInsert;
+
+// ─── Galicia: reglas de clasificación (paso 4) — concepto/leyenda → categoría ──
+// Seed inicial + reglas "aprendidas" cuando el usuario corrige una categoría.
+export const galiciaRules = pgTable("galicia_rules", {
+  id: serial("id").primaryKey(),
+  matchConcepto: text("match_concepto").notNull(),                // substring a buscar en concepto (uppercase)
+  matchLeyenda: text("match_leyenda"),                            // substring opcional en leyendas (uppercase)
+  categoryName: text("category_name").notNull(),                  // categoría a asignar (nombre, igual que caja_movements.category)
+  prioridad: integer("prioridad").notNull().default(0),           // mayor = se evalúa primero (aprendidas > seed)
+  origen: text("origen").notNull().default("seed"),               // seed | aprendida
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type GaliciaRule = typeof galiciaRules.$inferSelect;
+export type InsertGaliciaRule = typeof galiciaRules.$inferInsert;
+
 // ─── Cuentas Financieras ──────────────────────────────────────────────────────
 export const cuentasFinancieras = pgTable("cuentas_financieras", {
   id: serial("id").primaryKey(),
