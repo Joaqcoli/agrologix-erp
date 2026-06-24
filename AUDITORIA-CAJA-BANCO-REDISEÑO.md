@@ -101,3 +101,91 @@
 → **El 80% del trabajo ya está hecho** (categorización + gastos capturados). El rediseño es sobre todo **(a) calcular y mostrar la neta**, **(b) excluir lo interno**, y **(c) sumar Galicia al mismo modelo.**
 
 **Solo lectura. Nada tocado.**
+
+---
+
+# 🔧 Lector Galicia + vista compartida — diagnóstico técnico de construcción (solo lectura, 2026-06-24)
+
+> **Solo lectura. Nada construido.** Cómo construir el lector de extractos Galicia + vista MP/Galicia sobre lo que ya existe. **Resumen:** la mayor parte de la infraestructura ya está (parser reusable, categorización editable, entrada a `caja_movements`, gráfico de egresos). Lo nuevo es: upload de archivo, tabla staging Galicia, reglas de clasificación, y unificar la vista.
+
+## 1. Reusar lo existente — encaje del lector de Galicia
+
+| Pieza que ya existe | Dónde | Reuso para Galicia |
+|---|---|---|
+| **Parser de extractos** | `mp-report-sync.ts`: `normHeader`, `parseXlsxDate`, `parseNum`, `col(exact,fallback)`, lee CSV/XLSX (`XLSX.read` + `sheet_to_json`) | **Base del parser Galicia.** Cambia: mapeo de columnas (Fecha/Débitos/Créditos/Concepto/Leyendas), separador `;`, encoding `utf-8-sig`. Conviene **extraer estos helpers a un módulo compartido** (`server/xlsx-helpers.ts`) y usarlos en ambos. |
+| **Entrada a `caja_movements`** | `reconcileMpCajaMovement` (`storage.ts:5344`): borra por `source_id` + inserta `{source_id, date, type, amount, category, method}` | **Mismo patrón.** Galicia usa `source_id = 'galicia:{clave}'` → upsert idempotente, dedup automático. |
+| **Catálogo de categorías** | `bank_categories` (22) + endpoints GET/POST/PUT | **Tal cual.** "Comisiones Galicia", "Seguros", "Impuestos bancarios", etc. = filas nuevas en `bank_categories`. |
+| **Gráfico de egresos** | `caja/index.tsx:688` (Pie + acordeón) lee de `feed` (= `caja_movements`) | **Automático:** todo `caja_movement` con categoría aparece. Galicia entra ahí → aparece solo. |
+
+### ¿Tabla `galicia_movements` o directo a `caja_movements`?
+**Recomendación: tabla staging `galicia_movements`** (espejo de `mp_xlsx_movements`), y de ahí reconciliar a `caja_movements`. Razones:
+- **Dedup robusto** (clave del extracto, ver §4).
+- **Guardar el crudo** (concepto, leyendas, comprobante, saldo) → necesario para las reglas y para re-clasificar si cambian.
+- **Re-clasificar** sin re-subir el archivo.
+- Mismo modelo de dos capas que MP (staging `mp_xlsx_movements` → categorizado `caja_movements`). Consistencia.
+
+Estructura sugerida `galicia_movements`: `id (clave dedup, PK)`, `fecha`, `descripcion`, `concepto`, `leyendas` (concat), `comprobante`, `debito`, `credito`, `saldo`, `tipo_movimiento`, `category_id` (FK, nullable), `synced_at`. La reconciliación a `caja_movements` usa `source_id='galicia:{id}'`, `type` = débito→egreso / crédito→ingreso, `amount`, `category`.
+
+## 2. La vista compartida MP + Galicia
+
+**Hoy:** Banco muestra solo MP (de `/api/mp/movements`, live). MP se categoriza con `PUT /api/mp/movements/:mpId/category` (que escribe `mp_movement_overrides` + `caja_movements`).
+
+**Para la vista unificada**, dos opciones:
+- **(a) Endpoint unificado** `/api/bank/movements?from&to` que devuelve **MP (live) + Galicia (de `galicia_movements`)** con un campo `origen: 'mp'|'galicia'`, cada uno con su `categoryId` y los campos para el picker. El front renderiza una sola lista; el `CategoryPicker` (ya existe, `bancos:190`) sirve igual; al categorizar, según `origen` llama al endpoint de MP o al nuevo de Galicia.
+- **(b) Todo desde `caja_movements`** — pero MP se categoriza en vivo y no todos los movimientos MP están en `caja_movements` (solo los ya categorizados). → **(a) es la correcta:** unificar en un endpoint que junta ambas fuentes para la vista, manteniendo cada origen con su flujo de categorización.
+
+**Estructura de datos de la vista (unificada):**
+```
+{ id, origen: 'mp'|'galicia', fecha, descripcion, contraparte, monto, isOutgoing,
+  categoryId, categoryName, comprobante?, conceptoRaw? }
+```
+
+## 3. Categorías editables — ✅ ya existe, casi nada que tocar
+
+La UI **ya está completa** (`bancos/index.tsx`): `CategoryPicker` (dropdown + "Agregar categoría", L190/236), dialog de nueva categoría (L910), mutación `POST /api/bank-categories` (L377). Endpoints GET/POST/PUT `/api/bank-categories`. **El usuario ya puede crear categorías y categorizar desde la UI.**
+
+- **"Comisiones MP" vs "Comisiones Galicia":** son **dos filas distintas en `bank_categories`** (hoy hay una sola "Comisiones" con 314 movs = las de MP). Se crea "Comisiones Galicia" nueva; opcional renombrar la actual a "Comisiones MP". El modelo lo soporta sin cambios.
+- **Corrección de categoría:** cambiar el `category_id` del movimiento (MP: `mp_movement_overrides` + reconcile; Galicia: `galicia_movements.category_id` + reconcile a `caja_movements`).
+
+## 4. Detección de duplicados (período solapado)
+
+Campos del extracto que identifican un movimiento: **Número de Comprobante + Fecha + monto (débito/crédito) + Saldo**. El **Saldo** (running balance) es casi único por línea, pero el comprobante puede venir vacío en algunos. **Clave de dedup propuesta (PK de `galicia_movements`):**
+```
+galicia:{fecha}:{comprobante|'-'}:{debito|credito}:{saldo}
+```
+o un **hash SHA1 de la fila completa** (fecha+desc+concepto+leyendas+débito+crédito+saldo) si el comprobante no es confiable. Al subir un período solapado, el `INSERT ... ON CONFLICT (id) DO NOTHING` ignora los ya cargados → **idempotente** (igual que `mp_xlsx_movements` dedupe por `mp_id`).
+
+## 5. Clasificación automática + "aprendizaje"
+
+**Recomendación: tabla de reglas `galicia_rules`** (no código), para que el usuario "enseñe":
+```
+galicia_rules: { id, match_concepto (texto/patrón), match_leyenda (texto/patrón, nullable),
+                 category_id (FK), prioridad, origen: 'seed'|'aprendida', createdAt }
+```
+- **Seed inicial:** se cargan las reglas del alcance (DEB.AUTOM.→Seguros, COMITO→Comisiones Galicia, DEBITO DEBIN→Banco propio, LEY 25413→Impuestos bancarios, TRF…FEDERICO/JOAQUIN→Retiro socio, CREDITO PRESTAMO→Préstamo, etc.).
+- **Al parsear:** por cada movimiento, buscar la primera regla que matchee (concepto + leyenda) por prioridad → asignar `category_id`. Si ninguna matchea → categoría vacía (el usuario la pone).
+- **Aprendizaje:** cuando el usuario **corrige** la categoría de un movimiento, se **crea/actualiza una regla** `aprendida` (match por su concepto/leyenda → la categoría elegida) con prioridad alta. La próxima vez, ese concepto se sugiere solo. Es el mismo patrón que `bank_contacts` (identifica pagadores aprendidos).
+
+## 6. El gráfico de egresos por categoría — automático
+
+Sale de `caja/index.tsx:688` (`pieData`/`categoriaData`) que recorre `feed` (= `caja_movements` del período, filtrando `type==='egreso'` y excluyendo mercadería/proveedores con `EXCLUDE_FROM_PIE`). **Como Galicia entra a `caja_movements` con su categoría, aparece automáticamente** en el pie y el acordeón, con "Comisiones MP" y "Comisiones Galicia" separadas (son categorías distintas). **No hay que tocar el gráfico** — solo asegurar que el reconcile de Galicia escriba la categoría correcta.
+
+## 7. Plan de construcción por partes (local, verificable)
+
+| Paso | Qué | Toca plata/datos | Verificación |
+|---|---|---|---|
+| **1** | **Extraer helpers de parsing** a `server/xlsx-helpers.ts` (normHeader/parseDate/parseNum) sin cambiar MP | No (refactor) | MP sigue sincronizando igual |
+| **2** | **Tabla `galicia_movements`** + migración idempotente | Esquema (sin datos) | tabla creada, MP intacto |
+| **3** | **Parser Galicia** (CSV `;`/utf-8-sig + XLSX → filas normalizadas) — SIN guardar aún, solo devuelve el parseo | No (lectura) | subir el extracto de ejemplo → parsea 194 movs correctos (débito/crédito/concepto/leyendas) |
+| **4** | **Tabla `galicia_rules` + seed** de las reglas del alcance | Esquema + datos seed | reglas cargadas |
+| **5** | **Clasificador**: aplica reglas al parseo → categoría sugerida | No (lectura) | los 194 movs clasificados; mostrar cuántos por categoría y cuántos sin clasificar |
+| **6** | **Upload + guardar**: endpoint con `multer` (o archivo en body) → inserta en `galicia_movements` con dedup + reconcilia a `caja_movements` | **SÍ (escribe caja_movements)** | subir ejemplo → N movs en caja; re-subir solapado → 0 duplicados |
+| **7** | **Vista compartida**: endpoint unificado MP+Galicia + front que lista ambos categorizables | Lectura (categorizar sí escribe) | ver MP y Galicia juntos; categorizar uno de cada origen |
+| **8** | **Aprendizaje**: al corregir categoría → crear/actualizar `galicia_rules` aprendida | SÍ (reglas) | corregir un concepto → re-subir → se sugiere la categoría aprendida |
+| **9** | **Categorías nuevas** ("Comisiones Galicia", "Seguros", etc.) + separar "Comisiones MP" | Datos (categorías) | aparecen en el gráfico separadas |
+
+**Partes que tocan plata/datos (más cuidado):** paso 6 (escribe `caja_movements` — verificar dedup y montos), paso 8 (reglas que afectan clasificaciones futuras). Los pasos 1-5 son lectura/refactor (bajo riesgo). **Cada paso se prueba en local antes de seguir; el upload (6) con un extracto de ejemplo y verificación de que no duplica ni descuadra el gráfico.**
+
+→ **Orden recomendado: 1→2→3→4→5 (todo lectura/esquema, sin riesgo) → 6 (el que escribe, con verificación de dedup) → 7 (vista) → 8-9 (aprendizaje + categorías).** El grueso del valor (clasificar Galicia y verlo en el gráfico de egresos para la neta) llega en el paso 6-7.
+
+**Solo lectura. Nada construido.**
