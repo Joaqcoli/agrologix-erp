@@ -1156,9 +1156,13 @@ export async function runNcMigrations() {
       tipo_movimiento TEXT,
       category TEXT,
       categoria_auto BOOLEAN NOT NULL DEFAULT TRUE,
+      ya_contabilizado BOOLEAN NOT NULL DEFAULT FALSE,
+      asignacion_cc TEXT,
       synced_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `);
+  try { await db.execute(sql`ALTER TABLE galicia_movements ADD COLUMN IF NOT EXISTS ya_contabilizado BOOLEAN NOT NULL DEFAULT FALSE`); } catch {}
+  try { await db.execute(sql`ALTER TABLE galicia_movements ADD COLUMN IF NOT EXISTS asignacion_cc TEXT`); } catch {}
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS galicia_rules (
       id SERIAL PRIMARY KEY,

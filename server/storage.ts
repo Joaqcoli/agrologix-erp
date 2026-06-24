@@ -5436,6 +5436,83 @@ export const storage = {
     return cat;
   },
 
+  // ─── Lector Galicia (paso 6): importar extracto → galicia_movements + caja_movements ──
+  // Parsea, clasifica por reglas, deduplica y reconcilia a caja_movements. Idempotente
+  // (ON CONFLICT DO NOTHING en galicia, upsert por source_id en caja). Con dryRun=true
+  // corre todo en una transacción que hace ROLLBACK (verificación sin persistir).
+  async importGaliciaExtracto(buffer: Buffer, opts?: { dryRun?: boolean }): Promise<{
+    totalParseados: number; insertadosGalicia: number; duplicados: number;
+    reconciliadosCaja: number; sinCategoria: number;
+    cobrosPendientes: number; yaContabilizados: number;
+    porCategoria: { category: string; n: number; total: number }[];
+  }> {
+    const { parseGaliciaExtracto, classifyGaliciaMovement, tratamientoCobro, GALICIA_NEW_CATEGORIES } =
+      await import("./galicia-parser");
+    const movs = parseGaliciaExtracto(buffer);
+
+    const run = async (exec: any) => {
+      // Reglas de clasificación
+      const rulesRows = (await exec.execute(drizzleSql`SELECT match_concepto, match_leyenda, category_name, prioridad FROM galicia_rules`)).rows as any[];
+      const rules = rulesRows.map(r => ({ matchConcepto: r.match_concepto, matchLeyenda: r.match_leyenda, categoryName: r.category_name, prioridad: r.prioridad }));
+
+      // Asegurar categorías nuevas en bank_categories (no pisa las existentes)
+      const existing = (await exec.execute(drizzleSql`SELECT lower(name) AS name FROM bank_categories`)).rows.map((r: any) => r.name);
+      for (const c of GALICIA_NEW_CATEGORIES) {
+        if (!existing.includes(c.toLowerCase())) {
+          await exec.execute(drizzleSql`INSERT INTO bank_categories (name) VALUES (${c})`);
+        }
+      }
+
+      let insertadosGalicia = 0, duplicados = 0, reconciliadosCaja = 0, sinCategoria = 0, cobrosPendientes = 0, yaContabilizados = 0;
+      const porCat: Record<string, { n: number; total: number }> = {};
+
+      for (const m of movs) {
+        const category = classifyGaliciaMovement(m, rules);
+        const { yaContabilizado, asignacionCc } = tratamientoCobro(category);
+        if (!category) sinCategoria++;
+        if (asignacionCc === "pendiente") cobrosPendientes++;
+        if (yaContabilizado) yaContabilizados++;
+        const k = category ?? "(sin categoría)";
+        porCat[k] = porCat[k] ?? { n: 0, total: 0 };
+        porCat[k].n++; porCat[k].total += m.monto;
+
+        // 1) staging galicia_movements (dedup por id)
+        const ins = await exec.execute(drizzleSql`
+          INSERT INTO galicia_movements (id, fecha, descripcion, debito, credito, grupo_concepto, concepto, comprobante, leyendas, saldo, tipo_movimiento, category, categoria_auto, ya_contabilizado, asignacion_cc)
+          VALUES (${m.id}, ${m.fecha}, ${m.descripcion}, ${m.debito}, ${m.credito}, ${m.grupoConcepto}, ${m.concepto}, ${m.comprobante}, ${m.leyendas}, ${m.saldo}, ${m.tipoMovimiento}, ${category}, ${category != null}, ${yaContabilizado}, ${asignacionCc})
+          ON CONFLICT (id) DO NOTHING
+        `);
+        const inserted = (ins as any).rowCount ?? 0;
+        if (inserted > 0) insertadosGalicia++; else { duplicados++; continue; } // ya existía → no re-reconciliar
+
+        // 2) reconciliar a caja_movements SOLO si tiene categoría (igual que MP)
+        if (category) {
+          const sourceId = `galicia:${m.id}`;
+          await exec.execute(drizzleSql`DELETE FROM caja_movements WHERE source_id = ${sourceId}`);
+          await exec.execute(drizzleSql`
+            INSERT INTO caja_movements (source_id, date, type, description, amount, category, method)
+            VALUES (${sourceId}, ${m.fecha}, ${m.direccion}, ${m.descripcion || m.concepto}, ${m.monto.toFixed(2)}, ${category}, 'TRANSFERENCIA')
+          `);
+          reconciliadosCaja++;
+        }
+      }
+
+      const porCategoria = Object.entries(porCat).map(([category, v]) => ({ category, n: v.n, total: Math.round(v.total) }))
+        .sort((a, b) => b.total - a.total);
+      return { totalParseados: movs.length, insertadosGalicia, duplicados, reconciliadosCaja, sinCategoria, cobrosPendientes, yaContabilizados, porCategoria };
+    };
+
+    if (opts?.dryRun) {
+      // Ejecuta en transacción y fuerza rollback (no persiste) — para verificación
+      let result: any = null;
+      try {
+        await db.transaction(async (tx) => { result = await run(tx); throw new Error("__DRYRUN_ROLLBACK__"); });
+      } catch (e: any) { if (e.message !== "__DRYRUN_ROLLBACK__") throw e; }
+      return result;
+    }
+    return run(db);
+  },
+
   // ─── MP Movement Overrides ────────────────────────────────────────────────────
   async getMpMovementOverridesMap(mpIds: string[]): Promise<Map<string, number | null>> {
     if (mpIds.length === 0) return new Map();

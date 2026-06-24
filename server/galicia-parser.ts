@@ -136,9 +136,9 @@ export const GALICIA_SEED_RULES: GaliciaRuleLite[] = [
   { matchConcepto: "DEB. AUTOM. DE SERV", matchLeyenda: "MERCANTIL ANDINA",  categoryName: "Seguros",            prioridad: 10 },
   // Alquiler
   { matchConcepto: "TRF INMED PROVEED",   matchLeyenda: "STEFAN HERMANSSON",  categoryName: "Alquiler",           prioridad: 10 },
-  // Retiro socio (transferencias a Joaquín / Federico) — NO es gasto
-  { matchConcepto: "TRF INMED PROVEED",   matchLeyenda: "FEDERICO",           categoryName: "Retiro socio",       prioridad: 10 },
-  { matchConcepto: "TRF INMED PROVEED",   matchLeyenda: "JOAQUIN",            categoryName: "Retiro socio",       prioridad: 10 },
+  // Retiro de socio (transferencias a Joaquín / Federico) → categoría "Retiro" (ya existe). NO es gasto.
+  { matchConcepto: "TRF INMED PROVEED",   matchLeyenda: "FEDERICO",           categoryName: "Retiro",             prioridad: 10 },
+  { matchConcepto: "TRF INMED PROVEED",   matchLeyenda: "JOAQUIN",            categoryName: "Retiro",             prioridad: 10 },
   // Comisiones Galicia (separadas de "Comisiones" de MP)
   { matchConcepto: "COMISION",            matchLeyenda: null,                 categoryName: "Comisiones Galicia", prioridad: 5 },
   { matchConcepto: "COM. DEPOSITO",       matchLeyenda: null,                 categoryName: "Comisiones Galicia", prioridad: 5 },
@@ -158,8 +158,8 @@ export const GALICIA_SEED_RULES: GaliciaRuleLite[] = [
   // Préstamo recibido (no es ingreso del negocio)
   { matchConcepto: "CREDITO PRESTAMO",    matchLeyenda: null,                 categoryName: "Préstamo",           prioridad: 5 },
   // Cheques acreditados / cobros ya contados (no suman a la ganancia)
-  { matchConcepto: "G.DE CHEQUE",         matchLeyenda: null,                 categoryName: "Cobro ya contado",   prioridad: 5 },
-  { matchConcepto: "G.DE ECHEQ",          matchLeyenda: null,                 categoryName: "Cobro ya contado",   prioridad: 5 },
+  { matchConcepto: "G.DE CHEQUE",         matchLeyenda: null,                 categoryName: "Cobro cliente ya contabilizado", prioridad: 5 },
+  { matchConcepto: "G.DE ECHEQ",          matchLeyenda: null,                 categoryName: "Cobro cliente ya contabilizado", prioridad: 5 },
   { matchConcepto: "CREDITO DESCUENTO DOCUMENTO", matchLeyenda: null,         categoryName: "Cobro ya contado",   prioridad: 5 },
   // Cobros de cliente vía cash/SNP (no suman: el cobro ya se cuenta en ventas)
   { matchConcepto: "TRANSFERENCIAS CASH PROVEEDORES", matchLeyenda: null,     categoryName: "Cobro de cliente",   prioridad: 5 },
@@ -167,4 +167,26 @@ export const GALICIA_SEED_RULES: GaliciaRuleLite[] = [
   // Pago a proveedor (genérico, prioridad baja: las reglas con leyenda ganan)
   { matchConcepto: "ECHEQ",               matchLeyenda: null,                 categoryName: "Pago a proveedor",   prioridad: 3 },
   { matchConcepto: "TRF INMED PROVEED",   matchLeyenda: null,                 categoryName: "Pago a proveedor",   prioridad: 3 },
+];
+
+// ─── Tratamiento de cobros de cliente (paso 6) ────────────────────────────────
+// Deriva el tratamiento de un movimiento según su categoría sugerida:
+//  - "Cobro cliente ya contabilizado" (cheques G.DE CHEQUE) → yaContabilizado: NO suma
+//    a la ganancia, NO toca cuenta corriente (ya se registró al recibir el cheque).
+//  - "Cobro de cliente" (transferencias entrantes) → asignacion 'pendiente': es un cobro
+//    nuevo a asignar a cliente/factura en el paso siguiente.
+export function tratamientoCobro(categoryName: string | null): {
+  yaContabilizado: boolean;
+  asignacionCc: "pendiente" | null;
+} {
+  if (categoryName === "Cobro cliente ya contabilizado") return { yaContabilizado: true, asignacionCc: null };
+  if (categoryName === "Cobro de cliente") return { yaContabilizado: false, asignacionCc: "pendiente" };
+  return { yaContabilizado: false, asignacionCc: null };
+}
+
+// Categorías nuevas que el lector de Galicia necesita en bank_categories (paso 6).
+// "Retiro", "Banco propio", "Pago a proveedor", "Cobro de cliente" YA existen (de MP).
+export const GALICIA_NEW_CATEGORIES = [
+  "Seguros", "Alquiler", "Comisiones Galicia", "Impuestos bancarios",
+  "Intereses", "Préstamo", "Cobro cliente ya contabilizado",
 ];

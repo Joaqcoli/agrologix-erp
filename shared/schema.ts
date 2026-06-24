@@ -494,6 +494,8 @@ export const galiciaMovements = pgTable("galicia_movements", {
   tipoMovimiento: text("tipo_movimiento"),
   category: text("category"),                                     // categoría asignada (auto o manual) — texto, igual que caja_movements
   categoriaAuto: boolean("categoria_auto").notNull().default(true), // true=auto por regla, false=corregida a mano
+  yaContabilizado: boolean("ya_contabilizado").notNull().default(false), // cheque acreditado ya registrado → NO suma a la ganancia
+  asignacionCc: text("asignacion_cc"),                            // null | 'pendiente' (cobro de cliente a asignar a factura/CC)
   syncedAt: timestamp("synced_at").notNull().default(sql`now()`),
 });
 export type GaliciaMovement = typeof galiciaMovements.$inferSelect;

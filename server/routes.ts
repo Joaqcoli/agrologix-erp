@@ -12,6 +12,9 @@ import { ivaRateOf } from "@shared/iva";
 import { getHistoricalMonthStats } from "./historical-stats";
 import { getLastVoucher, createVoucher } from "./arca";
 import { syncMpReport } from "./mp-report-sync";
+import multer from "multer";
+
+const galiciaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // IVA: la tasa sale de products.iva_rate (única fuente: helper ivaRateOf). Ver M6.
 function calcTotalConIva(items: { ivaRate?: string | number | null; pricePerUnit: string; quantity: string }[]): number {
@@ -3175,6 +3178,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ─── Bank Categories ─────────────────────────────────────────────────────────
+  // ─── Lector Galicia (paso 6): subir extracto CSV/XLSX ────────────────────────
+  app.post("/api/galicia/upload", requireAuth, galiciaUpload.single("file"), async (req: any, res) => {
+    try {
+      if (!req.file?.buffer) return res.status(400).json({ error: "Falta el archivo (campo 'file')" });
+      const dryRun = req.query.dryRun === "1" || req.body?.dryRun === "1";
+      const result = await storage.importGaliciaExtracto(req.file.buffer, { dryRun });
+      return res.json({ ok: true, dryRun, ...result });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   app.get("/api/bank-categories", requireAuth, async (_req, res) => {
     try {
       return res.json(await storage.getBankCategories());
