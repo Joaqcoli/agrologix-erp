@@ -5700,6 +5700,48 @@ export const storage = {
     return apply(db, categoryName, opts?.socioId);
   },
 
+  // ─── Backfill retroactivo: socio a retiros de Galicia ya cargados ─────────────
+  // Para movimientos category="Retiro" SIN fila en retiros, hace match leyenda→socio
+  // y crea la fila (origen='movimiento', movimiento_ref='galicia:'+id). Sin match → skip.
+  // Idempotente: el NOT EXISTS + ON CONFLICT evitan duplicar. dryRun → transacción + rollback.
+  async backfillGaliciaRetiros(opts?: { dryRun?: boolean }): Promise<any> {
+    const totalsPorSocio = async (exec: any) =>
+      (await exec.execute(drizzleSql`SELECT socio_id, sum(monto::float)::float AS total, count(*)::int AS n FROM retiros GROUP BY socio_id ORDER BY socio_id`)).rows;
+
+    const run = async (exec: any) => {
+      const socios = (await exec.execute(drizzleSql`SELECT id, nombre FROM socios WHERE activo = true`)).rows as { id: number; nombre: string }[];
+      const movs = (await exec.execute(drizzleSql`
+        SELECT g.id, g.fecha, g.leyendas, g.descripcion, g.debito::float AS debito, g.credito::float AS credito
+        FROM galicia_movements g
+        WHERE g.category = 'Retiro'
+          AND NOT EXISTS (SELECT 1 FROM retiros r WHERE r.movimiento_ref = 'galicia:' || g.id)
+        ORDER BY g.fecha`)).rows as any[];
+
+      const creados: any[] = [], sinSocio: any[] = [];
+      for (const m of movs) {
+        const sourceId = `galicia:${m.id}`;
+        const monto = Math.abs(parseFloat(String(m.debito ?? m.credito ?? 0)));
+        const socioId = matchSocioByLeyenda(m.leyendas, socios);
+        if (socioId == null) { sinSocio.push({ sourceId, leyenda: m.leyendas, monto }); continue; }
+        await exec.execute(drizzleSql`
+          INSERT INTO retiros (socio_id, monto, fecha, origen, movimiento_ref, notas)
+          VALUES (${socioId}, ${monto.toFixed(2)}, ${m.fecha}, 'movimiento', ${sourceId}, ${m.leyendas || m.descripcion || null})
+          ON CONFLICT (movimiento_ref) WHERE movimiento_ref IS NOT NULL DO NOTHING`);
+        creados.push({ sourceId, socioId, monto, fecha: m.fecha });
+      }
+      return { creados, sinSocio, totalesDespues: await totalsPorSocio(exec) };
+    };
+
+    const totalesAntes = await totalsPorSocio(db);
+    if (opts?.dryRun) {
+      let result: any = null;
+      try { await db.transaction(async (tx) => { result = { totalesAntes, ...(await run(tx)) }; throw new Error("__DRYRUN_ROLLBACK__"); }); }
+      catch (e: any) { if (e.message !== "__DRYRUN_ROLLBACK__") throw e; }
+      return result;
+    }
+    return { totalesAntes, ...(await run(db)) };
+  },
+
   // ─── Cruce ECHEQ (extracto Galicia) ↔ cheque emitido (Paso B) ─────────────────
   // Match estricto: número normalizado (campo formal cheques.numero O extracción del
   // texto de notas/concepto) Y monto exacto. Si número coincide pero monto NO → NO
