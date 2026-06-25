@@ -257,3 +257,75 @@ Si al pagar una obligación **por banco** ya no se crea el `caja_movement`:
 **Orden sugerido:** 1) cambiar el flujo de pago (no crea gasto para banco) → 2) limpiar los históricos duplicados (alquiler primero, verificar el gráfico) → 3) normalizar categorías. Cada paso con verificación de que el total de egresos baja exactamente lo esperado (sin el doble).
 
 **Solo lectura. Nada tocado.**
+
+---
+
+# 🔵 Conciliación cheques Galicia ↔ obligaciones (diagnóstico, solo lectura, 2026-06-24)
+
+> **Solo lectura.** El usuario quiere que al cargar Galicia, los **ECHEQ** se crucen por **número de cheque** con las obligaciones (cheques emitidos), marquen la obligación pagada, bajen los "cheques emitidos" ($41M) y NO cuenten gasto si es proveedor (mercadería). **Conclusión: el cruce por número FUNCIONA (13/16 ECHEQ matchean, 13/13 con monto exacto)** — el número del extracto está en `comprobante`. **Pero hay un agujero: los cheques creados automáticamente al pagar un proveedor NO guardan el número** → esos no se pueden cruzar hasta arreglar ese flujo.
+
+## 1. Flujo cuenta corriente → cheque emitido → obligación
+
+Al registrar un pago a proveedor con **"cheque propio"** (`routes.ts:1631`):
+1. `createObligaciones([{ concepto: "Cheque propio — {proveedor}", tipo: "proveedor", monto, fechaVencimiento: fechaCobro }])`.
+2. `createCheque({ tipo: "emitido", estado: "en_cartera", monto, contraparte: proveedor, obligacionId, supplierPaymentId })`.
+
+→ Cada pago con cheque propio crea **una obligación + un cheque emitido** vinculados. **⚠️ Ni la obligación ni el cheque guardan el NÚMERO de cheque** (concepto = "Cheque propio — X" sin número; `cheques.notas` vacío). Solo los cargados **a mano** tienen el número (en `cheques.notas` = "Cheque Nº00122" y en `obligaciones.concepto` = "Cheque Nº00122 — JCB").
+
+## 2. El número de cheque en ambos lados (la clave del cruce)
+
+| Lado | Dónde vive | Formato | Ejemplo |
+|---|---|---|---|
+| **Extracto Galicia (ECHEQ)** | campo **`comprobante`** | número sin ceros ni prefijo | `122`, `123`, `126` |
+| **Cheque emitido (manual)** | `cheques.notas` / `obligaciones.concepto` | con prefijo + ceros | `"Cheque Nº00122"` |
+| **Cheque emitido (automático "propio")** | **NO se guarda** | — | — |
+
+→ **Normalizando** (quitar "Cheque Nº", quitar ceros a la izquierda → entero), los números **coinciden**. El `comprobante` del ECHEQ **es** el número de cheque (verificado: matchea 13/13 con monto exacto). **El cruce por número es viable.** El agujero: los 6 cheques "propio" sin número.
+
+## 3. El monto de "cheques emitidos" ($41M)
+
+`chequesEmitidosTotal` = `cheques` con `tipo='emitido' AND estado='en_cartera'` (front `caja/index.tsx:472`; SQL `storage.ts:4785`). Hoy: **24 en cartera = $41.000.000** (+ 13 ya cobrados = $18,5M). **Baja automáticamente al marcar un cheque `estado='cobrado'`** (el total lee los en_cartera en vivo). → conciliar = marcar el cheque cobrado.
+
+## 4. Distinguir proveedor (mercadería) vs operativo
+
+El campo **`obligaciones.tipo`** lo distingue:
+| tipo | obligaciones | monto | ¿cuenta gasto? |
+|---|---|---|---|
+| `proveedor` | 37 | $59.555.000 | ❌ NO (mercadería, ya en bruta) |
+| `alquiler` | 12 | $28.434.804 | ✅ SÍ (operativo) |
+| `cuota` | 10 | $1.608.000 | ✅ SÍ (operativo) |
+| `Camioneta` | 8 | $8.756 | ✅ SÍ (operativo) |
+
+→ **Regla:** ECHEQ que matchea obligación `tipo='proveedor'` → no cuenta gasto; cualquier otro tipo → cuenta gasto con su categoría.
+
+## 5. Matching real (16 ECHEQ del extracto ↔ obligaciones cargadas)
+
+- **16 ECHEQ** en el extracto. **13 matchean** por número con un cheque emitido — **monto coincide en los 13** (0 diferencias). Todos `tipo=proveedor`; 12 con obligación ya `pagado`, **1 (#133) con obligación `pendiente`** (cheque cobrado que el cruce marcaría pagada — justo lo deseado).
+- **3 ECHEQ sin obligación** que matchee (cheques cobrados sin obligación cargada, o número no presente).
+- **18 cheques emitidos en cartera SIN ECHEQ** en el extracto (no cobrados aún → siguen como recordatorio). ✓
+- **6 cheques "propio" sin número guardado** (no cruzables hasta arreglar el flujo).
+
+## 6. Riesgos del cruce automático
+
+1. **Cheques "propio" sin número (6):** no se cruzan → su obligación queda pendiente aunque el cheque se haya cobrado. **Mitigación: que el flujo de "cheque propio" guarde el número** (mejora previa al cruce).
+2. **3 ECHEQ sin obligación:** cheques cobrados sin obligación. Quedan como `"Pago a proveedor"` (no gasto), no bajan ninguna obligación. Riesgo bajo (si en realidad tenían obligación pero sin número, no se cruza → quedaría doble; por eso conviene el nº en origen).
+3. **Match por número + monto:** **conciliar SOLO si número Y monto coinciden** (guard). Si el monto difiere, no conciliar y marcar para revisión. (Hoy 13/13 coinciden, pero el guard protege a futuro.)
+4. **Números repetidos** entre chequeras distintas: muy improbable (son únicos), pero el cruce debe tomar el cheque `en_cartera` con ese número (no uno ya cobrado).
+5. **Doble conteo previo:** las 12 obligaciones ya pagadas a mano YA crearon su `caja_movement` (proveedor) que duplica con el ECHEQ. La conciliación + B2 + la limpieza de históricos lo resuelven.
+
+## 7. Propuesta de implementación (por pasos, marcando qué toca plata)
+
+**Paso A (previo, habilita el cruce) — guardar el número de cheque.** En el flujo "cheque propio" (`routes.ts:1631`) pedir/guardar el **número** en `cheques.notas`/un campo nuevo `numero`. *(Toca el flujo de pago, no plata; sin esto los cheques automáticos no se cruzan.)*
+
+**Paso B (el cruce, al cargar Galicia) — conciliar ECHEQ ↔ cheque emitido.** En `importGaliciaExtracto`, para cada movimiento ECHEQ:
+1. Extraer número (`comprobante`, normalizado).
+2. Buscar `cheques` `tipo='emitido' AND estado='en_cartera'` con ese número **y monto coincidente**.
+3. **Si matchea:** marcar el cheque `estado='cobrado'` (baja los $41M) + la obligación `estado='pagado'` (sale del recordatorio). **NO crear gasto** si la obligación es `tipo='proveedor'`; **sí** crear gasto (con su categoría) si es operativo.
+4. **Si NO matchea:** dejar el ECHEQ con categoría `"Pago a proveedor"` (no gasto) — o sin categoría para revisión manual.
+*(TOCA PLATA: marca cheques cobrados, obligaciones pagadas, baja $41M. Máximo cuidado + verificación con dry-run/rollback.)*
+
+**Paso C — encaje con B2 y limpieza de históricos.** Con el cruce, la obligación se marca pagada **desde el extracto** (no a mano), así que **no crea `caja_movement`** (B2). Limpiar los `caja_movements` de obligaciones ya pagadas a mano que duplican (el alquiler #377 y los de proveedor). *(Toca plata: borrado de duplicados, verificado.)*
+
+**Orden:** A (guardar número) → B (cruce con dry-run) → C (B2 + limpieza). Cada uno verificado en local con rollback antes de persistir. **El paso B es el más delicado** (mueve cheques emitidos $41M y obligaciones); va con dry-run obligatorio mostrando los matches antes de aplicar.
+
+**Solo lectura. Nada tocado.**
