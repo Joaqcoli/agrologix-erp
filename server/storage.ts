@@ -4869,12 +4869,44 @@ export const storage = {
       wkStart = wkEnd;
     }
 
+    // ── Ganancia Neta: ganancia_real − egresos operativos categorizados ──────────
+    // Egresos = caja_movements egresos con afecta_egresos=true (MISMA lógica que el
+    // gráfico de egresos B6: flag de bank_categories + fallback por texto). Período
+    // [from, to). fecha_cobertura = última fecha con egresos cargados (MP/Galicia).
+    const egRows = (await db.execute(drizzleSql`
+      SELECT category, amount::float AS amount, date
+      FROM caja_movements
+      WHERE type = 'egreso' AND date >= ${from} AND date < ${to}
+    `)).rows as any[];
+    const bankCatsRows = (await db.execute(drizzleSql`SELECT lower(name) AS name, afecta_egresos FROM bank_categories`)).rows as any[];
+    const afectaMap = new Map<string, boolean>(bankCatsRows.map(r => [r.name, r.afecta_egresos]));
+    const excludeText = (cat: string) => {
+      const l = (cat ?? "").toLowerCase();
+      return l.includes("proveedor") || l.includes("mercader") || l.includes("banco propio")
+        || l.includes("retiro") || l.includes("cheque rechazado");
+    };
+    const cuentaEnGrafico = (cat: string) => {
+      const flag = afectaMap.get((cat ?? "").toLowerCase());
+      return flag === undefined ? !excludeText(cat) : flag !== false;  // true = suma al gráfico/neta
+    };
+    let egresosOperativos = 0, cantidadMovimientosEgresos = 0, fechaCoberturaEgresos: string | null = null;
+    for (const r of egRows) {
+      if (r.date && (fechaCoberturaEgresos === null || r.date > fechaCoberturaEgresos)) fechaCoberturaEgresos = r.date;
+      if (cuentaEnGrafico(r.category)) { egresosOperativos += r.amount; cantidadMovimientosEgresos++; }
+    }
+    egresosOperativos = Math.round(egresosOperativos);
+    const ganancia_neta = ganancia_real - egresosOperativos;
+
     return {
       ventas,
       ganancia_bruta,
       mermaTotal,
       rindeTotal,
       ganancia_real,
+      ganancia_neta,
+      egresosOperativos,
+      cantidadMovimientosEgresos,
+      fechaCoberturaEgresos,
       diasPeriodo,
       diasTrabajados,
       semanas,

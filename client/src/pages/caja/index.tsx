@@ -476,11 +476,16 @@ export default function CajaPage() {
   [cheques]);
   const chequesEnCarteraTotal = useMemo(() => chequesEnCartera.reduce((s, c) => s + c.monto, 0), [chequesEnCartera]);
 
-  // Deudas (mismo cálculo del Dashboard, son all-time; el rango no las afecta)
+  // Deudas (all-time) + Ganancia neta del MES COMPLETO (mismo cálculo del Dashboard)
   const monthStart = todayIso.slice(0, 8) + "01";
-  const { data: deudaStats } = useQuery<{ deudaClientes: number; deudaProveedores: number }>({
-    queryKey: ["/api/dashboard/stats", monthStart, todayIso],
-    queryFn: () => fetch(`/api/dashboard/stats?from=${monthStart}&to=${todayIso}`, { credentials: "include" }).then(r => r.json()),
+  const monthEndExcl = (() => { const d = new Date(todayIso + "T00:00:00"); return new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString().slice(0, 10); })();
+  const { data: deudaStats } = useQuery<{
+    deudaClientes: number; deudaProveedores: number;
+    ganancia_real: number; ganancia_neta: number; egresosOperativos: number;
+    cantidadMovimientosEgresos: number; fechaCoberturaEgresos: string | null;
+  }>({
+    queryKey: ["/api/dashboard/stats", monthStart, monthEndExcl],
+    queryFn: () => fetch(`/api/dashboard/stats?from=${monthStart}&to=${monthEndExcl}`, { credentials: "include" }).then(r => r.json()),
     staleTime: 60_000,
   });
 
@@ -738,6 +743,26 @@ export default function CajaPage() {
   return (
     <Layout>
       <div className="p-6 space-y-6">
+        {/* ── Ganancia neta del mes (simple — Caja se rediseña después) ─────── */}
+        {deudaStats && (
+          <section className="rounded-xl border bg-card p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Ganancia neta del mes</p>
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
+              <span>Ganancia real <b className="tabular-nums">{fmt(deudaStats.ganancia_real ?? 0)}</b></span>
+              <span className="text-muted-foreground">−</span>
+              <span>Egresos operativos <b className="tabular-nums">{fmt(deudaStats.egresosOperativos ?? 0)}</b>
+                <span className="text-muted-foreground"> ({deudaStats.cantidadMovimientosEgresos ?? 0} movs)</span></span>
+              <span className="text-muted-foreground">=</span>
+              <span className="text-green-700 dark:text-green-400">Neta <b className="tabular-nums text-base">{fmt(deudaStats.ganancia_neta ?? 0)}</b></span>
+            </div>
+            {deudaStats.fechaCoberturaEgresos && (
+              <p className="text-[11px] text-amber-700 dark:text-amber-500 mt-2">
+                ⏱ Gastos cargados hasta el {(() => { const p = deudaStats.fechaCoberturaEgresos!.split("-"); return `${p[2]}/${p[1]}`; })()} · la neta puede no incluir gastos posteriores
+              </p>
+            )}
+          </section>
+        )}
+
         {/* ── Posición financiera ─────────────────────────────────────────── */}
         <section className="space-y-4">
           <h2 className="text-base font-semibold">¿Dónde está mi plata hoy?</h2>

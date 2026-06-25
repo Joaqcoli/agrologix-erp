@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Download } from "lucide-react";
+import { Download, Wallet, Clock } from "lucide-react";
 import { generateBolsaFvPDF, generateComisionesPDF, type BolsaFvRow, type ComisionRow } from "@/lib/pdf";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -54,6 +54,12 @@ function monthAbbrev(ym: string): string {
 const fmtFechaCorta = (ymd: string) =>
   new Date(ymd + "T12:00:00").toLocaleDateString("es-AR", { day: "2-digit", month: "short", year: "numeric" });
 const fmtMill = (v: number) => (v / 1_000_000).toLocaleString("es-AR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+// Compacto para chips (ej "2,75M" si ≥ 1M, si no en miles)
+const fmtM2 = (v: number) => Math.abs(v) >= 1_000_000
+  ? (v / 1_000_000).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "M"
+  : Math.round(v / 1000).toLocaleString("es-AR") + "k";
+// "2026-06-24" → "24/06"
+const fmtDDMM = (iso: string) => { const p = iso.split("-"); return p.length === 3 ? `${p[2]}/${p[1]}` : iso; };
 const fmtPct1 = (v: number) => v.toLocaleString("es-AR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -63,6 +69,10 @@ type Stats = {
   mermaTotal: number;
   rindeTotal: number;
   ganancia_real: number;
+  ganancia_neta: number;
+  egresosOperativos: number;
+  cantidadMovimientosEgresos: number;
+  fechaCoberturaEgresos: string | null;
   diasPeriodo: number;
   diasTrabajados: number;
   semanas: { label: string; ventas: number; bultos: number }[];
@@ -560,41 +570,55 @@ export default function DashboardPage() {
             </div>
           </section>
 
-          {/* ── Ganancia real (cascada) ── */}
-          <section className="va-card va-real" style={{ padding: "24px 28px", borderRadius: 18, marginBottom: 18 }}>
-            <div>
-              <span style={{ ...LABEL, fontSize: 12.5 }}>Ganancia real del período</span>
-              <div className="va-real-val" style={{ fontSize: 34, fontWeight: 800, letterSpacing: "-.025em", marginTop: 12, lineHeight: 1 }}>{isLoading ? "…" : (s ? fmt(s.ganancia_real) : "—")}</div>
-              {s && Math.abs(ajusteNeto) > 0 && (
-                <div style={{ display: "inline-flex", alignItems: "center", gap: 7, marginTop: 14, fontSize: 13, fontWeight: 700, color: ajustePositivo ? "var(--pos)" : "var(--neg)", background: ajustePositivo ? "var(--pos-soft)" : "var(--neg-soft)", padding: "7px 13px", borderRadius: 999 }}>
-                  {ajustePositivo ? "▲" : "▼"} {ajustePositivo ? "+" : "−"}{fmt(Math.abs(ajusteNeto))} sobre la bruta
+          {/* ── Ganancia neta del período (cadena Real − Gastos = Neta) ── */}
+          <section className="va-card" style={{ padding: "22px 28px", borderRadius: 18, marginBottom: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 18 }}>
+              <Wallet size={18} style={{ color: "var(--primary)" }} />
+              <span style={{ ...LABEL, fontSize: 12.5 }}>Ganancia neta del período</span>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+              {/* Ganancia Real */}
+              <div style={{ flex: "1 1 0", minWidth: 130, textAlign: "center", padding: "14px 10px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 9, whiteSpace: "nowrap" }}>Ganancia real</div>
+                <div style={{ fontSize: 27, fontWeight: 800, letterSpacing: "-.025em", color: "var(--ink)", lineHeight: 1 }}>{isLoading ? "…" : (s ? fmt(s.ganancia_real) : "—")}</div>
+                <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 11 }}>
+                  <button className="va-link" onClick={() => setRindeOpen(true)} style={{ fontSize: 11, fontWeight: 700, color: "var(--pos)", background: "var(--pos-soft)", borderRadius: 999, padding: "3px 9px" }}>↗ {s ? fmtM2(s.rindeTotal) : "—"}</button>
+                  <button className="va-link" onClick={() => setMermaOpen(true)} style={{ fontSize: 11, fontWeight: 700, color: "var(--neg)", background: "var(--neg-soft)", borderRadius: 999, padding: "3px 9px" }}>↘ {s ? fmtM2(s.mermaTotal) : "—"}</button>
                 </div>
-              )}
-              <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 12, lineHeight: 1.5 }}>{isLoading ? "" : realText}</div>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
-              <div className="va-wfrow">
-                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>Bruta</span>
-                <div style={{ height: 22, borderRadius: 6, background: "var(--bar-dim)", width: wPct(s?.ganancia_bruta ?? 0) }} />
-                <span style={{ textAlign: "right", fontSize: 14.5, fontWeight: 700 }}>{s ? fmt(s.ganancia_bruta) : "—"}</span>
               </div>
-              <div className="va-wfrow">
-                <button className="va-link" style={{ fontSize: 13, fontWeight: 600, color: "var(--pos)", textAlign: "left" }} onClick={() => setRindeOpen(true)}>+ Rinde</button>
-                <div style={{ height: 22, borderRadius: 6, background: "var(--pos)", width: wPct(s?.rindeTotal ?? 0) }} />
-                <span style={{ textAlign: "right", fontSize: 14.5, fontWeight: 700, color: "var(--pos)" }}>+{s ? fmt(s.rindeTotal) : "—"}</span>
+
+              {/* − */}
+              <div style={{ flex: "none", width: 30, height: 30, borderRadius: 999, background: "var(--line)", color: "var(--muted)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 800 }}>−</div>
+
+              {/* Gastos Operativos */}
+              <div style={{ flex: "1 1 0", minWidth: 130, textAlign: "center", padding: "14px 10px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 9, whiteSpace: "nowrap" }}>Gastos operativos</div>
+                <div style={{ fontSize: 27, fontWeight: 800, letterSpacing: "-.025em", color: "var(--ink)", lineHeight: 1 }}>{isLoading ? "…" : (s ? fmt(s.egresosOperativos) : "—")}</div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 11 }}>{s ? fmtInt(s.cantidadMovimientosEgresos) : "—"} movimientos</div>
               </div>
-              <div className="va-wfrow">
-                <button className="va-link" style={{ fontSize: 13, fontWeight: 600, color: "var(--neg)", textAlign: "left" }} onClick={() => setMermaOpen(true)}>− Merma</button>
-                <div style={{ height: 22, borderRadius: 6, background: "var(--neg)", width: wPct(s?.mermaTotal ?? 0) }} />
-                <span style={{ textAlign: "right", fontSize: 14.5, fontWeight: 700, color: "var(--neg)" }}>−{s ? fmt(s.mermaTotal) : "—"}</span>
-              </div>
-              <div style={{ height: 1, background: "var(--line)", margin: "2px 0" }} />
-              <div className="va-wfrow">
-                <span style={{ fontSize: 13, fontWeight: 800, color: "var(--ink)" }}>= Real</span>
-                <div style={{ height: 26, borderRadius: 6, background: "linear-gradient(90deg,var(--grad-mid),var(--grad-b))", width: wPct(s?.ganancia_real ?? 0) }} />
-                <span style={{ textAlign: "right", fontSize: 15, fontWeight: 800 }}>{s ? fmt(s.ganancia_real) : "—"}</span>
+
+              {/* = */}
+              <div style={{ flex: "none", width: 30, height: 30, borderRadius: 999, background: "var(--pos-soft)", color: "var(--primary-deep)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 800 }}>=</div>
+
+              {/* Ganancia Neta */}
+              <div style={{ flex: "1 1 0", minWidth: 140, textAlign: "center", padding: "14px 10px", background: "#eef4e2", borderRadius: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--primary-deep)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 9, whiteSpace: "nowrap" }}>Ganancia neta</div>
+                <div style={{ fontSize: 27, fontWeight: 800, letterSpacing: "-.025em", color: "var(--primary-deep)", lineHeight: 1 }}>{isLoading ? "…" : (s ? fmt(s.ganancia_neta) : "—")}</div>
+                <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--primary-deep)", opacity: 0.72, marginTop: 11 }}>lo que te queda</div>
               </div>
             </div>
+
+            {/* Aviso de cobertura de gastos */}
+            {s?.fechaCoberturaEgresos && (
+              <>
+                <div style={{ height: 1, background: "var(--line)", margin: "18px 0 12px" }} />
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, fontSize: 12, fontWeight: 600, color: "#b5751a" }}>
+                  <Clock size={13} />
+                  <span>Gastos cargados hasta el {fmtDDMM(s.fechaCoberturaEgresos)} · la neta puede no incluir gastos posteriores</span>
+                </div>
+              </>
+            )}
           </section>
 
           {/* ── Estado financiero ── */}
