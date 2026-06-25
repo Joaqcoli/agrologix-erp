@@ -1232,7 +1232,7 @@ export default function CajaPage() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <p className="text-[10px] text-muted-foreground">MP: el saldo se refleja por el feed automático.</p>
+                      <p className="text-[10px] text-muted-foreground">MP: el saldo se refleja por el feed automático. Pago por banco/cheque: no suma gasto (ya lo trae el extracto); solo efectivo registra el gasto.</p>
                     </div>
                   </>
                 );

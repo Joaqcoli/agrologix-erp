@@ -2588,13 +2588,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           });
         }
 
-        // Crear movimiento en feed de egresos (caja_movements) para no-MP
-        if (!isMP) {
-          const cuentaTipoMethod = (t: string) => {
-            if (t === "efectivo") return "EFECTIVO";
-            if (t === "cheque") return "CHEQUE";
-            return "TRANSFERENCIA";
-          };
+        // Feed de egresos (caja_movements) — DECISIÓN B2 (evita doble conteo):
+        //  • Pago por BANCO/TRANSFERENCIA/CHEQUE → NO se crea el gasto acá, porque el
+        //    egreso ya lo trae el extracto de Galicia/MP. La obligación queda solo como
+        //    recordatorio (estado=pagado). El saldo igual se ajusta arriba (movimiento_cuenta).
+        //  • Pago en EFECTIVO → SÍ se crea el gasto: es la ÚNICA fuente (no hay extracto),
+        //    además de descontar del saldo de Efectivo (movimiento_cuenta de arriba).
+        if (cuenta?.tipo === "efectivo") {
           try {
             await storage.createCajaMovement({
               date: new Date().toISOString().slice(0, 10),
@@ -2602,7 +2602,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               description: ob.concepto,
               amount: String(montoARS),
               category: ob.tipo,
-              method: cuenta ? cuentaTipoMethod(cuenta.tipo) : "TRANSFERENCIA",
+              method: "EFECTIVO",
             }, req.session.userId!);
           } catch (e) { console.error("caja_movement creation failed:", e); }
         }
