@@ -799,6 +799,26 @@ export async function runMigrations() {
     WHERE NOT EXISTS (SELECT 1 FROM bank_categories WHERE name = 'Comisiones')
   `); } catch {}
 
+  // B6: marca "afecta el gráfico de egresos" por categoría (reemplaza EXCLUDE_FROM_PIE por texto).
+  // One-time: si la columna NO existe, se agrega (DEFAULT TRUE) y se hace el BACKFILL que replica
+  // EXACTO las exclusiones actuales (proveedor/mercader/banco propio/retiro/cheque rechazado → false).
+  // El backfill corre SOLO al crear la columna, para no pisar elecciones manuales del usuario.
+  try {
+    const col = await db.execute(sql`SELECT 1 FROM information_schema.columns WHERE table_name='bank_categories' AND column_name='afecta_egresos'`);
+    if (col.rows.length === 0) {
+      await db.execute(sql`ALTER TABLE bank_categories ADD COLUMN afecta_egresos BOOLEAN NOT NULL DEFAULT TRUE`);
+      await db.execute(sql`
+        UPDATE bank_categories SET afecta_egresos = false
+        WHERE lower(name) LIKE '%proveedor%'
+           OR lower(name) LIKE '%mercader%'
+           OR lower(name) LIKE '%banco propio%'
+           OR lower(name) LIKE '%retiro%'
+           OR lower(name) LIKE '%cheque rechazado%'
+      `);
+      console.log("[migrate] bank_categories.afecta_egresos creada + backfill (réplica de EXCLUDE_FROM_PIE)");
+    }
+  } catch (e) { console.error("afecta_egresos migration failed:", e); }
+
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS mp_movement_overrides (
       id SERIAL PRIMARY KEY,

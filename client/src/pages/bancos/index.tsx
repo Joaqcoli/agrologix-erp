@@ -76,6 +76,7 @@ export default function BancosPage() {
   // New category dialog
   const [newCatOpen, setNewCatOpen] = useState(false);
   const [newCatName, setNewCatName] = useState("");
+  const [newCatAfecta, setNewCatAfecta] = useState(true);   // B6: ¿afecta el gráfico de egresos? (default Sí)
   const [pendingMovId, setPendingMovId] = useState<string | number | null>(null);
 
   // Edit category dialog
@@ -183,7 +184,8 @@ export default function BancosPage() {
   };
 
   const createCategoryMut = useMutation({
-    mutationFn: (name: string) => apiRequest("POST", "/api/bank-categories", { name }),
+    mutationFn: ({ name, afectaEgresos }: { name: string; afectaEgresos: boolean }) =>
+      apiRequest("POST", "/api/bank-categories", { name, afectaEgresos }),
     onSuccess: async (res: any) => {
       await qc.invalidateQueries({ queryKey: ["/api/bank-categories"] });
       if (pendingMovId != null && res?.id) {
@@ -192,6 +194,7 @@ export default function BancosPage() {
       setPendingMovId(null);
       setNewCatOpen(false);
       setNewCatName("");
+      setNewCatAfecta(true);
     },
   });
 
@@ -629,19 +632,36 @@ export default function BancosPage() {
       </div>
 
       {/* ── Dialog nueva categoría ── */}
-      <Dialog open={newCatOpen} onOpenChange={v => { setNewCatOpen(v); if (!v) { setNewCatName(""); setPendingMovId(null); } }}>
+      <Dialog open={newCatOpen} onOpenChange={v => { setNewCatOpen(v); if (!v) { setNewCatName(""); setNewCatAfecta(true); setPendingMovId(null); } }}>
         <DialogContent className="max-w-sm">
           <DialogHeader><DialogTitle>Nueva categoría</DialogTitle></DialogHeader>
           <Input
             value={newCatName}
             onChange={e => setNewCatName(e.target.value)}
             placeholder="Ej: Retiro propio"
-            onKeyDown={e => { if (e.key === "Enter" && newCatName.trim()) createCategoryMut.mutate(newCatName.trim()); }}
+            onKeyDown={e => { if (e.key === "Enter" && newCatName.trim()) createCategoryMut.mutate({ name: newCatName.trim(), afectaEgresos: newCatAfecta }); }}
             autoFocus
           />
+          {/* B6: ¿afecta el gráfico de egresos? */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">¿Afecta el gráfico de egresos?</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setNewCatAfecta(true)}
+                className={`flex-1 h-9 text-sm rounded-md border transition-colors ${newCatAfecta ? "border-foreground/30 bg-muted font-medium text-foreground" : "border-input bg-background text-muted-foreground hover:text-foreground"}`}
+              >Sí (es un gasto)</button>
+              <button
+                type="button"
+                onClick={() => setNewCatAfecta(false)}
+                className={`flex-1 h-9 text-sm rounded-md border transition-colors ${!newCatAfecta ? "border-foreground/30 bg-muted font-medium text-foreground" : "border-input bg-background text-muted-foreground hover:text-foreground"}`}
+              >No (interno / no-gasto)</button>
+            </div>
+            <p className="text-[10px] text-muted-foreground">"No" para movimientos que no son gasto operativo real (proveedores/mercadería, pases internos, retiros, etc.).</p>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setNewCatOpen(false)}>Cancelar</Button>
-            <Button onClick={() => { if (newCatName.trim()) createCategoryMut.mutate(newCatName.trim()); }} disabled={!newCatName.trim() || createCategoryMut.isPending}>
+            <Button onClick={() => { if (newCatName.trim()) createCategoryMut.mutate({ name: newCatName.trim(), afectaEgresos: newCatAfecta }); }} disabled={!newCatName.trim() || createCategoryMut.isPending}>
               {createCategoryMut.isPending ? "Guardando..." : "Guardar"}
             </Button>
           </DialogFooter>

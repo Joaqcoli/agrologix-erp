@@ -421,6 +421,7 @@ export type InsertCajaMovement = typeof cajaMovements.$inferInsert;
 export const bankCategories = pgTable("bank_categories", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
+  afectaEgresos: boolean("afecta_egresos").notNull().default(true), // si false, NO suma al gráfico de egresos (reemplaza EXCLUDE_FROM_PIE por texto)
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 export type BankCategory = typeof bankCategories.$inferSelect;

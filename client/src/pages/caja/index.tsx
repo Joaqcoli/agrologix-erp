@@ -28,14 +28,15 @@ function normalizeCategory(cat: string): string {
   if (lower.includes("cobro") && lower.includes("client")) return "Cobros clientes";
   return cat;
 }
-// Categorías excluidas del gráfico de egresos por categoría (no son gastos operativos reales)
-const EXCLUDE_FROM_PIE = (cat: string) => {
+// B6 — FALLBACK por texto: solo se usa para categorías que NO tienen fila en bank_categories.
+// La fuente de verdad ahora es bank_categories.afecta_egresos (el backfill replicó esta misma
+// lista, así que el resultado es idéntico). Categorías excluidas del gráfico de egresos:
+//  - proveedor / mercadería (ya en el costo de la bruta)
+//  - "banco propio": pase entre cuentas propias (interno)
+//  - "retiro": del dueño/socio y "retiro de efectivo" (interno Galicia→Efectivo)
+//  - "cheque rechazado": cheque que se acreditó y rebotó (neto $0)
+const EXCLUDE_FROM_PIE_TEXT = (cat: string) => {
   const l = cat.toLowerCase();
-  // El gráfico muestra SOLO gastos operativos reales. Se excluyen:
-  //  - proveedor / mercadería (ya en el costo de la bruta)
-  //  - "banco propio": pase de dinero entre cuentas propias (interno)
-  //  - "retiro": del dueño/socio (ganancia retirada) y "retiro de efectivo" (interno Galicia→Efectivo)
-  //  - "cheque rechazado": cheque que se acreditó y rebotó (neto $0)
   return l.includes("proveedor") || l.includes("mercader") || l.includes("banco propio")
     || l.includes("retiro") || l.includes("cheque rechazado");
 };
@@ -89,7 +90,7 @@ type CajaSummary = {
   manualMovements: { id: number; date: string; type: string; description: string; amount: string; category: string | null; method: string | null; sourceId?: string | null }[];
 };
 
-type BankCategory = { id: number; name: string };
+type BankCategory = { id: number; name: string; afectaEgresos?: boolean };
 
 type CuentaFinanciera = {
   id: number;
@@ -692,17 +693,31 @@ export default function CajaPage() {
   }, [feed]);
 
   // Pie: egresos by category for the selected period
+  // B6: mapa nombre(lower) → afecta_egresos (fuente de verdad). Excluida si afecta_egresos=false;
+  // si la categoría no está en el catálogo, fallback al texto (mantiene el comportamiento anterior).
+  const afectaEgresosMap = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const c of (bankCats ?? [])) m.set(c.name.toLowerCase(), c.afectaEgresos !== false);
+    return m;
+  }, [bankCats]);
+
+  const isExcludedFromPie = (cat: string) => {
+    const flag = afectaEgresosMap.get((cat ?? "").toLowerCase());
+    if (flag === undefined) return EXCLUDE_FROM_PIE_TEXT(cat); // sin fila en catálogo → texto
+    return flag === false;                                     // afecta_egresos=false → excluida
+  };
+
   const pieData = useMemo(() => {
     const map: Record<string, number> = {};
     for (const item of feed) {
       if (item.type !== "egreso") continue;
-      if (EXCLUDE_FROM_PIE(item.category)) continue; // excluir pagos proveedores / mercadería
+      if (isExcludedFromPie(item.category)) continue; // excluida si afecta_egresos=false (o fallback texto)
       map[item.category] = (map[item.category] ?? 0) + item.amount;
     }
     return Object.entries(map)
       .sort((a, b) => b[1] - a[1])
       .map(([name, value]) => ({ name, value: Math.round(value) }));
-  }, [feed]);
+  }, [feed, afectaEgresosMap]);
 
   // Accordion: egresos agrupados por categoría del período
   const categoriaData = useMemo(() => {

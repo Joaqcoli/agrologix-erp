@@ -5426,8 +5426,8 @@ export const storage = {
     return db.select().from(bankCategories).orderBy(asc(bankCategories.id));
   },
 
-  async createBankCategory(name: string): Promise<BankCategory> {
-    const [cat] = await db.insert(bankCategories).values({ name }).returning();
+  async createBankCategory(name: string, afectaEgresos: boolean = true): Promise<BankCategory> {
+    const [cat] = await db.insert(bankCategories).values({ name, afectaEgresos }).returning();
     return cat;
   },
 

@@ -3238,9 +3238,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/bank-categories", requireAuth, async (req, res) => {
     try {
-      const { name } = req.body as { name?: string };
+      const { name, afectaEgresos } = req.body as { name?: string; afectaEgresos?: boolean };
       if (!name?.trim()) return res.status(400).json({ error: "Nombre requerido" });
-      return res.json(await storage.createBankCategory(name.trim()));
+      return res.json(await storage.createBankCategory(name.trim(), afectaEgresos !== false));
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
