@@ -280,6 +280,9 @@ const DASH_CSS = `
 .va-dash .va-charts{display:grid;grid-template-columns:1.25fr 1fr;gap:18px;margin-bottom:18px}
 .va-dash .va-real{display:grid;grid-template-columns:300px 1fr;gap:48px;align-items:center}
 .va-dash .va-wfrow{display:grid;grid-template-columns:72px 1fr 124px;align-items:center;gap:14px}
+/* Ganancia neta: dos mitades (izq desglose real achicado, der neta) */
+.va-dash .va-netasplit{display:grid;grid-template-columns:1fr 1fr;gap:36px;align-items:stretch}
+.va-dash .va-netawf{display:grid;grid-template-columns:58px 1fr 92px;align-items:center;gap:10px}
 .va-dash .va-fin3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-bottom:18px}
 .va-dash .va-bottom{display:grid;grid-template-columns:1fr 1fr;gap:18px}
 
@@ -290,6 +293,7 @@ const DASH_CSS = `
   .va-dash .va-charts{grid-template-columns:1fr;gap:14px}
   .va-dash .va-fin3{grid-template-columns:1fr;gap:14px}
   .va-dash .va-real{grid-template-columns:1fr;gap:18px}
+  .va-dash .va-netasplit{grid-template-columns:1fr;gap:20px}
   .va-dash .va-bottom{grid-template-columns:1fr;gap:14px}
   .va-dash .va-wfrow{grid-template-columns:64px 1fr 96px;gap:10px}
   .va-dash h1{font-size:26px !important}
@@ -570,55 +574,78 @@ export default function DashboardPage() {
             </div>
           </section>
 
-          {/* ── Ganancia neta del período (cadena Real − Gastos = Neta) ── */}
-          <section className="va-card" style={{ padding: "22px 28px", borderRadius: 18, marginBottom: 18 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 18 }}>
-              <Wallet size={18} style={{ color: "var(--primary)" }} />
-              <span style={{ ...LABEL, fontSize: 12.5 }}>Ganancia neta del período</span>
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              {/* Ganancia Real */}
-              <div style={{ flex: "1 1 0", minWidth: 130, textAlign: "center", padding: "14px 10px" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 9, whiteSpace: "nowrap" }}>Ganancia real</div>
-                <div style={{ fontSize: 27, fontWeight: 800, letterSpacing: "-.025em", color: "var(--ink)", lineHeight: 1 }}>{isLoading ? "…" : (s ? fmt(s.ganancia_real) : "—")}</div>
-                <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 11 }}>
-                  <button className="va-link" onClick={() => setRindeOpen(true)} style={{ fontSize: 11, fontWeight: 700, color: "var(--pos)", background: "var(--pos-soft)", borderRadius: 999, padding: "3px 9px" }}>↗ {s ? fmtM2(s.rindeTotal) : "—"}</button>
-                  <button className="va-link" onClick={() => setMermaOpen(true)} style={{ fontSize: 11, fontWeight: 700, color: "var(--neg)", background: "var(--neg-soft)", borderRadius: 999, padding: "3px 9px" }}>↘ {s ? fmtM2(s.mermaTotal) : "—"}</button>
+          {/* ── Ganancia real (desglose achicado) + Ganancia neta ── */}
+          <section className="va-card" style={{ padding: "24px 28px", borderRadius: 18, marginBottom: 18 }}>
+            <div className="va-netasplit">
+              {/* ── IZQUIERDA: desglose de Ganancia Real (original, achicado) ── */}
+              <div>
+                <span style={{ ...LABEL, fontSize: 12 }}>Ganancia real del período</span>
+                <div className="va-real-val" style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-.025em", marginTop: 8, lineHeight: 1 }}>{isLoading ? "…" : (s ? fmt(s.ganancia_real) : "—")}</div>
+                {s && Math.abs(ajusteNeto) > 0 && (
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 10, fontSize: 12, fontWeight: 700, color: ajustePositivo ? "var(--pos)" : "var(--neg)", background: ajustePositivo ? "var(--pos-soft)" : "var(--neg-soft)", padding: "5px 11px", borderRadius: 999 }}>
+                    {ajustePositivo ? "▲" : "▼"} {ajustePositivo ? "+" : "−"}{fmt(Math.abs(ajusteNeto))} sobre la bruta
+                  </div>
+                )}
+                {/* 4 barras compactas */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 9, marginTop: 16 }}>
+                  <div className="va-netawf">
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--muted)" }}>Bruta</span>
+                    <div style={{ height: 18, borderRadius: 5, background: "var(--bar-dim)", width: wPct(s?.ganancia_bruta ?? 0) }} />
+                    <span style={{ textAlign: "right", fontSize: 13, fontWeight: 700 }}>{s ? fmt(s.ganancia_bruta) : "—"}</span>
+                  </div>
+                  <div className="va-netawf">
+                    <button className="va-link" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--pos)", textAlign: "left" }} onClick={() => setRindeOpen(true)}>+ Rinde</button>
+                    <div style={{ height: 18, borderRadius: 5, background: "var(--pos)", width: wPct(s?.rindeTotal ?? 0) }} />
+                    <span style={{ textAlign: "right", fontSize: 13, fontWeight: 700, color: "var(--pos)" }}>+{s ? fmt(s.rindeTotal) : "—"}</span>
+                  </div>
+                  <div className="va-netawf">
+                    <button className="va-link" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--neg)", textAlign: "left" }} onClick={() => setMermaOpen(true)}>− Merma</button>
+                    <div style={{ height: 18, borderRadius: 5, background: "var(--neg)", width: wPct(s?.mermaTotal ?? 0) }} />
+                    <span style={{ textAlign: "right", fontSize: 13, fontWeight: 700, color: "var(--neg)" }}>−{s ? fmt(s.mermaTotal) : "—"}</span>
+                  </div>
+                  <div style={{ height: 1, background: "var(--line)", margin: "1px 0" }} />
+                  <div className="va-netawf">
+                    <span style={{ fontSize: 12.5, fontWeight: 800, color: "var(--ink)" }}>= Real</span>
+                    <div style={{ height: 22, borderRadius: 5, background: "linear-gradient(90deg,var(--grad-mid),var(--grad-b))", width: wPct(s?.ganancia_real ?? 0) }} />
+                    <span style={{ textAlign: "right", fontSize: 13.5, fontWeight: 800 }}>{s ? fmt(s.ganancia_real) : "—"}</span>
+                  </div>
                 </div>
               </div>
 
-              {/* − */}
-              <div style={{ flex: "none", width: 30, height: 30, borderRadius: 999, background: "var(--line)", color: "var(--muted)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 800 }}>−</div>
+              {/* ── DERECHA: Ganancia Neta (− Gastos = Neta) ── */}
+              <div style={{ borderLeft: "1px solid var(--line)", paddingLeft: 36, display: "flex", flexDirection: "column", justifyContent: "center", gap: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Wallet size={16} style={{ color: "var(--primary)" }} />
+                  <span style={{ ...LABEL, fontSize: 12 }}>Tu ganancia neta</span>
+                </div>
 
-              {/* Gastos Operativos */}
-              <div style={{ flex: "1 1 0", minWidth: 130, textAlign: "center", padding: "14px 10px" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 9, whiteSpace: "nowrap" }}>Gastos operativos</div>
-                <div style={{ fontSize: 27, fontWeight: 800, letterSpacing: "-.025em", color: "var(--ink)", lineHeight: 1 }}>{isLoading ? "…" : (s ? fmt(s.egresosOperativos) : "—")}</div>
-                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 11 }}>{s ? fmtInt(s.cantidadMovimientosEgresos) : "—"} movimientos</div>
-              </div>
+                {/* − Gastos operativos */}
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "var(--neg)" }}>− Gastos operativos</span>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: "var(--ink)", lineHeight: 1.1 }}>{isLoading ? "…" : (s ? fmt(s.egresosOperativos) : "—")}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)" }}>{s ? fmtInt(s.cantidadMovimientosEgresos) : "—"} movimientos</div>
+                  </div>
+                </div>
 
-              {/* = */}
-              <div style={{ flex: "none", width: 30, height: 30, borderRadius: 999, background: "var(--pos-soft)", color: "var(--primary-deep)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 800 }}>=</div>
+                {/* = Ganancia neta (card verde) */}
+                <div style={{ background: "#eef4e2", borderRadius: 14, padding: "14px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "var(--primary-deep)", textTransform: "uppercase", letterSpacing: ".04em" }}>= Ganancia neta</div>
+                    <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--primary-deep)", opacity: 0.72, marginTop: 2 }}>lo que te queda</div>
+                  </div>
+                  <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-.025em", color: "var(--primary-deep)", lineHeight: 1, whiteSpace: "nowrap" }}>{isLoading ? "…" : (s ? fmt(s.ganancia_neta) : "—")}</div>
+                </div>
 
-              {/* Ganancia Neta */}
-              <div style={{ flex: "1 1 0", minWidth: 140, textAlign: "center", padding: "14px 10px", background: "#eef4e2", borderRadius: 14 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--primary-deep)", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 9, whiteSpace: "nowrap" }}>Ganancia neta</div>
-                <div style={{ fontSize: 27, fontWeight: 800, letterSpacing: "-.025em", color: "var(--primary-deep)", lineHeight: 1 }}>{isLoading ? "…" : (s ? fmt(s.ganancia_neta) : "—")}</div>
-                <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--primary-deep)", opacity: 0.72, marginTop: 11 }}>lo que te queda</div>
+                {/* Aviso de cobertura */}
+                {s?.fechaCoberturaEgresos && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 600, color: "#b5751a" }}>
+                    <Clock size={12} />
+                    <span>Gastos cargados hasta el {fmtDDMM(s.fechaCoberturaEgresos)} · la neta puede no incluir gastos posteriores</span>
+                  </div>
+                )}
               </div>
             </div>
-
-            {/* Aviso de cobertura de gastos */}
-            {s?.fechaCoberturaEgresos && (
-              <>
-                <div style={{ height: 1, background: "var(--line)", margin: "18px 0 12px" }} />
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, fontSize: 12, fontWeight: 600, color: "#b5751a" }}>
-                  <Clock size={13} />
-                  <span>Gastos cargados hasta el {fmtDDMM(s.fechaCoberturaEgresos)} · la neta puede no incluir gastos posteriores</span>
-                </div>
-              </>
-            )}
           </section>
 
           {/* ── Estado financiero ── */}
