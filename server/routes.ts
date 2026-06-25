@@ -3202,6 +3202,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // Corregir la categoría de UN movimiento de Galicia a mano (B4). NO crea reglas (sin aprendizaje).
+  // id va en el body (el id de Galicia tiene ':' y no es apto para path param).
+  app.put("/api/galicia/movements/category", requireAuth, async (req, res) => {
+    try {
+      const { id, categoryId, dryRun } = req.body as { id?: string; categoryId?: number | null; dryRun?: boolean };
+      if (!id) return res.status(400).json({ error: "id requerido" });
+      let name: string | null = null;
+      if (categoryId != null) {
+        const cats = await storage.getBankCategories();
+        name = (cats as any[]).find((c: any) => c.id === categoryId)?.name ?? null;
+      }
+      const result = await storage.setGaliciaCategory(id, name, { dryRun: dryRun === true });
+      return res.json({ ok: true, dryRun: dryRun === true, ...result });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // Cruce ECHEQ del extracto ↔ cheque emitido (Paso B). dryRun=1 → solo simula (rollback).
   app.post("/api/galicia/reconciliar-cheques", requireAuth, async (req: any, res) => {
     try {

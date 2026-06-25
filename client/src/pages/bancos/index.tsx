@@ -244,6 +244,16 @@ export default function BancosPage() {
     },
   });
 
+  // B4: categorizar un movimiento de Galicia (persiste categoría + re-reconcilia caja; NO crea reglas)
+  const galiciaSetCategoryMut = useMutation({
+    mutationFn: ({ id, categoryId }: { id: string | number; categoryId: number | null }) =>
+      apiRequest("PUT", "/api/galicia/movements/category", { id: String(id), categoryId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/galicia/movements"] });
+      qc.invalidateQueries({ queryKey: ["/api/caja/summary"] });
+    },
+  });
+
   const [applyPayError, setApplyPayError] = useState<string | null>(null);
 
   const applyPayMut = useMutation({
@@ -489,7 +499,7 @@ export default function BancosPage() {
       categories={categories}
       onAddCategory={() => { setPendingMovId(null); setNewCatOpen(true); }}
       onEditCategory={(cat) => { setEditCat(cat); setEditCatName(cat.name); setEditCatOpen(true); }}
-      onCategorize={() => { /* B4: el guardado de categoría de Galicia se implementa en el próximo paso */ }}
+      onCategorize={(m, catId) => galiciaSetCategoryMut.mutate({ id: m.id, categoryId: catId })}
       onAddNewForMov={() => { setPendingMovId(null); setNewCatOpen(true); }}
       renderName={galiciaRenderName}
       renderRowExtra={galiciaRenderRowExtra}

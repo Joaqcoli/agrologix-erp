@@ -5576,6 +5576,78 @@ export const storage = {
     });
   },
 
+  // ─── Lector Galicia: corregir categoría de UN movimiento a mano (B4) ──────────
+  // Actualiza galicia_movements.category + categoria_auto=false (corrección manual)
+  // y re-reconcilia el caja_movement (source_id galicia:...). NO toca galicia_rules
+  // (sin aprendizaje automático — decisión del usuario). Idempotente: el caja_movement
+  // se rehace con DELETE+INSERT, así A→B→A nunca duplica (siempre 0/1 fila por source_id).
+  async setGaliciaCategory(galiciaId: string, categoryName: string | null, opts?: { dryRun?: boolean }): Promise<any> {
+    const sourceId = `galicia:${galiciaId}`;
+
+    // Aplica el cambio de categoría + re-reconciliación. Devuelve datos básicos.
+    const apply = async (exec: any, name: string | null) => {
+      const rows = (await exec.execute(drizzleSql`
+        SELECT fecha, descripcion, concepto, debito::float AS debito, credito::float AS credito, category
+        FROM galicia_movements WHERE id = ${galiciaId}`)).rows as any[];
+      if (rows.length === 0) throw new Error("Movimiento Galicia no encontrado");
+      const m = rows[0];
+      const isOutgoing = m.debito != null;
+      const monto = Math.abs(parseFloat(String(m.debito ?? m.credito ?? 0)));
+      const direccion = isOutgoing ? "egreso" : "ingreso";
+      const desc = m.descripcion || m.concepto || "";
+
+      // 1) categoría + marca de corrección manual
+      await exec.execute(drizzleSql`UPDATE galicia_movements SET category = ${name}, categoria_auto = false WHERE id = ${galiciaId}`);
+
+      // 2) re-reconciliar caja_movements (DELETE+INSERT → nunca duplica)
+      await exec.execute(drizzleSql`DELETE FROM caja_movements WHERE source_id = ${sourceId}`);
+      if (name != null) {
+        await exec.execute(drizzleSql`
+          INSERT INTO caja_movements (source_id, date, type, description, amount, category, method)
+          VALUES (${sourceId}, ${m.fecha}, ${direccion}, ${desc}, ${monto.toFixed(2)}, ${name}, 'TRANSFERENCIA')`);
+      }
+
+      // 3) "Retiro de efectivo" → movimiento_cuenta en Efectivo (igual que el import; mantiene consistencia al cambiar A→Retiro o Retiro→A)
+      await exec.execute(drizzleSql`DELETE FROM movimientos_cuenta WHERE origen_tipo = 'galicia_efectivo' AND origen_id = ${sourceId}`);
+      if (name === "Retiro de efectivo") {
+        const efe = (await exec.execute(drizzleSql`SELECT id FROM cuentas_financieras WHERE tipo = 'efectivo' LIMIT 1`)).rows[0] as any;
+        if (efe?.id != null) {
+          await exec.execute(drizzleSql`
+            INSERT INTO movimientos_cuenta (cuenta_id, fecha, signo, monto, concepto, origen_tipo, origen_id)
+            VALUES (${efe.id}, ${m.fecha}::timestamp, 'ingreso', ${monto.toFixed(2)}, ${"Extracción Galicia → Efectivo"}, 'galicia_efectivo', ${sourceId})`);
+        }
+      }
+      return { sourceId, category: name, type: direccion, amount: monto, originalCategory: m.category };
+    };
+
+    // Snapshot para verificación (categoría + filas de caja del source + conteo de reglas)
+    const snapshot = async (exec: any) => {
+      const g = (await exec.execute(drizzleSql`SELECT category, categoria_auto FROM galicia_movements WHERE id = ${galiciaId}`)).rows[0];
+      const caja = (await exec.execute(drizzleSql`SELECT id, category FROM caja_movements WHERE source_id = ${sourceId} ORDER BY id`)).rows;
+      const rules = (await exec.execute(drizzleSql`SELECT count(*)::int AS n FROM galicia_rules`)).rows[0];
+      return { galiciaCategory: g?.category ?? null, categoriaAuto: g?.categoria_auto ?? null, cajaRows: caja, cajaCount: caja.length, rulesCount: rules?.n ?? 0 };
+    };
+
+    if (opts?.dryRun) {
+      // Verificación sin persistir: captura before → aplica B → after → vuelve al original (round-trip) → rollback
+      let evidence: any = null;
+      try {
+        await db.transaction(async (tx) => {
+          const before = await snapshot(tx);
+          await apply(tx, categoryName);
+          const after = await snapshot(tx);
+          await apply(tx, before.galiciaCategory);   // round-trip a la categoría original
+          const roundtrip = await snapshot(tx);
+          evidence = { before, after, roundtrip };
+          throw new Error("__DRYRUN_ROLLBACK__");
+        });
+      } catch (e: any) { if (e.message !== "__DRYRUN_ROLLBACK__") throw e; }
+      return evidence;
+    }
+
+    return apply(db, categoryName);
+  },
+
   // ─── Cruce ECHEQ (extracto Galicia) ↔ cheque emitido (Paso B) ─────────────────
   // Match estricto: número normalizado (campo formal cheques.numero O extracción del
   // texto de notas/concepto) Y monto exacto. Si número coincide pero monto NO → NO
