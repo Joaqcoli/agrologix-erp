@@ -1327,6 +1327,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ? (req.body.orderIds as unknown[]).map(Number).filter((n) => !isNaN(n))
         : [];
 
+      // Pago con cheque(s): nuevo formato = array `cheques` [{monto, fechaCobro, numero}].
+      // Validar ANTES de crear el pago que la suma de los cheques = monto total (no dejar pago huérfano).
+      const chequesList: { monto: number; fechaCobro: string; numero?: string }[] =
+        Array.isArray(req.body.cheques)
+          ? (req.body.cheques as any[]).map(c => ({ monto: parseFloat(String(c.monto)), fechaCobro: String(c.fechaCobro ?? ""), numero: c.numero }))
+          : [];
+      if (data.method === "CHEQUE" && chequesList.length > 0) {
+        if (chequesList.some(c => !c.fechaCobro)) return res.status(400).json({ error: "Cada cheque necesita su fecha de cobro" });
+        if (chequesList.some(c => !(c.monto > 0))) return res.status(400).json({ error: "Cada cheque necesita un monto válido" });
+        const suma = chequesList.reduce((s, c) => s + c.monto, 0);
+        const total = parseFloat(String(data.amount));
+        if (Math.abs(suma - total) > 0.01) {
+          return res.status(400).json({ error: `La suma de los cheques ($${Math.round(suma).toLocaleString("es-AR")}) no coincide con el total del pago ($${Math.round(total).toLocaleString("es-AR")}). Diferencia: $${Math.round(Math.abs(suma - total)).toLocaleString("es-AR")}.` });
+        }
+      }
+
       // Tomar snapshot del estado pendiente ANTES de crear el pago para calcular
       // montos exactos por remito sin interferencia del nuevo pago en el pool FIFO.
       const pendingSnapshot = await storage.getPendingOrdersForCustomer(data.customerId);
@@ -1377,27 +1393,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           concepto: `Cobro cliente`, origenTipo: "cobro", origenId: String(payment.id),
         });
       }
-      // Si pago con cheque, crear cheque recibido + movimiento en Cheques en cartera
-      if (data.method === "CHEQUE" && req.body.chequeInfo?.fechaCobro) {
-        const customer = await storage.getCustomer(data.customerId);
-        const contraparte = customer?.name ?? "Cliente";
-        const allCuentas = await storage.getCuentasFinancieras();
-        const chequeCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "cheque");
-        const cheque = await storage.createCheque({
-          tipo: "recibido",
-          monto: parseFloat(String(data.amount)),
-          fechaCobro: req.body.chequeInfo.fechaCobro,
-          estado: "en_cartera",
-          contraparte,
-          notas: data.notes ?? null,
-        });
-        if (chequeCuenta) {
-          await storage.createMovimientoCuenta({
-            cuentaId: chequeCuenta.id, signo: "ingreso",
-            monto: parseFloat(String(data.amount)),
-            concepto: `Cheque de ${contraparte}`,
-            origenTipo: "cheque_recibido", origenId: String(cheque.id),
-          });
+      // Si pago con cheque(s): crear N cheques recibidos (cada uno su monto/fecha/número),
+      // vinculados al pago (payment_id) y en cartera. Acepta el array `cheques` (nuevo) o el
+      // legacy `chequeInfo` (un cheque por el total). El payment sigue siendo UNO (total).
+      if (data.method === "CHEQUE") {
+        const lista = chequesList.length > 0
+          ? chequesList
+          : (req.body.chequeInfo?.fechaCobro
+              ? [{ monto: parseFloat(String(data.amount)), fechaCobro: req.body.chequeInfo.fechaCobro, numero: req.body.chequeInfo.numero }]
+              : []);
+        if (lista.length > 0) {
+          const customer = await storage.getCustomer(data.customerId);
+          const contraparte = customer?.name ?? "Cliente";
+          const allCuentas = await storage.getCuentasFinancieras();
+          const chequeCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "cheque");
+          for (const c of lista) {
+            const cheque = await storage.createCheque({
+              tipo: "recibido",
+              monto: c.monto,
+              fechaCobro: c.fechaCobro,
+              numero: (c.numero ?? "").toString().trim() || null,
+              estado: "en_cartera",
+              contraparte,
+              notas: data.notes ?? null,
+              paymentId: payment.id,
+            });
+            if (chequeCuenta) {
+              await storage.createMovimientoCuenta({
+                cuentaId: chequeCuenta.id, signo: "ingreso", monto: c.monto,
+                concepto: `Cheque de ${contraparte}`,
+                origenTipo: "cheque_recibido", origenId: String(cheque.id),
+              });
+            }
+          }
         }
       }
       return res.json(payment);

@@ -1026,6 +1026,8 @@ export async function runNcMigrations() {
   try { await db.execute(sql`ALTER TABLE cheques ADD COLUMN IF NOT EXISTS supplier_payment_id INTEGER`); } catch {}
   // Número de cheque (talonario / comprobante ECHEQ) — clave para cruzar con extracto Galicia
   try { await db.execute(sql`ALTER TABLE cheques ADD COLUMN IF NOT EXISTS numero TEXT`); } catch {}
+  // Vínculo cheque recibido → pago de cliente (varios cheques por pago). Null en los viejos.
+  try { await db.execute(sql`ALTER TABLE cheques ADD COLUMN IF NOT EXISTS payment_id INTEGER`); } catch {}
 
   // Movimientos de cuenta (libro de ajustes por cuenta)
   await db.execute(sql`

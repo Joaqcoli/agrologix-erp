@@ -577,6 +577,7 @@ export const cheques = pgTable("cheques", {
   cuentaDestinoId: integer("cuenta_destino_id").references(() => cuentasFinancieras.id),
   comision: numeric("comision", { precision: 14, scale: 2 }).notNull().default("0"),
   obligacionId: integer("obligacion_id"),  // se referencia a obligaciones, sin FK circular
+  paymentId: integer("payment_id"),        // vínculo cheque recibido → pago de cliente (varios cheques por pago); null en los viejos
   notas: text("notas"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });

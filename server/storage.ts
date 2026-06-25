@@ -3542,6 +3542,11 @@ export const storage = {
   },
 
   async deletePayment(id: number): Promise<void> {
+    // Borrar los cheques recibidos vinculados a este pago (payment_id) para no dejarlos huérfanos
+    // en cartera. Solo los de ESTE pago; los viejos (payment_id NULL) y los de otros pagos no se tocan.
+    // deleteCheque limpia además los movimientos_cuenta del cheque (ingreso en cartera, etc.).
+    const chequesDelPago = (await db.execute(drizzleSql`SELECT id FROM cheques WHERE payment_id = ${id}`)).rows as any[];
+    for (const c of chequesDelPago) { await this.deleteCheque(c.id); }
     await db.delete(payments).where(eq(payments.id, id));
   },
 
@@ -6256,15 +6261,15 @@ export const storage = {
     tipo: string; monto: number; fechaCobro: string; estado?: string;
     contraparte: string; supplierId?: number | null; cuentaDestinoId?: number | null;
     comision?: number; obligacionId?: number | null; notas?: string | null;
-    supplierPaymentId?: number | null; numero?: string | null;
+    supplierPaymentId?: number | null; numero?: string | null; paymentId?: number | null;
   }): Promise<any> {
     const row = await db.execute(drizzleSql`
       INSERT INTO cheques (tipo, numero, monto, fecha_cobro, estado, contraparte, supplier_id,
-        cuenta_destino_id, comision, obligacion_id, notas, supplier_payment_id)
+        cuenta_destino_id, comision, obligacion_id, notas, supplier_payment_id, payment_id)
       VALUES (${data.tipo}, ${data.numero ?? null}, ${data.monto}, ${data.fechaCobro},
         ${data.estado ?? "en_cartera"}, ${data.contraparte}, ${data.supplierId ?? null},
         ${data.cuentaDestinoId ?? null}, ${data.comision ?? 0},
-        ${data.obligacionId ?? null}, ${data.notas ?? null}, ${data.supplierPaymentId ?? null})
+        ${data.obligacionId ?? null}, ${data.notas ?? null}, ${data.supplierPaymentId ?? null}, ${data.paymentId ?? null})
       RETURNING id, tipo, numero, monto::float, fecha_cobro, estado, contraparte, supplier_id,
         cuenta_destino_id, comision::float, obligacion_id, notas, created_at
     `);

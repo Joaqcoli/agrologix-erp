@@ -694,7 +694,20 @@ function PaymentModal({
   const [retentionAmount, setRetentionAmount] = useState("");
   const [retentionType, setRetentionType] = useState("IIBB");
   const [cuentaId, setCuentaId] = useState<number | null>(null);
-  const [chequeFechaCobro, setChequeFechaCobro] = useState("");
+  // Pago con cheque(s): lista de cheques, cada uno con su monto/fecha/número. Default: uno vacío.
+  type ChequeRow = { monto: string; fechaCobro: string; numero: string };
+  const [cheques, setCheques] = useState<ChequeRow[]>([{ monto: "", fechaCobro: "", numero: "" }]);
+  const addCheque = () => setCheques(p => [...p, { monto: "", fechaCobro: "", numero: "" }]);
+  const removeCheque = (i: number) => setCheques(p => (p.length > 1 ? p.filter((_, j) => j !== i) : p));
+  const updateCheque = (i: number, field: keyof ChequeRow, val: string) => setCheques(p => p.map((c, j) => (j === i ? { ...c, [field]: val } : c)));
+  const chequesSum = cheques.reduce((s, c) => s + (parseFloat(c.monto) || 0), 0);
+  const chequesDiff = chequesSum - (parseFloat(amount || "0") || 0);
+  const chequesValid = method !== "CHEQUE" || (
+    cheques.length > 0 &&
+    cheques.every(c => (parseFloat(c.monto) || 0) > 0 && !!c.fechaCobro) &&
+    Math.abs(chequesDiff) < 0.01 &&
+    (parseFloat(amount || "0") || 0) > 0
+  );
   const { data: cuentas } = useQuery<any[]>({
     queryKey: ["/api/caja/cuentas"],
     queryFn: () => fetch("/api/caja/cuentas", { credentials: "include" }).then(r => r.json()),
@@ -728,7 +741,7 @@ function PaymentModal({
         notes: notes || null,
         orderIds: selectedOrderIds,
         cuentaId: (method === "EFECTIVO" || method === "TRANSFERENCIA") ? cuentaId : null,
-        chequeInfo: method === "CHEQUE" ? { fechaCobro: chequeFechaCobro } : undefined,
+        cheques: method === "CHEQUE" ? cheques.map(c => ({ monto: parseFloat(c.monto), fechaCobro: c.fechaCobro, numero: c.numero.trim() || undefined })) : undefined,
       });
       if (!isNaN(retAmt) && retAmt > 0) {
         await apiRequest("POST", "/api/payments", {
@@ -749,7 +762,7 @@ function PaymentModal({
       queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
       toast({ title: "Pago registrado" });
       setAmount(""); setNotes(""); setMethod("EFECTIVO"); setSelectedOrderIds([]);
-      setRetentionAmount(""); setRetentionType("IIBB"); setCuentaId(null); setChequeFechaCobro("");
+      setRetentionAmount(""); setRetentionType("IIBB"); setCuentaId(null); setCheques([{ monto: "", fechaCobro: "", numero: "" }]);
       onClose();
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -838,15 +851,30 @@ function PaymentModal({
             </div>
           )}
 
-          {/* Cheque: fecha de cobro */}
+          {/* Cheque(s): uno o varios, cada uno con su monto y fecha de cobro */}
           {method === "CHEQUE" && (
-            <div>
-              <Label className="text-xs">Fecha de cobro del cheque <span className="text-red-500">*</span></Label>
-              <Input
-                type="date" className="mt-1"
-                value={chequeFechaCobro}
-                onChange={e => setChequeFechaCobro(e.target.value)}
-              />
+            <div className="space-y-2 rounded-md border bg-muted/20 p-2.5">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs">Cheques {cheques.length > 1 ? `(${cheques.length})` : ""}</Label>
+                <button type="button" onClick={addCheque} className="text-[11px] font-medium text-blue-600 hover:text-blue-800">+ Agregar cheque</button>
+              </div>
+              {cheques.map((c, i) => (
+                <div key={i} className="grid grid-cols-[1fr_1.1fr_0.8fr_auto] gap-1.5 items-center">
+                  <Input type="number" min="0" step="0.01" placeholder="Monto" value={c.monto} onChange={e => updateCheque(i, "monto", e.target.value)} className="h-8 text-sm" />
+                  <Input type="date" value={c.fechaCobro} onChange={e => updateCheque(i, "fechaCobro", e.target.value)} className="h-8 text-sm" title="Fecha de cobro" />
+                  <Input placeholder="N.º" value={c.numero} onChange={e => updateCheque(i, "numero", e.target.value)} className="h-8 text-sm" />
+                  <button type="button" onClick={() => removeCheque(i)} disabled={cheques.length === 1} className="text-muted-foreground/50 hover:text-destructive disabled:opacity-30 px-1" title="Quitar">✕</button>
+                </div>
+              ))}
+              {/* Suma vs total */}
+              <div className={`flex items-center justify-between text-xs ${Math.abs(chequesDiff) < 0.01 ? "text-green-700" : "text-amber-700"}`}>
+                <span>Suma de cheques: <b>${chequesSum.toLocaleString("es-AR")}</b></span>
+                {parseFloat(amount || "0") > 0 && (
+                  Math.abs(chequesDiff) < 0.01
+                    ? <span>✓ coincide con el total</span>
+                    : <span>{chequesDiff > 0 ? "sobra" : "falta"} ${Math.abs(Math.round(chequesDiff)).toLocaleString("es-AR")} (total ${Math.round(parseFloat(amount)).toLocaleString("es-AR")})</span>
+                )}
+              </div>
             </div>
           )}
 
@@ -966,7 +994,7 @@ function PaymentModal({
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
           <Button
             onClick={() => mutation.mutate()}
-            disabled={mutation.isPending || !amount || parseFloat(amount) <= 0}
+            disabled={mutation.isPending || !amount || parseFloat(amount) <= 0 || !chequesValid}
             data-testid="button-confirm-payment"
           >
             {mutation.isPending ? "Guardando..." : "Guardar Pago"}
