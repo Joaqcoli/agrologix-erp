@@ -6048,8 +6048,11 @@ export const storage = {
     notes?: string;
     links: Array<{ pedidoId: number; montoAplicado: number }>;
     userId: number;
-  }): Promise<{ paymentId: number; bankLinks: any[] }> {
+    galiciaId?: string;   // si viene, marca galicia_movements.asignacion_cc='asignado'
+    loadCuit?: string;    // si el cliente no tiene CUIT, se lo carga (auto-match futuro)
+  }): Promise<{ paymentId: number; bankLinks: any[]; cuitLoaded: boolean }> {
     const totalAmount = data.links.reduce((s, l) => s + l.montoAplicado, 0);
+    const isGalicia = !!data.galiciaId;
     return await db.transaction(async (tx) => {
       // 1. Crear registro de pago en payments (actualiza CC automáticamente vía cálculo dinámico)
       const [payment] = await tx.insert(payments).values({
@@ -6057,7 +6060,7 @@ export const storage = {
         date: data.date,
         amount: String(totalAmount.toFixed(2)),
         method: "TRANSFERENCIA" as any,
-        notes: data.notes ?? `Pago MP — movimiento ${data.movementId}`,
+        notes: data.notes ?? `${isGalicia ? "Cobro Galicia" : "Pago MP"} — movimiento ${data.movementId}`,
         createdBy: data.userId,
       }).returning();
 
@@ -6079,8 +6082,26 @@ export const storage = {
         }))
       ).returning();
 
-      return { paymentId: payment.id, bankLinks };
+      // 4. Galicia: marcar el cobro como asignado (deja de figurar pendiente)
+      if (data.galiciaId) {
+        await tx.execute(drizzleSql`UPDATE galicia_movements SET asignacion_cc = 'asignado' WHERE id = ${data.galiciaId}`);
+      }
+
+      // 5. Cargar CUIT al cliente si no tenía (para que la próxima matchee sola). Solo si está vacío.
+      let cuitLoaded = false;
+      if (data.loadCuit && /^\d{11}$/.test(data.loadCuit)) {
+        const r = await tx.execute(drizzleSql`UPDATE customers SET cuit = ${data.loadCuit} WHERE id = ${data.customerId} AND (cuit IS NULL OR cuit = '')`);
+        cuitLoaded = ((r as any).rowCount ?? 0) > 0;
+      }
+
+      return { paymentId: payment.id, bankLinks, cuitLoaded };
     });
+  },
+
+  // Marca un cobro de Galicia como "ya registrado" a mano → NO toca la CC, deja de figurar pendiente.
+  async marcarCobroGaliciaYaRegistrado(galiciaId: string): Promise<{ ok: boolean }> {
+    await db.execute(drizzleSql`UPDATE galicia_movements SET asignacion_cc = 'ya_registrado' WHERE id = ${galiciaId}`);
+    return { ok: true };
   },
 
   // ─── Cuentas Financieras ──────────────────────────────────────────────────

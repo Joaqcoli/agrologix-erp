@@ -330,6 +330,29 @@ export default function BancosPage() {
     onError: (e: Error) => setApplyPayError(e.message),
   });
 
+  // Paso 4: aplicar un cobro de Galicia a CC (baja deuda del cliente + marca asignado + carga CUIT)
+  const galiciaApplyMut = useMutation({
+    mutationFn: (data: { movementId: string; customerId: number; date: string; links: Array<{ pedidoId: number; montoAplicado: number }>; galiciaId: string; loadCuit?: string }) =>
+      apiRequest("POST", "/api/bank-payment-links", data).then(r => r.json()),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/galicia/movements"] });
+      qc.invalidateQueries({ queryKey: ["/api/ar/cc"] });
+      qc.invalidateQueries({ queryKey: ["/api/caja/summary"] });
+      setApplyPayOpen(false); setApplyPayMov(null); setApplyAmounts(new Map()); setApplyPayError(null);
+    },
+    onError: (e: Error) => setApplyPayError(e.message),
+  });
+
+  // Paso 4: marcar un cobro de Galicia como "ya registrado" a mano (NO toca CC)
+  const galiciaYaRegistradoMut = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", "/api/galicia/cobro/ya-registrado", { id }).then(r => r.json()),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/galicia/movements"] });
+      setApplyPayOpen(false); setApplyPayMov(null); setApplyAmounts(new Map()); setApplyPayError(null);
+    },
+    onError: (e: Error) => setApplyPayError(e.message),
+  });
+
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const syncReportMut = useMutation({
     mutationFn: () => apiRequest("POST", "/api/mp/sync-report").then(r => r.json()),
@@ -899,6 +922,14 @@ export default function BancosPage() {
           const movId = applyPayMov.id;
           const links = [...applyAmounts.entries()].map(([pedidoId, monto]) => ({ pedidoId, montoAplicado: parseFloat(monto) }));
           const date = (applyPayMov.date_created ?? new Date().toISOString()).slice(0, 10);
+          // Galicia: aplica a CC + marca asignado + carga CUIT al cliente si no tenía
+          if (applyPayMov.source === "galicia") {
+            galiciaApplyMut.mutate({
+              movementId: String(movId), customerId: applyPayMov.entityId!, date, links,
+              galiciaId: String(movId), loadCuit: applyPayMov.suggestedCuit ?? undefined,
+            });
+            return;
+          }
           applyPayMut.mutate(
             { movementId: String(movId), customerId: applyPayMov.entityId!, date, links },
             {
@@ -980,18 +1011,30 @@ export default function BancosPage() {
 
               {applyPayError && (<p className="text-sm text-destructive bg-destructive/10 rounded px-3 py-2">{applyPayError}</p>)}
 
-              {/* Galicia: en este bloque (pasos 1-3) el diálogo se ve pero NO aplica (eso es el paso 4) */}
+              {/* Galicia: aviso de que esto baja la CC del cliente */}
               {applyPayMov.source === "galicia" && (
-                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                  Aplicar a la cuenta corriente se habilita en el paso 4 (todavía no toca la CC).
+                <p className="text-xs text-muted-foreground bg-muted/40 border rounded px-3 py-2">
+                  Al confirmar se registra el cobro de <b>{applyPayMov.displayName}</b> y <b>baja su cuenta corriente</b> por el monto asignado. Si ya lo registraste a mano, usá "Pago ya registrado" (no toca la CC).
                 </p>
               )}
 
-              <DialogFooter>
-                <Button variant="outline" onClick={() => { setApplyPayOpen(false); setApplyPayMov(null); setApplyAmounts(new Map()); setApplyPayError(null); }}>Cancelar</Button>
-                <Button onClick={handleConfirm} disabled={!canConfirm || applyPayMut.isPending || applyPayMov.source === "galicia"}>
-                  {applyPayMov.source === "galicia" ? "Confirmar (pendiente paso 4)" : applyPayMut.isPending ? "Aplicando..." : "Confirmar"}
-                </Button>
+              <DialogFooter className="flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+                {applyPayMov.source === "galicia" && (
+                  <Button
+                    variant="outline"
+                    className="border-amber-300 text-amber-700 hover:bg-amber-50 sm:mr-auto"
+                    disabled={galiciaYaRegistradoMut.isPending}
+                    onClick={() => galiciaYaRegistradoMut.mutate(String(applyPayMov.id))}
+                  >
+                    {galiciaYaRegistradoMut.isPending ? "Marcando…" : "Pago ya registrado (no toca CC)"}
+                  </Button>
+                )}
+                <div className="flex gap-2 sm:ml-auto">
+                  <Button variant="outline" onClick={() => { setApplyPayOpen(false); setApplyPayMov(null); setApplyAmounts(new Map()); setApplyPayError(null); }}>Cancelar</Button>
+                  <Button onClick={handleConfirm} disabled={!canConfirm || applyPayMut.isPending || galiciaApplyMut.isPending}>
+                    {(applyPayMut.isPending || galiciaApplyMut.isPending) ? "Aplicando..." : applyPayMov.source === "galicia" ? "Aplicar a CC" : "Confirmar"}
+                  </Button>
+                </div>
               </DialogFooter>
             </DialogContent>
           </Dialog>

@@ -3363,21 +3363,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Bank Payment Links — vincular movimiento MP a pedidos ───────────────
   app.post("/api/bank-payment-links", requireAuth, async (req, res) => {
     try {
-      const { movementId, customerId, date, notes, links } = req.body as {
-        movementId: string;
-        customerId: number;
-        date: string;
-        notes?: string;
+      const { movementId, customerId, date, notes, links, galiciaId, loadCuit, dryRun } = req.body as {
+        movementId: string; customerId: number; date: string; notes?: string;
         links: Array<{ pedidoId: number; montoAplicado: number }>;
+        galiciaId?: string; loadCuit?: string; dryRun?: boolean;
       };
       if (!movementId) return res.status(400).json({ error: "movementId requerido" });
       if (!customerId) return res.status(400).json({ error: "customerId requerido" });
       if (!Array.isArray(links) || links.length === 0) return res.status(400).json({ error: "links requerido" });
+      const totalAmount = links.reduce((s, l) => s + (l.montoAplicado || 0), 0);
+
+      // DRY-RUN: preview del efecto en la CC, SIN escribir nada. El pago baja la deuda
+      // exactamente por el monto (solo aumenta la cobranza del cliente).
+      if (dryRun === true) {
+        const summary = await storage.getCCSummary("2000-01-01", new Date().toISOString().slice(0, 10));
+        const cust = (summary.customers as any[]).find(c => c.customerId === customerId);
+        const saldoAntes = cust?.saldo ?? 0;
+        return res.json({ dryRun: true, customerId, customerName: cust?.customerName ?? null, totalAmount, saldoAntes, saldoDespues: Math.round(saldoAntes - totalAmount) });
+      }
+
       const result = await storage.applyBankMovementToOrders({
         movementId, customerId, date: date ?? new Date().toISOString().slice(0, 10),
-        notes, links, userId: req.session.userId!,
+        notes, links, userId: req.session.userId!, galiciaId, loadCuit,
       });
       return res.json(result);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // Marcar un cobro de Galicia como "ya registrado" a mano (NO toca CC, deja de figurar pendiente).
+  app.post("/api/galicia/cobro/ya-registrado", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.body as { id?: string };
+      if (!id) return res.status(400).json({ error: "id requerido" });
+      return res.json(await storage.marcarCobroGaliciaYaRegistrado(id));
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
