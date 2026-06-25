@@ -8,3 +8,6 @@ vite.config.ts.*
 arca_private.key
 arca_certificate.crt
 arca_request.csr
+# Extractos bancarios y CSVs en la raíz — datos sensibles, nunca commitear
+Extracto_*.csv
+/*.csv
