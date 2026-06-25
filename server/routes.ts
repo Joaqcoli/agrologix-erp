@@ -3193,6 +3193,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // Cruce ECHEQ del extracto ↔ cheque emitido (Paso B). dryRun=1 → solo simula (rollback).
+  app.post("/api/galicia/reconciliar-cheques", requireAuth, async (req: any, res) => {
+    try {
+      const dryRun = req.query.dryRun === "1" || req.body?.dryRun === "1";
+      const result = await storage.reconcileChequesEmitidos({ dryRun });
+      return res.json({ ok: true, dryRun, ...result });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   app.get("/api/bank-categories", requireAuth, async (_req, res) => {
     try {
       return res.json(await storage.getBankCategories());
