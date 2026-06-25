@@ -3193,6 +3193,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // Movimientos de Galicia para la vista de Banco (B1, solo lectura) — misma forma que MP.
+  app.get("/api/galicia/movements", requireAuth, async (req, res) => {
+    try {
+      const { from, to } = req.query as Record<string, string | undefined>;
+      const results = await storage.getGaliciaMovementsForView(from, to);
+      return res.json({ results });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // Cruce ECHEQ del extracto ↔ cheque emitido (Paso B). dryRun=1 → solo simula (rollback).
   app.post("/api/galicia/reconciliar-cheques", requireAuth, async (req: any, res) => {
     try {

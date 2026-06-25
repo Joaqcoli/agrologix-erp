@@ -5529,6 +5529,53 @@ export const storage = {
     return run(db);
   },
 
+  // ─── Lector Galicia: movimientos para la vista de Banco (B1, solo lectura) ─────
+  // Devuelve cada movimiento de galicia_movements en la MISMA forma que un MpMovement
+  // (la vista de /bancos los renderiza con el mismo componente). categoryId se resuelve
+  // desde el nombre de category vía bank_categories para que el CategoryPicker lo muestre.
+  async getGaliciaMovementsForView(from?: string, to?: string): Promise<any[]> {
+    const conds: string[] = [];
+    if (from) conds.push(`g.fecha >= '${from.replace(/'/g, "")}'`);
+    if (to)   conds.push(`g.fecha <= '${to.replace(/'/g, "")}'`);
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const rows = (await db.execute(drizzleSql`
+      SELECT g.id, g.fecha, g.descripcion, g.debito::float AS debito, g.credito::float AS credito,
+             g.concepto, g.comprobante, g.leyendas, g.tipo_movimiento, g.category,
+             g.categoria_auto, g.ya_contabilizado, g.asignacion_cc,
+             bc.id AS category_id
+      FROM galicia_movements g
+      LEFT JOIN bank_categories bc ON lower(bc.name) = lower(g.category)
+      ${drizzleSql.raw(where)}
+      ORDER BY g.fecha DESC, g.id DESC
+    `)).rows as any[];
+
+    return rows.map((r) => {
+      const isOutgoing = r.debito != null;
+      const gross = Math.abs(parseFloat(String(r.debito ?? r.credito ?? 0)));
+      return {
+        id: r.id,                                   // "galicia:..."
+        date_created: `${r.fecha}T00:00:00-03:00`,  // sin hora real en el extracto
+        type: r.tipo_movimiento ?? r.concepto ?? "transferencia",
+        description: r.descripcion || r.concepto || "",
+        status: "approved",
+        isOutgoing,
+        grossAmount: gross,
+        feeAmount: 0,
+        netAmount: gross,
+        total: gross,
+        displayName: r.descripcion || r.leyendas || r.concepto || null,
+        categoryId: r.category_id ?? null,          // resuelto desde el nombre
+        categoryName: r.category ?? null,           // nombre crudo (por si no está en el catálogo)
+        // campos propios de Galicia (para badges/futuro)
+        comprobante: r.comprobante ?? null,
+        yaContabilizado: r.ya_contabilizado ?? false,
+        asignacionCc: r.asignacion_cc ?? null,
+        categoriaAuto: r.categoria_auto ?? true,
+        source: "galicia",
+      };
+    });
+  },
+
   // ─── Cruce ECHEQ (extracto Galicia) ↔ cheque emitido (Paso B) ─────────────────
   // Match estricto: número normalizado (campo formal cheques.numero O extracción del
   // texto de notas/concepto) Y monto exacto. Si número coincide pero monto NO → NO
