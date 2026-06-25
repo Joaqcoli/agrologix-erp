@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Landmark, TrendingUp, Percent, ArrowDownLeft, ArrowUpRight, User, Building2, UserCheck, Pencil, RefreshCw, Columns2, Rows2 } from "lucide-react";
+import { Landmark, TrendingUp, Percent, ArrowDownLeft, ArrowUpRight, User, Building2, UserCheck, Pencil, RefreshCw, Columns2, Rows2, Upload } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import {
   BankSection, fmt, fmtDateLong, toArgDate,
@@ -243,6 +243,50 @@ export default function BancosPage() {
       setEditCatName("");
     },
   });
+
+  // B-upload: subir extracto de Galicia (CSV/XLSX) al endpoint existente
+  const galiciaFileRef = useRef<HTMLInputElement>(null);
+  type GaliciaUploadState =
+    | { kind: "ok"; nuevos: number; duplicados: number; sinCategoria: number; total: number }
+    | { kind: "empty" }
+    | { kind: "error"; msg: string }
+    | null;
+  const [galiciaUpload, setGaliciaUpload] = useState<GaliciaUploadState>(null);
+
+  const galiciaUploadMut = useMutation({
+    mutationFn: async (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch("/api/galicia/upload", { method: "POST", body: fd, credentials: "include" });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || "No se pudo subir el archivo");
+      return data;
+    },
+    onSuccess: (data: any) => {
+      qc.invalidateQueries({ queryKey: ["/api/galicia/movements"] });
+      qc.invalidateQueries({ queryKey: ["/api/caja/summary"] });
+      if ((data.totalParseados ?? 0) === 0) {
+        setGaliciaUpload({ kind: "empty" });
+      } else {
+        setGaliciaUpload({
+          kind: "ok",
+          nuevos: data.insertadosGalicia ?? 0,
+          duplicados: data.duplicados ?? 0,
+          sinCategoria: data.sinCategoria ?? 0,
+          total: data.totalParseados ?? 0,
+        });
+      }
+    },
+    onError: (e: Error) => setGaliciaUpload({ kind: "error", msg: e.message }),
+  });
+
+  const onGaliciaFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";          // permite re-subir el mismo archivo
+    if (!file) return;
+    setGaliciaUpload(null);
+    galiciaUploadMut.mutate(file);
+  };
 
   // B4: categorizar un movimiento de Galicia (persiste categoría + re-reconcilia caja; NO crea reglas)
   const galiciaSetCategoryMut = useMutation({
@@ -492,6 +536,46 @@ export default function BancosPage() {
     <BankSection
       source="galicia"
       title="Galicia"
+      headerAction={
+        <>
+          <input
+            ref={galiciaFileRef}
+            type="file"
+            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            className="hidden"
+            onChange={onGaliciaFilePicked}
+          />
+          <Button variant="outline" size="sm" onClick={() => galiciaFileRef.current?.click()} disabled={galiciaUploadMut.isPending}>
+            <Upload className={`h-4 w-4 mr-1 ${galiciaUploadMut.isPending ? "animate-pulse" : ""}`} />
+            {galiciaUploadMut.isPending ? "Subiendo…" : "Subir extracto"}
+          </Button>
+        </>
+      }
+      banner={galiciaUpload && (
+        galiciaUpload.kind === "ok" ? (
+          <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2.5 text-xs space-y-1">
+            <p className="font-medium text-green-800">✓ Extracto procesado ({galiciaUpload.total} movimientos leídos)</p>
+            <ul className="text-green-900/80 space-y-0.5">
+              <li><b>{galiciaUpload.nuevos}</b> nuevos cargados</li>
+              <li><b>{galiciaUpload.duplicados}</b> ya existían — ignorados por el dedup (es correcto, no se perdió nada)</li>
+              <li className={galiciaUpload.sinCategoria > 0 ? "text-amber-700" : ""}>
+                <b>{galiciaUpload.sinCategoria}</b> sin categoría{galiciaUpload.sinCategoria > 0 ? " — categorizalos desde la lista (filtro \"Sin categorizar\")" : ""}
+              </li>
+            </ul>
+            <button onClick={() => setGaliciaUpload(null)} className="text-green-700/60 hover:text-green-700 underline">cerrar</button>
+          </div>
+        ) : galiciaUpload.kind === "empty" ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+            No se reconoció ningún movimiento. ¿Es un extracto de Galicia? (CSV con columnas Fecha, Débitos, Créditos, Concepto…).
+            <button onClick={() => setGaliciaUpload(null)} className="ml-2 underline">cerrar</button>
+          </div>
+        ) : (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-xs text-destructive">
+            Error al subir: {galiciaUpload.msg}
+            <button onClick={() => setGaliciaUpload(null)} className="ml-2 underline">cerrar</button>
+          </div>
+        )
+      )}
       queryKeyBase="/api/galicia/movements"
       fetchMovements={({ from, to }) => fetchGaliciaMovements({ from, to })}
       errorLabel="Galicia"
