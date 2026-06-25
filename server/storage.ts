@@ -82,6 +82,24 @@ const VENDEDOR_HIST: Record<string, Record<string, { facturacion: number; comisi
   },
 };
 
+// Match leyenda del extracto Galicia → socio, por PRIMER nombre del socio dentro de la leyenda.
+// Normaliza acentos (la leyenda dice "JOAQUIN" sin tilde; el socio es "Joaquín Coli").
+// Ej: "FEDERICO EMANUEL VIDUHEIRO | ..." → socio cuyo primer nombre normalizado es "FEDERICO".
+function _normName(s: string): string {
+  return String(s ?? "").toUpperCase()
+    .replace(/[ÁÀÄÂÃ]/g, "A").replace(/[ÉÈËÊ]/g, "E").replace(/[ÍÌÏÎ]/g, "I")
+    .replace(/[ÓÒÖÔÕ]/g, "O").replace(/[ÚÙÜÛ]/g, "U");
+}
+export function matchSocioByLeyenda(leyenda: string | null | undefined, socios: { id: number; nombre: string }[]): number | null {
+  const L = _normName(leyenda ?? "");
+  if (!L) return null;
+  for (const s of socios) {
+    const first = _normName(s.nombre).split(/\s+/)[0] ?? "";
+    if (first.length >= 3 && L.includes(first)) return s.id;
+  }
+  return null;
+}
+
 export const storage = {
   // ─── Auth ─────────────────────────────────────────────────────────────────
   async getUserByEmail(email: string): Promise<User | undefined> {
@@ -5465,6 +5483,8 @@ export const storage = {
       // Cuenta Efectivo (única que lleva saldo): los "Retiro de efectivo" suman a su saldo
       const efeRow = (await exec.execute(drizzleSql`SELECT id FROM cuentas_financieras WHERE tipo = 'efectivo' LIMIT 1`)).rows[0] as any;
       const efectivoId: number | null = efeRow?.id ?? null;
+      // Socios (para auto-asignar retiros por la leyenda del extracto)
+      const socios = (await exec.execute(drizzleSql`SELECT id, nombre FROM socios WHERE activo = true`)).rows as { id: number; nombre: string }[];
 
       let insertadosGalicia = 0, duplicados = 0, reconciliadosCaja = 0, sinCategoria = 0, cobrosPendientes = 0, yaContabilizados = 0, retirosEfectivo = 0;
       const porCat: Record<string, { n: number; total: number }> = {};
@@ -5509,6 +5529,21 @@ export const storage = {
               VALUES (${efectivoId}, ${m.fecha}::timestamp, 'ingreso', ${m.monto.toFixed(2)}, ${"Extracción Galicia → Efectivo"}, 'galicia_efectivo', ${sourceId})
             `);
             retirosEfectivo++;
+          }
+
+          // 4) AUTOMÁTICO: "Retiro" con leyenda que nombra a un socio → crea su fila en retiros
+          //    (suma en la card del socio). Si la leyenda no nombra socio → no asigna (queda sin socio).
+          //    Idempotente: solo corre en movimientos nuevos (los duplicados hacen continue arriba) +
+          //    ON CONFLICT (movimiento_ref) DO NOTHING como segunda barrera.
+          if (category === "Retiro") {
+            const socioId = matchSocioByLeyenda(m.leyendas, socios);
+            if (socioId != null) {
+              await exec.execute(drizzleSql`
+                INSERT INTO retiros (socio_id, monto, fecha, origen, movimiento_ref, notas)
+                VALUES (${socioId}, ${m.monto.toFixed(2)}, ${m.fecha}, 'movimiento', ${sourceId}, ${m.leyendas || m.descripcion || null})
+                ON CONFLICT (movimiento_ref) WHERE movimiento_ref IS NOT NULL DO NOTHING
+              `);
+            }
           }
         }
       }
@@ -5581,13 +5616,13 @@ export const storage = {
   // y re-reconcilia el caja_movement (source_id galicia:...). NO toca galicia_rules
   // (sin aprendizaje automático — decisión del usuario). Idempotente: el caja_movement
   // se rehace con DELETE+INSERT, así A→B→A nunca duplica (siempre 0/1 fila por source_id).
-  async setGaliciaCategory(galiciaId: string, categoryName: string | null, opts?: { dryRun?: boolean }): Promise<any> {
+  async setGaliciaCategory(galiciaId: string, categoryName: string | null, opts?: { dryRun?: boolean; socioId?: number | null }): Promise<any> {
     const sourceId = `galicia:${galiciaId}`;
 
     // Aplica el cambio de categoría + re-reconciliación. Devuelve datos básicos.
-    const apply = async (exec: any, name: string | null) => {
+    const apply = async (exec: any, name: string | null, socioIdArg?: number | null) => {
       const rows = (await exec.execute(drizzleSql`
-        SELECT fecha, descripcion, concepto, debito::float AS debito, credito::float AS credito, category
+        SELECT fecha, descripcion, concepto, leyendas, debito::float AS debito, credito::float AS credito, category
         FROM galicia_movements WHERE id = ${galiciaId}`)).rows as any[];
       if (rows.length === 0) throw new Error("Movimiento Galicia no encontrado");
       const m = rows[0];
@@ -5617,15 +5652,32 @@ export const storage = {
             VALUES (${efe.id}, ${m.fecha}::timestamp, 'ingreso', ${monto.toFixed(2)}, ${"Extracción Galicia → Efectivo"}, 'galicia_efectivo', ${sourceId})`);
         }
       }
-      return { sourceId, category: name, type: direccion, amount: monto, originalCategory: m.category };
+
+      // 4) MANUAL: "Retiro" del socio → fila en retiros (espejo de reconcileMpCajaMovement).
+      //    Conserva el socio previo si no se pasa socioId (idempotente al re-categorizar).
+      //    Si la categoría se va de "Retiro", la fila se borra (DELETE de abajo) y no se reinserta.
+      let socio = socioIdArg ?? null;
+      if (socio == null && name === "Retiro") {
+        const prev = (await exec.execute(drizzleSql`SELECT socio_id FROM retiros WHERE movimiento_ref = ${sourceId} LIMIT 1`)).rows[0] as any;
+        socio = prev?.socio_id ?? null;
+      }
+      await exec.execute(drizzleSql`DELETE FROM retiros WHERE movimiento_ref = ${sourceId}`);
+      if (name === "Retiro" && socio != null) {
+        await exec.execute(drizzleSql`
+          INSERT INTO retiros (socio_id, monto, fecha, origen, movimiento_ref, notas)
+          VALUES (${socio}, ${monto.toFixed(2)}, ${m.fecha}, 'movimiento', ${sourceId}, ${m.leyendas || desc || null})
+          ON CONFLICT (movimiento_ref) WHERE movimiento_ref IS NOT NULL DO NOTHING`);
+      }
+      return { sourceId, category: name, type: direccion, amount: monto, socioId: socio, originalCategory: m.category };
     };
 
-    // Snapshot para verificación (categoría + filas de caja del source + conteo de reglas)
+    // Snapshot para verificación (categoría + filas de caja + retiro del source + conteo de reglas)
     const snapshot = async (exec: any) => {
       const g = (await exec.execute(drizzleSql`SELECT category, categoria_auto FROM galicia_movements WHERE id = ${galiciaId}`)).rows[0];
       const caja = (await exec.execute(drizzleSql`SELECT id, category FROM caja_movements WHERE source_id = ${sourceId} ORDER BY id`)).rows;
+      const ret = (await exec.execute(drizzleSql`SELECT id, socio_id, monto::float AS monto FROM retiros WHERE movimiento_ref = ${sourceId}`)).rows;
       const rules = (await exec.execute(drizzleSql`SELECT count(*)::int AS n FROM galicia_rules`)).rows[0];
-      return { galiciaCategory: g?.category ?? null, categoriaAuto: g?.categoria_auto ?? null, cajaRows: caja, cajaCount: caja.length, rulesCount: rules?.n ?? 0 };
+      return { galiciaCategory: g?.category ?? null, categoriaAuto: g?.categoria_auto ?? null, cajaRows: caja, cajaCount: caja.length, retiroRows: ret, retiroCount: ret.length, rulesCount: rules?.n ?? 0 };
     };
 
     if (opts?.dryRun) {
@@ -5634,7 +5686,7 @@ export const storage = {
       try {
         await db.transaction(async (tx) => {
           const before = await snapshot(tx);
-          await apply(tx, categoryName);
+          await apply(tx, categoryName, opts.socioId);
           const after = await snapshot(tx);
           await apply(tx, before.galiciaCategory);   // round-trip a la categoría original
           const roundtrip = await snapshot(tx);
@@ -5645,7 +5697,7 @@ export const storage = {
       return evidence;
     }
 
-    return apply(db, categoryName);
+    return apply(db, categoryName, opts?.socioId);
   },
 
   // ─── Cruce ECHEQ (extracto Galicia) ↔ cheque emitido (Paso B) ─────────────────

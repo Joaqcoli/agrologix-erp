@@ -3206,14 +3206,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // id va en el body (el id de Galicia tiene ':' y no es apto para path param).
   app.put("/api/galicia/movements/category", requireAuth, async (req, res) => {
     try {
-      const { id, categoryId, dryRun } = req.body as { id?: string; categoryId?: number | null; dryRun?: boolean };
+      const { id, categoryId, socioId, dryRun } = req.body as { id?: string; categoryId?: number | null; socioId?: number | null; dryRun?: boolean };
       if (!id) return res.status(400).json({ error: "id requerido" });
       let name: string | null = null;
       if (categoryId != null) {
         const cats = await storage.getBankCategories();
         name = (cats as any[]).find((c: any) => c.id === categoryId)?.name ?? null;
       }
-      const result = await storage.setGaliciaCategory(id, name, { dryRun: dryRun === true });
+      const result = await storage.setGaliciaCategory(id, name, { dryRun: dryRun === true, socioId: socioId ?? null });
       return res.json({ ok: true, dryRun: dryRun === true, ...result });
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });

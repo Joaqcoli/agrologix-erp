@@ -158,9 +158,12 @@ export default function BancosPage() {
     queryFn: () => fetch("/api/caja/socios", { credentials: "include" }).then(r => r.json()),
   });
 
-  const [retiroPrompt, setRetiroPrompt] = useState<{
-    mpId: string | number; categoryId: number; amount?: number; fee?: number; date?: string; isOutgoing?: boolean; description?: string;
-  } | null>(null);
+  // El diálogo "¿a qué socio?" se reusa para MP y Galicia (discriminado por source)
+  const [retiroPrompt, setRetiroPrompt] = useState<
+    | { source: "mp"; mpId: string | number; categoryId: number; amount?: number; fee?: number; date?: string; isOutgoing?: boolean; description?: string }
+    | { source: "galicia"; id: string; categoryId: number }
+    | null
+  >(null);
   const [retiroSocioId, setRetiroSocioId] = useState<number | null>(null);
 
   // Categoriza un movimiento MP; si es "Retiro" pide socio antes de guardar
@@ -176,10 +179,21 @@ export default function BancosPage() {
     };
     const catName = catId != null ? categories.find(c => c.id === catId)?.name : null;
     if (catName === "Retiro" && catId != null) {
-      setRetiroPrompt({ ...payload, categoryId: catId });
+      setRetiroPrompt({ source: "mp", ...payload, categoryId: catId });
       setRetiroSocioId(null);
     } else {
       setCategoryMut.mutate(payload);
+    }
+  };
+
+  // Categoriza un movimiento de Galicia; si es "Retiro" pide socio (mismo diálogo que MP)
+  const handleCategorizeGalicia = (m: MpMovement, catId: number | null) => {
+    const catName = catId != null ? categories.find(c => c.id === catId)?.name : null;
+    if (catName === "Retiro" && catId != null) {
+      setRetiroPrompt({ source: "galicia", id: String(m.id), categoryId: catId });
+      setRetiroSocioId(null);
+    } else {
+      galiciaSetCategoryMut.mutate({ id: m.id, categoryId: catId });
     }
   };
 
@@ -292,12 +306,14 @@ export default function BancosPage() {
   };
 
   // B4: categorizar un movimiento de Galicia (persiste categoría + re-reconcilia caja; NO crea reglas)
+  // socioId: solo para categoría "Retiro" → crea/actualiza la fila en retiros (card del socio).
   const galiciaSetCategoryMut = useMutation({
-    mutationFn: ({ id, categoryId }: { id: string | number; categoryId: number | null }) =>
-      apiRequest("PUT", "/api/galicia/movements/category", { id: String(id), categoryId }),
+    mutationFn: ({ id, categoryId, socioId }: { id: string | number; categoryId: number | null; socioId?: number | null }) =>
+      apiRequest("PUT", "/api/galicia/movements/category", { id: String(id), categoryId, socioId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/galicia/movements"] });
       qc.invalidateQueries({ queryKey: ["/api/caja/summary"] });
+      qc.invalidateQueries({ queryKey: ["/api/caja/retiros"] });
     },
   });
 
@@ -586,7 +602,7 @@ export default function BancosPage() {
       categories={categories}
       onAddCategory={() => { setPendingMovId(null); setNewCatOpen(true); }}
       onEditCategory={(cat) => { setEditCat(cat); setEditCatName(cat.name); setEditCatOpen(true); }}
-      onCategorize={(m, catId) => galiciaSetCategoryMut.mutate({ id: m.id, categoryId: catId })}
+      onCategorize={handleCategorizeGalicia}
       onAddNewForMov={() => { setPendingMovId(null); setNewCatOpen(true); }}
       renderName={galiciaRenderName}
       renderRowExtra={galiciaRenderRowExtra}
@@ -956,10 +972,15 @@ export default function BancosPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => { setRetiroPrompt(null); setRetiroSocioId(null); }}>Cancelar</Button>
             <Button
-              disabled={retiroSocioId == null || setCategoryMut.isPending}
+              disabled={retiroSocioId == null || setCategoryMut.isPending || galiciaSetCategoryMut.isPending}
               onClick={() => {
                 if (retiroPrompt == null || retiroSocioId == null) return;
-                setCategoryMut.mutate({ ...retiroPrompt, socioId: retiroSocioId });
+                if (retiroPrompt.source === "mp") {
+                  const { source, ...payload } = retiroPrompt;
+                  setCategoryMut.mutate({ ...payload, socioId: retiroSocioId });
+                } else {
+                  galiciaSetCategoryMut.mutate({ id: retiroPrompt.id, categoryId: retiroPrompt.categoryId, socioId: retiroSocioId });
+                }
                 setRetiroPrompt(null); setRetiroSocioId(null);
               }}
             >
