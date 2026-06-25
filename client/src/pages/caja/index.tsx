@@ -28,11 +28,15 @@ function normalizeCategory(cat: string): string {
   if (lower.includes("cobro") && lower.includes("client")) return "Cobros clientes";
   return cat;
 }
-// Categorías excluidas del gráfico de egresos por categoría (pagos a proveedores / mercadería)
+// Categorías excluidas del gráfico de egresos por categoría (no son gastos operativos reales)
 const EXCLUDE_FROM_PIE = (cat: string) => {
   const l = cat.toLowerCase();
-  // proveedor/mercadería + "banco propio" (pase de dinero entre cuentas, no es egreso real)
-  return l.includes("proveedor") || l.includes("mercader") || l.includes("banco propio");
+  // proveedor/mercadería + transferencias internas / no-egresos:
+  //  - "banco propio": pase de dinero entre cuentas propias
+  //  - "retiro de efectivo": transferencia interna Galicia → caja Efectivo
+  //  - "cheque rechazado": cheque que se acreditó y rebotó (neto $0)
+  return l.includes("proveedor") || l.includes("mercader") || l.includes("banco propio")
+    || l.includes("retiro de efectivo") || l.includes("cheque rechazado");
 };
 const pad = (n: number) => String(n).padStart(2, "0");
 const MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
