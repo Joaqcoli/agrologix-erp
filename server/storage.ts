@@ -5495,6 +5495,7 @@ export const storage = {
     reconciliadosCaja: number; sinCategoria: number; retirosEfectivo: number;
     cobrosPendientes: number; yaContabilizados: number;
     porCategoria: { category: string; n: number; total: number }[];
+    cruceCheques: any;   // resultado del cruce ECHEQ↔cheque emitido (auto al cargar)
   }> {
     const { parseGaliciaExtracto, classifyGaliciaMovement, tratamientoCobro, GALICIA_NEW_CATEGORIES } =
       await import("./galicia-parser");
@@ -5580,9 +5581,14 @@ export const storage = {
         }
       }
 
+      // Cruce de cheques AUTOMÁTICO: tras reconciliar los movimientos, ejecutar el mismo cruce
+      // que el endpoint manual, en el MISMO exec (así participa del rollback en dryRun).
+      // Idempotente: los cheques ya cobrados no se re-tocan → no baja cheques emitidos dos veces.
+      const cruceCheques = await this._reconcileChequesEmitidosTx(exec);
+
       const porCategoria = Object.entries(porCat).map(([category, v]) => ({ category, n: v.n, total: Math.round(v.total) }))
         .sort((a, b) => b.total - a.total);
-      return { totalParseados: movs.length, insertadosGalicia, duplicados, reconciliadosCaja, sinCategoria, cobrosPendientes, yaContabilizados, retirosEfectivo, porCategoria };
+      return { totalParseados: movs.length, insertadosGalicia, duplicados, reconciliadosCaja, sinCategoria, cobrosPendientes, yaContabilizados, retirosEfectivo, porCategoria, cruceCheques };
     };
 
     if (opts?.dryRun) {
@@ -5809,6 +5815,67 @@ export const storage = {
   // concilia, lo marca como "dudoso" para revisar a mano. Por cada match en_cartera:
   // cheque → cobrado, obligación → pagada. tipo=proveedor → NO suma gasto. Idempotente:
   // los ya cobrados no se vuelven a tocar (solo se reportan como vínculo).
+  // Núcleo del cruce ECHEQ↔cheque emitido — reutilizable con cualquier exec (db o tx).
+  // Lo llaman: reconcileChequesEmitidos (endpoint manual) Y importGaliciaExtracto (auto al cargar).
+  // Idempotente: solo concilia cheques en_cartera que matchean (número+monto); los ya cobrados
+  // no se re-tocan → ejecutar tras cada carga no baja cheques emitidos dos veces.
+  async _reconcileChequesEmitidosTx(exec: any): Promise<any> {
+    const norm = (s: any): string | null => { const d = String(s ?? "").replace(/\D/g, "").replace(/^0+/, ""); return d || null; };
+    const numDe = (c: any): { num: string | null; fuente: string } => {
+      if (c.numero) { const n = norm(c.numero); if (n) return { num: n, fuente: "campo formal" }; }
+      const m = String(c.notas ?? "").match(/N[ºo°]\s*0*([0-9]+)/i) || String(c.obl_concepto ?? "").match(/N[ºo°]\s*0*([0-9]+)/i);
+      if (m) { const n = norm(m[1]); if (n) return { num: n, fuente: "texto (notas/concepto)" }; }
+      return { num: null, fuente: "sin número" };
+    };
+
+    const echeqs = (await exec.execute(drizzleSql`
+      SELECT comprobante, debito::float AS monto FROM galicia_movements
+      WHERE concepto LIKE '%ECHEQ 48 HS. NRO%' AND debito IS NOT NULL ORDER BY fecha`)).rows as any[];
+    const cheques = (await exec.execute(drizzleSql`
+      SELECT c.id, c.numero, c.monto::float AS monto, c.estado, c.contraparte, c.obligacion_id, c.notas,
+             o.concepto AS obl_concepto, o.tipo AS obl_tipo, o.estado AS obl_estado
+      FROM cheques c LEFT JOIN obligaciones o ON o.id = c.obligacion_id
+      WHERE c.tipo = 'emitido'`)).rows as any[];
+
+    const totalEmitidoAntes = cheques.filter(c => c.estado === "en_cartera").reduce((s, c) => s + c.monto, 0);
+
+    const byNum: Record<string, any[]> = {};
+    for (const c of cheques) { const { num, fuente } = numDe(c); c._num = num; c._fuente = fuente; if (num) (byNum[num] ??= []).push(c); }
+
+    const used = new Set<number>();
+    let conciliados = 0, yaCobrados = 0, baja = 0, sumanGasto = 0;
+    const sinMatch: any[] = [], dudosos: any[] = [], detalle: any[] = [];
+
+    for (const e of echeqs) {
+      const n = norm(e.comprobante);
+      const cands = (n ? (byNum[n] ?? []) : []).filter(c => !used.has(c.id));
+      const exact = cands.find(c => Math.abs(c.monto - e.monto) < 0.5);
+      if (!exact) {
+        if (cands.length > 0) dudosos.push({ numero: n!, montoEcheq: e.monto, montoCheque: cands[0].monto, chequeId: cands[0].id });
+        else sinMatch.push({ numero: n ?? String(e.comprobante), monto: e.monto });
+        continue;
+      }
+      used.add(exact.id);
+      if (exact.obl_tipo && exact.obl_tipo !== "proveedor") sumanGasto++;
+      if (exact.estado === "en_cartera") {
+        conciliados++; baja += exact.monto;
+        await exec.execute(drizzleSql`UPDATE cheques SET estado = 'cobrado' WHERE id = ${exact.id}`);
+        if (exact.obligacion_id != null) {
+          await exec.execute(drizzleSql`UPDATE obligaciones SET estado = 'pagado', pagado_at = now() WHERE id = ${exact.obligacion_id} AND estado <> 'pagado'`);
+        }
+      } else { yaCobrados++; }
+      detalle.push({ numero: n!, monto: e.monto, chequeId: exact.id, contraparte: String(exact.contraparte).trim(),
+        estadoAntes: exact.estado, oblTipo: exact.obl_tipo ?? null, fuenteNumero: exact._fuente,
+        accion: exact.estado === "en_cartera" ? "conciliar (cobrado + obligación pagada)" : "ya cobrado (solo vínculo)" });
+    }
+
+    return {
+      echeqsExtracto: echeqs.length, matches: conciliados + yaCobrados, conciliados, yaCobrados,
+      totalEmitidoAntes: Math.round(totalEmitidoAntes), totalEmitidoDespues: Math.round(totalEmitidoAntes - baja),
+      baja: Math.round(baja), sumanGasto, sinMatch, dudosos, detalle,
+    };
+  },
+
   async reconcileChequesEmitidos(opts?: { dryRun?: boolean }): Promise<{
     echeqsExtracto: number; matches: number; conciliados: number; yaCobrados: number;
     totalEmitidoAntes: number; totalEmitidoDespues: number; baja: number; sumanGasto: number;
@@ -5817,72 +5884,13 @@ export const storage = {
     detalle: { numero: string; monto: number; chequeId: number; contraparte: string;
       estadoAntes: string; oblTipo: string | null; accion: string; fuenteNumero: string }[];
   }> {
-    // Normaliza: solo dígitos, sin ceros a la izquierda
-    const norm = (s: any): string | null => { const d = String(s ?? "").replace(/\D/g, "").replace(/^0+/, ""); return d || null; };
-    // Número de un cheque: campo formal primero, si no extrae del texto "Nº00123"
-    const numDe = (c: any): { num: string | null; fuente: string } => {
-      if (c.numero) { const n = norm(c.numero); if (n) return { num: n, fuente: "campo formal" }; }
-      const m = String(c.notas ?? "").match(/N[ºo°]\s*0*([0-9]+)/i) || String(c.obl_concepto ?? "").match(/N[ºo°]\s*0*([0-9]+)/i);
-      if (m) { const n = norm(m[1]); if (n) return { num: n, fuente: "texto (notas/concepto)" }; }
-      return { num: null, fuente: "sin número" };
-    };
-
-    const run = async (exec: any) => {
-      const echeqs = (await exec.execute(drizzleSql`
-        SELECT comprobante, debito::float AS monto FROM galicia_movements
-        WHERE concepto LIKE '%ECHEQ 48 HS. NRO%' AND debito IS NOT NULL ORDER BY fecha`)).rows as any[];
-      const cheques = (await exec.execute(drizzleSql`
-        SELECT c.id, c.numero, c.monto::float AS monto, c.estado, c.contraparte, c.obligacion_id, c.notas,
-               o.concepto AS obl_concepto, o.tipo AS obl_tipo, o.estado AS obl_estado
-        FROM cheques c LEFT JOIN obligaciones o ON o.id = c.obligacion_id
-        WHERE c.tipo = 'emitido'`)).rows as any[];
-
-      const totalEmitidoAntes = cheques.filter(c => c.estado === "en_cartera").reduce((s, c) => s + c.monto, 0);
-
-      const byNum: Record<string, any[]> = {};
-      for (const c of cheques) { const { num, fuente } = numDe(c); c._num = num; c._fuente = fuente; if (num) (byNum[num] ??= []).push(c); }
-
-      const used = new Set<number>();
-      let conciliados = 0, yaCobrados = 0, baja = 0, sumanGasto = 0;
-      const sinMatch: any[] = [], dudosos: any[] = [], detalle: any[] = [];
-
-      for (const e of echeqs) {
-        const n = norm(e.comprobante);
-        const cands = (n ? (byNum[n] ?? []) : []).filter(c => !used.has(c.id));
-        const exact = cands.find(c => Math.abs(c.monto - e.monto) < 0.5);
-        if (!exact) {
-          if (cands.length > 0) dudosos.push({ numero: n!, montoEcheq: e.monto, montoCheque: cands[0].monto, chequeId: cands[0].id });
-          else sinMatch.push({ numero: n ?? String(e.comprobante), monto: e.monto });
-          continue;
-        }
-        used.add(exact.id);
-        if (exact.obl_tipo && exact.obl_tipo !== "proveedor") sumanGasto++;
-        if (exact.estado === "en_cartera") {
-          conciliados++; baja += exact.monto;
-          await exec.execute(drizzleSql`UPDATE cheques SET estado = 'cobrado' WHERE id = ${exact.id}`);
-          if (exact.obligacion_id != null) {
-            await exec.execute(drizzleSql`UPDATE obligaciones SET estado = 'pagado', pagado_at = now() WHERE id = ${exact.obligacion_id} AND estado <> 'pagado'`);
-          }
-        } else { yaCobrados++; }
-        detalle.push({ numero: n!, monto: e.monto, chequeId: exact.id, contraparte: String(exact.contraparte).trim(),
-          estadoAntes: exact.estado, oblTipo: exact.obl_tipo ?? null, fuenteNumero: exact._fuente,
-          accion: exact.estado === "en_cartera" ? "conciliar (cobrado + obligación pagada)" : "ya cobrado (solo vínculo)" });
-      }
-
-      return {
-        echeqsExtracto: echeqs.length, matches: conciliados + yaCobrados, conciliados, yaCobrados,
-        totalEmitidoAntes: Math.round(totalEmitidoAntes), totalEmitidoDespues: Math.round(totalEmitidoAntes - baja),
-        baja: Math.round(baja), sumanGasto, sinMatch, dudosos, detalle,
-      };
-    };
-
     if (opts?.dryRun) {
       let result: any = null;
-      try { await db.transaction(async (tx) => { result = await run(tx); throw new Error("__DRYRUN_ROLLBACK__"); }); }
+      try { await db.transaction(async (tx) => { result = await this._reconcileChequesEmitidosTx(tx); throw new Error("__DRYRUN_ROLLBACK__"); }); }
       catch (e: any) { if (e.message !== "__DRYRUN_ROLLBACK__") throw e; }
       return result;
     }
-    return run(db);
+    return this._reconcileChequesEmitidosTx(db);
   },
 
   // ─── MP Movement Overrides ────────────────────────────────────────────────────

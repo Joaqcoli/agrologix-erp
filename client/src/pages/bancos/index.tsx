@@ -269,7 +269,7 @@ export default function BancosPage() {
   // B-upload: subir extracto de Galicia (CSV/XLSX) al endpoint existente
   const galiciaFileRef = useRef<HTMLInputElement>(null);
   type GaliciaUploadState =
-    | { kind: "ok"; nuevos: number; duplicados: number; sinCategoria: number; total: number }
+    | { kind: "ok"; nuevos: number; duplicados: number; sinCategoria: number; total: number; chequesConciliados: number; chequesBaja: number; chequesEmitidosDespues: number }
     | { kind: "empty" }
     | { kind: "error"; msg: string }
     | null;
@@ -287,15 +287,20 @@ export default function BancosPage() {
     onSuccess: (data: any) => {
       qc.invalidateQueries({ queryKey: ["/api/galicia/movements"] });
       qc.invalidateQueries({ queryKey: ["/api/caja/summary"] });
+      qc.invalidateQueries({ queryKey: ["/api/caja/cheques"] });  // el cruce pudo cobrar cheques
       if ((data.totalParseados ?? 0) === 0) {
         setGaliciaUpload({ kind: "empty" });
       } else {
+        const cc = data.cruceCheques ?? {};
         setGaliciaUpload({
           kind: "ok",
           nuevos: data.insertadosGalicia ?? 0,
           duplicados: data.duplicados ?? 0,
           sinCategoria: data.sinCategoria ?? 0,
           total: data.totalParseados ?? 0,
+          chequesConciliados: cc.conciliados ?? 0,
+          chequesBaja: cc.baja ?? 0,
+          chequesEmitidosDespues: cc.totalEmitidoDespues ?? 0,
         });
       }
     },
@@ -637,6 +642,13 @@ export default function BancosPage() {
               <li><b>{galiciaUpload.duplicados}</b> ya existían — ignorados por el dedup (es correcto, no se perdió nada)</li>
               <li className={galiciaUpload.sinCategoria > 0 ? "text-amber-700" : ""}>
                 <b>{galiciaUpload.sinCategoria}</b> sin categoría{galiciaUpload.sinCategoria > 0 ? " — categorizalos desde la lista (filtro \"Sin categorizar\")" : ""}
+              </li>
+              <li>
+                {galiciaUpload.chequesConciliados > 0 ? (
+                  <><b>{galiciaUpload.chequesConciliados}</b> cheque{galiciaUpload.chequesConciliados !== 1 ? "s" : ""} conciliado{galiciaUpload.chequesConciliados !== 1 ? "s" : ""} — cheques emitidos bajó ${galiciaUpload.chequesBaja.toLocaleString("es-AR")} (queda ${galiciaUpload.chequesEmitidosDespues.toLocaleString("es-AR")})</>
+                ) : (
+                  <span className="text-green-900/60">0 cheques nuevos para conciliar (los ya cobrados no se re-tocan)</span>
+                )}
               </li>
             </ul>
             <button onClick={() => setGaliciaUpload(null)} className="text-green-700/60 hover:text-green-700 underline">cerrar</button>
