@@ -173,6 +173,7 @@ const METHOD_CONFIG: Record<MethodKey, { label: string; icon: React.ReactNode; c
 type Cheque = {
   id: number;
   tipo: "recibido" | "emitido";
+  numero: string | null;
   monto: number;
   fecha_cobro: string;
   estado: "en_cartera" | "depositado" | "endosado" | "cobrado";
@@ -274,7 +275,7 @@ export default function CajaPage() {
   // Editar / agregar cheque en cartera
   const [editChequeOpen, setEditChequeOpen] = useState(false);
   const [addChequeOpen, setAddChequeOpen] = useState(false);
-  const [chequeForm, setChequeForm] = useState({ monto: "", fechaCobro: "", contraparte: "" });
+  const [chequeForm, setChequeForm] = useState({ monto: "", fechaCobro: "", contraparte: "", numero: "" });
 
   // Obligaciones
   const [oblDialogOpen, setOblDialogOpen] = useState(false);
@@ -508,16 +509,16 @@ export default function CajaPage() {
   };
 
   const editChequeMut = useMutation({
-    mutationFn: ({ id, monto, fechaCobro, contraparte }: { id: number; monto: number; fechaCobro: string; contraparte: string }) =>
-      apiRequest("PATCH", `/api/caja/cheques/${id}`, { accion: "editar", monto, fechaCobro, contraparte }),
+    mutationFn: ({ id, monto, fechaCobro, contraparte, numero }: { id: number; monto: number; fechaCobro: string; contraparte: string; numero?: string }) =>
+      apiRequest("PATCH", `/api/caja/cheques/${id}`, { accion: "editar", monto, fechaCobro, contraparte, numero }),
     onSuccess: () => { invalidateCheques(); setEditChequeOpen(false); setActiveCheque(null); },
     onError: (e: any) => toast({ title: "Error al editar", description: e.message, variant: "destructive" }),
   });
 
   const addChequeMut = useMutation({
-    mutationFn: (body: { monto: number; fechaCobro: string; contraparte: string }) =>
+    mutationFn: (body: { monto: number; fechaCobro: string; contraparte: string; numero?: string }) =>
       apiRequest("POST", `/api/caja/cheques`, body),
-    onSuccess: () => { invalidateCheques(); setAddChequeOpen(false); setChequeForm({ monto: "", fechaCobro: "", contraparte: "" }); },
+    onSuccess: () => { invalidateCheques(); setAddChequeOpen(false); setChequeForm({ monto: "", fechaCobro: "", contraparte: "", numero: "" }); },
     onError: (e: any) => toast({ title: "Error al agregar", description: e.message, variant: "destructive" }),
   });
 
@@ -1372,7 +1373,7 @@ export default function CajaPage() {
               Total: {fmt(chequesEnCartera.reduce((s, c) => s + c.monto, 0))}
             </span>
             <Button size="sm" variant="outline" className="h-7"
-              onClick={() => { setChequeForm({ monto: "", fechaCobro: "", contraparte: "" }); setAddChequeOpen(true); }}>
+              onClick={() => { setChequeForm({ monto: "", fechaCobro: "", contraparte: "", numero: "" }); setAddChequeOpen(true); }}>
               <Plus className="h-4 w-4 mr-1" /> Agregar
             </Button>
           </div>
@@ -1406,7 +1407,7 @@ export default function CajaPage() {
                             Endosar
                           </Button>
                           <Button size="icon" variant="ghost" className="h-7 w-7" title="Editar"
-                            onClick={() => { setActiveCheque(ch); setChequeForm({ monto: String(Math.round(ch.monto)), fechaCobro: ch.fecha_cobro.slice(0, 10), contraparte: ch.contraparte }); setEditChequeOpen(true); }}>
+                            onClick={() => { setActiveCheque(ch); setChequeForm({ monto: String(Math.round(ch.monto)), fechaCobro: ch.fecha_cobro.slice(0, 10), contraparte: ch.contraparte, numero: ch.numero ?? "" }); setEditChequeOpen(true); }}>
                             <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
                           </Button>
                           <Button size="icon" variant="ghost" className="h-7 w-7" title="Eliminar"
@@ -1434,6 +1435,10 @@ export default function CajaPage() {
                 <Input value={chequeForm.contraparte} onChange={e => setChequeForm(f => ({ ...f, contraparte: e.target.value }))} placeholder="Nombre del cliente/emisor" />
               </div>
               <div className="space-y-1">
+                <Label className="text-xs">Número de cheque</Label>
+                <Input inputMode="numeric" value={chequeForm.numero} onChange={e => setChequeForm(f => ({ ...f, numero: e.target.value }))} placeholder="Ej. 122" />
+              </div>
+              <div className="space-y-1">
                 <Label className="text-xs">Monto</Label>
                 <Input type="number" min="0" step="0.01" value={chequeForm.monto} onChange={e => setChequeForm(f => ({ ...f, monto: e.target.value }))} placeholder="0" />
               </div>
@@ -1447,7 +1452,7 @@ export default function CajaPage() {
               <Button
                 disabled={!chequeForm.contraparte || !parseFloat(chequeForm.monto) || !chequeForm.fechaCobro || addChequeMut.isPending || editChequeMut.isPending}
                 onClick={() => {
-                  const body = { monto: parseFloat(chequeForm.monto), fechaCobro: chequeForm.fechaCobro, contraparte: chequeForm.contraparte };
+                  const body = { monto: parseFloat(chequeForm.monto), fechaCobro: chequeForm.fechaCobro, contraparte: chequeForm.contraparte, numero: chequeForm.numero.trim() || undefined };
                   if (editChequeOpen && activeCheque) editChequeMut.mutate({ id: activeCheque.id, ...body });
                   else addChequeMut.mutate(body);
                 }}

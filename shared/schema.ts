@@ -567,6 +567,7 @@ export type Retiro = typeof retiros.$inferSelect;
 export const cheques = pgTable("cheques", {
   id: serial("id").primaryKey(),
   tipo: text("tipo").notNull(), // recibido | emitido
+  numero: text("numero"), // número de cheque (talonario / comprobante ECHEQ) — clave para cruzar con extracto Galicia
   monto: numeric("monto", { precision: 14, scale: 2 }).notNull(),
   fechaCobro: text("fecha_cobro").notNull(), // YYYY-MM-DD
   estado: text("estado").notNull().default("en_cartera"), // en_cartera | depositado | endosado | cobrado

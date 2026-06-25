@@ -5860,7 +5860,7 @@ export const storage = {
   // ─── Cheques ────────────────────────────────────────────────────────────────
   async getCheques(): Promise<any[]> {
     const rows = await db.execute(drizzleSql`
-      SELECT id, tipo, monto::float, fecha_cobro, estado, contraparte, supplier_id,
+      SELECT id, tipo, numero, monto::float, fecha_cobro, estado, contraparte, supplier_id,
              cuenta_destino_id, comision::float, obligacion_id, notas, created_at
       FROM cheques ORDER BY fecha_cobro ASC, id ASC
     `);
@@ -5871,16 +5871,16 @@ export const storage = {
     tipo: string; monto: number; fechaCobro: string; estado?: string;
     contraparte: string; supplierId?: number | null; cuentaDestinoId?: number | null;
     comision?: number; obligacionId?: number | null; notas?: string | null;
-    supplierPaymentId?: number | null;
+    supplierPaymentId?: number | null; numero?: string | null;
   }): Promise<any> {
     const row = await db.execute(drizzleSql`
-      INSERT INTO cheques (tipo, monto, fecha_cobro, estado, contraparte, supplier_id,
+      INSERT INTO cheques (tipo, numero, monto, fecha_cobro, estado, contraparte, supplier_id,
         cuenta_destino_id, comision, obligacion_id, notas, supplier_payment_id)
-      VALUES (${data.tipo}, ${data.monto}, ${data.fechaCobro},
+      VALUES (${data.tipo}, ${data.numero ?? null}, ${data.monto}, ${data.fechaCobro},
         ${data.estado ?? "en_cartera"}, ${data.contraparte}, ${data.supplierId ?? null},
         ${data.cuentaDestinoId ?? null}, ${data.comision ?? 0},
         ${data.obligacionId ?? null}, ${data.notas ?? null}, ${data.supplierPaymentId ?? null})
-      RETURNING id, tipo, monto::float, fecha_cobro, estado, contraparte, supplier_id,
+      RETURNING id, tipo, numero, monto::float, fecha_cobro, estado, contraparte, supplier_id,
         cuenta_destino_id, comision::float, obligacion_id, notas, created_at
     `);
     return (row.rows as any[])[0];
@@ -5888,7 +5888,7 @@ export const storage = {
 
   async patchCheque(id: number, data: {
     estado?: string; cuentaDestinoId?: number | null; comision?: number; contraparte?: string;
-    supplierPaymentId?: number | null; fechaCobro?: string; monto?: number;
+    supplierPaymentId?: number | null; fechaCobro?: string; monto?: number; numero?: string | null;
   }): Promise<any> {
     const row = await db.execute(drizzleSql`
       UPDATE cheques SET
@@ -5898,9 +5898,10 @@ export const storage = {
         contraparte = COALESCE(${data.contraparte ?? null}, contraparte),
         fecha_cobro = COALESCE(${data.fechaCobro ?? null}, fecha_cobro),
         monto = CASE WHEN ${data.monto !== undefined} THEN ${data.monto ?? 0}::numeric ELSE monto END,
+        numero = CASE WHEN ${data.numero !== undefined} THEN ${data.numero ?? null} ELSE numero END,
         supplier_payment_id = CASE WHEN ${data.supplierPaymentId !== undefined} THEN ${data.supplierPaymentId ?? null} ELSE supplier_payment_id END
       WHERE id = ${id}
-      RETURNING id, tipo, monto::float, fecha_cobro, estado, contraparte,
+      RETURNING id, tipo, numero, monto::float, fecha_cobro, estado, contraparte,
         cuenta_destino_id, comision::float, obligacion_id, notas, created_at
     `);
     return (row.rows as any[])[0];

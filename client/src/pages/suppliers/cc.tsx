@@ -199,6 +199,7 @@ function PaymentModal({
   const [cuentaId, setCuentaId] = useState<number | null>(null);
   const [chequeSubtipo, setChequeSubtipo] = useState<"cartera" | "propio">("cartera");
   const [chequeFechaCobro, setChequeFechaCobro] = useState("");
+  const [chequeNumero, setChequeNumero] = useState("");
   const [chequeCarteraId, setChequeCarteraId] = useState<number | null>(null);
 
   const { data: cuentas } = useQuery<any[]>({
@@ -237,6 +238,7 @@ function PaymentModal({
           tipo: chequeSubtipo,
           chequeCarteraId: chequeSubtipo === "cartera" ? chequeCarteraId : undefined,
           fechaCobro: chequeSubtipo === "propio" ? chequeFechaCobro : undefined,
+          numero: chequeSubtipo === "propio" ? (chequeNumero.trim() || undefined) : undefined,
         } : undefined,
       }),
     onSuccess: () => {
@@ -249,7 +251,7 @@ function PaymentModal({
       queryClient.invalidateQueries({ queryKey: ["/api/caja/obligaciones"] });
       toast({ title: "Pago registrado" });
       setAmount(""); setNotes(""); setMethod("EFECTIVO"); setSelectedPurchaseIds([]); setCuentaId(null);
-      setChequeSubtipo("cartera"); setChequeFechaCobro(""); setChequeCarteraId(null);
+      setChequeSubtipo("cartera"); setChequeFechaCobro(""); setChequeNumero(""); setChequeCarteraId(null);
       onClose();
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -341,7 +343,7 @@ function PaymentModal({
             <div className="space-y-2">
               <div>
                 <Label className="text-xs">Tipo de cheque</Label>
-                <Select value={chequeSubtipo} onValueChange={(v) => { setChequeSubtipo(v as "cartera" | "propio"); setChequeCarteraId(null); setChequeFechaCobro(""); }}>
+                <Select value={chequeSubtipo} onValueChange={(v) => { setChequeSubtipo(v as "cartera" | "propio"); setChequeCarteraId(null); setChequeFechaCobro(""); setChequeNumero(""); }}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="cartera">De cartera (cheque recibido de cliente)</SelectItem>
@@ -369,10 +371,18 @@ function PaymentModal({
                 </div>
               )}
               {chequeSubtipo === "propio" && (
-                <div>
-                  <Label className="text-xs">Fecha de cobro del cheque <span className="text-red-500">*</span></Label>
-                  <Input type="date" className="mt-1" value={chequeFechaCobro} onChange={e => setChequeFechaCobro(e.target.value)} />
-                  <p className="text-[10px] text-muted-foreground mt-1">Se crea una obligación en "Próximos vencimientos". Galicia se debita cuando la marcás pagada.</p>
+                <div className="space-y-2">
+                  <div>
+                    <Label className="text-xs">Número de cheque <span className="text-red-500">*</span></Label>
+                    <Input className="mt-1" inputMode="numeric" value={chequeNumero}
+                      onChange={e => setChequeNumero(e.target.value)} placeholder="Ej. 122 (del talonario)" />
+                    <p className="text-[10px] text-muted-foreground mt-1">Lo leés del talonario. Sirve para cruzarlo automáticamente con el extracto de Galicia cuando se debite.</p>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Fecha de cobro del cheque <span className="text-red-500">*</span></Label>
+                    <Input type="date" className="mt-1" value={chequeFechaCobro} onChange={e => setChequeFechaCobro(e.target.value)} />
+                    <p className="text-[10px] text-muted-foreground mt-1">Se crea una obligación en "Próximos vencimientos". Galicia se debita cuando la marcás pagada.</p>
+                  </div>
                 </div>
               )}
             </div>
@@ -434,7 +444,11 @@ function PaymentModal({
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
           <Button
             onClick={() => mutation.mutate()}
-            disabled={mutation.isPending || !amount || parseFloat(amount) <= 0}
+            disabled={
+              mutation.isPending || !amount || parseFloat(amount) <= 0 ||
+              (method === "CHEQUE" && chequeSubtipo === "propio" && (!chequeNumero.trim() || !chequeFechaCobro)) ||
+              (method === "CHEQUE" && chequeSubtipo === "cartera" && !chequeCarteraId)
+            }
           >
             {mutation.isPending ? "Guardando..." : "Guardar Pago"}
           </Button>

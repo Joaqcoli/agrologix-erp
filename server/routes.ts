@@ -1611,7 +1611,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Circuito cheques para pagos a proveedores
       if (data.method === "CHEQUE") {
         const chequeInfo = req.body.chequeInfo as {
-          tipo?: "cartera" | "propio"; chequeCarteraId?: number; fechaCobro?: string;
+          tipo?: "cartera" | "propio"; chequeCarteraId?: number; fechaCobro?: string; numero?: string;
         } | undefined;
         const allCuentas = await storage.getCuentasFinancieras();
         const chequeCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "cheque");
@@ -1632,8 +1632,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           // Cheque propio: crear obligacion + cheque emitido (Galicia no baja hasta pagar la obligacion)
           const supplier = await storage.getSupplier(data.supplierId);
           const supplierName = supplier?.name ?? "Proveedor";
+          const numeroCheque = chequeInfo.numero?.trim() || null;
           const obs = await storage.createObligaciones([{
-            concepto: `Cheque propio — ${supplierName}`,
+            concepto: numeroCheque
+              ? `Cheque propio Nº${numeroCheque} — ${supplierName}`
+              : `Cheque propio — ${supplierName}`,
             tipo: "proveedor",
             monto: parseFloat(String(data.amount)),
             fechaVencimiento: chequeInfo.fechaCobro,
@@ -1641,6 +1644,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }]);
           await storage.createCheque({
             tipo: "emitido",
+            numero: numeroCheque, // número del talonario — clave para cruzar con ECHEQ de Galicia
             monto: parseFloat(String(data.amount)),
             fechaCobro: chequeInfo.fechaCobro,
             estado: "en_cartera",
@@ -2392,10 +2396,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Crear cheque en cartera manualmente
   app.post("/api/caja/cheques", requireAuth, async (req, res) => {
     try {
-      const { monto, fechaCobro, contraparte, notas } = req.body;
+      const { monto, fechaCobro, contraparte, notas, numero } = req.body;
       if (!monto || !fechaCobro || !contraparte) return res.status(400).json({ error: "Campos requeridos: monto, fechaCobro, contraparte" });
       const cheque = await storage.createCheque({
-        tipo: "recibido", monto: parseFloat(monto), fechaCobro,
+        tipo: "recibido", numero: (numero ?? "").trim() || null, monto: parseFloat(monto), fechaCobro,
         estado: "en_cartera", contraparte, notas: notas ?? null,
       });
       return res.json(cheque);
@@ -2418,7 +2422,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/caja/cheques/:id", requireAuth, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const { accion, comision, contraparte, cuentaDestinoId, monto, fechaCobro } = req.body;
+      const { accion, comision, contraparte, cuentaDestinoId, monto, fechaCobro, numero } = req.body;
       const allCuentas = await storage.getCuentasFinancieras();
       const chequeCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "cheque");
       const galiciaCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "banco");
@@ -2462,6 +2466,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ...(monto !== undefined ? { monto: parseFloat(monto) } : {}),
           ...(fechaCobro !== undefined ? { fechaCobro } : {}),
           ...(contraparte !== undefined ? { contraparte } : {}),
+          ...(numero !== undefined ? { numero: (numero ?? "").trim() || null } : {}),
         });
       }
       return res.json(await storage.getCheques().then(cs => (cs as any[]).find(c => c.id === id)));
