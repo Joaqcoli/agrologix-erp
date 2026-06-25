@@ -5584,9 +5584,33 @@ export const storage = {
       ORDER BY g.fecha DESC, g.id DESC
     `)).rows as any[];
 
+    // Sugerencia de cliente por CUIT (solo cobros pendientes de asignar). El CUIT está
+    // en la leyenda (11 dígitos) y matchea customers.cuit (único, no heurístico).
+    const cuitDe = (leyenda: string | null): string | null => {
+      const m = String(leyenda ?? "").match(/\b(\d{11})\b/);
+      return m ? m[1] : null;
+    };
+    const pendientes = rows.filter(r => r.asignacion_cc === "pendiente");
+    const cuitToCustomer = new Map<string, { id: number; name: string }>();
+    if (pendientes.length > 0) {
+      const custs = (await db.execute(drizzleSql`
+        SELECT id, name, regexp_replace(cuit, '[^0-9]', '', 'g') AS cuit_norm
+        FROM customers WHERE cuit IS NOT NULL AND cuit <> ''`)).rows as any[];
+      for (const c of custs) if (c.cuit_norm) cuitToCustomer.set(String(c.cuit_norm), { id: c.id, name: c.name });
+    }
+
     return rows.map((r) => {
       const isOutgoing = r.debito != null;
       const gross = Math.abs(parseFloat(String(r.debito ?? r.credito ?? 0)));
+      // Sugerencia de cliente (solo cobros pendientes)
+      let suggestedCustomerId: number | null = null;
+      let suggestedCustomerName: string | null = null;
+      let suggestedCuit: string | null = null;
+      if (r.asignacion_cc === "pendiente") {
+        suggestedCuit = cuitDe(r.leyendas);
+        const hit = suggestedCuit ? cuitToCustomer.get(suggestedCuit) : undefined;
+        if (hit) { suggestedCustomerId = hit.id; suggestedCustomerName = hit.name; }
+      }
       return {
         id: r.id,                                   // "galicia:..."
         date_created: `${r.fecha}T00:00:00-03:00`,  // sin hora real en el extracto
@@ -5603,9 +5627,14 @@ export const storage = {
         categoryName: r.category ?? null,           // nombre crudo (por si no está en el catálogo)
         // campos propios de Galicia (para badges/futuro)
         comprobante: r.comprobante ?? null,
+        leyendas: r.leyendas ?? null,
         yaContabilizado: r.ya_contabilizado ?? false,
         asignacionCc: r.asignacion_cc ?? null,
         categoriaAuto: r.categoria_auto ?? true,
+        // Asignación de cobros (paso 1): cliente sugerido por CUIT
+        suggestedCustomerId,
+        suggestedCustomerName,
+        suggestedCuit,
         source: "galicia",
       };
     });

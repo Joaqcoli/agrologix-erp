@@ -89,6 +89,11 @@ export default function BancosPage() {
   const [applyPayMov, setApplyPayMov] = useState<MpMovement | null>(null);
   const [applyAmounts, setApplyAmounts] = useState<Map<number, string>>(new Map());
 
+  // Asignación de cobros Galicia — picker manual de cliente (cobros sin CUIT/match)
+  const [galiciaPickOpen, setGaliciaPickOpen] = useState(false);
+  const [galiciaPickMov, setGaliciaPickMov] = useState<MpMovement | null>(null);
+  const [galiciaPickSearch, setGaliciaPickSearch] = useState("");
+
   // Identificar / Editar contacto dialog
   const [identifyOpen, setIdentifyOpen] = useState(false);
   const [identifyMov, setIdentifyMov] = useState<MpMovement | null>(null);
@@ -118,7 +123,7 @@ export default function BancosPage() {
   const { data: customers = [] } = useQuery<SimpleEntity[]>({
     queryKey: ["/api/customers"],
     queryFn: () => fetch("/api/customers", { credentials: "include" }).then(r => r.json()),
-    enabled: identifyOpen && (idType === "cliente"),
+    enabled: (identifyOpen && (idType === "cliente")) || galiciaPickOpen,
   });
 
   const { data: pendingOrders = [], isLoading: pendingOrdersLoading } = useQuery<PendingOrder[]>({
@@ -504,16 +509,46 @@ export default function BancosPage() {
     </div>
   );
 
-  const galiciaRenderRowExtra = (m: MpMovement) => (
-    <>
-      {m.comprobante && (
-        <span className="text-[10px] text-muted-foreground font-mono">N.º {m.comprobante}</span>
-      )}
-      {m.yaContabilizado && (
-        <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 font-medium">ya contabilizado</span>
-      )}
-    </>
-  );
+  // Abre el diálogo "Aplicar pago" para un cobro de Galicia, con el cliente (sugerido o elegido)
+  const openGaliciaApply = (m: MpMovement, customerId: number, customerName?: string | null) => {
+    setApplyPayMov({ ...m, entityId: customerId, displayName: customerName ?? m.displayName, source: "galicia" });
+    setApplyAmounts(new Map());
+    setApplyPayError(null);
+    setApplyPayOpen(true);
+  };
+
+  const galiciaRenderRowExtra = (m: MpMovement) => {
+    const esCobroPendiente = m.asignacionCc === "pendiente";
+    return (
+      <>
+        {m.comprobante && (
+          <span className="text-[10px] text-muted-foreground font-mono">N.º {m.comprobante}</span>
+        )}
+        {m.yaContabilizado && (
+          <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 font-medium">ya contabilizado</span>
+        )}
+        {/* Asignación de cobros: cobro pendiente de asignar a factura/CC */}
+        {esCobroPendiente && (
+          (m.bankPaymentLinks && m.bankPaymentLinks.length > 0) ? (
+            <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">✓ {fmtBankLinks(m.bankPaymentLinks)}</span>
+          ) : m.suggestedCustomerId ? (
+            <>
+              <span className="text-[10px] text-muted-foreground">Sugerido: <b className="text-foreground">{m.suggestedCustomerName}</b> · por CUIT {m.suggestedCuit}</span>
+              <button
+                onClick={() => openGaliciaApply(m, m.suggestedCustomerId!, m.suggestedCustomerName)}
+                className="text-[11px] text-green-700 hover:text-green-900 font-medium border border-green-300 rounded px-1.5 py-0.5 leading-tight hover:bg-green-50 transition-colors flex-shrink-0"
+              >Aplicar pago</button>
+            </>
+          ) : (
+            <button
+              onClick={() => { setGaliciaPickMov(m); setGaliciaPickSearch(""); setGaliciaPickOpen(true); }}
+              className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors flex-shrink-0"
+            >Identificar cliente</button>
+          )
+        )}
+      </>
+    );
+  };
 
   // ── secciones (reutilizadas en split y tabs) ───────────────────────────────────
 
@@ -945,16 +980,60 @@ export default function BancosPage() {
 
               {applyPayError && (<p className="text-sm text-destructive bg-destructive/10 rounded px-3 py-2">{applyPayError}</p>)}
 
+              {/* Galicia: en este bloque (pasos 1-3) el diálogo se ve pero NO aplica (eso es el paso 4) */}
+              {applyPayMov.source === "galicia" && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                  Aplicar a la cuenta corriente se habilita en el paso 4 (todavía no toca la CC).
+                </p>
+              )}
+
               <DialogFooter>
                 <Button variant="outline" onClick={() => { setApplyPayOpen(false); setApplyPayMov(null); setApplyAmounts(new Map()); setApplyPayError(null); }}>Cancelar</Button>
-                <Button onClick={handleConfirm} disabled={!canConfirm || applyPayMut.isPending}>
-                  {applyPayMut.isPending ? "Aplicando..." : "Confirmar"}
+                <Button onClick={handleConfirm} disabled={!canConfirm || applyPayMut.isPending || applyPayMov.source === "galicia"}>
+                  {applyPayMov.source === "galicia" ? "Confirmar (pendiente paso 4)" : applyPayMut.isPending ? "Aplicando..." : "Confirmar"}
                 </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
         );
       })()}
+
+      {/* ── Dialog: identificar cliente de un cobro de Galicia (Paso 3, manual) ── */}
+      <Dialog open={galiciaPickOpen} onOpenChange={v => { if (!v) { setGaliciaPickOpen(false); setGaliciaPickMov(null); setGaliciaPickSearch(""); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>¿Qué cliente es este cobro?</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-1">
+            {galiciaPickMov && (
+              <div className="bg-muted/50 rounded-lg px-3 py-2 text-xs">
+                <p className="font-mono text-muted-foreground">{galiciaPickMov.leyendas || galiciaPickMov.displayName}</p>
+                <p className="font-semibold text-green-700">+{fmt(galiciaPickMov.grossAmount ?? 0)}</p>
+              </div>
+            )}
+            <Input value={galiciaPickSearch} onChange={e => setGaliciaPickSearch(e.target.value)} placeholder="Buscar cliente por nombre…" autoFocus />
+            <div className="border rounded-md overflow-hidden max-h-56 overflow-y-auto">
+              {customers
+                .filter(c => !galiciaPickSearch.trim() || c.name.toLowerCase().includes(galiciaPickSearch.toLowerCase()))
+                .slice(0, 30)
+                .map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      const mov = galiciaPickMov;
+                      setGaliciaPickOpen(false); setGaliciaPickMov(null); setGaliciaPickSearch("");
+                      if (mov) openGaliciaApply(mov, c.id, c.name);
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors border-b last:border-b-0"
+                  >{c.name}</button>
+                ))}
+              {customers.length === 0 && <p className="text-xs text-muted-foreground px-3 py-2">Cargando clientes…</p>}
+            </div>
+            <p className="text-[10px] text-muted-foreground">Al elegir cliente se abre "Aplicar pago" con sus pedidos pendientes. (Cargar el CUIT del cliente para auto-match futuro queda para el paso 4.)</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setGaliciaPickOpen(false); setGaliciaPickMov(null); setGaliciaPickSearch(""); }}>Cancelar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Dialog: elegir socio para un movimiento categorizado como Retiro ── */}
       <Dialog open={retiroPrompt != null} onOpenChange={v => { if (!v) { setRetiroPrompt(null); setRetiroSocioId(null); } }}>

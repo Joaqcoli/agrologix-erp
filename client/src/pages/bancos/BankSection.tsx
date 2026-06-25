@@ -103,6 +103,11 @@ export type MpMovement = {
   yaContabilizado?: boolean;
   asignacionCc?: string | null;
   categoriaAuto?: boolean;
+  leyendas?: string | null;
+  // asignación de cobros Galicia (cliente sugerido por CUIT)
+  suggestedCustomerId?: number | null;
+  suggestedCustomerName?: string | null;
+  suggestedCuit?: string | null;
 };
 
 export type MpMovementsResponse = { results?: MpMovement[]; error?: string };
