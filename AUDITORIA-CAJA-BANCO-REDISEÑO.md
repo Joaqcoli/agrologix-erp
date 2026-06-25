@@ -189,3 +189,71 @@ Sale de `caja/index.tsx:688` (`pieData`/`categoriaData`) que recorre `feed` (= `
 → **Orden recomendado: 1→2→3→4→5 (todo lectura/esquema, sin riesgo) → 6 (el que escribe, con verificación de dedup) → 7 (vista) → 8-9 (aprendizaje + categorías).** El grueso del valor (clasificar Galicia y verlo en el gráfico de egresos para la neta) llega en el paso 6-7.
 
 **Solo lectura. Nada construido.**
+
+---
+
+# 🔴 Doble conteo de obligaciones + categorías duplicadas (diagnóstico, solo lectura, 2026-06-24)
+
+> **Solo lectura.** El usuario vio el alquiler dos veces en el gráfico de egresos. Causa: **marcar una obligación como pagada crea un `caja_movement` (gasto), y el MISMO pago vuelve a entrar por el extracto de Galicia** → doble. Decisión B2: obligaciones = **recordatorio** (no gasto); el gasto lo cuenta solo el banco (Galicia/MP).
+
+## 1. Categorías duplicadas
+
+- **En `bank_categories`: ninguna duplicada** por may/min.
+- **En `caja_movements` SÍ:** `"alquiler"` y `"Alquiler"` (2 movs, $4.739.135). De dónde sale cada una:
+  - `"Alquiler"` ($2.369.568) → **de Galicia** (`caja_movement #1293`, `source_id=galicia:…`, concepto "TRF INMED PROVEED" a STEFAN).
+  - `"alquiler"` ($2.369.567) → **de la obligación #15 pagada** (`caja_movement #377`, manual, sin source_id).
+- **La causa de la duplicación de categoría:** las obligaciones crean el `caja_movement` con `category = ob.tipo` (texto libre del tipo, ej. `"alquiler"`, `"proveedor"`), mientras Galicia usa las categorías formales (`"Alquiler"`, `"Pago a proveedor"`). → mismo gasto, dos nombres.
+
+## 2. Cómo funciona hoy el pago de una obligación (`PATCH /api/caja/obligaciones/:id`, routes.ts:2516)
+
+Al marcar pagada (modo `montoPagado`):
+1. `storage.payObligacion` → UPDATE obligación (`estado='pagado'`) + INSERT `obligacion_pagos` (atómico, M8).
+2. Si la cuenta de pago **no es MP**: `createMovimientoCuenta` (egreso) → afecta el **saldo** de la cuenta (Sistema A).
+3. Si **no es MP**: **`createCajaMovement({ type:'egreso', category: ob.tipo, amount: montoARS })`** (routes.ts:2594) → **ESTE es el gasto** que aparece en el feed/gráfico de egresos (Sistema B).
+
+→ **El paso 3 es el que genera el doble conteo:** crea un gasto por cada obligación pagada por banco, y ese mismo pago vuelve a entrar como movimiento de Galicia.
+
+## 3. El doble conteo real en los datos
+
+- **Alquiler (confirmado, visible):** `obl#15 "Alquiler galpón" $2.369.567` pagada (11-jun, cuenta 2=Galicia) → `caja_movement #377 "alquiler"`. **Y** Galicia trae `#1293 "Alquiler"` (TRF a STEFAN, 10-jun). **$2.369.567 contado DOS veces** (y como "alquiler" no está excluido del pie, **se ve en el gráfico**).
+- **14 obligaciones pagadas = $20.924.567 en `caja_movements` manuales** (category de tipo-obligación). **La mayoría son cheques a proveedores** (Sanjuaninos, JCB, Adrián Rotelli) que en Galicia aparecen como **"ECHEQ 48 HS"** categorizados **"Pago a proveedor"** → también doble conteo.
+  - **PERO:** los de proveedor (`"proveedor"` y `"Pago a proveedor"`) **ya están EXCLUIDOS del gráfico de egresos** (ambos contienen "proveedor") y son costo de mercadería (excluidos de la neta). → su doble conteo **no se ve en el gráfico ni infla la neta**.
+  - **El único doble conteo que IMPACTA hoy es el alquiler** (gasto operativo real, no excluido). Cualquier obligación futura de gasto operativo (servicios, impuestos, sueldos pagados por banco) tendría el mismo problema.
+
+## 4. Impacto de cambiar a B2 (obligación = recordatorio, no gasto)
+
+Si al pagar una obligación **por banco** ya no se crea el `caja_movement`:
+- **Se elimina el doble conteo** (el gasto lo cuenta solo Galicia/MP). ✓
+- **Lo que cambia:** el feed/gráfico de egresos deja de recibir el gasto desde la obligación; lo recibe desde el extracto. **Para gastos pagados por banco no se rompe nada** (el extracto los trae).
+- **⚠️ El hueco a cuidar — pagos en EFECTIVO:** una obligación pagada con **efectivo NO viene en ningún extracto**. Si no se crea el `caja_movement`, ese gasto **desaparecería**. → **B2 debe distinguir:** pago por **banco** (Galicia/MP) = no crea gasto (lo trae el extracto); pago por **efectivo** = SÍ crea el gasto (es la única fuente). Hoy las 14 obligaciones pagadas son todas TRANSFERENCIA (banco), pero el flujo debe contemplar el efectivo.
+- **Saldo (`movimiento_cuenta`):** solo importa para **Efectivo** (única cuenta con saldo real; Galicia no lleva saldo, MP va por API). Mantenerlo para efectivo; para banco es inocuo (no se muestra).
+- **No hay reportes que dependan de la obligación-como-gasto** salvo el feed de egresos, que pasa a alimentarse del extracto.
+
+## 5. Datos históricos ya cargados
+
+- **14 `caja_movements` de obligaciones pagadas ($20,9M)** que duplican con Galicia. Para limpiar:
+  - **Alquiler:** borrar `#377 "alquiler"` (queda el de Galicia `#1293 "Alquiler"`).
+  - **Cheques a proveedores:** borrar los `caja_movements` de obligación `category="proveedor"` (quedan los ECHEQ de Galicia). *(Bajo riesgo visible: ya estaban excluidos del pie, pero conviene limpiar para que la neta no los cuente doble.)*
+  - **Criterio de borrado seguro:** borrar los `caja_movements` **sin `source_id`** que correspondan a obligaciones pagadas **por banco** y que tengan su contraparte en Galicia. Los pagados por **efectivo** se conservan.
+- **Categoría:** normalizar `"alquiler"` → `"Alquiler"` (y revisar otras variantes al unificar).
+
+## 6. Propuesta de implementación B2 (limpia, sin romper ni doble-contar)
+
+**A) Flujo nuevo de pago de obligación** (datos nuevos):
+- Marcar pagada → UPDATE estado + `obligacion_pagos` (igual). **Saca del recordatorio.**
+- **NO** crear `caja_movement` si la cuenta de pago es **banco** (Galicia/MP) → el gasto lo trae el extracto/API.
+- **SÍ** crear `caja_movement` si la cuenta es **Efectivo** (única fuente para efectivo).
+- `movimiento_cuenta` (saldo): solo para Efectivo.
+- (Revertir a pendiente: borrar lo que se haya creado, como hoy.)
+
+**B) Limpieza de históricos** (una vez, reversible/verificada):
+- Borrar los `caja_movements` de obligaciones pagadas por banco que duplican con Galicia (empezando por el alquiler `#377`).
+- Conservar los de efectivo (si los hubiera).
+
+**C) Categorías:**
+- Normalizar variantes may/min en `caja_movements` (`"alquiler"`→`"Alquiler"`).
+- Con B2, las obligaciones dejan de crear categorías (ya no generan `caja_movement`), así que **no se generan más duplicados** de raíz. La obligación usa su `tipo` solo como recordatorio.
+
+**Orden sugerido:** 1) cambiar el flujo de pago (no crea gasto para banco) → 2) limpiar los históricos duplicados (alquiler primero, verificar el gráfico) → 3) normalizar categorías. Cada paso con verificación de que el total de egresos baja exactamente lo esperado (sin el doble).
+
+**Solo lectura. Nada tocado.**
