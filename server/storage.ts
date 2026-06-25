@@ -5442,7 +5442,7 @@ export const storage = {
   // corre todo en una transacción que hace ROLLBACK (verificación sin persistir).
   async importGaliciaExtracto(buffer: Buffer, opts?: { dryRun?: boolean }): Promise<{
     totalParseados: number; insertadosGalicia: number; duplicados: number;
-    reconciliadosCaja: number; sinCategoria: number;
+    reconciliadosCaja: number; sinCategoria: number; retirosEfectivo: number;
     cobrosPendientes: number; yaContabilizados: number;
     porCategoria: { category: string; n: number; total: number }[];
   }> {
@@ -5462,8 +5462,11 @@ export const storage = {
           await exec.execute(drizzleSql`INSERT INTO bank_categories (name) VALUES (${c})`);
         }
       }
+      // Cuenta Efectivo (única que lleva saldo): los "Retiro de efectivo" suman a su saldo
+      const efeRow = (await exec.execute(drizzleSql`SELECT id FROM cuentas_financieras WHERE tipo = 'efectivo' LIMIT 1`)).rows[0] as any;
+      const efectivoId: number | null = efeRow?.id ?? null;
 
-      let insertadosGalicia = 0, duplicados = 0, reconciliadosCaja = 0, sinCategoria = 0, cobrosPendientes = 0, yaContabilizados = 0;
+      let insertadosGalicia = 0, duplicados = 0, reconciliadosCaja = 0, sinCategoria = 0, cobrosPendientes = 0, yaContabilizados = 0, retirosEfectivo = 0;
       const porCat: Record<string, { n: number; total: number }> = {};
 
       for (const m of movs) {
@@ -5494,12 +5497,25 @@ export const storage = {
             VALUES (${sourceId}, ${m.fecha}, ${m.direccion}, ${m.descripcion || m.concepto}, ${m.monto.toFixed(2)}, ${category}, 'TRANSFERENCIA')
           `);
           reconciliadosCaja++;
+
+          // 3) "Retiro de efectivo" (extracción de cajero) = transferencia interna Galicia→Efectivo.
+          //    Suma al saldo de la cuenta Efectivo (movimiento_cuenta ingreso, dedup por origen_id).
+          //    NOTA: solo afecta el saldo si su fecha > saldo_base_fecha de Efectivo (si es anterior,
+          //    ya está absorbido en el saldo_base; el filtro lo excluye → no doble cuenta).
+          if (category === "Retiro de efectivo" && efectivoId != null) {
+            await exec.execute(drizzleSql`DELETE FROM movimientos_cuenta WHERE origen_tipo = 'galicia_efectivo' AND origen_id = ${sourceId}`);
+            await exec.execute(drizzleSql`
+              INSERT INTO movimientos_cuenta (cuenta_id, fecha, signo, monto, concepto, origen_tipo, origen_id)
+              VALUES (${efectivoId}, ${m.fecha}::timestamp, 'ingreso', ${m.monto.toFixed(2)}, ${"Extracción Galicia → Efectivo"}, 'galicia_efectivo', ${sourceId})
+            `);
+            retirosEfectivo++;
+          }
         }
       }
 
       const porCategoria = Object.entries(porCat).map(([category, v]) => ({ category, n: v.n, total: Math.round(v.total) }))
         .sort((a, b) => b.total - a.total);
-      return { totalParseados: movs.length, insertadosGalicia, duplicados, reconciliadosCaja, sinCategoria, cobrosPendientes, yaContabilizados, porCategoria };
+      return { totalParseados: movs.length, insertadosGalicia, duplicados, reconciliadosCaja, sinCategoria, cobrosPendientes, yaContabilizados, retirosEfectivo, porCategoria };
     };
 
     if (opts?.dryRun) {

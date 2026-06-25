@@ -157,13 +157,24 @@ export const GALICIA_SEED_RULES: GaliciaRuleLite[] = [
   { matchConcepto: "CTAS PROPIAS",        matchLeyenda: null,                 categoryName: "Banco propio",       prioridad: 5 },
   // Préstamo recibido (no es ingreso del negocio)
   { matchConcepto: "CREDITO PRESTAMO",    matchLeyenda: null,                 categoryName: "Préstamo",           prioridad: 5 },
-  // Cheques acreditados / cobros ya contados (no suman a la ganancia)
+  // Cheques acreditados / cobros ya contabilizados (NO suman a la ganancia, NO tocan CC)
   { matchConcepto: "G.DE CHEQUE",         matchLeyenda: null,                 categoryName: "Cobro cliente ya contabilizado", prioridad: 5 },
   { matchConcepto: "G.DE ECHEQ",          matchLeyenda: null,                 categoryName: "Cobro cliente ya contabilizado", prioridad: 5 },
-  { matchConcepto: "CREDITO DESCUENTO DOCUMENTO", matchLeyenda: null,         categoryName: "Cobro ya contado",   prioridad: 5 },
-  // Cobros de cliente vía cash/SNP (no suman: el cobro ya se cuenta en ventas)
+  { matchConcepto: "GESTION DE CHEQUE",   matchLeyenda: null,                 categoryName: "Cobro cliente ya contabilizado", prioridad: 5 },
+  { matchConcepto: "ACRED. CHEQUE",       matchLeyenda: null,                 categoryName: "Cobro cliente ya contabilizado", prioridad: 5 },
+  { matchConcepto: "CREDITO DESCUENTO DOCUMENTO", matchLeyenda: null,         categoryName: "Cobro cliente ya contabilizado", prioridad: 5 },
+  // Cheque rechazado (se acreditó y rebotó el mismo día → neto $0, excluido de la ganancia)
+  { matchConcepto: "RECHAZO CHEQUE",      matchLeyenda: null,                 categoryName: "Cheque rechazado",   prioridad: 6 },
+  { matchConcepto: "RECHAZO ECH",         matchLeyenda: null,                 categoryName: "Cheque rechazado",   prioridad: 6 },
+  // Comisión por rechazo → Comisiones Galicia (prioridad 8: gana sobre "RECHAZO CHEQUE")
+  { matchConcepto: "COM. RECHAZO",        matchLeyenda: null,                 categoryName: "Comisiones Galicia", prioridad: 8 },
+  // Cobros de cliente (transferencias entrantes) — cobro nuevo a asignar a factura/CC
   { matchConcepto: "TRANSFERENCIAS CASH PROVEEDORES", matchLeyenda: null,     categoryName: "Cobro de cliente",   prioridad: 5 },
   { matchConcepto: "SNP PAGO A PROVEEDORES", matchLeyenda: null,              categoryName: "Cobro de cliente",   prioridad: 5 },
+  { matchConcepto: "TRANSFERENCIA DE TERCEROS", matchLeyenda: null,          categoryName: "Cobro de cliente",   prioridad: 5 },
+  // Retiro de efectivo (extracción de cajero) — transferencia interna Galicia→Efectivo;
+  // NO resta de la ganancia y SUMA al saldo de la cuenta Efectivo (ver importGaliciaExtracto)
+  { matchConcepto: "EXTRACCION CAJERO",   matchLeyenda: null,                 categoryName: "Retiro de efectivo", prioridad: 5 },
   // Pago a proveedor (genérico, prioridad baja: las reglas con leyenda ganan)
   { matchConcepto: "ECHEQ",               matchLeyenda: null,                 categoryName: "Pago a proveedor",   prioridad: 3 },
   { matchConcepto: "TRF INMED PROVEED",   matchLeyenda: null,                 categoryName: "Pago a proveedor",   prioridad: 3 },
@@ -189,4 +200,5 @@ export function tratamientoCobro(categoryName: string | null): {
 export const GALICIA_NEW_CATEGORIES = [
   "Seguros", "Alquiler", "Comisiones Galicia", "Impuestos bancarios",
   "Intereses", "Préstamo", "Cobro cliente ya contabilizado",
+  "Cheque rechazado", "Retiro de efectivo",
 ];
