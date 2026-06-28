@@ -572,6 +572,16 @@ export default function BancosPage() {
           </button>
         )
       )}
+      {/* Pago a proveedor: aplicar a la CC del proveedor (espejo del de Galicia) */}
+      {m.yaAplicadoProv && (
+        <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">✓ aplicado a CC</span>
+      )}
+      {m.esPagoProvPend && (
+        <button
+          onClick={() => openProvApply(m)}
+          className="text-[11px] text-purple-700 hover:text-purple-900 font-medium border border-purple-300 rounded px-1.5 py-0.5 leading-tight hover:bg-purple-50 transition-colors flex-shrink-0"
+        >{m.suggestedSupplierName ? `Aplicar a ${m.suggestedSupplierName}` : "Aplicar pago"}</button>
+      )}
     </>
   );
 
