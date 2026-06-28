@@ -34,6 +34,8 @@ type PurchaseRow = {
   total: number;
   paymentMethod: string;
   isPaid: boolean;
+  status?: "pagada" | "parcial" | "pendiente";
+  paidAmount?: number;
   totalEmptyCost: number;
 };
 
@@ -91,7 +93,7 @@ type ChequeRow = {
   estado: string;       // en_cartera | depositado | endosado | cobrado
 };
 
-type PendingPurchase = { id: number; folio: string; total: string; purchaseDate: string };
+type PendingPurchase = { id: number; folio: string; total: string; purchaseDate: string; paidAmount?: string; status?: string };
 
 // ── PDF generation ─────────────────────────────────────────────────────────────
 function buildPDF(data: APCCDetail, monthLabel: string) {
@@ -459,6 +461,100 @@ function PaymentModal({
 }
 
 // ── Main Detail Page ───────────────────────────────────────────────────────────
+// Re-imputar un pago EXISTENTE a compras elegidas a mano (reasignar lo que el FIFO auto-imputó).
+function ReimputeDialog({ payment, supplierName, onClose }: { payment: PaymentRow; supplierName: string; onClose: () => void }) {
+  const { toast } = useToast();
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  // Compras pendientes IGNORANDO este pago (las muestra como si no estuviera aplicado)
+  const { data: pending = [], isLoading } = useQuery<PendingPurchase[]>({
+    queryKey: ["/api/ap/pending-purchases", payment.supplierId, "exclude", payment.id],
+    queryFn: () => fetch(`/api/ap/pending-purchases/${payment.supplierId}?excludePaymentId=${payment.id}`, { credentials: "include" }).then((r) => r.json()),
+  });
+
+  const mut = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/ap/payments/${payment.id}/impute`, { purchaseIds: [...selected] }).then((r) => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ap/cc/supplier"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ap/pending-purchases"] });
+      toast({ title: "Pago imputado", description: `${selected.size} compra(s) actualizadas.` });
+      onClose();
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const dateFrom = `${payment.date.slice(0, 7)}-01`; // corte por el mes del pago
+  const sortByDate = (a: PendingPurchase, b: PendingPurchase) => (a.purchaseDate < b.purchaseDate ? -1 : 1);
+  const periodo = pending.filter((p) => p.purchaseDate.slice(0, 10) >= dateFrom).sort(sortByDate);
+  const anteriores = pending.filter((p) => p.purchaseDate.slice(0, 10) < dateFrom).sort(sortByDate);
+  const toggle = (id: number) => setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const selectedPending = pending.filter((p) => selected.has(p.id)).reduce((s, p) => s + Math.max(0, parseFloat(p.total) - parseFloat(p.paidAmount ?? "0")), 0);
+
+  const Row = (p: PendingPurchase) => {
+    const pend = Math.max(0, parseFloat(p.total) - parseFloat(p.paidAmount ?? "0"));
+    const parcial = parseFloat(p.paidAmount ?? "0") > 0;
+    const checked = selected.has(p.id);
+    return (
+      <div key={p.id} onClick={() => toggle(p.id)}
+        className={`flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${checked ? "border-green-400 bg-green-50 dark:bg-green-950/20" : "border-input hover:bg-muted/40"}`}>
+        <Checkbox checked={checked} className="pointer-events-none" />
+        <div className="flex-1 min-w-0">
+          <span className="text-sm font-medium font-mono">{p.folio}</span>
+          <p className="text-xs text-muted-foreground">{p.purchaseDate.slice(0, 10)}{parcial && <span className="text-amber-600"> · parcial, pagado ${fmtInt(parseFloat(p.paidAmount ?? "0"))}</span>}</p>
+        </div>
+        <p className={`text-sm font-semibold flex-shrink-0 ${checked ? "text-green-700" : "text-orange-700"}`}>${fmtInt(pend)}</p>
+      </div>
+    );
+  };
+
+  return (
+    <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader><DialogTitle>Imputar pago — {supplierName}</DialogTitle></DialogHeader>
+        <div className="space-y-3 py-1">
+          <div className="bg-muted/50 rounded-lg px-3 py-2 text-xs flex items-center justify-between">
+            <span className="text-muted-foreground">Pago {payment.date} · {payment.method}{payment.notes ? ` · ${payment.notes}` : ""}</span>
+            <span className="font-semibold text-green-700">${fmtInt(payment.amount)}</span>
+          </div>
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground py-3 text-center">Cargando compras…</p>
+          ) : pending.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-3 text-center">No hay compras pendientes para imputar.</p>
+          ) : (
+            <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+              {periodo.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-semibold text-muted-foreground">Compras del período</p>
+                  {periodo.map(Row)}
+                </div>
+              )}
+              {anteriores.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-semibold text-amber-600">Pendientes de períodos anteriores</p>
+                  {anteriores.map(Row)}
+                </div>
+              )}
+            </div>
+          )}
+          {selected.size > 0 && (
+            <div className="border-t pt-2 flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">{selected.size} compra{selected.size > 1 ? "s" : ""} · pendiente ${fmtInt(selectedPending)}</span>
+              <span className={selectedPending > payment.amount + 0.01 ? "text-amber-600" : "text-muted-foreground"}>
+                {selectedPending > payment.amount + 0.01 ? "el pago no cubre todo → última queda parcial" : "el pago las cubre"}
+              </span>
+            </div>
+          )}
+          <p className="text-[10px] text-muted-foreground">Reasigna a qué compras va este pago (reparte por fecha, parcial la última). No cambia el saldo. Sin selección → vuelve a FIFO automático.</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button onClick={() => mut.mutate()} disabled={mut.isPending}>{mut.isPending ? "Imputando…" : "Imputar a compras elegidas"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function SupplierCCPage({
   supplierId,
   month: initMonth,
@@ -473,6 +569,7 @@ export default function SupplierCCPage({
   const [month, setMonth] = useState(initMonth);
   const [year, setYear] = useState(initYear);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [reimputePayment, setReimputePayment] = useState<PaymentRow | null>(null);
   const [activeTab, setActiveTab] = useState<"cc" | "vacios">("cc");
   const today2 = new Date();
   const years = Array.from({ length: 4 }, (_, i) => today2.getFullYear() - i);
@@ -534,7 +631,7 @@ export default function SupplierCCPage({
 
   const pendingPurchasesTotal = (data?.purchases ?? [])
     .filter((p) => !p.isPaid)
-    .reduce((s, p) => s + p.total, 0);
+    .reduce((s, p) => s + (p.total - (p.paidAmount ?? 0)), 0); // descuenta lo ya pagado en parciales
 
   const todayISO = new Date().toISOString().slice(0, 10);
   const chequeEstado = (c: ChequeRow): { label: string; vencido: boolean } => {
@@ -704,6 +801,10 @@ export default function SupplierCCPage({
                                 <CheckCircle2 className="h-2.5 w-2.5" />
                                 Pagada
                               </span>
+                            ) : p.status === "parcial" ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-700 bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 px-1.5 py-0.5 rounded-full whitespace-nowrap">
+                                Parcial · pagado ${fmtInt(p.paidAmount ?? 0)} / queda ${fmtInt(p.total - (p.paidAmount ?? 0))}
+                              </span>
                             ) : (
                               <span className="text-[10px] text-muted-foreground">Pendiente</span>
                             )}
@@ -778,13 +879,22 @@ export default function SupplierCCPage({
                       </td>
                       <td className="py-1.5 px-3 text-right font-semibold text-green-600">${fmtInt(p.amount)}</td>
                       <td className="py-1.5 px-3">
-                        <button
-                          onClick={() => deletePaymentMutation.mutate(p.id)}
-                          disabled={deletePaymentMutation.isPending}
-                          className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </button>
+                        <div className="flex items-center gap-1 justify-end">
+                          <button
+                            onClick={() => setReimputePayment(p)}
+                            title="Elegir a qué compras imputar este pago"
+                            className="p-0.5 rounded hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
+                          >
+                            <Wallet className="h-3 w-3" />
+                          </button>
+                          <button
+                            onClick={() => deletePaymentMutation.mutate(p.id)}
+                            disabled={deletePaymentMutation.isPending}
+                            className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -978,6 +1088,13 @@ export default function SupplierCCPage({
         onClose={() => setShowPaymentModal(false)}
         pendingPurchases={pendingPurchases}
       />
+      {reimputePayment && (
+        <ReimputeDialog
+          payment={reimputePayment}
+          supplierName={data?.supplier.name ?? ""}
+          onClose={() => setReimputePayment(null)}
+        />
+      )}
     </Layout>
   );
 }

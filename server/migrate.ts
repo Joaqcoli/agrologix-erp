@@ -355,6 +355,21 @@ export async function runMigrations() {
   // Movimientos de banco (MP) marcados como "pago a proveedor ya registrado" (los de Galicia usan asignacion_cc)
   try { await db.execute(sql`CREATE TABLE IF NOT EXISTS bank_prov_registrado (movement_id TEXT PRIMARY KEY, created_at TIMESTAMP NOT NULL DEFAULT now())`); } catch {}
 
+  // Imputación pago→compra: el usuario elige a qué compras imputar un pago (espejo de payment_order_links).
+  // onDelete cascade: borrar un supplier_payment revierte sus imputaciones automáticamente.
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS supplier_payment_purchase_links (
+        id SERIAL PRIMARY KEY,
+        supplier_payment_id INTEGER NOT NULL REFERENCES supplier_payments(id) ON DELETE CASCADE,
+        purchase_id INTEGER NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
+        amount_applied NUMERIC
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_sppl_payment ON supplier_payment_purchase_links(supplier_payment_id)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_sppl_purchase ON supplier_payment_purchase_links(purchase_id)`);
+  } catch (e) { console.error("supplier_payment_purchase_links migration failed:", e); }
+
   await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS supplier_id INTEGER REFERENCES suppliers(id)`);
   await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'cuenta_corriente'`);
   await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS is_paid BOOLEAN NOT NULL DEFAULT false`);

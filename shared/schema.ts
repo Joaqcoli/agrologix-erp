@@ -98,6 +98,16 @@ export const supplierPayments = pgTable("supplier_payments", {
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 
+// Imputación pago→compra (espejo de payment_order_links, lado proveedor).
+// Permite que el usuario elija a qué compras imputar un pago, con parciales reales.
+// onDelete cascade: borrar el pago revierte sus imputaciones automáticamente.
+export const supplierPaymentPurchaseLinks = pgTable("supplier_payment_purchase_links", {
+  id: serial("id").primaryKey(),
+  supplierPaymentId: integer("supplier_payment_id").notNull().references(() => supplierPayments.id, { onDelete: "cascade" }),
+  purchaseId: integer("purchase_id").notNull().references(() => purchases.id, { onDelete: "cascade" }),
+  amountApplied: numeric("amount_applied"),
+});
+
 export const purchaseItems = pgTable("purchase_items", {
   id: serial("id").primaryKey(),
   purchaseId: integer("purchase_id").notNull().references(() => purchases.id, { onDelete: "cascade" }),
@@ -310,6 +320,7 @@ export type PaymentOrderLink = typeof paymentOrderLinks.$inferSelect;
 export type Withholding = typeof withholdings.$inferSelect;
 export type Supplier = typeof suppliers.$inferSelect;
 export type SupplierPayment = typeof supplierPayments.$inferSelect;
+export type SupplierPaymentPurchaseLink = typeof supplierPaymentPurchaseLinks.$inferSelect;
 
 export const insertSupplierSchema = createInsertSchema(suppliers).omit({ id: true, createdAt: true });
 export const insertSupplierPaymentSchema = createInsertSchema(supplierPayments).omit({ id: true, createdAt: true, createdBy: true }).extend({

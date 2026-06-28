@@ -38,6 +38,9 @@ type PendingOrder = {
   paidAmount: string; pendingAmount: string; orderDate: string; invoiceNumber: string | null;
 };
 type SimpleEntity = { id: number; name: string };
+type PendingPurchase = {
+  id: number; folio: string; total: string; purchaseDate: string; paidAmount: string; status: string;
+};
 
 function fmtList(items: string[]): string {
   if (items.length === 0) return "";
@@ -100,6 +103,7 @@ export default function BancosPage() {
   const [provSupplierId, setProvSupplierId] = useState<number | null>(null);
   const [provSearch, setProvSearch] = useState("");
   const [provError, setProvError] = useState<string | null>(null);
+  const [provSelected, setProvSelected] = useState<Set<number>>(new Set()); // compras elegidas a imputar
 
   // Identificar / Editar contacto dialog
   const [identifyOpen, setIdentifyOpen] = useState(false);
@@ -154,15 +158,23 @@ export default function BancosPage() {
     enabled: provApplyOpen && !!provApplyMov && provSupplierId != null,
   });
 
-  // Aplicar el pago a la CC del proveedor (baja la deuda)
+  // Compras pendientes del proveedor elegido (para imputar el pago con checkbox, como clientes)
+  const { data: provPendingPurchases = [], isLoading: provPendingLoading } = useQuery<PendingPurchase[]>({
+    queryKey: ["/api/ap/pending-purchases", provSupplierId],
+    queryFn: () => fetch(`/api/ap/pending-purchases/${provSupplierId}`, { credentials: "include" }).then(r => r.json()),
+    enabled: provApplyOpen && provSupplierId != null,
+  });
+
+  // Aplicar el pago a la CC del proveedor (baja la deuda), imputándolo a las compras elegidas
   const provApplyMut = useMutation({
-    mutationFn: (data: { movementId: string; supplierId: number; amount: number; date: string; method?: string; galiciaId?: string }) =>
+    mutationFn: (data: { movementId: string; supplierId: number; amount: number; date: string; method?: string; galiciaId?: string; purchaseIds?: number[] }) =>
       apiRequest("POST", "/api/bank/supplier-payment", data).then(r => r.json()),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/galicia/movements"] });
       qc.invalidateQueries({ queryKey: ["/api/mp/movements"] });
       qc.invalidateQueries({ queryKey: ["/api/ap/cc"] });
-      setProvApplyOpen(false); setProvApplyMov(null); setProvSupplierId(null); setProvSearch(""); setProvError(null);
+      qc.invalidateQueries({ queryKey: ["/api/ap/pending-purchases"] });
+      setProvApplyOpen(false); setProvApplyMov(null); setProvSupplierId(null); setProvSearch(""); setProvError(null); setProvSelected(new Set());
     },
     onError: (e: Error) => setProvError(e.message),
   });
@@ -1154,43 +1166,110 @@ export default function BancosPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Dialog: aplicar pago a la CC de un PROVEEDOR ── */}
-      <Dialog open={provApplyOpen} onOpenChange={v => { if (!v) { setProvApplyOpen(false); setProvApplyMov(null); setProvSupplierId(null); setProvSearch(""); setProvError(null); } }}>
-        <DialogContent className="max-w-sm">
+      {/* ── Dialog: aplicar pago a la CC de un PROVEEDOR (con selección de compras, espejo de clientes) ── */}
+      <Dialog open={provApplyOpen} onOpenChange={v => { if (!v) { setProvApplyOpen(false); setProvApplyMov(null); setProvSupplierId(null); setProvSearch(""); setProvError(null); setProvSelected(new Set()); } }}>
+        <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>Aplicar pago a proveedor</DialogTitle></DialogHeader>
-          <div className="space-y-3 py-1">
-            {provApplyMov && (
-              <div className="bg-muted/50 rounded-lg px-3 py-2 text-xs">
-                <p className="font-mono text-muted-foreground">{provApplyMov.leyendas || provApplyMov.displayName}</p>
-                <p className="font-semibold text-red-700">−{fmt(provApplyMov.grossAmount ?? 0)}</p>
-              </div>
-            )}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium">Proveedor</label>
-              <Input value={provSearch} onChange={e => { setProvSearch(e.target.value); setProvSupplierId(null); }} placeholder="Buscar proveedor…" />
-              {provSupplierId == null && provSearch.trim() && (
-                <div className="border rounded-md overflow-hidden max-h-44 overflow-y-auto">
-                  {suppliers.filter(s => s.name.toLowerCase().includes(provSearch.toLowerCase())).slice(0, 20).map(s => (
-                    <button key={s.id} onClick={() => { setProvSupplierId(s.id); setProvSearch(s.name); }} className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors border-b last:border-b-0">{s.name}</button>
-                  ))}
+          {(() => {
+            const gross = provApplyMov?.grossAmount ?? 0;
+            const movDate = (provApplyMov?.date_created ?? new Date().toISOString()).slice(0, 10);
+            const dateFrom = `${movDate.slice(0, 7)}-01`; // 1° del mes del movimiento → corte período / anteriores
+            const toggle = (id: number) => setProvSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+            const periodo = provPendingPurchases.filter(p => p.purchaseDate.slice(0, 10) >= dateFrom).sort((a, b) => a.purchaseDate < b.purchaseDate ? -1 : 1);
+            const anteriores = provPendingPurchases.filter(p => p.purchaseDate.slice(0, 10) < dateFrom).sort((a, b) => a.purchaseDate < b.purchaseDate ? -1 : 1);
+            const selectedPending = provPendingPurchases
+              .filter(p => provSelected.has(p.id))
+              .reduce((s, p) => s + Math.max(0, parseFloat(p.total) - parseFloat(p.paidAmount)), 0);
+
+            const Row = (p: PendingPurchase) => {
+              const pend = Math.max(0, parseFloat(p.total) - parseFloat(p.paidAmount));
+              const parcial = parseFloat(p.paidAmount) > 0;
+              const checked = provSelected.has(p.id);
+              return (
+                <div key={p.id} onClick={() => toggle(p.id)}
+                  className={`flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${checked ? "border-red-400 bg-red-50" : "border-input hover:bg-muted/40"}`}>
+                  <div className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 ${checked ? "border-red-500 bg-red-500" : "border-muted-foreground/40"}`}>
+                    {checked && <span className="text-white text-[9px] leading-none">✓</span>}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm font-medium font-mono">{p.folio}</span>
+                    <p className="text-xs text-muted-foreground">{fmtDateLong(p.purchaseDate)}{parcial && <span className="text-amber-600"> · parcial, pagado {fmt(parseFloat(p.paidAmount))}</span>}</p>
+                  </div>
+                  <p className={`text-sm font-semibold flex-shrink-0 ${checked ? "text-red-700" : "text-orange-700"}`}>{fmt(pend)}</p>
                 </div>
-              )}
-            </div>
-            {/* Preview del saldo CC (dry-run) */}
-            {provSupplierId != null && provPreview && (
-              <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs">
-                CC de <b>{provPreview.supplierName?.trim()}</b>: <b>{fmt(provPreview.saldoAntes)}</b> → <b className="text-green-700">{fmt(provPreview.saldoDespues)}</b> (baja {fmt(provApplyMov?.grossAmount ?? 0)})
+              );
+            };
+
+            return (
+              <div className="space-y-3 py-1">
+                {provApplyMov && (
+                  <div className="bg-muted/50 rounded-lg px-3 py-2 text-xs flex items-center justify-between">
+                    <p className="font-mono text-muted-foreground truncate pr-2">{provApplyMov.leyendas || provApplyMov.displayName}</p>
+                    <p className="font-semibold text-red-700 flex-shrink-0">−{fmt(gross)}</p>
+                  </div>
+                )}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium">Proveedor</label>
+                  <Input value={provSearch} onChange={e => { setProvSearch(e.target.value); setProvSupplierId(null); setProvSelected(new Set()); }} placeholder="Buscar proveedor…" />
+                  {provSupplierId == null && provSearch.trim() && (
+                    <div className="border rounded-md overflow-hidden max-h-44 overflow-y-auto">
+                      {suppliers.filter(s => s.name.toLowerCase().includes(provSearch.toLowerCase())).slice(0, 20).map(s => (
+                        <button key={s.id} onClick={() => { setProvSupplierId(s.id); setProvSearch(s.name); }} className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors border-b last:border-b-0">{s.name}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {provSupplierId != null && provPreview && (
+                  <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs">
+                    CC de <b>{provPreview.supplierName?.trim()}</b>: <b>{fmt(provPreview.saldoAntes)}</b> → <b className="text-green-700">{fmt(provPreview.saldoDespues)}</b> (baja {fmt(gross)})
+                  </div>
+                )}
+
+                {/* Compras pendientes con checkbox — dos secciones, como clientes */}
+                {provSupplierId != null && (
+                  provPendingLoading ? (
+                    <p className="text-sm text-muted-foreground py-3 text-center">Cargando compras…</p>
+                  ) : provPendingPurchases.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-3 text-center">No hay compras pendientes.</p>
+                  ) : (
+                    <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+                      {periodo.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-xs font-semibold text-muted-foreground">Compras del período</p>
+                          {periodo.map(Row)}
+                        </div>
+                      )}
+                      {anteriores.length > 0 && (
+                        <div className="space-y-1.5">
+                          <p className="text-xs font-semibold text-amber-600">Pendientes de períodos anteriores</p>
+                          {anteriores.map(Row)}
+                        </div>
+                      )}
+                    </div>
+                  )
+                )}
+
+                {provSelected.size > 0 && (
+                  <div className="border-t pt-2 flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">{provSelected.size} compra{provSelected.size > 1 ? "s" : ""} · pendiente {fmt(selectedPending)}</span>
+                    <span className={selectedPending > gross + 0.01 ? "text-amber-600" : "text-muted-foreground"}>
+                      {selectedPending > gross + 0.01 ? "el pago no cubre todo → última queda parcial" : "el pago las cubre"}
+                    </span>
+                  </div>
+                )}
+
+                {provError && <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{provError}</p>}
+                <p className="text-[10px] text-muted-foreground">Elegí a qué compras imputar el pago (más viejas primero, deja parcial la última si no alcanza). Sin selección → se imputa FIFO automático. Si ya lo registraste a mano, usá "Pago ya registrado".</p>
               </div>
-            )}
-            {provError && <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{provError}</p>}
-            <p className="text-[10px] text-muted-foreground">Aplicar crea un pago al proveedor y baja su CC. Si ya lo registraste a mano (o es un cheque ya cargado), usá "Pago ya registrado".</p>
-          </div>
+            );
+          })()}
           <DialogFooter className="flex-col-reverse gap-2 sm:flex-row sm:justify-between">
             <Button variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50 sm:mr-auto" disabled={provYaRegistradoMut.isPending} onClick={() => provApplyMov && provYaRegistradoMut.mutate(String(provApplyMov.id))}>
               {provYaRegistradoMut.isPending ? "Marcando…" : "Pago ya registrado"}
             </Button>
             <div className="flex gap-2 sm:ml-auto">
-              <Button variant="outline" onClick={() => { setProvApplyOpen(false); setProvApplyMov(null); setProvSupplierId(null); setProvSearch(""); setProvError(null); }}>Cancelar</Button>
+              <Button variant="outline" onClick={() => { setProvApplyOpen(false); setProvApplyMov(null); setProvSupplierId(null); setProvSearch(""); setProvError(null); setProvSelected(new Set()); }}>Cancelar</Button>
               <Button
                 disabled={provSupplierId == null || provApplyMut.isPending}
                 onClick={() => provApplyMov && provSupplierId != null && provApplyMut.mutate({
@@ -1198,6 +1277,7 @@ export default function BancosPage() {
                   date: (provApplyMov.date_created ?? new Date().toISOString()).slice(0, 10),
                   method: provApplyMov.source === "galicia" ? "TRANSFERENCIA" : "MP",
                   galiciaId: provApplyMov.source === "galicia" ? String(provApplyMov.id) : undefined,
+                  purchaseIds: [...provSelected],
                 })}
               >{provApplyMut.isPending ? "Aplicando…" : "Aplicar a CC"}</Button>
             </div>

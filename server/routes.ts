@@ -1629,6 +1629,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const data = insertSupplierPaymentSchema.parse(req.body);
       const payment = await storage.createSupplierPayment(data, req.session.userId!);
+      // Imputar a las compras elegidas (purchaseIds[]) o FIFO sobre todas si no se eligió ninguna.
+      // Si el pago apunta a una compra puntual (purchaseId), esa imputación la maneja el netting legacy.
+      if (!data.purchaseId) {
+        const purchaseIds: number[] = Array.isArray(req.body.purchaseIds)
+          ? (req.body.purchaseIds as unknown[]).map(Number).filter((n) => !isNaN(n))
+          : [];
+        await storage.applySupplierPaymentToPurchases(payment.id, data.supplierId, parseFloat(String(data.amount)), purchaseIds);
+      }
       const cuentaId = req.body.cuentaId ? Number(req.body.cuentaId) : null;
       if (cuentaId) {
         await storage.createMovimientoCuenta({
@@ -1697,8 +1705,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/ap/pending-purchases/:supplierId", requireAuth, async (req, res) => {
     try {
-      return res.json(await storage.getPendingPurchasesForSupplier(Number(req.params.supplierId)));
+      const excludePaymentId = req.query.excludePaymentId ? Number(req.query.excludePaymentId) : undefined;
+      return res.json(await storage.getPendingPurchasesForSupplier(Number(req.params.supplierId), excludePaymentId));
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // Re-imputar un pago EXISTENTE a compras elegidas a mano (reasignar; sin tocar el saldo).
+  // Reescribe sus supplier_payment_purchase_links según purchaseIds[] (reparte por fecha, parcial la última).
+  app.post("/api/ap/payments/:id/impute", requireAuth, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const purchaseIds: number[] = Array.isArray(req.body.purchaseIds)
+        ? (req.body.purchaseIds as unknown[]).map(Number).filter((n) => !isNaN(n))
+        : [];
+      const pay = await storage.getSupplierPaymentById(id);
+      if (!pay) return res.status(404).json({ error: "Pago no encontrado" });
+      await storage.applySupplierPaymentToPurchases(id, pay.supplierId, parseFloat(String(pay.amount)), purchaseIds);
+      return res.json({ ok: true, imputadas: purchaseIds.length });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   app.get("/api/ap/empties/:supplierId", requireAuth, async (req, res) => {
@@ -3456,9 +3480,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Aplicar un movimiento de banco a la CC de un proveedor (baja su deuda). dryRun=preview.
   app.post("/api/bank/supplier-payment", requireAuth, async (req: any, res) => {
     try {
-      const { movementId, supplierId, amount, date, method, galiciaId, dryRun } = req.body as {
+      const { movementId, supplierId, amount, date, method, galiciaId, dryRun, purchaseIds } = req.body as {
         movementId?: string; supplierId?: number; amount?: number; date?: string;
-        method?: string; galiciaId?: string; dryRun?: boolean;
+        method?: string; galiciaId?: string; dryRun?: boolean; purchaseIds?: number[];
       };
       if (!movementId) return res.status(400).json({ error: "movementId requerido" });
       if (!supplierId) return res.status(400).json({ error: "supplierId requerido" });
@@ -3466,6 +3490,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const result = await storage.applyBankMovementToSupplier({
         movementId, supplierId, amount, date: date ?? new Date().toISOString().slice(0, 10),
         method, galiciaId, userId: req.session.userId, dryRun: dryRun === true,
+        purchaseIds: Array.isArray(purchaseIds) ? purchaseIds.map(Number).filter((n) => !isNaN(n)) : undefined,
       });
       return res.json(result);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }

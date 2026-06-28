@@ -3,7 +3,7 @@ import {
   users, customers, products, purchases, purchaseItems,
   stockMovements, productCostHistory, orders, orderItems,
   priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks,
-  suppliers, supplierPayments, clientGroups, clientGroupMembers, priceListItems,
+  suppliers, supplierPayments, supplierPaymentPurchaseLinks, clientGroups, clientGroupMembers, priceListItems,
   invoices, cajaMovements, bankCategories, mpMovementOverrides, bankContacts, bankPaymentLinks,
   mpMovementIdentifiers,
   creditNotes,
@@ -4261,12 +4261,20 @@ export const storage = {
 
   // ─── AP Payments ──────────────────────────────────────────────────────────────
 
+  async getSupplierPaymentById(id: number): Promise<SupplierPayment | undefined> {
+    const [p] = await db.select().from(supplierPayments).where(eq(supplierPayments.id, id)).limit(1);
+    return p;
+  },
+
   async createSupplierPayment(data: InsertSupplierPayment, userId?: number): Promise<SupplierPayment> {
     const [p] = await db.insert(supplierPayments).values({ ...data, createdBy: userId ?? null }).returning();
     return p;
   },
 
   async deleteSupplierPayment(id: number): Promise<void> {
+    // Proveedor del pago (para recomputar is_paid tras borrar; el cascade ya limpia las imputaciones)
+    const supRow = (await db.execute(drizzleSql`SELECT supplier_id AS "supplierId" FROM supplier_payments WHERE id = ${id}`)).rows[0] as any;
+    const supplierId = supRow ? Number(supRow.supplierId) : null;
     // Limpiar cheques/obligaciones vinculados a este pago (sin esto quedaban huérfanos
     // y aparecían como cheques duplicados al borrar y recrear un pago con cheque).
     const linked: any = await db.execute(drizzleSql`
@@ -4286,22 +4294,174 @@ export const storage = {
         await this.deleteMovimientoCuentaByOrigen("cheque_endosado", String(ch.id));
       }
     }
-    await db.delete(supplierPayments).where(eq(supplierPayments.id, id));
+    await db.delete(supplierPayments).where(eq(supplierPayments.id, id)); // cascade borra las imputaciones
+    // Revertir imputaciones: lo que cubría este pago vuelve a pendiente/parcial según el resto
+    if (supplierId) await this._recomputeSupplierPaidFlags(supplierId);
   },
 
-  async getPendingPurchasesForSupplier(supplierId: number): Promise<{ id: number; folio: string; total: string; purchaseDate: string }[]> {
-    const result = await db
-      .select({ id: purchases.id, folio: purchases.folio, total: purchases.total, purchaseDate: purchases.purchaseDate })
-      .from(purchases)
-      .where(and(eq(purchases.supplierId, supplierId), eq(purchases.isPaid, false)))
-      .orderBy(desc(purchases.purchaseDate))
-      .limit(60);
-    return result.map((r) => ({
-      id: r.id,
-      folio: r.folio,
-      total: r.total != null ? String(r.total) : "0",
+  // ─── Imputación de pagos a compras (lado proveedor, espejo de getPendingOrdersForCustomer) ────
+  // Netea Σpagos contra las compras del proveedor: respeta imputaciones explícitas
+  // (supplier_payment_purchase_links) y el legacy supplier_payments.purchase_id; los pagos sin
+  // imputar van a un pool que se aplica FIFO (compra más vieja primero). Devuelve cada compra con
+  // cuánto tiene cubierto y su estado. NO cambia Σpagos ni Σcompras → el saldo del proveedor es
+  // invariante; esta función SOLO reparte la cobertura entre las compras.
+  async _supplierPurchaseStates(
+    supplierId: number,
+    opts?: { excludePaymentId?: number },
+  ): Promise<{ id: number; folio: string; purchaseDate: string; total: number; covered: number; status: "pagada" | "parcial" | "pendiente" }[]> {
+    const exclude = opts?.excludePaymentId ?? 0;
+    const [purchasesRows, paymentsRows] = await Promise.all([
+      db.execute(drizzleSql`
+        SELECT id, folio, purchase_date AS "purchaseDate", total::numeric AS total
+        FROM purchases
+        WHERE supplier_id = ${supplierId}
+        ORDER BY purchase_date ASC, id ASC
+      `),
+      db.execute(drizzleSql`
+        SELECT
+          sp.id,
+          sp.amount::numeric AS amount,
+          sp.purchase_id AS "legacyPurchaseId",
+          STRING_AGG(CAST(sppl.purchase_id AS text), ',' ORDER BY pu.purchase_date, pu.id)
+            FILTER (WHERE sppl.purchase_id IS NOT NULL) AS linked_ids,
+          STRING_AGG(COALESCE(sppl.amount_applied::text, 'N'), ',' ORDER BY pu.purchase_date, pu.id)
+            FILTER (WHERE sppl.purchase_id IS NOT NULL) AS amounts_applied
+        FROM supplier_payments sp
+        LEFT JOIN supplier_payment_purchase_links sppl ON sppl.supplier_payment_id = sp.id
+        LEFT JOIN purchases pu ON pu.id = sppl.purchase_id
+        WHERE sp.supplier_id = ${supplierId} AND sp.id <> ${exclude}
+        GROUP BY sp.id, sp.amount, sp.purchase_id, sp.date
+        ORDER BY sp.date, sp.id
+      `),
+    ]);
+
+    const purchasesList = (purchasesRows.rows as any[]).map((r) => ({
+      id: Number(r.id),
+      folio: String(r.folio),
       purchaseDate: r.purchaseDate instanceof Date ? r.purchaseDate.toISOString() : String(r.purchaseDate),
+      total: Math.round(parseFloat(r.total ?? "0")),
     }));
+    const totalById = new Map(purchasesList.map((p) => [p.id, p.total]));
+    const credit = new Map<number, number>();
+    let pool = 0;
+
+    for (const p of paymentsRows.rows as any[]) {
+      const amount = Math.round(parseFloat(p.amount ?? "0"));
+      const linkedStr: string | null = p.linked_ids;
+      const amountsStr: string | null = p.amounts_applied;
+      const legacyId = p.legacyPurchaseId != null ? Number(p.legacyPurchaseId) : null;
+
+      if (linkedStr) {
+        // Pago con imputación explícita: usar amount_applied exacto cuando esté disponible
+        const ids = linkedStr.split(",").map(Number).filter((n) => !isNaN(n) && n > 0);
+        const raw = amountsStr ? amountsStr.split(",") : [];
+        const allKnown = raw.length === ids.length && raw.every((s) => s !== "N");
+        let applied = 0;
+        if (allKnown) {
+          for (let i = 0; i < ids.length; i++) {
+            const a = Math.round(parseFloat(raw[i]));
+            if (!isNaN(a) && a > 0) { credit.set(ids[i], (credit.get(ids[i]) ?? 0) + a); applied += a; }
+          }
+        } else {
+          let rem = amount;
+          for (const id of ids) {
+            if (rem <= 0) break;
+            const room = Math.max(0, (totalById.get(id) ?? 0) - (credit.get(id) ?? 0));
+            const a = Math.min(rem, room);
+            if (a > 0) { credit.set(id, (credit.get(id) ?? 0) + a); rem -= a; applied += a; }
+          }
+        }
+        pool += Math.max(0, amount - applied); // sobrante → FIFO
+      } else if (legacyId && totalById.has(legacyId)) {
+        // Legacy: pago atado a una compra (puesta al día CC / auto-pago de compra contado)
+        const room = Math.max(0, (totalById.get(legacyId) ?? 0) - (credit.get(legacyId) ?? 0));
+        const a = Math.min(amount, room);
+        if (a > 0) credit.set(legacyId, (credit.get(legacyId) ?? 0) + a);
+        pool += Math.max(0, amount - a);
+      } else {
+        pool += amount; // pago flotante (sin imputar) → FIFO
+      }
+    }
+
+    // Pool FIFO: cubrir compras más viejas primero
+    for (const p of purchasesList) {
+      if (pool <= 0) break;
+      const room = Math.max(0, p.total - (credit.get(p.id) ?? 0));
+      const a = Math.min(pool, room);
+      if (a > 0) { credit.set(p.id, (credit.get(p.id) ?? 0) + a); pool -= a; }
+    }
+
+    return purchasesList.map((p) => {
+      const covered = Math.round(credit.get(p.id) ?? 0);
+      const status: "pagada" | "parcial" | "pendiente" =
+        covered >= p.total - 1 ? "pagada" : covered > 0 ? "parcial" : "pendiente";
+      return { ...p, covered, status };
+    });
+  },
+
+  // Compras no saldadas del proveedor (incluye parciales), con cuánto llevan pagado. Sin filtro de
+  // período (trae todas, como getPendingOrdersForCustomer) — el frontend las parte en dos secciones.
+  // excludePaymentId: ignora la cobertura de ESE pago (para re-imputar un pago existente a mano —
+  // muestra las compras como si ese pago no estuviera aplicado).
+  async getPendingPurchasesForSupplier(supplierId: number, excludePaymentId?: number): Promise<{ id: number; folio: string; total: string; purchaseDate: string; paidAmount: string; status: string }[]> {
+    const states = await this._supplierPurchaseStates(supplierId, excludePaymentId ? { excludePaymentId } : undefined);
+    return states
+      .filter((s) => s.status !== "pagada")
+      .map((s) => ({
+        id: s.id,
+        folio: s.folio,
+        total: s.total.toFixed(2),
+        purchaseDate: s.purchaseDate,
+        paidAmount: s.covered.toFixed(2),
+        status: s.status,
+      }));
+  },
+
+  // Imputar un pago a compras del proveedor. Si se pasan purchaseIds, reparte el monto SOLO sobre
+  // esas (más vieja primero, parcial la última). Si no, FIFO sobre todas las pendientes (autoApply).
+  // Escribe supplier_payment_purchase_links (parciales reales) y sincroniza el flag is_paid.
+  // Idempotente: borra las imputaciones previas de ESTE pago antes de recalcular.
+  async applySupplierPaymentToPurchases(
+    supplierPaymentId: number,
+    supplierId: number,
+    amount: number,
+    purchaseIds?: number[],
+  ): Promise<void> {
+    await db.delete(supplierPaymentPurchaseLinks).where(eq(supplierPaymentPurchaseLinks.supplierPaymentId, supplierPaymentId));
+
+    // Cobertura por el RESTO de los pagos (excluyendo éste): repartimos sobre lo que queda libre
+    const states = await this._supplierPurchaseStates(supplierId, { excludePaymentId: supplierPaymentId });
+    const byId = new Map(states.map((s) => [s.id, s]));
+
+    // Orden de imputación: si hay selección, esas compras ordenadas por fecha; si no, todas (FIFO)
+    const targets = (purchaseIds && purchaseIds.length > 0)
+      ? purchaseIds.map((id) => byId.get(id)).filter((s): s is NonNullable<typeof s> => !!s)
+          .sort((a, b) => (a.purchaseDate < b.purchaseDate ? -1 : a.purchaseDate > b.purchaseDate ? 1 : a.id - b.id))
+      : states; // ya viene ordenado por fecha asc
+
+    let remaining = Math.round(amount);
+    const links: { supplierPaymentId: number; purchaseId: number; amountApplied: string }[] = [];
+    for (const s of targets) {
+      if (remaining <= 0) break;
+      const room = Math.max(0, s.total - s.covered);
+      const toApply = Math.min(remaining, room);
+      if (toApply > 0) {
+        links.push({ supplierPaymentId, purchaseId: s.id, amountApplied: toApply.toFixed(2) });
+        remaining -= toApply;
+      }
+    }
+    if (links.length > 0) await db.insert(supplierPaymentPurchaseLinks).values(links);
+    await this._recomputeSupplierPaidFlags(supplierId);
+  },
+
+  // Sincroniza el flag físico purchases.is_paid con el netting (pagada = cubierta completa).
+  // Mantiene correcto cualquier lugar que lea is_paid directamente.
+  async _recomputeSupplierPaidFlags(supplierId: number): Promise<void> {
+    const states = await this._supplierPurchaseStates(supplierId);
+    const paidIds = states.filter((s) => s.status === "pagada").map((s) => s.id);
+    const unpaidIds = states.filter((s) => s.status !== "pagada").map((s) => s.id);
+    if (paidIds.length > 0) await db.update(purchases).set({ isPaid: true }).where(inArray(purchases.id, paidIds));
+    if (unpaidIds.length > 0) await db.update(purchases).set({ isPaid: false }).where(inArray(purchases.id, unpaidIds));
   },
 
   // ─── AP CC Summary (resumen mensual por proveedor) ────────────────────────────
@@ -4445,15 +4605,27 @@ export const storage = {
 
     const saldoMesAnterior = Math.round(prevPurchasesTotal - prevPaymentsTotal);
 
-    const purchasesInPeriod = (purchasesInRows.rows as any[]).map((p) => ({
-      id: Number(p.id),
-      folio: String(p.folio),
-      purchaseDate: String(p.purchaseDate),
-      total: Math.round(parseFloat(p.total ?? "0")),
-      paymentMethod: String(p.paymentMethod ?? "cuenta_corriente"),
-      isPaid: Boolean(p.isPaid),
-      totalEmptyCost: Math.round(parseFloat(p.totalEmptyCost ?? "0")),
-    }));
+    // Netting: estado (pagada/parcial/pendiente) y monto pagado por compra
+    const purchaseStates = await this._supplierPurchaseStates(supplierId);
+    const stateById = new Map(purchaseStates.map((s) => [s.id, s]));
+
+    const purchasesInPeriod = (purchasesInRows.rows as any[]).map((p) => {
+      const total = Math.round(parseFloat(p.total ?? "0"));
+      const stt = stateById.get(Number(p.id));
+      const status = stt ? stt.status : (Boolean(p.isPaid) ? "pagada" : "pendiente");
+      const paidAmount = stt ? stt.covered : (Boolean(p.isPaid) ? total : 0);
+      return {
+        id: Number(p.id),
+        folio: String(p.folio),
+        purchaseDate: String(p.purchaseDate),
+        total,
+        paymentMethod: String(p.paymentMethod ?? "cuenta_corriente"),
+        isPaid: status === "pagada",
+        status,        // "pagada" | "parcial" | "pendiente"
+        paidAmount,    // cuánto lleva imputado (para parciales)
+        totalEmptyCost: Math.round(parseFloat(p.totalEmptyCost ?? "0")),
+      };
+    });
 
     const facturacion = purchasesInPeriod.reduce((s, p) => s + p.total, 0);
     const cobranza = paymentsInPeriod.reduce((s, p) => s + Math.round(parseFloat(p.amount ?? "0")), 0);
@@ -6193,6 +6365,7 @@ export const storage = {
   async applyBankMovementToSupplier(data: {
     movementId: string; supplierId: number; amount: number; date: string;
     method?: string; notes?: string; galiciaId?: string; userId?: number; dryRun?: boolean;
+    purchaseIds?: number[];
   }): Promise<any> {
     // Anti-duplicado: si ya hay un supplier_payment con este movement_ref, no re-aplicar.
     const yaAplicado = (await db.execute(drizzleSql`SELECT id FROM supplier_payments WHERE movement_ref = ${data.movementId} LIMIT 1`)).rows[0] as any;
@@ -6211,6 +6384,9 @@ export const storage = {
       method: (data.method ?? "TRANSFERENCIA") as any, notes: data.notes ?? `Pago banco — movimiento ${data.movementId}`,
       movementRef: data.movementId, createdBy: data.userId ?? null,
     } as any).returning();
+
+    // Imputar a las compras elegidas (o FIFO sobre todas si no se eligió ninguna)
+    await this.applySupplierPaymentToPurchases(pay.id, data.supplierId, data.amount, data.purchaseIds);
 
     if (data.galiciaId) {
       await db.execute(drizzleSql`UPDATE galicia_movements SET asignacion_cc = 'asignado' WHERE id = ${data.galiciaId}`);
