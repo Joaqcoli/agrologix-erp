@@ -350,6 +350,9 @@ export async function runMigrations() {
     )
   `);
 
+  // Vínculo supplier_payment → movimiento de banco que lo originó (anti-duplicado + revert)
+  try { await db.execute(sql`ALTER TABLE supplier_payments ADD COLUMN IF NOT EXISTS movement_ref TEXT`); } catch {}
+
   await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS supplier_id INTEGER REFERENCES suppliers(id)`);
   await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'cuenta_corriente'`);
   await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS is_paid BOOLEAN NOT NULL DEFAULT false`);

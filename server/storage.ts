@@ -5642,6 +5642,25 @@ export const storage = {
       for (const c of custs) if (c.cuit_norm) cuitToCustomer.set(String(c.cuit_norm), { id: c.id, name: c.name });
     }
 
+    // Proveedor: egresos "Pago a proveedor" pendientes de aplicar a CC.
+    const pagosProvPend = rows.filter(r => r.category === "Pago a proveedor" && r.debito != null && r.asignacion_cc == null);
+    let suppliers: { id: number; name: string }[] = [];
+    const refsAplicados = new Set<string>();
+    if (pagosProvPend.length > 0) {
+      suppliers = (await db.execute(drizzleSql`SELECT id, name FROM suppliers`)).rows as any[];
+      const sp = (await db.execute(drizzleSql`SELECT movement_ref FROM supplier_payments WHERE movement_ref IS NOT NULL`)).rows as any[];
+      for (const x of sp) refsAplicados.add(String(x.movement_ref));
+    }
+    const matchSupplier = (leyenda: string | null) => {
+      const L = String(leyenda ?? "").toUpperCase();
+      if (!L) return null;
+      for (const s of suppliers) {
+        const tokens = String(s.name).toUpperCase().split(/[\s\-]+/).filter(t => t.length >= 4);
+        if (tokens.some(t => L.includes(t))) return s;
+      }
+      return null;
+    };
+
     return rows.map((r) => {
       const isOutgoing = r.debito != null;
       const gross = Math.abs(parseFloat(String(r.debito ?? r.credito ?? 0)));
@@ -5654,6 +5673,11 @@ export const storage = {
         const hit = suggestedCuit ? cuitToCustomer.get(suggestedCuit) : undefined;
         if (hit) { suggestedCustomerId = hit.id; suggestedCustomerName = hit.name; }
       }
+      // Pago a proveedor pendiente de aplicar a CC (+ hint de proveedor por nombre)
+      const esPagoProvPend = r.category === "Pago a proveedor" && isOutgoing && r.asignacion_cc == null;
+      const yaAplicadoProv = refsAplicados.has(String(r.id));
+      let suggestedSupplierId: number | null = null, suggestedSupplierName: string | null = null;
+      if (esPagoProvPend && !yaAplicadoProv) { const sm = matchSupplier(r.leyendas); if (sm) { suggestedSupplierId = sm.id; suggestedSupplierName = sm.name; } }
       return {
         id: r.id,                                   // "galicia:..."
         date_created: `${r.fecha}T00:00:00-03:00`,  // sin hora real en el extracto
@@ -5678,6 +5702,11 @@ export const storage = {
         suggestedCustomerId,
         suggestedCustomerName,
         suggestedCuit,
+        // Pago a proveedor: pendiente de aplicar a CC + proveedor sugerido por nombre
+        esPagoProvPend: esPagoProvPend && !yaAplicadoProv,
+        yaAplicadoProv,
+        suggestedSupplierId,
+        suggestedSupplierName,
         source: "galicia",
       };
     });
@@ -6145,6 +6174,52 @@ export const storage = {
 
   // Marca un cobro de Galicia como "ya registrado" a mano → NO toca la CC, deja de figurar pendiente.
   async marcarCobroGaliciaYaRegistrado(galiciaId: string): Promise<{ ok: boolean }> {
+    await db.execute(drizzleSql`UPDATE galicia_movements SET asignacion_cc = 'ya_registrado' WHERE id = ${galiciaId}`);
+    return { ok: true };
+  },
+
+  // Saldo CC de un proveedor = Σ compras − Σ pagos (misma fórmula que el módulo AP).
+  async getSupplierSaldo(supplierId: number): Promise<number> {
+    const r = (await db.execute(drizzleSql`
+      SELECT COALESCE((SELECT sum(total::numeric) FROM purchases WHERE supplier_id = ${supplierId}), 0)
+           - COALESCE((SELECT sum(amount::numeric) FROM supplier_payments WHERE supplier_id = ${supplierId}), 0) AS saldo
+    `)).rows[0] as any;
+    return Math.round(parseFloat(String(r?.saldo ?? 0)));
+  },
+
+  // Aplicar un movimiento de banco a la CC de un proveedor (espejo de applyBankMovementToOrders).
+  // Crea un supplier_payment (baja la CC) con movement_ref = id del movimiento (anti-duplicado +
+  // revert). Si es de Galicia, marca asignacion_cc='asignado'. dryRun = preview saldo, sin escribir.
+  async applyBankMovementToSupplier(data: {
+    movementId: string; supplierId: number; amount: number; date: string;
+    method?: string; notes?: string; galiciaId?: string; userId?: number; dryRun?: boolean;
+  }): Promise<any> {
+    // Anti-duplicado: si ya hay un supplier_payment con este movement_ref, no re-aplicar.
+    const yaAplicado = (await db.execute(drizzleSql`SELECT id FROM supplier_payments WHERE movement_ref = ${data.movementId} LIMIT 1`)).rows[0] as any;
+    if (yaAplicado) throw new Error("Este movimiento ya fue aplicado a un proveedor (no se duplica).");
+
+    const saldoAntes = await this.getSupplierSaldo(data.supplierId);
+    const saldoDespues = saldoAntes - Math.round(data.amount);
+
+    if (data.dryRun) {
+      const sup = (await db.execute(drizzleSql`SELECT name FROM suppliers WHERE id = ${data.supplierId}`)).rows[0] as any;
+      return { dryRun: true, supplierId: data.supplierId, supplierName: sup?.name ?? null, amount: Math.round(data.amount), saldoAntes, saldoDespues };
+    }
+
+    const [pay] = await db.insert(supplierPayments).values({
+      supplierId: data.supplierId, date: data.date, amount: String(data.amount.toFixed(2)),
+      method: (data.method ?? "TRANSFERENCIA") as any, notes: data.notes ?? `Pago banco — movimiento ${data.movementId}`,
+      movementRef: data.movementId, createdBy: data.userId ?? null,
+    } as any).returning();
+
+    if (data.galiciaId) {
+      await db.execute(drizzleSql`UPDATE galicia_movements SET asignacion_cc = 'asignado' WHERE id = ${data.galiciaId}`);
+    }
+    return { supplierPaymentId: pay.id, saldoAntes, saldoDespues };
+  },
+
+  // Marcar un pago a proveedor de Galicia como "ya registrado" (NO toca CC).
+  async marcarPagoProveedorYaRegistrado(galiciaId: string): Promise<{ ok: boolean }> {
     await db.execute(drizzleSql`UPDATE galicia_movements SET asignacion_cc = 'ya_registrado' WHERE id = ${galiciaId}`);
     return { ok: true };
   },

@@ -94,6 +94,13 @@ export default function BancosPage() {
   const [galiciaPickMov, setGaliciaPickMov] = useState<MpMovement | null>(null);
   const [galiciaPickSearch, setGaliciaPickSearch] = useState("");
 
+  // Aplicar pago a PROVEEDOR (espejo del de clientes): movimiento + proveedor elegido
+  const [provApplyOpen, setProvApplyOpen] = useState(false);
+  const [provApplyMov, setProvApplyMov] = useState<MpMovement | null>(null);
+  const [provSupplierId, setProvSupplierId] = useState<number | null>(null);
+  const [provSearch, setProvSearch] = useState("");
+  const [provError, setProvError] = useState<string | null>(null);
+
   // Identificar / Editar contacto dialog
   const [identifyOpen, setIdentifyOpen] = useState(false);
   const [identifyMov, setIdentifyMov] = useState<MpMovement | null>(null);
@@ -135,8 +142,43 @@ export default function BancosPage() {
   const { data: suppliers = [] } = useQuery<SimpleEntity[]>({
     queryKey: ["/api/suppliers"],
     queryFn: () => fetch("/api/suppliers", { credentials: "include" }).then(r => r.json()),
-    enabled: identifyOpen && (idType === "proveedor"),
+    enabled: (identifyOpen && (idType === "proveedor")) || provApplyOpen,
   });
+
+  // Preview del saldo CC del proveedor elegido (dry-run, no escribe)
+  const { data: provPreview } = useQuery<{ saldoAntes: number; saldoDespues: number; supplierName: string } | null>({
+    queryKey: ["/api/bank/supplier-payment", "dry", provApplyMov?.id, provSupplierId],
+    queryFn: () => apiRequest("POST", "/api/bank/supplier-payment", {
+      movementId: String(provApplyMov!.id), supplierId: provSupplierId, amount: provApplyMov!.grossAmount, dryRun: true,
+    }).then(r => r.json()),
+    enabled: provApplyOpen && !!provApplyMov && provSupplierId != null,
+  });
+
+  // Aplicar el pago a la CC del proveedor (baja la deuda)
+  const provApplyMut = useMutation({
+    mutationFn: (data: { movementId: string; supplierId: number; amount: number; date: string; method?: string; galiciaId?: string }) =>
+      apiRequest("POST", "/api/bank/supplier-payment", data).then(r => r.json()),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/galicia/movements"] });
+      qc.invalidateQueries({ queryKey: ["/api/ap/cc"] });
+      setProvApplyOpen(false); setProvApplyMov(null); setProvSupplierId(null); setProvSearch(""); setProvError(null);
+    },
+    onError: (e: Error) => setProvError(e.message),
+  });
+
+  // Marcar pago a proveedor como ya registrado (NO toca CC)
+  const provYaRegistradoMut = useMutation({
+    mutationFn: (id: string) => apiRequest("POST", "/api/galicia/pago-proveedor/ya-registrado", { id }).then(r => r.json()),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/galicia/movements"] });
+      setProvApplyOpen(false); setProvApplyMov(null); setProvSupplierId(null); setProvSearch(""); setProvError(null);
+    },
+    onError: (e: Error) => setProvError(e.message),
+  });
+
+  const openProvApply = (m: MpMovement) => {
+    setProvApplyMov(m); setProvSupplierId(m.suggestedSupplierId ?? null); setProvSearch(""); setProvError(null); setProvApplyOpen(true);
+  };
 
   const { data: allBankContacts = [] } = useQuery<BankContact[]>({
     queryKey: ["/api/bank-contacts"],
@@ -573,6 +615,16 @@ export default function BancosPage() {
               className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors flex-shrink-0"
             >Identificar cliente</button>
           )
+        )}
+        {/* Asignación de pagos a proveedor: aplicar a la CC del proveedor */}
+        {m.yaAplicadoProv && (
+          <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">✓ aplicado a CC</span>
+        )}
+        {m.esPagoProvPend && (
+          <button
+            onClick={() => openProvApply(m)}
+            className="text-[11px] text-purple-700 hover:text-purple-900 font-medium border border-purple-300 rounded px-1.5 py-0.5 leading-tight hover:bg-purple-50 transition-colors flex-shrink-0"
+          >{m.suggestedSupplierName ? `Aplicar a ${m.suggestedSupplierName}` : "Aplicar pago"}</button>
         )}
       </>
     );
@@ -1086,6 +1138,55 @@ export default function BancosPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => { setGaliciaPickOpen(false); setGaliciaPickMov(null); setGaliciaPickSearch(""); }}>Cancelar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Dialog: aplicar pago a la CC de un PROVEEDOR ── */}
+      <Dialog open={provApplyOpen} onOpenChange={v => { if (!v) { setProvApplyOpen(false); setProvApplyMov(null); setProvSupplierId(null); setProvSearch(""); setProvError(null); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Aplicar pago a proveedor</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-1">
+            {provApplyMov && (
+              <div className="bg-muted/50 rounded-lg px-3 py-2 text-xs">
+                <p className="font-mono text-muted-foreground">{provApplyMov.leyendas || provApplyMov.displayName}</p>
+                <p className="font-semibold text-red-700">−{fmt(provApplyMov.grossAmount ?? 0)}</p>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">Proveedor</label>
+              <Input value={provSearch} onChange={e => { setProvSearch(e.target.value); setProvSupplierId(null); }} placeholder="Buscar proveedor…" />
+              {provSupplierId == null && provSearch.trim() && (
+                <div className="border rounded-md overflow-hidden max-h-44 overflow-y-auto">
+                  {suppliers.filter(s => s.name.toLowerCase().includes(provSearch.toLowerCase())).slice(0, 20).map(s => (
+                    <button key={s.id} onClick={() => { setProvSupplierId(s.id); setProvSearch(s.name); }} className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors border-b last:border-b-0">{s.name}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Preview del saldo CC (dry-run) */}
+            {provSupplierId != null && provPreview && (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs">
+                CC de <b>{provPreview.supplierName?.trim()}</b>: <b>{fmt(provPreview.saldoAntes)}</b> → <b className="text-green-700">{fmt(provPreview.saldoDespues)}</b> (baja {fmt(provApplyMov?.grossAmount ?? 0)})
+              </div>
+            )}
+            {provError && <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{provError}</p>}
+            <p className="text-[10px] text-muted-foreground">Aplicar crea un pago al proveedor y baja su CC. Si ya lo registraste a mano (o es un cheque ya cargado), usá "Pago ya registrado".</p>
+          </div>
+          <DialogFooter className="flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+            <Button variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50 sm:mr-auto" disabled={provYaRegistradoMut.isPending} onClick={() => provApplyMov && provYaRegistradoMut.mutate(String(provApplyMov.id))}>
+              {provYaRegistradoMut.isPending ? "Marcando…" : "Pago ya registrado"}
+            </Button>
+            <div className="flex gap-2 sm:ml-auto">
+              <Button variant="outline" onClick={() => { setProvApplyOpen(false); setProvApplyMov(null); setProvSupplierId(null); setProvSearch(""); setProvError(null); }}>Cancelar</Button>
+              <Button
+                disabled={provSupplierId == null || provApplyMut.isPending}
+                onClick={() => provApplyMov && provSupplierId != null && provApplyMut.mutate({
+                  movementId: String(provApplyMov.id), supplierId: provSupplierId, amount: provApplyMov.grossAmount ?? 0,
+                  date: (provApplyMov.date_created ?? new Date().toISOString()).slice(0, 10), method: "TRANSFERENCIA", galiciaId: String(provApplyMov.id),
+                })}
+              >{provApplyMut.isPending ? "Aplicando…" : "Aplicar a CC"}</Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

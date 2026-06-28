@@ -108,6 +108,11 @@ export type MpMovement = {
   suggestedCustomerId?: number | null;
   suggestedCustomerName?: string | null;
   suggestedCuit?: string | null;
+  // pago a proveedor pendiente de aplicar a CC
+  esPagoProvPend?: boolean;
+  yaAplicadoProv?: boolean;
+  suggestedSupplierId?: number | null;
+  suggestedSupplierName?: string | null;
 };
 
 export type MpMovementsResponse = { results?: MpMovement[]; error?: string };

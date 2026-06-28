@@ -93,6 +93,7 @@ export const supplierPayments = pgTable("supplier_payments", {
   method: text("method").notNull().default("EFECTIVO"),
   notes: text("notes"),
   purchaseId: integer("purchase_id").references(() => purchases.id),
+  movementRef: text("movement_ref"),  // id del movimiento de banco que originó el pago (galicia:.. / mp:..) — anti-duplicado + revert
   createdBy: integer("created_by").references(() => users.id),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });

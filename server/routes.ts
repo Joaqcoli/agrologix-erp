@@ -3427,5 +3427,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // Aplicar un movimiento de banco a la CC de un proveedor (baja su deuda). dryRun=preview.
+  app.post("/api/bank/supplier-payment", requireAuth, async (req: any, res) => {
+    try {
+      const { movementId, supplierId, amount, date, method, galiciaId, dryRun } = req.body as {
+        movementId?: string; supplierId?: number; amount?: number; date?: string;
+        method?: string; galiciaId?: string; dryRun?: boolean;
+      };
+      if (!movementId) return res.status(400).json({ error: "movementId requerido" });
+      if (!supplierId) return res.status(400).json({ error: "supplierId requerido" });
+      if (!(amount && amount > 0)) return res.status(400).json({ error: "amount inválido" });
+      const result = await storage.applyBankMovementToSupplier({
+        movementId, supplierId, amount, date: date ?? new Date().toISOString().slice(0, 10),
+        method, galiciaId, userId: req.session.userId, dryRun: dryRun === true,
+      });
+      return res.json(result);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  // Marcar un pago a proveedor de Galicia como "ya registrado" (NO toca CC).
+  app.post("/api/galicia/pago-proveedor/ya-registrado", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.body as { id?: string };
+      if (!id) return res.status(400).json({ error: "id requerido" });
+      return res.json(await storage.marcarPagoProveedorYaRegistrado(id));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   return httpServer;
 }
