@@ -352,6 +352,8 @@ export async function runMigrations() {
 
   // Vínculo supplier_payment → movimiento de banco que lo originó (anti-duplicado + revert)
   try { await db.execute(sql`ALTER TABLE supplier_payments ADD COLUMN IF NOT EXISTS movement_ref TEXT`); } catch {}
+  // Movimientos de banco (MP) marcados como "pago a proveedor ya registrado" (los de Galicia usan asignacion_cc)
+  try { await db.execute(sql`CREATE TABLE IF NOT EXISTS bank_prov_registrado (movement_id TEXT PRIMARY KEY, created_at TIMESTAMP NOT NULL DEFAULT now())`); } catch {}
 
   await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS supplier_id INTEGER REFERENCES suppliers(id)`);
   await db.execute(sql`ALTER TABLE purchases ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'cuenta_corriente'`);

@@ -6218,10 +6218,27 @@ export const storage = {
     return { supplierPaymentId: pay.id, saldoAntes, saldoDespues };
   },
 
-  // Marcar un pago a proveedor de Galicia como "ya registrado" (NO toca CC).
-  async marcarPagoProveedorYaRegistrado(galiciaId: string): Promise<{ ok: boolean }> {
-    await db.execute(drizzleSql`UPDATE galicia_movements SET asignacion_cc = 'ya_registrado' WHERE id = ${galiciaId}`);
+  // Marcar un pago a proveedor como "ya registrado" (NO toca CC). Galicia → asignacion_cc;
+  // MP/otros → tabla bank_prov_registrado (los movimientos MP no tienen fila propia).
+  async marcarPagoProveedorYaRegistrado(movementId: string): Promise<{ ok: boolean }> {
+    if (movementId.startsWith("galicia:")) {
+      await db.execute(drizzleSql`UPDATE galicia_movements SET asignacion_cc = 'ya_registrado' WHERE id = ${movementId}`);
+    } else {
+      await db.execute(drizzleSql`INSERT INTO bank_prov_registrado (movement_id) VALUES (${movementId}) ON CONFLICT (movement_id) DO NOTHING`);
+    }
     return { ok: true };
+  },
+
+  // Sets para el endpoint MP: refs ya aplicados a un proveedor + movimientos marcados "ya registrado".
+  async getAppliedSupplierRefs(): Promise<Set<string>> {
+    const rows = (await db.execute(drizzleSql`SELECT movement_ref FROM supplier_payments WHERE movement_ref IS NOT NULL`)).rows as any[];
+    return new Set(rows.map(r => String(r.movement_ref)));
+  },
+  async getProvRegistrados(): Promise<Set<string>> {
+    try {
+      const rows = (await db.execute(drizzleSql`SELECT movement_id FROM bank_prov_registrado`)).rows as any[];
+      return new Set(rows.map(r => String(r.movement_id)));
+    } catch { return new Set(); }
   },
 
   // ─── Cuentas Financieras ──────────────────────────────────────────────────

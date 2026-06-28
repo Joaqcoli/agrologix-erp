@@ -160,6 +160,7 @@ export default function BancosPage() {
       apiRequest("POST", "/api/bank/supplier-payment", data).then(r => r.json()),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/galicia/movements"] });
+      qc.invalidateQueries({ queryKey: ["/api/mp/movements"] });
       qc.invalidateQueries({ queryKey: ["/api/ap/cc"] });
       setProvApplyOpen(false); setProvApplyMov(null); setProvSupplierId(null); setProvSearch(""); setProvError(null);
     },
@@ -171,6 +172,7 @@ export default function BancosPage() {
     mutationFn: (id: string) => apiRequest("POST", "/api/galicia/pago-proveedor/ya-registrado", { id }).then(r => r.json()),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/galicia/movements"] });
+      qc.invalidateQueries({ queryKey: ["/api/mp/movements"] });
       setProvApplyOpen(false); setProvApplyMov(null); setProvSupplierId(null); setProvSearch(""); setProvError(null);
     },
     onError: (e: Error) => setProvError(e.message),
@@ -1183,7 +1185,9 @@ export default function BancosPage() {
                 disabled={provSupplierId == null || provApplyMut.isPending}
                 onClick={() => provApplyMov && provSupplierId != null && provApplyMut.mutate({
                   movementId: String(provApplyMov.id), supplierId: provSupplierId, amount: provApplyMov.grossAmount ?? 0,
-                  date: (provApplyMov.date_created ?? new Date().toISOString()).slice(0, 10), method: "TRANSFERENCIA", galiciaId: String(provApplyMov.id),
+                  date: (provApplyMov.date_created ?? new Date().toISOString()).slice(0, 10),
+                  method: provApplyMov.source === "galicia" ? "TRANSFERENCIA" : "MP",
+                  galiciaId: provApplyMov.source === "galicia" ? String(provApplyMov.id) : undefined,
                 })}
               >{provApplyMut.isPending ? "Aplicando…" : "Aplicar a CC"}</Button>
             </div>

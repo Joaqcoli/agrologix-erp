@@ -3039,6 +3039,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         };
       });
 
+      // Pago a proveedor: marcar movimientos categorizados "Pago a proveedor" (egresos) pendientes de
+      // aplicar a CC — espejo del lado Galicia. yaAplicado = supplier_payment con ese movement_ref;
+      // yaRegistrado = marcado a mano (tabla bank_prov_registrado). No rompe el feed si algo falla.
+      try {
+        const provCats = new Map((await storage.getBankCategories()).map((c: any) => [c.id, c.name]));
+        const provApplied = await storage.getAppliedSupplierRefs();
+        const provRegistrados = await storage.getProvRegistrados();
+        const provSuppliers = await storage.getSuppliers();
+        const matchSup = (txt: any) => {
+          const L = String(txt ?? "").toUpperCase(); if (!L) return null;
+          for (const s of provSuppliers as any[]) {
+            const t = String(s.name).toUpperCase().split(/[\s\-]+/).filter((x: string) => x.length >= 4);
+            if (t.some((x: string) => L.includes(x))) return s;
+          }
+          return null;
+        };
+        for (const m of withCats as any[]) {
+          const catName = provCats.get(m.categoryId ?? -1) ?? null;
+          const yaAplicadoProv = provApplied.has(String(m.id));
+          const esPagoProvPend = !!m.isOutgoing && catName === "Pago a proveedor" && !yaAplicadoProv && !provRegistrados.has(String(m.id));
+          m.yaAplicadoProv = yaAplicadoProv;
+          m.esPagoProvPend = esPagoProvPend;
+          if (esPagoProvPend) { const sm = matchSup(m.displayName || m.description); m.suggestedSupplierId = sm?.id ?? null; m.suggestedSupplierName = sm?.name ?? null; }
+        }
+      } catch (e) { /* no romper el feed MP */ }
+
       // Reconciliación banco→caja:
       //  (1) movimientos CATEGORIZADOS → su monto principal = transferido (gross), separando la comisión.
       //  (2) TODO movimiento con comisión → un egreso en "Comisiones" (categorizado o no), así el total de
