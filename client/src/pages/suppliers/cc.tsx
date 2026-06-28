@@ -13,7 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2, Wallet } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2, Wallet, Clock, Unlink } from "lucide-react";
 import React, { useState } from "react";
 import { jsPDF } from "jspdf";
 
@@ -614,6 +614,17 @@ export default function SupplierCCPage({
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  // Quitar la imputación de un pago (borra los links; NO borra el pago; saldo intacto)
+  const clearImputacionMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("POST", `/api/ap/payments/${id}/clear-imputacion`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ap/cc/supplier", supplierId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ap/pending-purchases"] });
+      toast({ title: "Imputación quitada", description: "El pago quedó sin imputar a compras (el saldo no cambió)." });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const fmtDate = (d: string) => {
     const [y, m, day] = String(d).slice(0, 10).split("-").map(Number);
     return new Date(y, (m || 1) - 1, day || 1).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
@@ -632,6 +643,16 @@ export default function SupplierCCPage({
   const pendingPurchasesTotal = (data?.purchases ?? [])
     .filter((p) => !p.isPaid)
     .reduce((s, p) => s + (p.total - (p.paidAmount ?? 0)), 0); // descuenta lo ya pagado en parciales
+
+  // Compras pendientes de períodos ANTERIORES (igual que clientes): de pendingPurchases (todas, sin
+  // filtro de período) las que son de antes del período visto. Así no quedan invisibles las viejas.
+  const periodDateFrom = `${year}-${String(month).padStart(2, "0")}-01`;
+  const prevPendingPurchases = (pendingPurchases ?? [])
+    .filter((p) => p.purchaseDate.slice(0, 10) < periodDateFrom)
+    .sort((a, b) => (a.purchaseDate < b.purchaseDate ? -1 : 1));
+  const prevPendingTotal = prevPendingPurchases.reduce(
+    (s, p) => s + (parseFloat(p.total) - parseFloat(p.paidAmount ?? "0")), 0,
+  );
 
   const todayISO = new Date().toISOString().slice(0, 10);
   const chequeEstado = (c: ChequeRow): { label: string; vencido: boolean } => {
@@ -835,6 +856,59 @@ export default function SupplierCCPage({
           </CardContent>
         </Card>
 
+        {/* Compras pendientes de períodos anteriores (espejo de clientes) — no quedan invisibles las viejas */}
+        {prevPendingPurchases.length > 0 && (
+          <Card className="border-amber-200 dark:border-amber-800">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2 text-amber-700 dark:text-amber-400">
+                <Clock className="h-4 w-4" />
+                Pendientes de períodos anteriores ({prevPendingPurchases.length})
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto"><table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border bg-muted/30">
+                    <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Folio</th>
+                    <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Fecha</th>
+                    <th className="text-right py-1.5 px-3 font-semibold text-muted-foreground">Total</th>
+                    <th className="text-right py-1.5 px-3 font-semibold text-muted-foreground">Pendiente</th>
+                    <th className="text-left py-1.5 px-3 font-semibold text-muted-foreground">Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {prevPendingPurchases.map((p) => {
+                    const total = parseFloat(p.total);
+                    const paid = parseFloat(p.paidAmount ?? "0");
+                    const remaining = total - paid;
+                    return (
+                      <tr key={p.id} className="border-b border-border last:border-0 cursor-pointer hover:bg-muted/20 transition-colors" onClick={() => setLocation(`/purchases/${p.id}`)}>
+                        <td className="py-1.5 px-3 font-mono font-medium text-primary">{p.folio}</td>
+                        <td className="py-1.5 px-3 text-muted-foreground">{fmtDate(p.purchaseDate)}</td>
+                        <td className="py-1.5 px-3 text-right text-muted-foreground">${fmtInt(total)}</td>
+                        <td className="py-1.5 px-3 text-right font-semibold text-destructive">${fmtInt(remaining)}</td>
+                        <td className="py-1.5 px-3">
+                          {p.status === "parcial" ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-700 bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 px-1.5 py-0.5 rounded-full whitespace-nowrap">
+                              Parcial · pagado ${fmtInt(paid)}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-muted-foreground">Pendiente</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table></div>
+              <div className="flex items-center justify-between px-3 py-2 border-t border-border bg-amber-50/50 dark:bg-amber-950/20 text-xs">
+                <span className="text-muted-foreground font-medium">{prevPendingPurchases.length} compra{prevPendingPurchases.length > 1 ? "s" : ""} de períodos anteriores</span>
+                <span className="font-bold text-destructive">${fmtInt(prevPendingTotal)}</span>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Payments */}
         <Card>
           <CardHeader className="pb-2">
@@ -888,8 +962,17 @@ export default function SupplierCCPage({
                             <Wallet className="h-3 w-3" />
                           </button>
                           <button
+                            onClick={() => { if (confirm("¿Quitar la imputación de este pago? Las compras que pagaba vuelven a pendiente. El pago NO se borra y el saldo no cambia.")) clearImputacionMutation.mutate(p.id); }}
+                            disabled={clearImputacionMutation.isPending}
+                            title="Quitar imputación (el pago sigue, solo deja de estar asociado a compras)"
+                            className="p-0.5 rounded hover:bg-amber-100 dark:hover:bg-amber-900/30 text-muted-foreground hover:text-amber-600 transition-colors"
+                          >
+                            <Unlink className="h-3 w-3" />
+                          </button>
+                          <button
                             onClick={() => deletePaymentMutation.mutate(p.id)}
                             disabled={deletePaymentMutation.isPending}
+                            title="Borrar el pago (baja el saldo)"
                             className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
                           >
                             <Trash2 className="h-3 w-3" />

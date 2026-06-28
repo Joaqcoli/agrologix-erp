@@ -1725,6 +1725,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
+  // Quitar la imputación de un pago (borra los links; NO borra el pago; saldo intacto). Reversible.
+  app.post("/api/ap/payments/:id/clear-imputacion", requireAuth, async (req, res) => {
+    try {
+      await storage.clearSupplierPaymentImputation(Number(req.params.id));
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   app.get("/api/ap/empties/:supplierId", requireAuth, async (req, res) => {
     try {
       return res.json(await storage.getSupplierEmptiesDetail(Number(req.params.supplierId)));

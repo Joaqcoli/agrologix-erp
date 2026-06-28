@@ -4454,6 +4454,16 @@ export const storage = {
     await this._recomputeSupplierPaidFlags(supplierId);
   },
 
+  // Quitar la imputación de un pago: borra sus supplier_payment_purchase_links → el pago queda
+  // sin imputar a compras concretas (las compras que cubría vuelven a pendiente). NO borra el pago
+  // (sigue bajando el saldo). Reversible: se puede re-imputar con applySupplierPaymentToPurchases.
+  async clearSupplierPaymentImputation(supplierPaymentId: number): Promise<void> {
+    const pay = await this.getSupplierPaymentById(supplierPaymentId);
+    if (!pay) throw new Error("Pago no encontrado");
+    await db.delete(supplierPaymentPurchaseLinks).where(eq(supplierPaymentPurchaseLinks.supplierPaymentId, supplierPaymentId));
+    await this._recomputeSupplierPaidFlags(pay.supplierId);
+  },
+
   // Sincroniza el flag físico purchases.is_paid con el netting (pagada = cubierta completa).
   // Mantiene correcto cualquier lugar que lea is_paid directamente.
   async _recomputeSupplierPaidFlags(supplierId: number): Promise<void> {
