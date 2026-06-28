@@ -5948,6 +5948,8 @@ export const storage = {
         // Pago a proveedor: pendiente de aplicar a CC + proveedor sugerido por nombre
         esPagoProvPend: esPagoProvPend && !yaAplicadoProv,
         yaAplicadoProv,
+        // Marcado "ya registrado" a mano (asignacion_cc='ya_registrado') → badge informativo
+        yaRegistradoProv: r.category === "Pago a proveedor" && isOutgoing && r.asignacion_cc === "ya_registrado",
         suggestedSupplierId,
         suggestedSupplierName,
         source: "galicia",

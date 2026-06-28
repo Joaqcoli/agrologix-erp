@@ -588,6 +588,9 @@ export default function BancosPage() {
       {m.yaAplicadoProv && (
         <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">✓ aplicado a CC</span>
       )}
+      {m.yaRegistradoProv && (
+        <span className="text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 rounded px-1.5 py-0.5 font-medium">✓ Ya registrado</span>
+      )}
       {m.esPagoProvPend && (
         <button
           onClick={() => openProvApply(m)}
@@ -643,6 +646,9 @@ export default function BancosPage() {
         {/* Asignación de pagos a proveedor: aplicar a la CC del proveedor */}
         {m.yaAplicadoProv && (
           <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">✓ aplicado a CC</span>
+        )}
+        {m.yaRegistradoProv && (
+          <span className="text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 rounded px-1.5 py-0.5 font-medium">✓ Ya registrado</span>
         )}
         {m.esPagoProvPend && (
           <button

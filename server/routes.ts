@@ -3316,9 +3316,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         };
         for (const m of allMovements) {
           const catName = provCats.get(m.categoryId ?? -1) ?? null;
+          const esProv = !!m.isOutgoing && catName === "Pago a proveedor";
           const yaAplicadoProv = provApplied.has(String(m.id));
-          const esPagoProvPend = !!m.isOutgoing && catName === "Pago a proveedor" && !yaAplicadoProv && !provRegistrados.has(String(m.id));
+          const yaRegistradoProv = esProv && !yaAplicadoProv && provRegistrados.has(String(m.id));
+          const esPagoProvPend = esProv && !yaAplicadoProv && !yaRegistradoProv;
           m.yaAplicadoProv = yaAplicadoProv;
+          m.yaRegistradoProv = yaRegistradoProv;
           m.esPagoProvPend = esPagoProvPend;
           if (esPagoProvPend) { const sm = matchSup(m.displayName || m.description); m.suggestedSupplierId = sm?.id ?? null; m.suggestedSupplierName = sm?.name ?? null; }
         }

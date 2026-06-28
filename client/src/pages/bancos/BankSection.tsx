@@ -111,6 +111,7 @@ export type MpMovement = {
   // pago a proveedor pendiente de aplicar a CC
   esPagoProvPend?: boolean;
   yaAplicadoProv?: boolean;
+  yaRegistradoProv?: boolean;
   suggestedSupplierId?: number | null;
   suggestedSupplierName?: string | null;
 };
