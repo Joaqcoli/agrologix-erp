@@ -4679,10 +4679,39 @@ export const storage = {
       .map(({ emisionMs, ...c }) => c)
       .sort((a, b) => (a.fechaCobro < b.fechaCobro ? -1 : a.fechaCobro > b.fechaCobro ? 1 : 0));
 
+    // Estado de imputación por pago: links explícitos (supplier_payment_purchase_links) o el legacy
+    // supplier_payments.purchase_id. Para que el usuario vea de un vistazo qué pago está asociado a compras.
+    const imputRows = (await db.execute(drizzleSql`
+      SELECT sp.id AS "paymentId",
+        COUNT(l.id)::int AS "nLinks",
+        COALESCE(SUM(l.amount_applied::numeric), 0)::float AS "montoImputado",
+        STRING_AGG(p.folio, ', ' ORDER BY p.purchase_date) AS "folios",
+        sp.purchase_id AS "legacyPurchaseId",
+        (SELECT folio FROM purchases WHERE id = sp.purchase_id) AS "legacyFolio",
+        (SELECT total::float FROM purchases WHERE id = sp.purchase_id) AS "legacyTotal"
+      FROM supplier_payments sp
+      LEFT JOIN supplier_payment_purchase_links l ON l.supplier_payment_id = sp.id
+      LEFT JOIN purchases p ON p.id = l.purchase_id
+      WHERE sp.supplier_id = ${supplierId}
+      GROUP BY sp.id, sp.purchase_id
+    `)).rows as any[];
+    const imputById = new Map<number, { count: number; folios: string; monto: number }>();
+    for (const r of imputRows) {
+      const nLinks = Number(r.nLinks ?? 0);
+      if (nLinks > 0) {
+        imputById.set(Number(r.paymentId), { count: nLinks, folios: r.folios ?? "", monto: Math.round(Number(r.montoImputado ?? 0)) });
+      } else if (r.legacyPurchaseId != null && r.legacyFolio) {
+        imputById.set(Number(r.paymentId), { count: 1, folios: String(r.legacyFolio), monto: Math.round(Number(r.legacyTotal ?? 0)) });
+      } else {
+        imputById.set(Number(r.paymentId), { count: 0, folios: "", monto: 0 });
+      }
+    }
+
     // Vincular cada pago con método CHEQUE a su cheque emitido (mismo monto, emisión más cercana al pago)
     const usedCheque = new Set<number>();
     const payments = paymentsInPeriod.map((p) => {
-      const base = { ...p, amount: parseFloat(p.amount ?? "0") };
+      const imputacion = imputById.get(Number(p.id)) ?? { count: 0, folios: "", monto: 0 };
+      const base = { ...p, amount: parseFloat(p.amount ?? "0"), imputacion };
       if (String(p.method ?? "").toUpperCase() !== "CHEQUE") return base;
       const payMs = new Date(p.createdAt ?? p.date).getTime();
       let bestIdx = -1, bestDelta = Infinity;

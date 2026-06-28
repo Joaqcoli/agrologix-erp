@@ -13,7 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2, Wallet, Clock, Unlink } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2, Wallet, Clock, Unlink, Link2 } from "lucide-react";
 import React, { useState } from "react";
 import { jsPDF } from "jspdf";
 
@@ -60,6 +60,7 @@ type PaymentRow = {
   purchaseId?: number | null;
   chequeFechaCobro?: string;   // solo en pagos con método CHEQUE (emitido propio)
   chequePlazoDias?: number;    // fecha_cobro − fecha de emisión
+  imputacion?: { count: number; folios: string; monto: number }; // estado de imputación a compras
 };
 
 type APCCDetail = {
@@ -950,6 +951,21 @@ export default function SupplierCCPage({
                             <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">{p.notes}</span>
                           )}
                         </div>
+                        {/* Estado de imputación a compras */}
+                        {(p.imputacion?.count ?? 0) > 0 ? (
+                          <span
+                            title={p.imputacion?.folios || undefined}
+                            className="mt-0.5 inline-flex items-center gap-1 text-[9px] py-0 px-1.5 rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                          >
+                            <Link2 className="h-2.5 w-2.5" />
+                            Imputado a {p.imputacion!.count} compra{p.imputacion!.count > 1 ? "s" : ""}
+                            {p.imputacion!.folios ? ` · ${p.imputacion!.folios.length > 32 ? p.imputacion!.folios.slice(0, 32) + "…" : p.imputacion!.folios}` : ""}
+                          </span>
+                        ) : (
+                          <span className="mt-0.5 inline-flex items-center gap-1 text-[9px] py-0 px-1.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                            Sin compras asociadas
+                          </span>
+                        )}
                       </td>
                       <td className="py-1.5 px-3 text-right font-semibold text-green-600">${fmtInt(p.amount)}</td>
                       <td className="py-1.5 px-3">
