@@ -3130,31 +3130,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         };
       });
 
-      // Pago a proveedor: marcar movimientos categorizados "Pago a proveedor" (egresos) pendientes de
-      // aplicar a CC — espejo del lado Galicia. yaAplicado = supplier_payment con ese movement_ref;
-      // yaRegistrado = marcado a mano (tabla bank_prov_registrado). No rompe el feed si algo falla.
-      try {
-        const provCats = new Map((await storage.getBankCategories()).map((c: any) => [c.id, c.name]));
-        const provApplied = await storage.getAppliedSupplierRefs();
-        const provRegistrados = await storage.getProvRegistrados();
-        const provSuppliers = await storage.getSuppliers();
-        const matchSup = (txt: any) => {
-          const L = String(txt ?? "").toUpperCase(); if (!L) return null;
-          for (const s of provSuppliers as any[]) {
-            const t = String(s.name).toUpperCase().split(/[\s\-]+/).filter((x: string) => x.length >= 4);
-            if (t.some((x: string) => L.includes(x))) return s;
-          }
-          return null;
-        };
-        for (const m of withCats as any[]) {
-          const catName = provCats.get(m.categoryId ?? -1) ?? null;
-          const yaAplicadoProv = provApplied.has(String(m.id));
-          const esPagoProvPend = !!m.isOutgoing && catName === "Pago a proveedor" && !yaAplicadoProv && !provRegistrados.has(String(m.id));
-          m.yaAplicadoProv = yaAplicadoProv;
-          m.esPagoProvPend = esPagoProvPend;
-          if (esPagoProvPend) { const sm = matchSup(m.displayName || m.description); m.suggestedSupplierId = sm?.id ?? null; m.suggestedSupplierName = sm?.name ?? null; }
-        }
-      } catch (e) { /* no romper el feed MP */ }
+      // (Los flags de "Pago a proveedor" se calculan más abajo, sobre allMovements — así también
+      //  los movimientos importados por XLSX reciben el botón, no solo los de la API live.)
 
       // Reconciliación banco→caja:
       //  (1) movimientos CATEGORIZADOS → su monto principal = transferido (gross), separando la comisión.
@@ -3319,6 +3296,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       allMovements.sort((a, b) =>
         new Date(b.date_created ?? 0).getTime() - new Date(a.date_created ?? 0).getTime()
       );
+
+      // Pago a proveedor: marcar movimientos categorizados "Pago a proveedor" (egresos) pendientes de
+      // aplicar a CC — espejo del lado Galicia. yaAplicado = supplier_payment con ese movement_ref;
+      // yaRegistrado = marcado a mano (tabla bank_prov_registrado). Corre sobre allMovements (live + XLSX)
+      // para que los pagos a proveedor importados por Excel también muestren el botón. No rompe el feed.
+      try {
+        const provCats = new Map((await storage.getBankCategories()).map((c: any) => [c.id, c.name]));
+        const provApplied = await storage.getAppliedSupplierRefs();
+        const provRegistrados = await storage.getProvRegistrados();
+        const provSuppliers = await storage.getSuppliers();
+        const matchSup = (txt: any) => {
+          const L = String(txt ?? "").toUpperCase(); if (!L) return null;
+          for (const s of provSuppliers as any[]) {
+            const t = String(s.name).toUpperCase().split(/[\s\-]+/).filter((x: string) => x.length >= 4);
+            if (t.some((x: string) => L.includes(x))) return s;
+          }
+          return null;
+        };
+        for (const m of allMovements) {
+          const catName = provCats.get(m.categoryId ?? -1) ?? null;
+          const yaAplicadoProv = provApplied.has(String(m.id));
+          const esPagoProvPend = !!m.isOutgoing && catName === "Pago a proveedor" && !yaAplicadoProv && !provRegistrados.has(String(m.id));
+          m.yaAplicadoProv = yaAplicadoProv;
+          m.esPagoProvPend = esPagoProvPend;
+          if (esPagoProvPend) { const sm = matchSup(m.displayName || m.description); m.suggestedSupplierId = sm?.id ?? null; m.suggestedSupplierName = sm?.name ?? null; }
+        }
+      } catch (e) { /* no romper el feed MP */ }
 
       return res.json({ ...mpData, results: allMovements, _debug_xlsx_merged: xlsxDebug });
     } catch (e: any) {
