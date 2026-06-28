@@ -67,7 +67,7 @@ type OrderRow = {
   paidAmount: number;
   customerId?: number;
 };
-type PaymentRow = Payment & { orderFolio?: string | null };
+type PaymentRow = Payment & { orderFolio?: string | null; lines?: { method: string; amount: number }[] };
 
 // ── Date range helpers ──────────────────────────────────────────────────────────
 
@@ -2038,6 +2038,14 @@ export default function CCCustomerDetailPage({
                               </Badge>
                             )}
                           </div>
+                          {/* Desglose de líneas para pagos compuestos (MIXTO) */}
+                          {((p as PaymentRow).lines?.length ?? 0) > 1 && (
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                              {(p as PaymentRow).lines!
+                                .map((l) => `${l.method.charAt(0) + l.method.slice(1).toLowerCase().replace(/_/g, " ")} $${fmtInt(l.amount)}`)
+                                .join(" · ")}
+                            </p>
+                          )}
                         </td>
                         <td className="py-1.5 px-3 text-right font-semibold text-green-600">${fmtInt(parseFloat(p.amount as string))}</td>
                         <td className="py-1.5 px-3">

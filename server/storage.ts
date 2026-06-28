@@ -4150,6 +4150,26 @@ export const storage = {
       `)),
     ]);
 
+    // Adjuntar las líneas de cada pago compuesto (payment_lines) → desglose de métodos en la CC
+    const payIds = (paymentsIn.rows as any[]).map((p) => Number(p.id)).filter((n) => !isNaN(n));
+    if (payIds.length > 0) {
+      const linesRows = (await db.execute(drizzleSql.raw(`
+        SELECT payment_id, method, amount::numeric AS amount
+        FROM payment_lines
+        WHERE payment_id = ANY(ARRAY[${payIds.join(",")}]::int[])
+        ORDER BY id
+      `))).rows as any[];
+      const linesByPay = new Map<number, { method: string; amount: number }[]>();
+      for (const l of linesRows) {
+        const pid = Number(l.payment_id);
+        if (!linesByPay.has(pid)) linesByPay.set(pid, []);
+        linesByPay.get(pid)!.push({ method: String(l.method), amount: Math.round(Number(l.amount)) });
+      }
+      for (const p of paymentsIn.rows as any[]) {
+        (p as any).lines = linesByPay.get(Number(p.id)) ?? [];
+      }
+    }
+
     // Opening balance: sum across all IDs
     const openingBalance = allIds.reduce((s, id) => {
       const cust = allCustomersMap.get(id);
