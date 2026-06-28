@@ -2,7 +2,7 @@ import { db } from "./db";
 import {
   users, customers, products, purchases, purchaseItems,
   stockMovements, productCostHistory, orders, orderItems,
-  priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks,
+  priceHistory, remitos, productUnits, payments, withholdings, paymentOrderLinks, paymentLines,
   suppliers, supplierPayments, supplierPaymentPurchaseLinks, clientGroups, clientGroupMembers, priceListItems,
   invoices, cajaMovements, bankCategories, mpMovementOverrides, bankContacts, bankPaymentLinks,
   mpMovementIdentifiers,
@@ -3541,13 +3541,25 @@ export const storage = {
     return w;
   },
 
+  async createPaymentLine(data: { paymentId: number; method: string; amount: number; cuentaId?: number | null; chequeId?: number | null }): Promise<{ id: number }> {
+    const [row] = await db.insert(paymentLines).values({
+      paymentId: data.paymentId, method: data.method, amount: String(data.amount),
+      cuentaId: data.cuentaId ?? null, chequeId: data.chequeId ?? null,
+    }).returning({ id: paymentLines.id });
+    return row;
+  },
+
   async deletePayment(id: number): Promise<void> {
+    // Limpiar movimientos de cuenta de las líneas (efectivo/transferencia) de un pago compuesto.
+    // Los cheques de las líneas se borran abajo por payment_id (deleteCheque limpia sus movimientos).
+    const lineas = (await db.execute(drizzleSql`SELECT id FROM payment_lines WHERE payment_id = ${id}`)).rows as any[];
+    for (const l of lineas) { await this.deleteMovimientoCuentaByOrigen("cobro_linea", String(l.id)); }
     // Borrar los cheques recibidos vinculados a este pago (payment_id) para no dejarlos huérfanos
     // en cartera. Solo los de ESTE pago; los viejos (payment_id NULL) y los de otros pagos no se tocan.
     // deleteCheque limpia además los movimientos_cuenta del cheque (ingreso en cartera, etc.).
     const chequesDelPago = (await db.execute(drizzleSql`SELECT id FROM cheques WHERE payment_id = ${id}`)).rows as any[];
     for (const c of chequesDelPago) { await this.deleteCheque(c.id); }
-    await db.delete(payments).where(eq(payments.id, id));
+    await db.delete(payments).where(eq(payments.id, id)); // cascade borra payment_lines + payment_order_links
   },
 
   async updatePayment(id: number, data: { date: string; amount: string; method: string; notes?: string | null }): Promise<Payment> {

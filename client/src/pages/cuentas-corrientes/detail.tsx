@@ -688,26 +688,35 @@ function PaymentModal({
   const { toast } = useToast();
   const [date, setDate] = useState(today());
   const [amount, setAmount] = useState("");
-  const [method, setMethod] = useState<string>("EFECTIVO");
   const [notes, setNotes] = useState("");
   const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([]);
   const [retentionAmount, setRetentionAmount] = useState("");
   const [retentionType, setRetentionType] = useState("IIBB");
-  const [cuentaId, setCuentaId] = useState<number | null>(null);
-  // Pago con cheque(s): lista de cheques, cada uno con su monto/fecha/número. Default: uno vacío.
-  type ChequeRow = { monto: string; fechaCobro: string; numero: string };
-  const [cheques, setCheques] = useState<ChequeRow[]>([{ monto: "", fechaCobro: "", numero: "" }]);
-  const addCheque = () => setCheques(p => [...p, { monto: "", fechaCobro: "", numero: "" }]);
-  const removeCheque = (i: number) => setCheques(p => (p.length > 1 ? p.filter((_, j) => j !== i) : p));
-  const updateCheque = (i: number, field: keyof ChequeRow, val: string) => setCheques(p => p.map((c, j) => (j === i ? { ...c, [field]: val } : c)));
-  const chequesSum = cheques.reduce((s, c) => s + (parseFloat(c.monto) || 0), 0);
-  const chequesDiff = chequesSum - (parseFloat(amount || "0") || 0);
-  const chequesValid = method !== "CHEQUE" || (
-    cheques.length > 0 &&
-    cheques.every(c => (parseFloat(c.monto) || 0) > 0 && !!c.fechaCobro) &&
-    Math.abs(chequesDiff) < 0.01 &&
-    (parseFloat(amount || "0") || 0) > 0
-  );
+  // Líneas que componen el pago: cada una su método + monto (efectivo + transferencia + cheques).
+  // Default: una línea EFECTIVO. Con una sola línea, su monto = el total (no se muestra el input).
+  type PayLine = { method: string; monto: string; numero: string; fechaCobro: string; cuentaId: number | null };
+  const [lines, setLines] = useState<PayLine[]>([{ method: "EFECTIVO", monto: "", numero: "", fechaCobro: "", cuentaId: null }]);
+  const addLine = () => setLines(p => {
+    // al pasar de 1 a varias, fijar el monto de la primera = total actual para que el usuario reparta
+    const base = p.length === 1 ? [{ ...p[0], monto: p[0].monto || amount }] : p;
+    return [...base, { method: "TRANSFERENCIA", monto: "", numero: "", fechaCobro: "", cuentaId: null }];
+  });
+  const removeLine = (i: number) => setLines(p => {
+    if (p.length <= 1) return p;
+    const next = p.filter((_, j) => j !== i);
+    return next.length === 1 ? [{ ...next[0], monto: amount }] : next; // al volver a 1, monto = total
+  });
+  const updateLine = (i: number, patch: Partial<PayLine>) => setLines(p => p.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  // Setear el total y, si hay una sola línea, sincronizar su monto al total
+  const setAmountSync = (v: string) => { setAmount(v); setLines(p => (p.length === 1 ? [{ ...p[0], monto: v }] : p)); };
+  // Validación: Σ líneas = total; cada línea monto>0; cheques con fecha de cobro
+  const linesSum = lines.reduce((s, l) => s + (parseFloat(l.monto) || 0), 0);
+  const linesDiff = linesSum - (parseFloat(amount || "0") || 0);
+  const linesValid =
+    lines.length > 0 &&
+    lines.every(l => (parseFloat(l.monto) || 0) > 0 && (l.method !== "CHEQUE" || !!l.fechaCobro)) &&
+    Math.abs(linesDiff) < 0.01 &&
+    (parseFloat(amount || "0") || 0) > 0;
   const { data: cuentas } = useQuery<any[]>({
     queryKey: ["/api/caja/cuentas"],
     queryFn: () => fetch("/api/caja/cuentas", { credentials: "include" }).then(r => r.json()),
@@ -733,16 +742,32 @@ function PaymentModal({
 
   const mutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("POST", "/api/payments", {
-        customerId,
-        date,
-        amount,
-        method,
-        notes: notes || null,
-        orderIds: selectedOrderIds,
-        cuentaId: (method === "EFECTIVO" || method === "TRANSFERENCIA") ? cuentaId : null,
-        cheques: method === "CHEQUE" ? cheques.map(c => ({ monto: parseFloat(c.monto), fechaCobro: c.fechaCobro, numero: c.numero.trim() || undefined })) : undefined,
-      });
+      const efectivoCuenta = cuentas?.find((c: any) => c.tipo === "efectivo");
+      const resolveCuenta = (l: PayLine) =>
+        l.method === "EFECTIVO" ? (efectivoCuenta?.id ?? null)
+        : l.method === "TRANSFERENCIA" ? l.cuentaId
+        : null;
+      if (lines.length === 1) {
+        // Pago de un solo método → camino simple (legacy), idéntico a antes
+        const l = lines[0];
+        await apiRequest("POST", "/api/payments", {
+          customerId, date, amount, method: l.method, notes: notes || null, orderIds: selectedOrderIds,
+          cuentaId: (l.method === "EFECTIVO" || l.method === "TRANSFERENCIA") ? resolveCuenta(l) : null,
+          cheques: l.method === "CHEQUE" ? [{ monto: parseFloat(amount), fechaCobro: l.fechaCobro, numero: l.numero.trim() || undefined }] : undefined,
+        });
+      } else {
+        // Pago compuesto → líneas mezcladas
+        await apiRequest("POST", "/api/payments", {
+          customerId, date, amount, notes: notes || null, orderIds: selectedOrderIds,
+          lines: lines.map(l => ({
+            method: l.method,
+            monto: parseFloat(l.monto),
+            numero: l.method === "CHEQUE" ? (l.numero.trim() || undefined) : undefined,
+            fechaCobro: l.method === "CHEQUE" ? l.fechaCobro : undefined,
+            cuentaId: resolveCuenta(l),
+          })),
+        });
+      }
       if (!isNaN(retAmt) && retAmt > 0) {
         await apiRequest("POST", "/api/payments", {
           customerId,
@@ -761,8 +786,9 @@ function PaymentModal({
       queryClient.invalidateQueries({ queryKey: ["/api/ar/pending-orders", customerId] });
       queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
       toast({ title: "Pago registrado" });
-      setAmount(""); setNotes(""); setMethod("EFECTIVO"); setSelectedOrderIds([]);
-      setRetentionAmount(""); setRetentionType("IIBB"); setCuentaId(null); setCheques([{ monto: "", fechaCobro: "", numero: "" }]);
+      setAmount(""); setNotes(""); setSelectedOrderIds([]);
+      setRetentionAmount(""); setRetentionType("IIBB");
+      setLines([{ method: "EFECTIVO", monto: "", numero: "", fechaCobro: "", cuentaId: null }]);
       onClose();
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -786,7 +812,7 @@ function PaymentModal({
               <Input
                 type="number"
                 value={amount}
-                onChange={(e) => setAmount(e.target.value)}
+                onChange={(e) => setAmountSync(e.target.value)}
                 placeholder="0"
                 className="flex-1"
                 data-testid="input-payment-amount"
@@ -797,86 +823,71 @@ function PaymentModal({
                   variant="outline"
                   size="sm"
                   className="text-xs h-8 whitespace-nowrap"
-                  onClick={() => setAmount(String(Math.round(selectedTotal)))}
+                  onClick={() => setAmountSync(String(Math.round(selectedTotal)))}
                 >
                   Usar ${fmtInt(selectedTotal)}
                 </Button>
               )}
             </div>
           </div>
-          <div>
-            <Label className="text-xs">Método</Label>
-            <Select value={method} onValueChange={v => {
-              setMethod(v);
-              if (v === "EFECTIVO") {
-                const ef = cuentas?.find((c: any) => c.tipo === "efectivo");
-                setCuentaId(ef?.id ?? null);
-              } else if (v !== "TRANSFERENCIA") {
-                setCuentaId(null);
-              }
-            }}>
-              <SelectTrigger className="mt-1" data-testid="select-payment-method">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PAYMENT_METHODS.filter((m) => m !== "RETENCION").map((m) => (
-                  <SelectItem key={m} value={m}>{m.replace(/_/g, " ")}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Cuenta a ajustar */}
-          {(method === "EFECTIVO" || method === "TRANSFERENCIA") && cuentas && (
-            <div>
-              <Label className="text-xs text-muted-foreground">Ajustar cuenta</Label>
-              {method === "EFECTIVO" ? (
-                <p className="text-xs text-muted-foreground mt-1">
-                  → {cuentas.find((c: any) => c.tipo === "efectivo")?.nombre ?? "Efectivo"}
-                </p>
-              ) : (
-                <Select
-                  value={cuentaId != null ? String(cuentaId) : "none"}
-                  onValueChange={v => setCuentaId(v === "none" ? null : Number(v))}
-                >
-                  <SelectTrigger className="mt-1 h-8 text-sm"><SelectValue placeholder="No ajustar saldo" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Mercado Pago (no ajusta)</SelectItem>
-                    {cuentas.filter((c: any) => c.tipo === "banco").map((c: any) => (
-                      <SelectItem key={c.id} value={String(c.id)}>{c.nombre}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
+          {/* Métodos de pago: una o varias líneas (efectivo + transferencia + cheques mezclados) */}
+          <div className="space-y-2 rounded-md border bg-muted/20 p-2.5">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">Método{lines.length > 1 ? `s (${lines.length})` : ""}</Label>
+              <button type="button" onClick={addLine} className="text-[11px] font-medium text-blue-600 hover:text-blue-800">+ Agregar método</button>
             </div>
-          )}
-
-          {/* Cheque(s): uno o varios, cada uno con su monto y fecha de cobro */}
-          {method === "CHEQUE" && (
-            <div className="space-y-2 rounded-md border bg-muted/20 p-2.5">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs">Cheques {cheques.length > 1 ? `(${cheques.length})` : ""}</Label>
-                <button type="button" onClick={addCheque} className="text-[11px] font-medium text-blue-600 hover:text-blue-800">+ Agregar cheque</button>
-              </div>
-              {cheques.map((c, i) => (
-                <div key={i} className="grid grid-cols-[1fr_1.1fr_0.8fr_auto] gap-1.5 items-center">
-                  <Input type="number" min="0" step="0.01" placeholder="Monto" value={c.monto} onChange={e => updateCheque(i, "monto", e.target.value)} className="h-8 text-sm" />
-                  <Input type="date" value={c.fechaCobro} onChange={e => updateCheque(i, "fechaCobro", e.target.value)} className="h-8 text-sm" title="Fecha de cobro" />
-                  <Input placeholder="N.º" value={c.numero} onChange={e => updateCheque(i, "numero", e.target.value)} className="h-8 text-sm" />
-                  <button type="button" onClick={() => removeCheque(i)} disabled={cheques.length === 1} className="text-muted-foreground/50 hover:text-destructive disabled:opacity-30 px-1" title="Quitar">✕</button>
+            {lines.map((l, i) => (
+              <div key={i} className="space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <Select value={l.method} onValueChange={v => updateLine(i, { method: v, cuentaId: null })}>
+                    <SelectTrigger className="h-8 text-sm flex-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {PAYMENT_METHODS.filter((m) => m !== "RETENCION" && m !== "MIXTO").map((m) => (
+                        <SelectItem key={m} value={m}>{m.replace(/_/g, " ")}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {lines.length > 1 && (
+                    <Input type="number" min="0" step="0.01" placeholder="Monto" value={l.monto}
+                      onChange={e => updateLine(i, { monto: e.target.value })} className="h-8 text-sm w-28" />
+                  )}
+                  {lines.length > 1 && (
+                    <button type="button" onClick={() => removeLine(i)} className="text-muted-foreground/50 hover:text-destructive px-1" title="Quitar">✕</button>
+                  )}
                 </div>
-              ))}
-              {/* Suma vs total */}
-              <div className={`flex items-center justify-between text-xs ${Math.abs(chequesDiff) < 0.01 ? "text-green-700" : "text-amber-700"}`}>
-                <span>Suma de cheques: <b>${chequesSum.toLocaleString("es-AR")}</b></span>
-                {parseFloat(amount || "0") > 0 && (
-                  Math.abs(chequesDiff) < 0.01
-                    ? <span>✓ coincide con el total</span>
-                    : <span>{chequesDiff > 0 ? "sobra" : "falta"} ${Math.abs(Math.round(chequesDiff)).toLocaleString("es-AR")} (total ${Math.round(parseFloat(amount)).toLocaleString("es-AR")})</span>
+                {l.method === "CHEQUE" && (
+                  <div className="grid grid-cols-[1.1fr_0.8fr] gap-1.5 pl-1">
+                    <Input type="date" value={l.fechaCobro} onChange={e => updateLine(i, { fechaCobro: e.target.value })} className="h-8 text-sm" title="Fecha de cobro" />
+                    <Input placeholder="N.º cheque" value={l.numero} onChange={e => updateLine(i, { numero: e.target.value })} className="h-8 text-sm" />
+                  </div>
+                )}
+                {l.method === "TRANSFERENCIA" && cuentas && (
+                  <Select value={l.cuentaId != null ? String(l.cuentaId) : "none"} onValueChange={v => updateLine(i, { cuentaId: v === "none" ? null : Number(v) })}>
+                    <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Mercado Pago (no ajusta)" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Mercado Pago (no ajusta)</SelectItem>
+                      {cuentas.filter((c: any) => c.tipo === "banco").map((c: any) => (
+                        <SelectItem key={c.id} value={String(c.id)}>{c.nombre}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {l.method === "EFECTIVO" && (
+                  <p className="text-[11px] text-muted-foreground pl-1">→ {cuentas?.find((c: any) => c.tipo === "efectivo")?.nombre ?? "Efectivo"}</p>
                 )}
               </div>
-            </div>
-          )}
+            ))}
+            {lines.length > 1 && (
+              <div className={`flex items-center justify-between text-xs ${Math.abs(linesDiff) < 0.01 ? "text-green-700" : "text-amber-700"}`}>
+                <span>Suma de métodos: <b>${linesSum.toLocaleString("es-AR")}</b></span>
+                {parseFloat(amount || "0") > 0 && (
+                  Math.abs(linesDiff) < 0.01
+                    ? <span>✓ coincide con el total</span>
+                    : <span>{linesDiff > 0 ? "sobra" : "falta"} ${Math.abs(Math.round(linesDiff)).toLocaleString("es-AR")} (total ${Math.round(parseFloat(amount)).toLocaleString("es-AR")})</span>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Multi-select order checkboxes */}
           <div>
@@ -994,7 +1005,7 @@ function PaymentModal({
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
           <Button
             onClick={() => mutation.mutate()}
-            disabled={mutation.isPending || !amount || parseFloat(amount) <= 0 || !chequesValid}
+            disabled={mutation.isPending || !amount || parseFloat(amount) <= 0 || !linesValid}
             data-testid="button-confirm-payment"
           >
             {mutation.isPending ? "Guardando..." : "Guardar Pago"}

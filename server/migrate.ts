@@ -320,6 +320,22 @@ export async function runMigrations() {
   // ─── CC v4: amount applied per payment-order link ───────────────────────────
   await db.execute(sql`ALTER TABLE payment_order_links ADD COLUMN IF NOT EXISTS amount_applied numeric`);
 
+  // ─── Pago compuesto: líneas de método de un pago de cliente (efectivo + transf + cheques) ──
+  // Tabla nueva, vacía; no toca pagos existentes. onDelete cascade → borrar el pago borra sus líneas.
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS payment_lines (
+        id SERIAL PRIMARY KEY,
+        payment_id INTEGER NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
+        method TEXT NOT NULL,
+        amount NUMERIC(14,2) NOT NULL,
+        cuenta_id INTEGER,
+        cheque_id INTEGER
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_payment_lines_payment ON payment_lines(payment_id)`);
+  } catch (e) { console.error("payment_lines migration failed:", e); }
+
   // ─── Proveedores (AP module) ─────────────────────────────────────────────────
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS suppliers (

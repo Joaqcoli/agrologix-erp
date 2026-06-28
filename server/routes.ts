@@ -1343,6 +1343,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
+      // Pago compuesto: array `lines` [{method, monto, numero?, fechaCobro?, cuentaId?}] — generaliza el
+      // multi-cheque a métodos mezclados (efectivo + transferencia + cheques). Σ líneas debe = total.
+      const linesList: { method: string; monto: number; numero?: string; fechaCobro?: string; cuentaId: number | null }[] =
+        Array.isArray(req.body.lines)
+          ? (req.body.lines as any[]).map(l => ({
+              method: String(l.method ?? "EFECTIVO"),
+              monto: parseFloat(String(l.monto)),
+              numero: l.numero,
+              fechaCobro: l.fechaCobro ? String(l.fechaCobro) : undefined,
+              cuentaId: l.cuentaId != null ? Number(l.cuentaId) : null,
+            }))
+          : [];
+      if (linesList.length > 0) {
+        if (linesList.some(l => !(l.monto > 0))) return res.status(400).json({ error: "Cada línea de pago necesita un monto válido" });
+        if (linesList.some(l => l.method === "CHEQUE" && !l.fechaCobro)) return res.status(400).json({ error: "Cada cheque necesita su fecha de cobro" });
+        const suma = linesList.reduce((s, l) => s + l.monto, 0);
+        const total = parseFloat(String(data.amount));
+        if (Math.abs(suma - total) > 0.01) {
+          return res.status(400).json({ error: `La suma de las líneas ($${Math.round(suma).toLocaleString("es-AR")}) no coincide con el total del pago ($${Math.round(total).toLocaleString("es-AR")}). Diferencia: $${Math.round(Math.abs(suma - total)).toLocaleString("es-AR")}.` });
+        }
+        // Método del pago: único si todas las líneas comparten método; MIXTO si hay varios
+        const distinct = Array.from(new Set(linesList.map(l => l.method)));
+        (data as any).method = distinct.length === 1 ? distinct[0] : "MIXTO";
+      }
+
       // Tomar snapshot del estado pendiente ANTES de crear el pago para calcular
       // montos exactos por remito sin interferencia del nuevo pago en el pool FIFO.
       const pendingSnapshot = await storage.getPendingOrdersForCustomer(data.customerId);
@@ -1385,45 +1410,79 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // Auto-aplicar: vincular al pedido más viejo primero hasta cubrir el monto
         await storage.autoApplyPaymentToOrders(payment.id, data.customerId, parseFloat(String(data.amount)), pendingSnapshot);
       }
-      // Ajustar saldo de cuenta si cuentaId fue indicado (solo banco/efectivo, nunca MP)
-      const cuentaId = req.body.cuentaId ? Number(req.body.cuentaId) : null;
-      if (cuentaId) {
-        await storage.createMovimientoCuenta({
-          cuentaId, signo: "ingreso", monto: parseFloat(String(data.amount)),
-          concepto: `Cobro cliente`, origenTipo: "cobro", origenId: String(payment.id),
-        });
-      }
-      // Si pago con cheque(s): crear N cheques recibidos (cada uno su monto/fecha/número),
-      // vinculados al pago (payment_id) y en cartera. Acepta el array `cheques` (nuevo) o el
-      // legacy `chequeInfo` (un cheque por el total). El payment sigue siendo UNO (total).
-      if (data.method === "CHEQUE") {
-        const lista = chequesList.length > 0
-          ? chequesList
-          : (req.body.chequeInfo?.fechaCobro
-              ? [{ monto: parseFloat(String(data.amount)), fechaCobro: req.body.chequeInfo.fechaCobro, numero: req.body.chequeInfo.numero }]
-              : []);
-        if (lista.length > 0) {
-          const customer = await storage.getCustomer(data.customerId);
-          const contraparte = customer?.name ?? "Cliente";
-          const allCuentas = await storage.getCuentasFinancieras();
-          const chequeCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "cheque");
-          for (const c of lista) {
+      if (linesList.length > 0) {
+        // ── Pago compuesto: una fila payment_lines por línea. Cheques → cartera; efectivo/transf →
+        //    movimiento de cuenta propio (origenTipo "cobro_linea" para poder revertir al borrar). ──
+        const customer = await storage.getCustomer(data.customerId);
+        const contraparte = customer?.name ?? "Cliente";
+        const allCuentas = await storage.getCuentasFinancieras();
+        const chequeCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "cheque");
+        for (const l of linesList) {
+          if (l.method === "CHEQUE") {
             const cheque = await storage.createCheque({
-              tipo: "recibido",
-              monto: c.monto,
-              fechaCobro: c.fechaCobro,
-              numero: (c.numero ?? "").toString().trim() || null,
-              estado: "en_cartera",
-              contraparte,
-              notas: data.notes ?? null,
-              paymentId: payment.id,
+              tipo: "recibido", monto: l.monto, fechaCobro: l.fechaCobro!,
+              numero: (l.numero ?? "").toString().trim() || null, estado: "en_cartera",
+              contraparte, notas: data.notes ?? null, paymentId: payment.id,
             });
+            await storage.createPaymentLine({ paymentId: payment.id, method: "CHEQUE", amount: l.monto, chequeId: cheque.id });
             if (chequeCuenta) {
               await storage.createMovimientoCuenta({
-                cuentaId: chequeCuenta.id, signo: "ingreso", monto: c.monto,
-                concepto: `Cheque de ${contraparte}`,
-                origenTipo: "cheque_recibido", origenId: String(cheque.id),
+                cuentaId: chequeCuenta.id, signo: "ingreso", monto: l.monto,
+                concepto: `Cheque de ${contraparte}`, origenTipo: "cheque_recibido", origenId: String(cheque.id),
               });
+            }
+          } else {
+            const linea = await storage.createPaymentLine({ paymentId: payment.id, method: l.method, amount: l.monto, cuentaId: l.cuentaId });
+            if (l.cuentaId) {
+              await storage.createMovimientoCuenta({
+                cuentaId: l.cuentaId, signo: "ingreso", monto: l.monto,
+                concepto: `Cobro cliente (${l.method.toLowerCase()})`, origenTipo: "cobro_linea", origenId: String(linea.id),
+              });
+            }
+          }
+        }
+      } else {
+        // ── Pago simple (un método): camino legacy intacto ──
+        // Ajustar saldo de cuenta si cuentaId fue indicado (solo banco/efectivo, nunca MP)
+        const cuentaId = req.body.cuentaId ? Number(req.body.cuentaId) : null;
+        if (cuentaId) {
+          await storage.createMovimientoCuenta({
+            cuentaId, signo: "ingreso", monto: parseFloat(String(data.amount)),
+            concepto: `Cobro cliente`, origenTipo: "cobro", origenId: String(payment.id),
+          });
+        }
+        // Si pago con cheque(s): crear N cheques recibidos (cada uno su monto/fecha/número),
+        // vinculados al pago (payment_id) y en cartera. Acepta el array `cheques` (nuevo) o el
+        // legacy `chequeInfo` (un cheque por el total). El payment sigue siendo UNO (total).
+        if (data.method === "CHEQUE") {
+          const lista = chequesList.length > 0
+            ? chequesList
+            : (req.body.chequeInfo?.fechaCobro
+                ? [{ monto: parseFloat(String(data.amount)), fechaCobro: req.body.chequeInfo.fechaCobro, numero: req.body.chequeInfo.numero }]
+                : []);
+          if (lista.length > 0) {
+            const customer = await storage.getCustomer(data.customerId);
+            const contraparte = customer?.name ?? "Cliente";
+            const allCuentas = await storage.getCuentasFinancieras();
+            const chequeCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "cheque");
+            for (const c of lista) {
+              const cheque = await storage.createCheque({
+                tipo: "recibido",
+                monto: c.monto,
+                fechaCobro: c.fechaCobro,
+                numero: (c.numero ?? "").toString().trim() || null,
+                estado: "en_cartera",
+                contraparte,
+                notas: data.notes ?? null,
+                paymentId: payment.id,
+              });
+              if (chequeCuenta) {
+                await storage.createMovimientoCuenta({
+                  cuentaId: chequeCuenta.id, signo: "ingreso", monto: c.monto,
+                  concepto: `Cheque de ${contraparte}`,
+                  origenTipo: "cheque_recibido", origenId: String(cheque.id),
+                });
+              }
             }
           }
         }

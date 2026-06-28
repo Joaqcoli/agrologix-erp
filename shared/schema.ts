@@ -224,7 +224,7 @@ export const remitos = pgTable("remitos", {
 
 // ─── Cuentas Corrientes ───────────────────────────────────────────────────────
 
-export const PAYMENT_METHODS = ["EFECTIVO", "TRANSFERENCIA", "CHEQUE", "CUENTA_CORRIENTE", "OTRO", "RETENCION"] as const;
+export const PAYMENT_METHODS = ["EFECTIVO", "TRANSFERENCIA", "CHEQUE", "CUENTA_CORRIENTE", "OTRO", "RETENCION", "MIXTO"] as const;
 export type PaymentMethod = typeof PAYMENT_METHODS[number];
 
 export const payments = pgTable("payments", {
@@ -244,6 +244,18 @@ export const paymentOrderLinks = pgTable("payment_order_links", {
   paymentId: integer("payment_id").notNull().references(() => payments.id, { onDelete: "cascade" }),
   orderId: integer("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
   amountApplied: numeric("amount_applied"),
+});
+
+// Líneas que componen un pago de cliente (un pago puede mezclar métodos: efectivo + transferencia +
+// cheques). Para líneas CHEQUE, chequeId apunta al cheque creado en cartera. amount = monto de la línea.
+// La suma de las líneas = payments.amount. onDelete cascade: borrar el pago borra sus líneas.
+export const paymentLines = pgTable("payment_lines", {
+  id: serial("id").primaryKey(),
+  paymentId: integer("payment_id").notNull().references(() => payments.id, { onDelete: "cascade" }),
+  method: text("method").notNull(),        // EFECTIVO | TRANSFERENCIA | CHEQUE | ...
+  amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+  cuentaId: integer("cuenta_id").references(() => cuentasFinancieras.id), // mov. de cuenta (efectivo/transf)
+  chequeId: integer("cheque_id"),          // cheque creado (líneas CHEQUE)
 });
 
 export const withholdings = pgTable("withholdings", {
@@ -317,6 +329,7 @@ export type PriceHistory = typeof priceHistory.$inferSelect;
 export type Remito = typeof remitos.$inferSelect;
 export type Payment = typeof payments.$inferSelect;
 export type PaymentOrderLink = typeof paymentOrderLinks.$inferSelect;
+export type PaymentLine = typeof paymentLines.$inferSelect;
 export type Withholding = typeof withholdings.$inferSelect;
 export type Supplier = typeof suppliers.$inferSelect;
 export type SupplierPayment = typeof supplierPayments.$inferSelect;
