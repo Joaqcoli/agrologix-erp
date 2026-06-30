@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import ChequesFlow from "./ChequesFlow";
 import {
   TrendingUp, TrendingDown, DollarSign, Plus, Trash2,
   ChevronLeft, ChevronRight, Wallet, Building2, CreditCard,
@@ -1403,6 +1404,9 @@ export default function CajaPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* ── Flujo semanal de cheques (cartera vs emisiones, por fecha de impacto) ── */}
+        <ChequesFlow cheques={cheques ?? []} />
 
         {/* ── Cheques en cartera ────────────────────────────────────────── */}
         <section className="space-y-3">
