@@ -6109,9 +6109,11 @@ export const storage = {
       return { num: null, fuente: "sin número" };
     };
 
+    // Débitos de cheque emitido cobrado: cubre "ECHEQ 48 HS. NRO" (907365) y "ECHEQ GALICIA NRO" (907364).
+    // Los RECHAZO CHEQUE / COM. no tienen "ECHEQ" → no entran. El match estricto (nº+monto) protege igual.
     const echeqs = (await exec.execute(drizzleSql`
       SELECT comprobante, debito::float AS monto FROM galicia_movements
-      WHERE concepto LIKE '%ECHEQ 48 HS. NRO%' AND debito IS NOT NULL ORDER BY fecha`)).rows as any[];
+      WHERE concepto ILIKE '%ECHEQ%' AND debito IS NOT NULL ORDER BY fecha`)).rows as any[];
     const cheques = (await exec.execute(drizzleSql`
       SELECT c.id, c.numero, c.monto::float AS monto, c.estado, c.contraparte, c.obligacion_id, c.notas,
              o.concepto AS obl_concepto, o.tipo AS obl_tipo, o.estado AS obl_estado
@@ -6167,10 +6169,13 @@ export const storage = {
     const norm = (s: any): string | null => { const d = String(s ?? "").replace(/\D/g, "").replace(/^0+/, ""); return d || null; };
     const dias = (a: string, b: string) => Math.abs((Date.parse(a + "T00:00:00Z") - Date.parse(b + "T00:00:00Z")) / 86400000);
 
+    // Créditos por acreditación de cheque depositado: "G.DE CHEQUE" (917195), "GESTION DE CHEQUE"
+    // (917169) y "ACREDITAMIENTO CANJE GALICIA" (917118, cheques por canje). credito IS NOT NULL
+    // descarta las comisiones/rechazos (que son débitos). El match estricto (nº+monto+fecha) protege.
     const creditos = (await exec.execute(drizzleSql`
       SELECT comprobante, credito::float AS monto, fecha::text AS fecha
       FROM galicia_movements
-      WHERE (concepto ILIKE '%G.DE CHEQUE%' OR concepto ILIKE '%GESTION DE CHEQUE%')
+      WHERE (concepto ILIKE '%CHEQUE%' OR concepto ILIKE '%CANJE%')
         AND credito IS NOT NULL
       ORDER BY fecha`)).rows as any[];
     const cheques = (await exec.execute(drizzleSql`
