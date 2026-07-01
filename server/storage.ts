@@ -5833,10 +5833,12 @@ export const storage = {
       // que el endpoint manual, en el MISMO exec (así participa del rollback en dryRun).
       // Idempotente: los cheques ya cobrados no se re-tocan → no baja cheques emitidos dos veces.
       const cruceCheques = await this._reconcileChequesEmitidosTx(exec);
+      // Cruce de RECIBIDOS depositados (crédito "G.DE CHEQUE") → marca cobrado los que acreditaron.
+      const cruceChequesRecibidos = await this._reconcileChequesRecibidosTx(exec);
 
       const porCategoria = Object.entries(porCat).map(([category, v]) => ({ category, n: v.n, total: Math.round(v.total) }))
         .sort((a, b) => b.total - a.total);
-      return { totalParseados: movs.length, insertadosGalicia, duplicados, reconciliadosCaja, sinCategoria, cobrosPendientes, yaContabilizados, retirosEfectivo, porCategoria, cruceCheques };
+      return { totalParseados: movs.length, insertadosGalicia, duplicados, reconciliadosCaja, sinCategoria, cobrosPendientes, yaContabilizados, retirosEfectivo, porCategoria, cruceCheques, cruceChequesRecibidos };
     };
 
     if (opts?.dryRun) {
@@ -6153,6 +6155,76 @@ export const storage = {
       totalEmitidoAntes: Math.round(totalEmitidoAntes), totalEmitidoDespues: Math.round(totalEmitidoAntes - baja),
       baja: Math.round(baja), sumanGasto, sinMatch, dudosos, detalle,
     };
+  },
+
+  // ─── Cruce depósito de cheque (extracto Galicia, crédito "G.DE CHEQUE") ↔ cheque RECIBIDO ──────
+  // Match ESTRICTO (para estar seguros que es el mismo cheque): número normalizado + monto exacto +
+  // fecha del crédito dentro de una ventana razonable del cobro del cheque (−3d..+45d). Por cada
+  // match en_cartera: cheque → cobrado (sale de cartera) + registra la fecha de acreditación en notas.
+  // Idempotente (los ya cobrados no se re-tocan). Los rechazados NO se cruzan (no acreditaron).
+  // NO toca ninguna CC de cliente (el pago del cliente ya se registró al recibir el cheque).
+  async _reconcileChequesRecibidosTx(exec: any): Promise<any> {
+    const norm = (s: any): string | null => { const d = String(s ?? "").replace(/\D/g, "").replace(/^0+/, ""); return d || null; };
+    const dias = (a: string, b: string) => Math.abs((Date.parse(a + "T00:00:00Z") - Date.parse(b + "T00:00:00Z")) / 86400000);
+
+    const creditos = (await exec.execute(drizzleSql`
+      SELECT comprobante, credito::float AS monto, fecha::text AS fecha
+      FROM galicia_movements
+      WHERE (concepto ILIKE '%G.DE CHEQUE%' OR concepto ILIKE '%GESTION DE CHEQUE%')
+        AND credito IS NOT NULL
+      ORDER BY fecha`)).rows as any[];
+    const cheques = (await exec.execute(drizzleSql`
+      SELECT id, numero, monto::float AS monto, estado, contraparte, fecha_cobro::text AS fecha_cobro
+      FROM cheques WHERE tipo = 'recibido'`)).rows as any[];
+
+    const totalRecibidoAntes = cheques.filter(c => c.estado === "en_cartera").reduce((s, c) => s + c.monto, 0);
+    const byNum: Record<string, any[]> = {};
+    for (const c of cheques) { const n = norm(c.numero); c._num = n; if (n) (byNum[n] ??= []).push(c); }
+
+    const used = new Set<number>();
+    let conciliados = 0, yaCobrados = 0, baja = 0;
+    const sinMatch: any[] = [], dudosos: any[] = [], detalle: any[] = [];
+
+    for (const cr of creditos) {
+      const n = norm(cr.comprobante);
+      const cands = (n ? (byNum[n] ?? []) : []).filter(c => !used.has(c.id));
+      const exact = cands.find(c => Math.abs(c.monto - cr.monto) < 0.5 && dias(cr.fecha, c.fecha_cobro) <= 45);
+      if (!exact) {
+        const numMontoOk = cands.find(c => Math.abs(c.monto - cr.monto) < 0.5);
+        if (numMontoOk) dudosos.push({ numero: n!, montoExtracto: cr.monto, fechaAcred: cr.fecha, cobroCheque: numMontoOk.fecha_cobro, chequeId: numMontoOk.id, motivo: "número+monto ok, fecha fuera de ventana" });
+        else if (cands.length > 0) dudosos.push({ numero: n!, montoExtracto: cr.monto, montoCheque: cands[0].monto, chequeId: cands[0].id, motivo: "número ok, monto no coincide" });
+        else sinMatch.push({ numero: n ?? String(cr.comprobante), monto: cr.monto, fecha: cr.fecha });
+        continue;
+      }
+      used.add(exact.id);
+      if (exact.estado === "en_cartera") {
+        conciliados++; baja += exact.monto;
+        await exec.execute(drizzleSql`
+          UPDATE cheques SET estado = 'cobrado',
+            notas = COALESCE(NULLIF(notas, ''), '') || ${` · Acreditado ${cr.fecha} (extracto Galicia)`}
+          WHERE id = ${exact.id}`);
+      } else { yaCobrados++; }
+      detalle.push({ numero: n!, monto: cr.monto, chequeId: exact.id, contraparte: String(exact.contraparte).trim(),
+        fechaAcred: cr.fecha, cobroCheque: exact.fecha_cobro, estadoAntes: exact.estado,
+        accion: exact.estado === "en_cartera" ? "conciliar (cobrado)" : "ya cobrado (solo vínculo)" });
+    }
+
+    return {
+      creditosExtracto: creditos.length, matches: conciliados + yaCobrados, conciliados, yaCobrados,
+      totalRecibidoAntes: Math.round(totalRecibidoAntes), totalRecibidoDespues: Math.round(totalRecibidoAntes - baja),
+      baja: Math.round(baja), sinMatch, dudosos, detalle,
+    };
+  },
+
+  // Cruce manual de recibidos (dry-run o aplicar) — espejo de reconcileChequesEmitidos.
+  async reconcileChequesRecibidos(opts?: { dryRun?: boolean }): Promise<any> {
+    if (opts?.dryRun) {
+      let result: any = null;
+      try { await db.transaction(async (tx) => { result = await this._reconcileChequesRecibidosTx(tx); throw new Error("__DRYRUN_ROLLBACK__"); }); }
+      catch (e: any) { if (e.message !== "__DRYRUN_ROLLBACK__") throw e; }
+      return result;
+    }
+    return this._reconcileChequesRecibidosTx(db);
   },
 
   async reconcileChequesEmitidos(opts?: { dryRun?: boolean }): Promise<{

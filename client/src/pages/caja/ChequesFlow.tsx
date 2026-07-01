@@ -60,15 +60,20 @@ function ResumenCard({ label, valor, sub, barColor, trackColor, valorColor }: {
   );
 }
 
-function ChequeRow({ impacto, fechaCheque, nombre, monto }: { impacto: Date; fechaCheque: string; nombre: string; monto: number }) {
+function ChequeRow({ impacto, fechaCheque, nombre, monto, cobrado }: { impacto: Date; fechaCheque: string; nombre: string; monto: number; cobrado?: boolean }) {
   return (
     <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 border-t border-border py-2 first:border-t-0">
       <div className="leading-tight">
         <p className="text-[12px] font-medium tabular-nums capitalize">{fmtRowDate(impacto)}</p>
         <p className="text-[9.5px] text-muted-foreground tabular-nums">cheq {fmtDM(parseYMD(fechaCheque))}</p>
       </div>
-      <p className="text-[13px] truncate" title={nombre}>{nombre}</p>
-      <p className="text-[13px] font-medium tabular-nums text-foreground">{fmtMoney(monto)}</p>
+      <div className="min-w-0 flex items-center gap-1.5">
+        <p className="text-[13px] truncate" title={nombre}>{nombre}</p>
+        {cobrado && (
+          <span className="flex-shrink-0 text-[9px] font-medium rounded px-1 py-0.5" style={{ background: C.greenTrack, color: C.green }}>✓ Cobrado</span>
+        )}
+      </div>
+      <p className={`text-[13px] font-medium tabular-nums ${cobrado ? "text-muted-foreground line-through" : "text-foreground"}`}>{fmtMoney(monto)}</p>
     </div>
   );
 }
@@ -87,12 +92,12 @@ export default function ChequesFlow({ cheques }: { cheques: Cheque[] }) {
       const imp = fechaImpacto(c.fecha_cobro);
       return imp >= lunes && imp < finSemana;
     };
-    const enCartera = (cheques ?? []).filter(c => c.estado === "en_cartera");
-    const acr = enCartera.filter(c => c.tipo === "recibido" && enRango(c))
-      .map(c => ({ ...c, _imp: fechaImpacto(c.fecha_cobro) }))
+    // en_cartera = pendiente; cobrado/depositado = confirmado por el banco (badge "Cobrado")
+    const relevantes = (cheques ?? []).filter(c => ["en_cartera", "cobrado", "depositado"].includes(c.estado));
+    const conFlags = (c: Cheque) => ({ ...c, _imp: fechaImpacto(c.fecha_cobro), _cobrado: c.estado !== "en_cartera" });
+    const acr = relevantes.filter(c => c.tipo === "recibido" && enRango(c)).map(conFlags)
       .sort((a, b) => a._imp.getTime() - b._imp.getTime());
-    const deb = enCartera.filter(c => c.tipo === "emitido" && enRango(c))
-      .map(c => ({ ...c, _imp: fechaImpacto(c.fecha_cobro) }))
+    const deb = relevantes.filter(c => c.tipo === "emitido" && enRango(c)).map(conFlags)
       .sort((a, b) => a._imp.getTime() - b._imp.getTime());
     return {
       acredita: acr, debita: deb,
@@ -150,7 +155,7 @@ export default function ChequesFlow({ cheques }: { cheques: Cheque[] }) {
           {acredita.length === 0 ? (
             <p className="text-[12px] text-muted-foreground py-3">Sin cheques esta semana</p>
           ) : acredita.map(c => (
-            <ChequeRow key={c.id} impacto={c._imp} fechaCheque={c.fecha_cobro} nombre={c.contraparte} monto={c.monto} />
+            <ChequeRow key={c.id} impacto={c._imp} fechaCheque={c.fecha_cobro} nombre={c.contraparte} monto={c.monto} cobrado={c._cobrado} />
           ))}
           <div className="mt-1 pt-2 flex items-center justify-between" style={{ borderTop: "1.5px solid hsl(var(--border))" }}>
             <span className="text-[13.5px] font-medium" style={{ color: C.green }}>Total que entra</span>
@@ -166,7 +171,7 @@ export default function ChequesFlow({ cheques }: { cheques: Cheque[] }) {
           {debita.length === 0 ? (
             <p className="text-[12px] text-muted-foreground py-3">Sin cheques esta semana</p>
           ) : debita.map(c => (
-            <ChequeRow key={c.id} impacto={c._imp} fechaCheque={c.fecha_cobro} nombre={`${c.contraparte}${c.numero ? ` · Nº ${c.numero}` : ""}`} monto={c.monto} />
+            <ChequeRow key={c.id} impacto={c._imp} fechaCheque={c.fecha_cobro} nombre={`${c.contraparte}${c.numero ? ` · Nº ${c.numero}` : ""}`} monto={c.monto} cobrado={c._cobrado} />
           ))}
           <div className="mt-1 pt-2 flex items-center justify-between" style={{ borderTop: "1.5px solid hsl(var(--border))" }}>
             <span className="text-[13.5px] font-medium" style={{ color: C.coral }}>Total que sale</span>
