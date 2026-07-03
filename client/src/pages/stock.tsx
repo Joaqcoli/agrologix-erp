@@ -13,7 +13,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
-import { Search, Package, Plus, CheckCircle2, AlertCircle, Warehouse, ChevronDown, ChevronUp, History, TrendingDown, TrendingUp, Trash2, RefreshCw, AlertTriangle } from "lucide-react";
+import { Search, Package, Plus, CheckCircle2, AlertCircle, Warehouse, ChevronDown, ChevronUp, History, TrendingDown, TrendingUp, Trash2, RefreshCw, AlertTriangle, Printer } from "lucide-react";
+import { jsPDF } from "jspdf";
 import type { Product, ProductUnit } from "@shared/schema";
 import { PRODUCT_CATEGORIES } from "@shared/schema";
 import { parseQuantityAndUnit } from "@/lib/parseQuantityAndUnit";
@@ -775,6 +776,81 @@ export default function StockPage() {
     ...Object.keys(grouped).filter((c) => !CATEGORY_ORDER.includes(c) && grouped[c]?.length > 0),
   ];
 
+  // Imprimir hoja de control de stock: TODO el stock (>0), por categoría, sin precios, 2 columnas.
+  // Con checkbox por producto para tildar al contar físicamente. Intenta entrar en una hoja.
+  const handlePrintStock = () => {
+    const all = (Array.isArray(stockData) ? stockData : []).filter((pu) => parseFloat(pu.stockQty as string) > 0);
+    const g: Record<string, { name: string; qty: number; unit: string }[]> = {};
+    for (const pu of all) {
+      const cat = pu.product.category ?? "Sin categoría";
+      (g[cat] ??= []).push({ name: pu.product.name, qty: parseFloat(pu.stockQty as string), unit: pu.unit });
+    }
+    const cats = [
+      ...CATEGORY_ORDER.filter((c) => g[c]?.length),
+      ...Object.keys(g).filter((c) => !CATEGORY_ORDER.includes(c) && g[c]?.length),
+    ];
+    for (const c of cats) g[c].sort((a, b) => a.name.localeCompare(b.name, "es"));
+
+    const doc = new jsPDF({ unit: "mm", format: "a4" });
+    const pageW = 210, pageH = 297, margin = 10, colGap = 8, nCols = 2;
+    const colW = (pageW - margin * 2 - colGap * (nCols - 1)) / nCols;
+    const top = 22, bottom = pageH - 12, lineH = 4.4;
+    const colX = (i: number) => margin + i * (colW + colGap);
+    let col = 0, y = top;
+
+    doc.setFont("helvetica", "bold"); doc.setFontSize(14);
+    doc.text("Control de Stock", margin, 13);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(110);
+    doc.text(new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" }), pageW - margin, 13, { align: "right" });
+    doc.setTextColor(0);
+
+    if (cats.length === 0) {
+      doc.setFontSize(11); doc.setTextColor(110);
+      doc.text("Sin productos en stock.", margin, top);
+      doc.save(`Control-Stock-${new Date().toISOString().slice(0, 10)}.pdf`);
+      return;
+    }
+
+    const ensure = (h: number) => {
+      if (y + h > bottom) { col++; if (col >= nCols) { doc.addPage(); col = 0; } y = top; }
+    };
+
+    for (const cat of cats) {
+      ensure(6 + lineH); // no dejar el header de categoría huérfano
+      const x = colX(col);
+      doc.setFillColor(238, 242, 227);
+      doc.rect(x, y - 3.6, colW, 5.4, "F");
+      doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(107, 138, 42);
+      doc.text(cat.toUpperCase(), x + 1.5, y);
+      doc.setTextColor(0);
+      y += lineH + 2.2;
+
+      doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+      for (const it of g[cat]) {
+        ensure(lineH);
+        const cx = colX(col);
+        doc.setDrawColor(180); doc.rect(cx, y - 2.7, 2.6, 2.6);
+        const qtyStr = `${fmtStock(it.qty)} ${it.unit}`;
+        doc.setFont("helvetica", "bold");
+        const qtyW = doc.getTextWidth(qtyStr);
+        doc.setFont("helvetica", "normal");
+        const nameMaxW = colW - 4 - qtyW - 3;
+        let name = it.name;
+        if (doc.getTextWidth(name) > nameMaxW) {
+          while (name.length > 3 && doc.getTextWidth(name + "…") > nameMaxW) name = name.slice(0, -1);
+          name = name + "…";
+        }
+        doc.text(name, cx + 4, y);
+        doc.setFont("helvetica", "bold");
+        doc.text(qtyStr, cx + colW, y, { align: "right" });
+        doc.setFont("helvetica", "normal");
+        y += lineH;
+      }
+      y += 1.8;
+    }
+    doc.save(`Control-Stock-${new Date().toISOString().slice(0, 10)}.pdf`);
+  };
+
   const handlePreview = () => {
     if (!rawText.trim()) return;
     const lines = rawText.split("\n").filter((l) => l.trim());
@@ -836,6 +912,9 @@ export default function StockPage() {
             <p className="text-sm text-muted-foreground mt-0.5">Stock actual por producto y unidad</p>
           </div>
           <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={handlePrintStock}>
+              <Printer className="mr-2 h-3.5 w-3.5" /> Imprimir stock
+            </Button>
             <Button
               variant="outline"
               size="sm"
