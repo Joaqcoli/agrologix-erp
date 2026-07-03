@@ -4902,26 +4902,16 @@ export const storage = {
       FROM purchase_items pi WHERE pi.empty_cost::numeric > 0
     `);
 
-    // 6) Deuda a proveedores (all-time)
-    // Agrego cada lado por separado para evitar join cartesiano
+    // 6) Deuda a proveedores (all-time) = Σcompras − Σpagos sobre proveedores activos.
+    // Debe coincidir EXACTO con el total del módulo Proveedores (getAPCCSummary.totals.saldo):
+    // ahí el saldo de cada proveedor es Σcompras − Σpagos (todos, sin filtrar por is_paid/método).
+    // El cálculo anterior excluía compras pagadas por efectivo/transf (pero dejaba sus pagos) y los
+    // pagos VALE → subestimaba la deuda. Sumamos cada lado por separado (evita join cartesiano).
     const deudaRow = await db.execute(drizzleSql`
       SELECT
-        COALESCE(SUM(comp.total_pendiente), 0)
-          - COALESCE(SUM(pag.total_pagado), 0) AS deuda
-      FROM suppliers s
-      LEFT JOIN (
-        SELECT supplier_id, SUM(total::numeric) AS total_pendiente
-        FROM purchases
-        WHERE is_paid = false OR payment_method = 'cuenta_corriente'
-        GROUP BY supplier_id
-      ) comp ON comp.supplier_id = s.id
-      LEFT JOIN (
-        SELECT supplier_id, SUM(amount::numeric) AS total_pagado
-        FROM supplier_payments
-        WHERE method != 'VALE'
-        GROUP BY supplier_id
-      ) pag ON pag.supplier_id = s.id
-      WHERE s.active = true
+        COALESCE((SELECT SUM(p.total::numeric)  FROM purchases p         JOIN suppliers s ON s.id = p.supplier_id  WHERE s.active = true), 0)
+      - COALESCE((SELECT SUM(sp.amount::numeric) FROM supplier_payments sp JOIN suppliers s ON s.id = sp.supplier_id WHERE s.active = true), 0)
+        AS deuda
     `);
 
     // 7) Deuda de clientes (all-time AR balance)
