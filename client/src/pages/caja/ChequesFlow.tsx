@@ -2,19 +2,23 @@ import { useState, useMemo } from "react";
 import { ArrowLeftRight, ChevronLeft, ChevronRight } from "lucide-react";
 
 // ── Fecha de IMPACTO (acreditación/débito real en el banco) ──────────────────
-// Regla: fecha del cheque + 1 día hábil. Sin feriados (solo fines de semana):
-//   Lun→Mar, Mar→Mié, Mié→Jue, Jue→Vie (todos +1)
-//   Vie→Lun (+3), Sáb→Mar (+3), Dom→Mar (+2)
-// AISLADA y documentada: para sumar feriados después, restar/saltar acá los días no hábiles.
-const OFFSET_POR_DIA = [2, 1, 1, 1, 1, 3, 3]; // index = getDay() (0=Dom .. 6=Sáb)
+// EMITIDOS (débito): 24hs hábiles (+1 día hábil). Lun→Mar, Mar→Mié, Mié→Jue, Jue→Vie;
+//   Vie→Lun, Sáb→Mar, Dom→Mar.
+// RECIBIDOS (acreditación): 48hs hábiles (+2 días hábiles). Lun→Mié, Mar→Jue, Mié→Vie, Jue→Lun;
+//   Vie→Mar, Sáb→Mié, Dom→Mié.
+// offset en días calendario por getDay() (0=Dom .. 6=Sáb). AISLADO y documentado: para sumar
+// feriados después, ajustar acá saltando los días no hábiles.
+const OFFSET_EMITIDO  = [2, 1, 1, 1, 1, 3, 3]; // +1 día hábil (24hs)
+const OFFSET_RECIBIDO = [3, 2, 2, 2, 4, 4, 4]; // +2 días hábiles (48hs)
 function parseYMD(s: string): Date {
   const [y, m, d] = s.slice(0, 10).split("-").map(Number);
   return new Date(y, (m || 1) - 1, d || 1);
 }
-export function fechaImpacto(fechaCheque: string): Date {
+export function fechaImpacto(fechaCheque: string, tipo: "emitido" | "recibido"): Date {
   const base = parseYMD(fechaCheque);
+  const off = tipo === "recibido" ? OFFSET_RECIBIDO : OFFSET_EMITIDO;
   const out = new Date(base);
-  out.setDate(out.getDate() + OFFSET_POR_DIA[base.getDay()]);
+  out.setDate(out.getDate() + off[base.getDay()]);
   out.setHours(0, 0, 0, 0);
   return out;
 }
@@ -89,12 +93,12 @@ export default function ChequesFlow({ cheques }: { cheques: Cheque[] }) {
   const { acredita, debita, totalAcr, totalDeb } = useMemo(() => {
     const finSemana = addDays(domingo, 1); // exclusivo (lunes siguiente 00:00)
     const enRango = (c: Cheque) => {
-      const imp = fechaImpacto(c.fecha_cobro);
+      const imp = fechaImpacto(c.fecha_cobro, c.tipo);
       return imp >= lunes && imp < finSemana;
     };
     // en_cartera = pendiente; cobrado/depositado = confirmado por el banco (badge "Cobrado")
     const relevantes = (cheques ?? []).filter(c => ["en_cartera", "cobrado", "depositado"].includes(c.estado));
-    const conFlags = (c: Cheque) => ({ ...c, _imp: fechaImpacto(c.fecha_cobro), _cobrado: c.estado !== "en_cartera" });
+    const conFlags = (c: Cheque) => ({ ...c, _imp: fechaImpacto(c.fecha_cobro, c.tipo), _cobrado: c.estado !== "en_cartera" });
     const acr = relevantes.filter(c => c.tipo === "recibido" && enRango(c)).map(conFlags)
       .sort((a, b) => a._imp.getTime() - b._imp.getTime());
     const deb = relevantes.filter(c => c.tipo === "emitido" && enRango(c)).map(conFlags)
@@ -181,7 +185,7 @@ export default function ChequesFlow({ cheques }: { cheques: Cheque[] }) {
       </div>
 
       <p className="mt-3 text-[11px] text-muted-foreground leading-snug">
-        Acreditación = fecha del cheque + 1 día hábil (los de viernes impactan el lunes; sábado y domingo, el martes). No contempla feriados.
+        Emitidos: se debitan a las 24hs hábiles (viernes → lunes; fin de semana → martes). Recibidos: se acreditan a las 48hs hábiles (viernes → martes; fin de semana → miércoles). No contempla feriados.
       </p>
     </div>
   );
