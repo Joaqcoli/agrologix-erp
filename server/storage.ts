@@ -2614,7 +2614,7 @@ export const storage = {
       .where(and(eq(productUnits.productId, productId), eq(productUnits.isActive, true)));
   },
 
-  async getAllProductUnitsStock(filters?: { category?: string; search?: string; onlyInStock?: boolean }): Promise<(ProductUnit & { product: Product })[]> {
+  async getAllProductUnitsStock(filters?: { category?: string; search?: string; onlyInStock?: boolean }): Promise<(ProductUnit & { product: Product; packageUnit?: string | null })[]> {
     const onlyInStock = filters?.onlyInStock !== false; // default true
     const puConditions: any[] = [eq(productUnits.isActive, true), eq(products.active, true)];
     if (onlyInStock) puConditions.push(drizzleSql`${productUnits.stockQty} > 0`);
@@ -2626,14 +2626,33 @@ export const storage = {
       .where(and(...puConditions));
 
     const PACKAGE_UNITS = new Set(['CAJON', 'BOLSA', 'BANDEJA']);
-    return rows
+    const result = rows
       .filter((r) => {
         if (PACKAGE_UNITS.has(r.pu.unit)) return false;
         if (filters?.category && r.product.category !== filters.category) return false;
         if (filters?.search && !r.product.name.toUpperCase().includes(filters.search.toUpperCase())) return false;
         return true;
       })
-      .map((r) => ({ ...r.pu, product: r.product }))
+      .map((r) => ({ ...r.pu, product: r.product }));
+
+    // Envase (CAJON/BOLSA/BANDEJA) del purchase_item más reciente por producto — para mostrar el
+    // equivalente en cajón/bolsa junto a la unidad base (ej. en la hoja de control de stock).
+    const prodIds = Array.from(new Set(result.map((r) => r.productId)));
+    const pkgMap = new Map<number, string>();
+    if (prodIds.length > 0) {
+      const pkgRows = (await db.execute(drizzleSql.raw(`
+        SELECT DISTINCT ON (pi.product_id) pi.product_id AS "productId", pi.purchase_unit AS "packageUnit"
+        FROM purchase_items pi
+        JOIN purchases p ON p.id = pi.purchase_id
+        WHERE pi.product_id = ANY(ARRAY[${prodIds.join(",")}]::int[])
+          AND pi.purchase_unit IN ('CAJON','BOLSA','BANDEJA')
+        ORDER BY pi.product_id, p.purchase_date DESC, pi.id DESC
+      `))).rows as any[];
+      for (const r of pkgRows) pkgMap.set(Number(r.productId), String(r.packageUnit));
+    }
+
+    return result
+      .map((r) => ({ ...r, packageUnit: pkgMap.get(r.productId) ?? null }))
       .sort((a, b) => a.product.name.localeCompare(b.product.name));
   },
 

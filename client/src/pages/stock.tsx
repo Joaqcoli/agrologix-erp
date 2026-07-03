@@ -29,7 +29,7 @@ function formatDate(s: string) {
 const fmtStock = (v: number) => v.toLocaleString("es-MX", { maximumFractionDigits: 2 });
 const fmtPesos = (v: number) => `${v >= 0 ? "+" : ""}$${fmt(Math.abs(v))}`;
 
-type ProductUnitWithProduct = ProductUnit & { product: Product };
+type ProductUnitWithProduct = ProductUnit & { product: Product; packageUnit?: string | null };
 
 const CATEGORY_ORDER = [
   "Fruta", "Verdura", "Hortaliza Liviana", "Hortaliza Pesada", "Hongos/Hierbas", "Huevos",
@@ -779,11 +779,27 @@ export default function StockPage() {
   // Imprimir hoja de control de stock: TODO el stock (>0), por categoría, sin precios, 2 columnas.
   // Con checkbox por producto para tildar al contar físicamente. Intenta entrar en una hoja.
   const handlePrintStock = () => {
+    // Etiqueta corta del envase para el equivalente en cajón/bolsa
+    const pkgLabel = (u?: string | null) =>
+      u === "CAJON" ? "cajón" : u === "BOLSA" ? "bolsa" : u === "BANDEJA" ? "bandeja" : null;
+    // Muestra primero el envase (cajón/bolsa) y entre paréntesis la unidad base (KG/UNIDAD).
+    // Si el producto no tiene equivalencia de envase, solo la unidad base.
+    const qtyLabel = (qty: number, unit: string, wpu: number, pkg?: string | null): string => {
+      const lbl = pkgLabel(pkg);
+      if (wpu > 0 && lbl) {
+        const env = Math.round((qty / wpu) * 10) / 10; // cajones con 1 decimal
+        return `${fmtStock(env)} ${lbl} (${fmtStock(qty)} ${unit})`;
+      }
+      return `${fmtStock(qty)} ${unit}`;
+    };
+
     const all = (Array.isArray(stockData) ? stockData : []).filter((pu) => parseFloat(pu.stockQty as string) > 0);
-    const g: Record<string, { name: string; qty: number; unit: string }[]> = {};
+    const g: Record<string, { name: string; qtyStr: string }[]> = {};
     for (const pu of all) {
       const cat = pu.product.category ?? "Sin categoría";
-      (g[cat] ??= []).push({ name: pu.product.name, qty: parseFloat(pu.stockQty as string), unit: pu.unit });
+      const qty = parseFloat(pu.stockQty as string);
+      const wpu = parseFloat((pu.weightPerUnit as string) ?? "0") || 0;
+      (g[cat] ??= []).push({ name: pu.product.name, qtyStr: qtyLabel(qty, pu.unit, wpu, pu.packageUnit) });
     }
     const cats = [
       ...CATEGORY_ORDER.filter((c) => g[c]?.length),
@@ -794,14 +810,14 @@ export default function StockPage() {
     const doc = new jsPDF({ unit: "mm", format: "a4" });
     const pageW = 210, pageH = 297, margin = 10, colGap = 8, nCols = 2;
     const colW = (pageW - margin * 2 - colGap * (nCols - 1)) / nCols;
-    const top = 22, bottom = pageH - 12, lineH = 4.4;
+    const top = 24, bottom = pageH - 12, lineH = 5.2;
     const colX = (i: number) => margin + i * (colW + colGap);
     let col = 0, y = top;
 
-    doc.setFont("helvetica", "bold"); doc.setFontSize(14);
-    doc.text("Control de Stock", margin, 13);
-    doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(110);
-    doc.text(new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" }), pageW - margin, 13, { align: "right" });
+    doc.setFont("helvetica", "bold"); doc.setFontSize(15);
+    doc.text("Control de Stock", margin, 14);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.setTextColor(110);
+    doc.text(new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" }), pageW - margin, 14, { align: "right" });
     doc.setTextColor(0);
 
     if (cats.length === 0) {
@@ -816,37 +832,36 @@ export default function StockPage() {
     };
 
     for (const cat of cats) {
-      ensure(6 + lineH); // no dejar el header de categoría huérfano
+      ensure(7 + lineH); // no dejar el header de categoría huérfano
       const x = colX(col);
       doc.setFillColor(238, 242, 227);
-      doc.rect(x, y - 3.6, colW, 5.4, "F");
-      doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor(107, 138, 42);
-      doc.text(cat.toUpperCase(), x + 1.5, y);
+      doc.rect(x, y - 4, colW, 6, "F");
+      doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.setTextColor(107, 138, 42);
+      doc.text(cat.toUpperCase(), x + 1.8, y);
       doc.setTextColor(0);
-      y += lineH + 2.2;
+      y += lineH + 2.5;
 
-      doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(9.5);
       for (const it of g[cat]) {
         ensure(lineH);
         const cx = colX(col);
-        doc.setDrawColor(180); doc.rect(cx, y - 2.7, 2.6, 2.6);
-        const qtyStr = `${fmtStock(it.qty)} ${it.unit}`;
+        doc.setDrawColor(170); doc.rect(cx, y - 3, 3, 3);
         doc.setFont("helvetica", "bold");
-        const qtyW = doc.getTextWidth(qtyStr);
+        const qtyW = doc.getTextWidth(it.qtyStr);
         doc.setFont("helvetica", "normal");
-        const nameMaxW = colW - 4 - qtyW - 3;
+        const nameMaxW = colW - 5 - qtyW - 3;
         let name = it.name;
         if (doc.getTextWidth(name) > nameMaxW) {
           while (name.length > 3 && doc.getTextWidth(name + "…") > nameMaxW) name = name.slice(0, -1);
           name = name + "…";
         }
-        doc.text(name, cx + 4, y);
+        doc.text(name, cx + 5, y);
         doc.setFont("helvetica", "bold");
-        doc.text(qtyStr, cx + colW, y, { align: "right" });
+        doc.text(it.qtyStr, cx + colW, y, { align: "right" });
         doc.setFont("helvetica", "normal");
         y += lineH;
       }
-      y += 1.8;
+      y += 2;
     }
     doc.save(`Control-Stock-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
