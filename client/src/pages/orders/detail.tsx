@@ -655,9 +655,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
   // ── Edit state ────────────────────────────────────────────────────────────
   const [drafts, setDrafts] = useState<Record<number, ItemDraft>>({});
   const [editingId, setEditingId] = useState<number | null>(null);
-  type ZeroCostItem = { itemId: number; productName: string };
-  type ZeroCostState = { queue: ZeroCostItem[]; sinStockIds: number[] } | null;
-  const [zeroCostState, setZeroCostState] = useState<ZeroCostState>(null);
   // Bonification (price=0) dialog queue
   type BonifItem = { itemId: number; productName: string; patch: { itemId: number; data: Record<string, any> } };
   type BonifState = { queue: BonifItem[]; resolved: { itemId: number; data: Record<string, any> }[]; others: { itemId: number; data: Record<string, any> }[] } | null;
@@ -943,37 +940,9 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const handleApprove = () => {
     if (!order) return;
-    const needsQuestion = order.items.filter((item) => {
-      const override = item.overrideCostPerUnit;
-      const effectiveCost = parseFloat(
-        (override != null && override !== "" ? override : (item.costPerUnit as string)) ?? "0"
-      );
-      return effectiveCost === 0 && !item.bolsaType && !item.isBonification;
-    });
-    if (needsQuestion.length === 0) {
-      void doApproveWithStockCheck();
-      return;
-    }
-    setZeroCostState({
-      queue: needsQuestion.map((item) => ({ itemId: item.id, productName: item.product?.name ?? "Producto" })),
-      sinStockIds: [],
-    });
-  };
-
-  const handleZeroCostAnswer = (affectStock: boolean) => {
-    if (!zeroCostState || zeroCostState.queue.length === 0) return;
-    const [current, ...remaining] = zeroCostState.queue;
-    const newSinStockIds = affectStock ? zeroCostState.sinStockIds : [...zeroCostState.sinStockIds, current.itemId];
-    if (remaining.length === 0) {
-      setZeroCostState(null);
-      // "No descontar stock" → pasar como decision "zero" en lugar de bolsaType: "sin_stock"
-      const zeroDecisions = Object.fromEntries(
-        newSinStockIds.map((itemId) => [itemId, "zero" as ApprovalDecision])
-      );
-      void doApproveWithStockCheck(zeroDecisions);
-    } else {
-      setZeroCostState({ queue: remaining, sinStockIds: newSinStockIds });
-    }
+    // Los ítems sin stock (costo $0) los detecta el stock-check y muestra el diálogo con las dos
+    // opciones económicas: "Costo $0" (margen 100%) o "Sumar al Rinde" (último costo → rinde).
+    void doApproveWithStockCheck();
   };
 
   const handleStockIssueAnswer = (decision: ApprovalDecision) => {
@@ -1709,31 +1678,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Zero-cost dialog — per item, sequential */}
-      <AlertDialog open={!!(zeroCostState && zeroCostState.queue.length > 0)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Costo $0 — {zeroCostState?.queue[0]?.productName}</AlertDialogTitle>
-            <AlertDialogDescription>
-              Esta línea tiene costo $0. ¿Querés que descuente stock al aprobar el pedido?
-              {zeroCostState && zeroCostState.queue.length > 1 && (
-                <span className="block mt-1 text-xs text-muted-foreground">
-                  ({zeroCostState.queue.length} líneas por revisar)
-                </span>
-              )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setZeroCostState(null)}>Cancelar</AlertDialogCancel>
-            <AlertDialogAction className="bg-secondary text-secondary-foreground hover:bg-secondary/80" onClick={() => handleZeroCostAnswer(false)}>
-              No descontar stock
-            </AlertDialogAction>
-            <AlertDialogAction onClick={() => handleZeroCostAnswer(true)}>
-              Sí, descontar stock
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       {/* Delete order dialog */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
