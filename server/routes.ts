@@ -2541,7 +2541,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/caja/cheques/:id", requireAuth, async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const { accion, comision, contraparte, cuentaDestinoId, monto, fechaCobro, numero } = req.body;
+      const { accion, comision, contraparte, cuentaDestinoId, monto, fechaCobro, numero, gastoCategoria, gastoFecha } = req.body;
       const allCuentas = await storage.getCuentasFinancieras();
       const chequeCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "cheque");
       const galiciaCuenta = (allCuentas as any[]).find((c: any) => c.tipo === "banco");
@@ -2578,6 +2578,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             concepto: `Cheque endosado a ${nuevaContraparte}`,
             origenTipo: "cheque_endosado", origenId: String(id),
           });
+        }
+        // Opcional: registrar el endoso como gasto en "egresos por categoría".
+        // NO lleva cuentaId → no genera un 2º movimiento de cuenta (ya lo descuenta el endoso de arriba).
+        if (gastoCategoria) {
+          await storage.createCajaMovement({
+            date: gastoFecha || new Date().toISOString().slice(0, 10),
+            type: "egreso",
+            description: `Cheque endosado a ${nuevaContraparte}${cheque.numero ? ` (nº ${cheque.numero})` : ""}`,
+            amount: String(cheque.monto),
+            category: String(gastoCategoria),
+            method: "CHEQUE",
+          } as any, (req as any).session?.userId ?? null);
         }
       } else if (accion === "editar") {
         // Editar datos del cheque en cartera (monto, fecha de cobro, de quién)

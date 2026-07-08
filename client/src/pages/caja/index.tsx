@@ -273,6 +273,8 @@ export default function CajaPage() {
   const [activeCheque, setActiveCheque] = useState<Cheque | null>(null);
   const [chequeComision, setChequeComision] = useState("");
   const [chequeEndosarA, setChequeEndosarA] = useState("");
+  const [chequeEndosarGasto, setChequeEndosarGasto] = useState(false);
+  const [chequeEndosarCategoria, setChequeEndosarCategoria] = useState("");
   const [chequeCuentaDestinoId, setChequeCuentaDestinoId] = useState<number | null>(null);
   // Editar / agregar cheque en cartera
   const [editChequeOpen, setEditChequeOpen] = useState(false);
@@ -501,12 +503,14 @@ export default function CajaPage() {
   });
 
   const endosarMut = useMutation({
-    mutationFn: ({ id, contraparte }: { id: number; contraparte: string }) =>
-      apiRequest("PATCH", `/api/caja/cheques/${id}`, { accion: "endosar", contraparte }),
+    mutationFn: ({ id, contraparte, gastoCategoria, gastoFecha }: { id: number; contraparte: string; gastoCategoria: string | null; gastoFecha: string }) =>
+      apiRequest("PATCH", `/api/caja/cheques/${id}`, { accion: "endosar", contraparte, gastoCategoria, gastoFecha }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/caja/cheques"] });
       queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/summary"] });
       setEndosarChequeOpen(false); setActiveCheque(null); setChequeEndosarA("");
+      setChequeEndosarGasto(false); setChequeEndosarCategoria("");
     },
   });
 
@@ -1557,7 +1561,7 @@ export default function CajaPage() {
         </Dialog>
 
         {/* Dialog: endosar cheque */}
-        <Dialog open={endosarChequeOpen} onOpenChange={v => { setEndosarChequeOpen(v); if (!v) { setActiveCheque(null); setChequeEndosarA(""); } }}>
+        <Dialog open={endosarChequeOpen} onOpenChange={v => { setEndosarChequeOpen(v); if (!v) { setActiveCheque(null); setChequeEndosarA(""); setChequeEndosarGasto(false); setChequeEndosarCategoria(""); } }}>
           <DialogContent className="max-w-sm">
             <DialogHeader><DialogTitle>Endosar cheque</DialogTitle></DialogHeader>
             <div className="py-2 space-y-3">
@@ -1568,12 +1572,38 @@ export default function CajaPage() {
                 <Label className="text-xs">Endosar a (proveedor u otro) <span className="text-red-500">*</span></Label>
                 <Input value={chequeEndosarA} onChange={e => setChequeEndosarA(e.target.value)} placeholder="Nombre del proveedor" className="mt-1" />
               </div>
+              <label className="flex items-center gap-2 cursor-pointer pt-1">
+                <input type="checkbox" className="h-4 w-4 accent-purple-700"
+                  checked={chequeEndosarGasto}
+                  onChange={e => setChequeEndosarGasto(e.target.checked)} />
+                <span className="text-xs">Registrar como gasto (egreso por categoría)</span>
+              </label>
+              {chequeEndosarGasto && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Categoría del gasto <span className="text-red-500">*</span></Label>
+                  <Select value={chequeEndosarCategoria || "_none"} onValueChange={v => setChequeEndosarCategoria(v === "_none" ? "" : v)}>
+                    <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Elegí una categoría" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none">Elegí una categoría</SelectItem>
+                      {bankCatNames.map(cat => (
+                        <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground">Suma en "Egresos por categoría". No mueve la cuenta de nuevo (ya la descuenta el endoso).</p>
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setEndosarChequeOpen(false)}>Cancelar</Button>
               <Button
-                onClick={() => activeCheque && endosarMut.mutate({ id: activeCheque.id, contraparte: chequeEndosarA || activeCheque.contraparte })}
-                disabled={endosarMut.isPending || !chequeEndosarA}
+                onClick={() => activeCheque && endosarMut.mutate({
+                  id: activeCheque.id,
+                  contraparte: chequeEndosarA || activeCheque.contraparte,
+                  gastoCategoria: chequeEndosarGasto ? (chequeEndosarCategoria || null) : null,
+                  gastoFecha: todayIso,
+                })}
+                disabled={endosarMut.isPending || !chequeEndosarA || (chequeEndosarGasto && !chequeEndosarCategoria)}
               >
                 {endosarMut.isPending ? "Guardando..." : "Confirmar endoso"}
               </Button>
