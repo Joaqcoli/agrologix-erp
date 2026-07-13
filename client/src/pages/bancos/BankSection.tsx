@@ -358,19 +358,6 @@ export function BankSection(props: BankSectionProps) {
         </div>
       )}
 
-      {/* Cards resumen (verde = entra / coral = sale) */}
-      <div className="brx-sums2">
-        {cards.map((c, i) => {
-          const isAcr = (c.color ?? "").includes("green");
-          return (
-            <div key={i} className={`brx-scard ${isAcr ? "acr" : "deb"}`}>
-              <div className="lab">{c.label}</div>
-              <div className="amt brx-num">{isLoading ? "…" : fmt(c.value)}</div>
-            </div>
-          );
-        })}
-      </div>
-
       {/* Filtros */}
       <div className="brx-filters">
         <div className="brx-fld">
