@@ -12,6 +12,53 @@ import { Plus, ShoppingCart, Calendar, ChevronRight, Package, DollarSign, Users 
 import type { Purchase } from "@shared/schema";
 
 const fmtInt = (n: number) => Math.round(n).toLocaleString("es-AR");
+// es-AR con 2 decimales (unifica formato con el resto del sistema): $682.999,97
+const fmt2 = (n: number) => n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// ── Rediseño Compras (Claude Design) — CSS de diseno-caja/compras-rediseno.html ──
+const CMX_CSS = `
+.compras-rx{background:#f4f4f1;min-height:100%;padding:30px 24px 56px;font-family:'Inter',system-ui,sans-serif;color:#1e2420;}
+.compras-rx *{box-sizing:border-box;}
+.cmx-wrap{max-width:1240px;margin:0 auto;}
+.cmx-num{font-family:'Bricolage Grotesque','Inter',sans-serif;font-variant-numeric:tabular-nums;letter-spacing:-.01em;}
+.cmx-top{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:22px;}
+.cmx-title{font-family:'Bricolage Grotesque';font-size:27px;font-weight:700;margin:0;letter-spacing:-.02em;}
+.cmx-subtitle{font-size:13.5px;color:#8b8f88;margin-top:5px;}
+.cmx-topright{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.cmx-datepick{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #ecece8;border-radius:10px;padding:9px 13px;font-size:13.5px;color:#1e2420;}
+.cmx-datepick>svg{color:#8b8f88;flex:0 0 auto;}
+.cmx-datepick input{border:none;outline:none;font-family:'Inter';font-size:13.5px;color:#1e2420;background:transparent;}
+.cmx-datepick:focus-within{border-color:#5f8020;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
+.cmx-btnnew{display:inline-flex;align-items:center;gap:8px;background:#6b8a2a;color:#fff;border:none;border-radius:11px;padding:11px 18px;font-family:'Inter';font-size:14px;font-weight:600;cursor:pointer;text-decoration:none;}
+.cmx-btnnew:hover{background:#5f7d24;}
+.cmx-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px;}
+@media(max-width:760px){.cmx-summary{grid-template-columns:1fr;}}
+.cmx-sum{background:#fff;border:1px solid #ecece8;border-radius:16px;padding:20px 22px;}
+.cmx-sum .head{display:flex;align-items:center;gap:10px;margin-bottom:14px;}
+.cmx-sicon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
+.cmx-sicon.g{background:#eef3e3;color:#5f8020;}
+.cmx-sicon.c{background:#f8ede8;color:#c05e42;}
+.cmx-sicon.b{background:#e9eff7;color:#3a67a3;}
+.cmx-sum .lab{font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9a9e96;}
+.cmx-sum .val{font-family:'Bricolage Grotesque';font-size:30px;font-weight:700;letter-spacing:-.02em;margin-top:2px;}
+.cmx-list{display:flex;flex-direction:column;gap:11px;}
+.cmx-oc{display:flex;align-items:center;gap:16px;background:#fff;border:1px solid #ecece8;border-radius:14px;padding:15px 20px;cursor:pointer;transition:border-color .15s,box-shadow .15s;text-decoration:none;color:inherit;}
+.cmx-oc:hover{border-color:#d9d9d3;box-shadow:0 3px 14px rgba(30,36,32,.05);}
+.cmx-cart{width:44px;height:44px;border-radius:11px;background:#eef3e3;color:#5f8020;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
+.cmx-ocmid{flex:1;min-width:0;}
+.cmx-ocline{display:flex;align-items:center;gap:10px;margin-bottom:3px;flex-wrap:wrap;}
+.cmx-occode{font-size:14px;font-weight:700;color:#1e2420;letter-spacing:-.01em;}
+.cmx-pcount{font-size:11px;font-weight:500;color:#6f7469;background:#f1f2ee;border:1px solid #e6e7e1;padding:2px 9px;border-radius:20px;white-space:nowrap;}
+.cmx-prov{font-family:'Bricolage Grotesque';font-size:17px;font-weight:600;letter-spacing:-.01em;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cmx-ocdate{display:flex;align-items:center;gap:6px;font-size:12.5px;color:#8b8f88;margin-top:5px;}
+.cmx-octot{text-align:right;flex:0 0 auto;}
+.cmx-octot .l{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9a9e96;margin-bottom:3px;}
+.cmx-octot .v{font-family:'Bricolage Grotesque';font-size:19px;font-weight:700;letter-spacing:-.01em;}
+.cmx-chev{color:#c4c7bf;flex:0 0 auto;display:flex;}
+.cmx-empty{background:#fff;border:1px solid #ecece8;border-radius:16px;padding:48px 20px;text-align:center;color:#8b8f88;display:flex;flex-direction:column;align-items:center;gap:10px;}
+.cmx-empty .big{font-size:15px;font-weight:600;color:#1e2420;}
+.cmx-emptyic{width:48px;height:48px;border-radius:50%;background:#f1f1ec;display:flex;align-items:center;justify-content:center;color:#8b8f88;}
+`;
 
 export default function PurchasesPage() {
   const [date, setDate] = useState(() => {
@@ -41,119 +88,82 @@ export default function PurchasesPage() {
 
   return (
     <Layout title="Compras">
-      <div className="p-6 space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">Órdenes de Compra</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              {purchases?.length ?? 0} orden{(purchases?.length ?? 0) !== 1 ? "es" : ""} el {formatDateLong(date)}
-            </p>
-          </div>
-          <Input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="w-auto"
-          />
-          <Link href="/purchases/new">
-            <Button data-testid="button-new-purchase">
-              <Plus className="mr-2 h-4 w-4" /> Nueva Compra
-            </Button>
-          </Link>
-        </div>
-
-        {/* Resumen del día */}
-        {!isLoading && list.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  <Package className="h-3.5 w-3.5" /> Bultos comprados
-                </div>
-                <p className="text-2xl font-bold text-foreground mt-1">{fmtInt(bultosTotal)}</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  <DollarSign className="h-3.5 w-3.5" /> Total comprado
-                </div>
-                <p className="text-2xl font-bold text-foreground mt-1">${fmtInt(totalComprado)}</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  <Users className="h-3.5 w-3.5" /> Proveedores
-                </div>
-                <p className="text-2xl font-bold text-foreground mt-1">{proveedoresCount}</p>
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
-        {isLoading ? (
-          <div className="space-y-3">
-            {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-24 w-full rounded-lg" />)}
-          </div>
-        ) : (purchases ?? []).length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-16 gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-                <ShoppingCart className="h-6 w-6 text-muted-foreground" />
+      <div className="compras-rx">
+        <style>{CMX_CSS}</style>
+        <div className="cmx-wrap">
+          {/* Encabezado */}
+          <div className="cmx-top">
+            <div>
+              <h1 className="cmx-title">Órdenes de Compra</h1>
+              <div className="cmx-subtitle">
+                {purchases?.length ?? 0} orden{(purchases?.length ?? 0) !== 1 ? "es" : ""} el {formatDateLong(date)}
               </div>
-              <p className="text-sm font-medium text-foreground">Sin órdenes de compra</p>
-              <p className="text-sm text-muted-foreground text-center">Registra tu primera compra para comenzar el inventario.</p>
-              <Link href="/purchases/new">
-                <Button size="sm">
-                  <Plus className="mr-2 h-4 w-4" /> Nueva Compra
-                </Button>
+            </div>
+            <div className="cmx-topright">
+              <div className="cmx-datepick">
+                <Calendar className="h-4 w-4" />
+                <input type="date" value={date} onChange={(e) => setDate(e.target.value)} data-testid="input-date-filter" />
+              </div>
+              <Link href="/purchases/new" className="cmx-btnnew" data-testid="button-new-purchase">
+                <Plus className="h-[17px] w-[17px]" /> Nueva Compra
               </Link>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-3">
-            {(purchases ?? []).map((p) => (
-              <Link key={p.id} href={`/purchases/${p.id}`}>
-                <Card className="hover-elevate cursor-pointer" data-testid={`card-purchase-${p.id}`}>
-                  <CardContent className="p-4">
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="flex items-start gap-4 flex-1 min-w-0">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 shrink-0">
-                          <ShoppingCart className="h-5 w-5 text-primary" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-bold text-foreground">{p.folio}</span>
-                            <Badge variant="secondary" className="text-[10px]">
-                              {p.itemCount} producto{p.itemCount !== 1 ? "s" : ""}
-                            </Badge>
-                          </div>
-                          <p className="text-sm text-foreground mt-0.5 truncate">{p.supplierName}</p>
-                          <div className="flex flex-wrap items-center gap-3 mt-1">
-                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                              <Calendar className="h-3 w-3" />
-                              {formatDate(p.purchaseDate)}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        <div className="text-right">
-                          <p className="text-xs text-muted-foreground">Total</p>
-                          <p className="text-base font-bold text-foreground">
-                            ${parseFloat(p.total).toLocaleString("es-MX", { minimumFractionDigits: 2 })}
-                          </p>
-                        </div>
-                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            ))}
+            </div>
           </div>
-        )}
+
+          {/* Resumen del día (mismos cálculos) */}
+          {!isLoading && list.length > 0 && (
+            <div className="cmx-summary">
+              <div className="cmx-sum">
+                <div className="head"><span className="cmx-sicon g"><Package className="h-[18px] w-[18px]" /></span><span className="lab">Bultos comprados</span></div>
+                <div className="val cmx-num">{fmtInt(bultosTotal)}</div>
+              </div>
+              <div className="cmx-sum">
+                <div className="head"><span className="cmx-sicon c"><DollarSign className="h-[18px] w-[18px]" /></span><span className="lab">Total comprado</span></div>
+                <div className="val cmx-num">${fmtInt(totalComprado)}</div>
+              </div>
+              <div className="cmx-sum">
+                <div className="head"><span className="cmx-sicon b"><Users className="h-[18px] w-[18px]" /></span><span className="lab">Proveedores</span></div>
+                <div className="val cmx-num">{proveedoresCount}</div>
+              </div>
+            </div>
+          )}
+
+          {isLoading ? (
+            <div className="cmx-list">
+              {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-[74px] w-full rounded-2xl" />)}
+            </div>
+          ) : list.length === 0 ? (
+            <div className="cmx-empty">
+              <div className="cmx-emptyic"><ShoppingCart className="h-6 w-6" /></div>
+              <div className="big">Sin órdenes de compra</div>
+              <div>Registra tu primera compra para comenzar el inventario.</div>
+              <Link href="/purchases/new" className="cmx-btnnew" style={{ marginTop: 6 }}>
+                <Plus className="h-[17px] w-[17px]" /> Nueva Compra
+              </Link>
+            </div>
+          ) : (
+            <div className="cmx-list">
+              {list.map((p) => (
+                <Link key={p.id} href={`/purchases/${p.id}`} className="cmx-oc" data-testid={`card-purchase-${p.id}`}>
+                  <span className="cmx-cart"><ShoppingCart className="h-5 w-5" /></span>
+                  <div className="cmx-ocmid">
+                    <div className="cmx-ocline">
+                      <span className="cmx-occode">{p.folio}</span>
+                      <span className="cmx-pcount">{p.itemCount} producto{p.itemCount !== 1 ? "s" : ""}</span>
+                    </div>
+                    <div className="cmx-prov">{p.supplierName}</div>
+                    <div className="cmx-ocdate"><Calendar className="h-[14px] w-[14px]" /> {formatDate(p.purchaseDate)}</div>
+                  </div>
+                  <div className="cmx-octot">
+                    <div className="l">Total</div>
+                    <div className="v cmx-num">${fmt2(parseFloat(p.total))}</div>
+                  </div>
+                  <span className="cmx-chev"><ChevronRight className="h-5 w-5" /></span>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </Layout>
   );
