@@ -13,7 +13,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Package, Download, ClipboardList, Users, AlertTriangle, Layers, ChevronDown, HelpCircle,
+  Package, Download, ClipboardList, Users, AlertTriangle, Layers, ChevronDown, HelpCircle, Search,
 } from "lucide-react";
 
 type LoadListRow = {
@@ -86,6 +86,83 @@ function isDudaRow(row: LoadListRow): boolean {
     return true;
   });
 }
+
+// ── Rediseño Lista de Carga (Claude Design) — CSS de diseno-caja/lista-carga-rediseno.html ──
+const LLX_CSS = `
+.loadlist-rx{background:#f4f4f1;min-height:100%;padding:30px 24px 56px;font-family:'Inter',system-ui,sans-serif;color:#1e2420;}
+.loadlist-rx *{box-sizing:border-box;}
+.llx-wrap{max-width:1180px;margin:0 auto;}
+.llx-num{font-family:'Bricolage Grotesque','Inter',sans-serif;font-variant-numeric:tabular-nums;letter-spacing:-.01em;}
+.llx-pagehead{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:22px;flex-wrap:wrap;}
+.llx-pagehead h1{font-family:'Bricolage Grotesque';font-size:27px;font-weight:700;margin:0;letter-spacing:-.02em;}
+.llx-pagehead .sub{font-size:14px;color:#8b8f88;margin:5px 0 0;}
+.llx-buycompra{background:#fff;border:1px solid #ecece8;color:#1e2420;font-family:'Inter';font-size:13.5px;font-weight:500;padding:10px 16px;border-radius:11px;cursor:pointer;display:flex;align-items:center;gap:8px;white-space:nowrap;}
+.llx-buycompra:hover{border-color:#cfcfc9;background:#f6f6f2;}
+.llx-controls{display:flex;align-items:flex-end;gap:26px;flex-wrap:wrap;margin-bottom:22px;}
+.llx-fld{display:flex;flex-direction:column;gap:6px;}
+.llx-fld label{font-size:12.5px;font-weight:600;color:#9a9e96;}
+.llx-fld input{font-family:'Inter';font-size:14px;padding:10px 13px;border:1px solid #ecece8;border-radius:10px;background:#fff;color:#1e2420;}
+.llx-fld input:focus{outline:none;border-color:#6b8a2a;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
+.llx-switch{display:inline-flex;align-items:center;gap:11px;cursor:pointer;font-size:14px;font-weight:500;user-select:none;}
+.llx-switch input{display:none;}
+.llx-track{width:42px;height:24px;border-radius:20px;background:#d9d9d3;position:relative;transition:.2s;flex:0 0 auto;}
+.llx-track::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 1px 2px rgba(0,0,0,.25);}
+.llx-switch input:checked + .llx-track{background:#6b8a2a;}
+.llx-switch input:checked + .llx-track::after{transform:translateX(18px);}
+.llx-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px;}
+@media(max-width:720px){.llx-stats{grid-template-columns:repeat(2,1fr);}}
+.llx-stat{background:#fff;border:1px solid #ecece8;border-radius:14px;padding:15px 18px;}
+.llx-stat .lab{display:flex;align-items:center;gap:8px;font-size:13px;color:#8b8f88;margin-bottom:9px;}
+.llx-stat .val{font-size:26px;font-weight:700;line-height:1;}
+.llx-stat.alert .lab{color:#c05e42;}
+.llx-stat.alert .val{color:#c05e42;}
+.llx-searchrow{display:flex;gap:12px;margin-bottom:18px;flex-wrap:wrap;}
+.llx-searchwrap{flex:1;position:relative;min-width:200px;}
+.llx-searchwrap>svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:#8b8f88;pointer-events:none;}
+.llx-searchwrap input{width:100%;font-family:'Inter';font-size:14px;padding:11px 14px 11px 40px;border:1px solid #ecece8;border-radius:11px;background:#fff;color:#1e2420;}
+.llx-searchwrap input:focus{outline:none;border-color:#6b8a2a;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
+.llx-catsel{font-family:'Inter';font-size:14px;padding:11px 14px;border:1px solid #ecece8;border-radius:11px;background:#fff;color:#1e2420;min-width:170px;}
+.llx-catsel:focus{outline:none;border-color:#6b8a2a;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
+.llx-tablecard{background:#fff;border:1px solid #ecece8;border-radius:16px;overflow:hidden;}
+.llx-tabletop{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #f1f1ee;gap:10px;flex-wrap:wrap;}
+.llx-tabletop .t{display:flex;align-items:center;gap:10px;font-family:'Bricolage Grotesque';font-weight:700;font-size:15px;}
+.llx-tabletop .badge{font-size:12px;font-weight:600;color:#8b8f88;background:#f1f1ec;padding:4px 11px;border-radius:20px;white-space:nowrap;}
+.llx-grid{display:grid;align-items:center;gap:12px;}
+.llx-g7{grid-template-columns:38px minmax(0,1fr) 96px 108px 92px 168px 96px;}
+.llx-g5{grid-template-columns:38px minmax(0,1fr) 96px 108px 96px;}
+.llx-thead{padding:11px 20px;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9a9e96;border-bottom:1px solid #f1f1ee;}
+.llx-thead .r{text-align:right;}
+.loadlist-rx .r{text-align:right;}
+.llx-catrow{padding:9px 20px;background:#faf9f6;font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#8b8f88;}
+.llx-prow{padding:14px 20px;border-top:1px solid #f4f4f1;cursor:pointer;}
+.llx-prow:hover{background:#f7f7f4;}
+.llx-prow.buy{background:#fdf4f1;}
+.llx-prow.buy:hover{background:#fbeee9;}
+.llx-prow.duda{background:#fbf7e8;}
+.llx-prow.duda:hover{background:#f7f1da;}
+.llx-pidx{color:#8b8f88;font-size:13px;}
+.llx-pname{font-size:14.5px;font-weight:500;display:flex;align-items:center;gap:6px;}
+.llx-pdesg{font-size:12px;color:#8b8f88;margin-top:2px;}
+.llx-uchip{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.03em;color:#5f645b;background:#eef0ec;border:1px solid #e3e5df;padding:3px 9px;border-radius:7px;}
+.llx-ptot{font-weight:700;font-size:14.5px;}
+.llx-pstk{color:#8b8f88;font-size:14px;}
+.llx-pneto{display:flex;flex-direction:column;align-items:flex-end;line-height:1.15;}
+.llx-pneto .n{font-weight:700;font-size:14.5px;color:#b0553f;}
+.llx-pneto .tag{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#c05e42;}
+.llx-pneto.ok .n{color:#5f8020;font-size:14px;}
+.llx-pneto.duda .n{color:#c08a1e;font-size:12.5px;display:inline-flex;align-items:center;gap:4px;}
+.llx-pclients{display:inline-flex;align-items:center;gap:6px;justify-content:flex-end;font-size:13px;font-weight:600;color:#8b8f88;background:none;border:none;cursor:pointer;font-family:inherit;width:100%;}
+.llx-pclients:hover{color:#1e2420;}
+.llx-empty{padding:44px 20px;text-align:center;color:#8b8f88;font-size:14px;}
+.llx-empty .big{font-size:15px;font-weight:600;color:#1e2420;margin-bottom:4px;}
+.llx-pending{background:#fff;border:1px solid #eecf9a;border-radius:16px;overflow:hidden;margin-bottom:22px;}
+.llx-pending .ph{display:flex;align-items:center;gap:8px;padding:14px 20px;font-weight:600;font-size:14px;color:#c08a1e;border-bottom:1px solid #f5ecd6;background:#fdf7e6;}
+.llx-pending table{width:100%;border-collapse:collapse;font-size:13.5px;}
+.llx-pending th{text-align:left;padding:9px 20px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#9a9e96;border-bottom:1px solid #f1f1ee;}
+.llx-pending th.r,.llx-pending td.r{text-align:right;}
+.llx-pending td{padding:10px 20px;border-top:1px solid #f4f4f1;}
+.llx-pending .raw{color:#c08a1e;font-style:italic;}
+`;
 
 export default function LoadListPage() {
   const d0 = new Date();
@@ -181,333 +258,197 @@ export default function LoadListPage() {
 
   return (
     <Layout title="Lista de Carga">
-      <div className="p-6 max-w-5xl mx-auto space-y-5">
-        {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">Lista de Carga</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Consolidado por producto y unidad — stock y faltantes
-            </p>
+      <div className="loadlist-rx">
+        <style>{LLX_CSS}</style>
+        <div className="llx-wrap">
+          {/* Header */}
+          <div className="llx-pagehead">
+            <div>
+              <h1>Lista de Carga</h1>
+              <p className="sub">Consolidado por producto y unidad — stock y faltantes</p>
+            </div>
+            <button className="llx-buycompra" onClick={handleExportCompra} data-testid="button-export-load-list">
+              <Download className="h-[15px] w-[15px]" /> Lista de Compra
+            </button>
           </div>
-          <Button onClick={handleExportCompra} variant="outline" data-testid="button-export-load-list">
-            <Download className="mr-2 h-4 w-4" /> Lista de Compra
-          </Button>
-        </div>
 
-        {/* Controls */}
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="date-filter">Fecha</Label>
-            <Input
-              id="date-filter"
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-44"
-              data-testid="input-load-list-date"
-            />
+          {/* Controles: fecha + toggles verdes (misma lógica) */}
+          <div className="llx-controls">
+            <div className="llx-fld">
+              <label htmlFor="date-filter">Fecha</label>
+              <input id="date-filter" type="date" value={date} onChange={(e) => setDate(e.target.value)} data-testid="input-load-list-date" />
+            </div>
+            <label className="llx-switch">
+              <input type="checkbox" checked={includeStock} onChange={(e) => setIncludeStock(e.target.checked)} data-testid="toggle-include-stock" />
+              <span className="llx-track" /> Incluir stock
+            </label>
+            <label className="llx-switch">
+              <input type="checkbox" checked={showOnlyShortages} onChange={(e) => setShowOnlyShortages(e.target.checked)} data-testid="toggle-show-only-shortages" />
+              <span className="llx-track" /> Solo faltantes
+            </label>
           </div>
-          <div className="flex items-center gap-2 pb-0.5">
-            <Switch
-              id="toggle-stock"
-              checked={includeStock}
-              onCheckedChange={setIncludeStock}
-              data-testid="toggle-include-stock"
-            />
-            <Label htmlFor="toggle-stock" className="cursor-pointer text-sm">
-              Incluir Stock
-            </Label>
-          </div>
-          <div className="flex items-center gap-2 pb-0.5">
-            <Switch
-              id="toggle-shortages"
-              checked={showOnlyShortages}
-              onCheckedChange={setShowOnlyShortages}
-              data-testid="toggle-show-only-shortages"
-            />
-            <Label htmlFor="toggle-shortages" className="cursor-pointer text-sm">
-              Solo faltantes
-            </Label>
-          </div>
-        </div>
 
-        {/* Summary cards */}
-        {isLoading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
-          </div>
-        ) : data ? (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <Card>
-              <CardContent className="pt-4 pb-3">
-                <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
-                  <ClipboardList className="h-3.5 w-3.5" /> Pedidos
-                </div>
-                <p className="text-2xl font-bold text-foreground" data-testid="summary-orders-count">{data.summary.ordersCount}</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="pt-4 pb-3">
-                <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
-                  <Users className="h-3.5 w-3.5" /> Clientes
-                </div>
-                <p className="text-2xl font-bold text-foreground" data-testid="summary-customers-count">{data.summary.customersCount}</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="pt-4 pb-3">
-                <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
-                  <Layers className="h-3.5 w-3.5" /> Productos/ítems
-                </div>
-                <p className="text-2xl font-bold text-foreground" data-testid="summary-rows-count">{data.summary.rowsCount}</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="pt-4 pb-3">
-                <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
-                  <AlertTriangle className="h-3.5 w-3.5 text-destructive" /> Faltantes
-                </div>
-                <p className={`text-2xl font-bold ${data.summary.shortagesCount > 0 ? "text-destructive" : "text-foreground"}`} data-testid="summary-shortages-count">
-                  {data.summary.shortagesCount}
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-        ) : null}
+          {/* 4 cards resumen — mismos valores de data.summary (sin recalcular) */}
+          {data && (
+            <div className="llx-stats">
+              <div className="llx-stat">
+                <div className="lab"><ClipboardList className="h-[15px] w-[15px]" /> Pedidos</div>
+                <div className="val llx-num" data-testid="summary-orders-count">{data.summary.ordersCount}</div>
+              </div>
+              <div className="llx-stat">
+                <div className="lab"><Users className="h-[15px] w-[15px]" /> Clientes</div>
+                <div className="val llx-num" data-testid="summary-customers-count">{data.summary.customersCount}</div>
+              </div>
+              <div className="llx-stat">
+                <div className="lab"><Layers className="h-[15px] w-[15px]" /> Productos/ítems</div>
+                <div className="val llx-num" data-testid="summary-rows-count">{data.summary.rowsCount}</div>
+              </div>
+              <div className="llx-stat alert">
+                <div className="lab"><AlertTriangle className="h-[15px] w-[15px]" /> Faltantes</div>
+                <div className="val llx-num" data-testid="summary-shortages-count">{data.summary.shortagesCount}</div>
+              </div>
+            </div>
+          )}
 
-        {/* Pending section */}
-        {data && data.pending.length > 0 && (
-          <Card className="border-amber-300 dark:border-amber-700">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2 text-amber-700 dark:text-amber-400">
-                <AlertTriangle className="h-4 w-4" />
-                Pendientes de asignación ({data.pending.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+          {/* Pendientes de asignación (misma data) */}
+          {data && data.pending.length > 0 && (
+            <div className="llx-pending">
+              <div className="ph"><AlertTriangle className="h-4 w-4" /> Pendientes de asignación ({data.pending.length})</div>
+              <div style={{ overflowX: "auto" }}>
+                <table>
                   <thead>
-                    <tr className="border-b border-border">
-                      <th className="text-left py-1.5 pr-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Cliente</th>
-                      <th className="text-left py-1.5 pr-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Pedido</th>
-                      <th className="text-left py-1.5 pr-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Texto original</th>
-                      <th className="text-right py-1.5 pr-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Cant.</th>
-                      <th className="text-left py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Unidad</th>
-                    </tr>
+                    <tr><th>Cliente</th><th>Pedido</th><th>Texto original</th><th className="r">Cant.</th><th>Unidad</th></tr>
                   </thead>
                   <tbody>
                     {data.pending.map((p, idx) => (
-                      <tr key={idx} className="border-b border-border last:border-0" data-testid={`pending-row-${idx}`}>
-                        <td className="py-2 pr-3 text-foreground font-medium">{p.customerName}</td>
-                        <td className="py-2 pr-3 text-muted-foreground text-xs">{p.orderFolio}</td>
-                        <td className="py-2 pr-3 text-amber-700 dark:text-amber-400 italic">{p.rawText}</td>
-                        <td className="py-2 pr-3 text-right text-foreground">{p.qty ?? "—"}</td>
-                        <td className="py-2 text-muted-foreground text-xs">{p.unit ?? "—"}</td>
+                      <tr key={idx} data-testid={`pending-row-${idx}`}>
+                        <td style={{ fontWeight: 500 }}>{p.customerName}</td>
+                        <td style={{ color: "#8b8f88", fontSize: 12 }}>{p.orderFolio}</td>
+                        <td className="raw">{p.rawText}</td>
+                        <td className="r">{p.qty ?? "—"}</td>
+                        <td style={{ color: "#8b8f88", fontSize: 12 }}>{p.unit ?? "—"}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Filters */}
-        {data && data.rows.length > 0 && (
-          <div className="flex flex-wrap gap-3">
-            <div className="flex-1 min-w-40">
-              <Input
-                placeholder="Buscar producto..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                data-testid="input-search-product"
-              />
             </div>
-            <Select value={unitFilter} onValueChange={setUnitFilter}>
-              <SelectTrigger className="w-36" data-testid="select-unit-filter">
-                <SelectValue placeholder="Unidad" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todas las unidades</SelectItem>
-                {allUnits.map((u) => (
-                  <SelectItem key={u} value={u}>{u}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
+          )}
 
-        {/* Main table */}
-        {isLoading ? (
-          <div className="space-y-2">
-            {[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} className="h-12 w-full rounded-md" />)}
-          </div>
-        ) : !data || data.rows.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-16 gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-                <ClipboardList className="h-6 w-6 text-muted-foreground" />
+          {/* Buscador + filtro por unidad (idéntico a hoy) */}
+          {data && data.rows.length > 0 && (
+            <div className="llx-searchrow">
+              <div className="llx-searchwrap">
+                <Search className="h-4 w-4" />
+                <input placeholder="Buscar producto..." value={search} onChange={(e) => setSearch(e.target.value)} autoComplete="off" data-testid="input-search-product" />
               </div>
-              <p className="text-sm font-medium text-foreground">Sin pedidos para esta fecha</p>
-              <p className="text-sm text-muted-foreground text-center">
-                No hay ítems cargados para el {formattedDate}.
-              </p>
-            </CardContent>
-          </Card>
-        ) : filteredRows.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-10 gap-2">
-              <p className="text-sm font-medium text-foreground">Sin faltantes</p>
-              <p className="text-sm text-muted-foreground">Todos los productos tienen stock suficiente.</p>
-            </CardContent>
-          </Card>
-        ) : (
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                  <Package className="h-4 w-4" />
-                  Lista de Carga — Galpón — {formattedDate}
-                </CardTitle>
-                <Badge variant="secondary" className="text-xs">
-                  {filteredRows.length} {filteredRows.length === 1 ? "producto" : "productos"}
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="p-0">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border bg-muted/30">
-                      <th className="text-left py-2.5 px-4 text-xs font-semibold text-muted-foreground uppercase tracking-wide">#</th>
-                      <th className="text-left py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Producto</th>
-                      <th className="text-left py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Unidad</th>
-                      <th className="text-right py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Total Pedido</th>
-                      {includeStock && <th className="text-right py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Stock</th>}
-                      {includeStock && <th className="text-right py-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Neto a Comprar</th>}
-                      <th className="text-center py-2.5 px-4 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Clientes</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(() => {
-                      const grouped: Record<string, LoadListRow[]> = {};
-                      for (const row of filteredRows) {
-                        const cat = row.category || "Sin categoría";
-                        if (!grouped[cat]) grouped[cat] = [];
-                        grouped[cat].push(row);
-                      }
-                      const sortedCats = [
-                        ...CATEGORY_ORDER.filter((c) => grouped[c]?.length > 0),
-                        ...Object.keys(grouped).filter((c) => !CATEGORY_ORDER.includes(c) && grouped[c]?.length > 0),
-                      ];
-                      let globalIdx = 0;
-                      return sortedCats.map((cat) => (
-                        <>
-                          <tr key={`cat-${cat}`} className="border-b border-border bg-muted/50">
-                            <td colSpan={includeStock ? 7 : 5} className="py-1.5 px-4 text-xs font-semibold text-muted-foreground uppercase tracking-widest">
-                              {cat}
-                            </td>
-                          </tr>
-                          {grouped[cat].map((row) => {
-                            globalIdx++;
-                            const status = getRowStatus(row);
-                            const isShortage = status === "shortage" || status === "duda-pending";
-                            const isDuda = status === "duda-unresolved";
-                            const isDudaOk = status === "duda-ok";
+              <select className="llx-catsel" value={unitFilter} onChange={(e) => setUnitFilter(e.target.value)} data-testid="select-unit-filter">
+                <option value="all">Todas las unidades</option>
+                {allUnits.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </div>
+          )}
 
-                            const rowBg = isDuda
-                              ? "bg-yellow-50 dark:bg-yellow-950/20 hover:bg-yellow-100 dark:hover:bg-yellow-950/30"
-                              : isDudaOk
-                              ? ""
-                              : includeStock && isShortage
-                              ? "bg-red-50 dark:bg-red-950/20"
-                              : "";
-
-                            return (
-                              <tr
-                                key={`${row.productId}-${row.unit}`}
-                                className={`border-b border-border last:border-0 transition-colors cursor-pointer ${rowBg} ${!isDuda && !isDudaOk && !isShortage ? "hover:bg-muted/20" : ""}`}
-                                onClick={() => {
-                                  if (isDuda || isDudaOk || status === "duda-pending") {
-                                    setDudaRow(row);
-                                  } else {
-                                    setDetailRow(row);
-                                  }
-                                }}
-                                data-testid={`load-row-${row.productId}-${row.unit}`}
-                              >
-                                <td className="py-3 px-4 text-muted-foreground text-xs">{globalIdx}</td>
-                                <td className="py-3 px-3 font-medium text-foreground">
-                                  <div className="flex items-center gap-1.5">
-                                    {isDuda && <HelpCircle className="h-3.5 w-3.5 text-yellow-500 shrink-0" />}
-                                    {row.productName}
-                                  </div>
-                                  {row.demandByUnit && row.demandByUnit.length > 1 && (
-                                    <div className="text-[10px] text-muted-foreground font-normal mt-0.5" data-testid={`demand-breakdown-${row.productId}`}>
-                                      {row.demandByUnit.map((d) => `${fmtQty(d.qty, d.unit)} ${d.unit.toLowerCase()}`).join(" + ")}
-                                    </div>
-                                  )}
-                                </td>
-                                <td className="py-3 px-3">
-                                  <Badge variant="outline" className="text-[10px] font-mono">{row.unit}</Badge>
-                                </td>
-                                <td className="py-3 px-3 text-right font-semibold text-foreground">
-                                  {fmtQty(row.totalQty, row.unit)}
-                                </td>
-                                {includeStock && (
-                                  <td className="py-3 px-3 text-right text-muted-foreground">
-                                    {fmtQty(row.stockQty, row.unit)}
-                                  </td>
-                                )}
-                                {includeStock && (
-                                  <td className="py-3 px-3 text-right font-bold">
-                                    {isDudaOk ? (
-                                      <span className="text-green-600 dark:text-green-400 text-xs font-medium">OK</span>
-                                    ) : isDuda ? (
-                                      <span className="text-yellow-600 dark:text-yellow-400 text-xs font-semibold flex items-center justify-end gap-1">
-                                        <HelpCircle className="h-3 w-3" /> DUDA
-                                      </span>
-                                    ) : isShortage ? (
-                                      <span className="text-destructive">
-                                        {fmtDiff(Math.abs(row.diffQty), row.unit)} <span className="text-[10px] font-normal">A COMPRAR</span>
-                                      </span>
-                                    ) : (
-                                      <span className="text-green-600 dark:text-green-400 text-xs font-medium">OK</span>
-                                    )}
-                                  </td>
-                                )}
-                                <td className="py-3 px-4 text-center">
-                                  <button
-                                    className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (isDuda || isDudaOk || status === "duda-pending") {
-                                        setDudaRow(row);
-                                      } else {
-                                        setDetailRow(row);
-                                      }
-                                    }}
-                                    data-testid={`button-detail-${row.productId}-${row.unit}`}
-                                  >
-                                    <Users className="h-3.5 w-3.5" />
-                                    {row.customersCount}
-                                    <ChevronDown className="h-3 w-3" />
-                                  </button>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </>
-                      ));
-                    })()}
-                  </tbody>
-                </table>
+          {/* Tabla */}
+          {isLoading ? (
+            <div className="llx-tablecard"><div className="llx-empty">Cargando…</div></div>
+          ) : !data || data.rows.length === 0 ? (
+            <div className="llx-tablecard"><div className="llx-empty"><div className="big">Sin pedidos para esta fecha</div>No hay ítems cargados para el {formattedDate}.</div></div>
+          ) : filteredRows.length === 0 ? (
+            <div className="llx-tablecard"><div className="llx-empty"><div className="big">Sin faltantes</div>Todos los productos tienen stock suficiente.</div></div>
+          ) : (
+            <div className="llx-tablecard">
+              <div className="llx-tabletop">
+                <div className="t"><Package className="h-[17px] w-[17px]" /> Lista de Carga — Galpón — {formattedDate}</div>
+                <span className="badge">{filteredRows.length} {filteredRows.length === 1 ? "producto" : "productos"}</span>
               </div>
-            </CardContent>
-          </Card>
-        )}
+              <div className={`llx-grid llx-thead ${includeStock ? "llx-g7" : "llx-g5"}`}>
+                <span>#</span><span>Producto</span><span>Unidad</span>
+                <span className="r">Total pedido</span>
+                {includeStock && <span className="r">Stock</span>}
+                {includeStock && <span className="r">Neto a comprar</span>}
+                <span className="r">Clientes</span>
+              </div>
+              {(() => {
+                const grouped: Record<string, LoadListRow[]> = {};
+                for (const row of filteredRows) {
+                  const cat = row.category || "Sin categoría";
+                  if (!grouped[cat]) grouped[cat] = [];
+                  grouped[cat].push(row);
+                }
+                const sortedCats = [
+                  ...CATEGORY_ORDER.filter((c) => grouped[c]?.length > 0),
+                  ...Object.keys(grouped).filter((c) => !CATEGORY_ORDER.includes(c) && grouped[c]?.length > 0),
+                ];
+                let globalIdx = 0;
+                return sortedCats.map((cat) => (
+                  <div key={`cat-${cat}`}>
+                    <div className="llx-catrow">{cat}</div>
+                    {grouped[cat].map((row) => {
+                      globalIdx++;
+                      const status = getRowStatus(row);
+                      const isShortage = status === "shortage" || status === "duda-pending";
+                      const isDuda = status === "duda-unresolved";
+                      const isDudaOk = status === "duda-ok";
+                      const rowClass = isDuda ? "duda" : (includeStock && isShortage ? "buy" : "");
+                      return (
+                        <div
+                          key={`${row.productId}-${row.unit}`}
+                          className={`llx-grid llx-prow ${includeStock ? "llx-g7" : "llx-g5"} ${rowClass}`}
+                          onClick={() => {
+                            if (isDuda || isDudaOk || status === "duda-pending") setDudaRow(row);
+                            else setDetailRow(row);
+                          }}
+                          data-testid={`load-row-${row.productId}-${row.unit}`}
+                        >
+                          <span className="llx-pidx">{globalIdx}</span>
+                          <div style={{ minWidth: 0 }}>
+                            <div className="llx-pname">
+                              {isDuda && <HelpCircle className="h-3.5 w-3.5" style={{ color: "#c08a1e" }} />}
+                              {row.productName}
+                            </div>
+                            {row.demandByUnit && row.demandByUnit.length > 1 && (
+                              <div className="llx-pdesg" data-testid={`demand-breakdown-${row.productId}`}>
+                                {row.demandByUnit.map((d) => `${fmtQty(d.qty, d.unit)} ${d.unit.toLowerCase()}`).join(" + ")}
+                              </div>
+                            )}
+                          </div>
+                          <span><span className="llx-uchip">{row.unit}</span></span>
+                          <span className="r llx-ptot llx-num">{fmtQty(row.totalQty, row.unit)}</span>
+                          {includeStock && <span className="r llx-pstk llx-num">{fmtQty(row.stockQty, row.unit)}</span>}
+                          {includeStock && (
+                            <div className="r">
+                              {isDudaOk ? (
+                                <div className="llx-pneto ok"><span className="n">OK</span></div>
+                              ) : isDuda ? (
+                                <div className="llx-pneto duda"><span className="n"><HelpCircle className="h-3 w-3" /> DUDA</span></div>
+                              ) : isShortage ? (
+                                <div className="llx-pneto"><span className="n llx-num">{fmtDiff(Math.abs(row.diffQty), row.unit)}</span><span className="tag">a comprar</span></div>
+                              ) : (
+                                <div className="llx-pneto ok"><span className="n">OK</span></div>
+                              )}
+                            </div>
+                          )}
+                          <button
+                            className="llx-pclients"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (isDuda || isDudaOk || status === "duda-pending") setDudaRow(row);
+                              else setDetailRow(row);
+                            }}
+                            data-testid={`button-detail-${row.productId}-${row.unit}`}
+                          >
+                            <Users className="h-[15px] w-[15px]" /> {row.customersCount} <ChevronDown className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ));
+              })()}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Detail dialog (filas normales) */}
