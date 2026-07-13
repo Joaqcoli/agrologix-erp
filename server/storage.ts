@@ -557,9 +557,18 @@ export const storage = {
             ))
             .orderBy(desc(purchaseItems.id))
             .limit(1);
-          let wpu = recentPi?.weightPerPackage
-            ? parseFloat(recentPi.weightPerPackage as string)
-            : parseFloat(baseRow.weightPerUnit as string ?? "0");
+          let wpu = recentPi?.weightPerPackage ? parseFloat(recentPi.weightPerPackage as string) : 0;
+          // Factor explícito por envase: para envases que se VENDEN pero no se COMPRAN
+          // (ej. rúcula por BANDEJA = 12 atados). La fila product_units del propio envase con
+          // weight_per_unit > 0 manda antes que el factor genérico de la fila base (que sería el del cajón).
+          if (wpu === 0) {
+            const [pkgRow] = await tx.select({ weightPerUnit: productUnits.weightPerUnit })
+              .from(productUnits)
+              .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, canonical)))
+              .limit(1);
+            wpu = parseFloat(pkgRow?.weightPerUnit as string ?? "0");
+          }
+          if (wpu === 0) wpu = parseFloat(baseRow.weightPerUnit as string ?? "0");
           // Fallback para datos viejos sin purchaseUnit: cualquier compra con weightPerPackage > 0
           if (wpu === 0) {
             const [anyPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
@@ -2137,9 +2146,16 @@ export const storage = {
               ))
               .orderBy(desc(purchaseItems.id))
               .limit(1);
-            let wpu = recentPi?.weightPerPackage
-              ? parseFloat(recentPi.weightPerPackage as string)
-              : parseFloat(baseUnitPu.weightPerUnit as string ?? "0");
+            let wpu = recentPi?.weightPerPackage ? parseFloat(recentPi.weightPerPackage as string) : 0;
+            // Factor explícito por envase (envases que se venden pero no se compran, ej. rúcula por BANDEJA)
+            if (wpu === 0) {
+              const [pkgRow] = await tx.select({ weightPerUnit: productUnits.weightPerUnit })
+                .from(productUnits)
+                .where(and(eq(productUnits.productId, item.productId as number), eq(productUnits.unit, oiCanonical)))
+                .limit(1);
+              wpu = parseFloat(pkgRow?.weightPerUnit as string ?? "0");
+            }
+            if (wpu === 0) wpu = parseFloat(baseUnitPu.weightPerUnit as string ?? "0");
             if (wpu === 0) {
               const [anyPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
                 .from(purchaseItems)
