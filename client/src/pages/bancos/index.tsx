@@ -9,9 +9,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Landmark, TrendingUp, Percent, ArrowDownLeft, ArrowUpRight, User, Building2, UserCheck, Pencil, RefreshCw, Columns2, Rows2, Upload } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import {
-  BankSection, fmt, fmtDateLong, toArgDate,
+  BankSection, fmt, fmtDateLong, toArgDate, BANCOS_CSS,
   type MpMovement, type MpMovementsResponse, type BankCategory, type BankPaymentLink, type CardSpec,
 } from "./BankSection";
+
+const LOGO_MP = "/logos/logo-mercadopago.png";
+const LOGO_GALICIA = "/logos/logo-galicia.png";
 
 // ─── helpers locales (específicos de MP: contactos / identificación) ─────────────
 
@@ -542,68 +545,52 @@ export default function BancosPage() {
     const subtitle = m.description || m.type;
     if (identified) {
       return (
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <ContactTypeIcon type={m.contactType ?? "otro"} />
-          <p className="font-semibold text-sm leading-tight">{m.displayName}</p>
-          <span className="text-[10px] text-muted-foreground bg-muted rounded px-1.5 py-0.5">
-            {CONTACT_TYPE_LABELS[m.contactType ?? "otro"] ?? m.contactType}
-          </span>
-          <button onClick={() => openEditContactDialog(m)} className="text-muted-foreground/40 hover:text-muted-foreground transition-colors" title="Editar contacto">
+        <>
+          <span className="brx-mvname" title={m.displayName ?? ""}>{m.displayName}</span>
+          <span className="brx-tag">{CONTACT_TYPE_LABELS[m.contactType ?? "otro"] ?? m.contactType}</span>
+          <button onClick={() => openEditContactDialog(m)} className="brx-pen" title="Editar contacto">
             <Pencil className="h-3 w-3" />
           </button>
-        </div>
+        </>
       );
     }
     return (
-      <div className="flex items-center gap-2 flex-wrap">
-        <p className="font-semibold text-sm leading-tight text-foreground">{m.displayName || subtitle}</p>
-        {fmtRawId(m.rawIdentifier) && (
-          <span className="text-xs text-muted-foreground font-mono">{fmtRawId(m.rawIdentifier)}</span>
-        )}
-        <button onClick={() => openIdentifyDialog(m)} className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors flex-shrink-0">
-          Identificar
-        </button>
-      </div>
+      <>
+        <span className="brx-mvname" title={m.displayName || subtitle}>{m.displayName || subtitle}</span>
+        {fmtRawId(m.rawIdentifier) && <span className="brx-idraw">{fmtRawId(m.rawIdentifier)}</span>}
+        <button onClick={() => openIdentifyDialog(m)} className="brx-chip btn brx-act ident">Identificar</button>
+      </>
     );
   };
 
   const mpRenderRowExtra = (m: MpMovement) => (
     <>
-      {m.source === "xlsx" && (
-        <span className="text-[10px] bg-orange-100 text-orange-700 rounded px-1.5 py-0.5 font-medium">Reporte</span>
-      )}
+      {m.source === "xlsx" && <span className="brx-tag">Reporte</span>}
       {!m.isOutgoing && m.contactType === "cliente" && m.entityId && (
         (m.bankPaymentLinks && m.bankPaymentLinks.length > 0) ? (
-          <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">✓ {fmtBankLinks(m.bankPaymentLinks)}</span>
+          <span className="brx-chip brx-c-ok">✓ {fmtBankLinks(m.bankPaymentLinks)}</span>
         ) : (
           <button
             onClick={() => { setApplyPayMov(m); setApplyAmounts(new Map()); setApplyPayOpen(true); }}
-            className="text-[11px] text-green-700 hover:text-green-900 font-medium border border-green-300 rounded px-1.5 py-0.5 leading-tight hover:bg-green-50 transition-colors flex-shrink-0"
+            className="brx-chip btn brx-act pay"
           >
             Aplicar pago
           </button>
         )
       )}
       {/* Pago a proveedor: aplicar a la CC del proveedor (espejo del de Galicia) */}
-      {m.yaAplicadoProv && (
-        <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">✓ aplicado a CC</span>
-      )}
-      {m.yaRegistradoProv && (
-        <span className="text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 rounded px-1.5 py-0.5 font-medium">✓ Ya registrado</span>
-      )}
+      {m.yaAplicadoProv && <span className="brx-chip brx-c-ok">✓ aplicado a CC</span>}
+      {m.yaRegistradoProv && <span className="brx-chip brx-c-gris">✓ Ya registrado</span>}
       {m.esPagoProvPend && (
-        <button
-          onClick={() => openProvApply(m)}
-          className="text-[11px] text-purple-700 hover:text-purple-900 font-medium border border-purple-300 rounded px-1.5 py-0.5 leading-tight hover:bg-purple-50 transition-colors flex-shrink-0"
-        >{m.suggestedSupplierName ? `Aplicar a ${m.suggestedSupplierName}` : "Aplicar pago"}</button>
+        <button onClick={() => openProvApply(m)} className="brx-chip btn brx-act pay">
+          {m.suggestedSupplierName ? `Aplicar a ${m.suggestedSupplierName}` : "Aplicar pago"}
+        </button>
       )}
     </>
   );
 
   const galiciaRenderName = (m: MpMovement) => (
-    <div className="flex items-center gap-2 flex-wrap">
-      <p className="font-semibold text-sm leading-tight text-foreground">{m.displayName || m.description}</p>
-    </div>
+    <span className="brx-mvname" title={m.displayName || m.description || ""}>{m.displayName || m.description}</span>
   );
 
   // Abre el diálogo "Aplicar pago" para un cobro de Galicia, con el cliente (sugerido o elegido)
@@ -618,44 +605,35 @@ export default function BancosPage() {
     const esCobroPendiente = m.asignacionCc === "pendiente";
     return (
       <>
-        {m.comprobante && (
-          <span className="text-[10px] text-muted-foreground font-mono">N.º {m.comprobante}</span>
-        )}
-        {m.yaContabilizado && (
-          <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 font-medium">ya contabilizado</span>
-        )}
+        {m.yaContabilizado && <span className="brx-chip brx-c-azul">ya contabilizado</span>}
         {/* Asignación de cobros: cobro pendiente de asignar a factura/CC */}
         {esCobroPendiente && (
           (m.bankPaymentLinks && m.bankPaymentLinks.length > 0) ? (
-            <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">✓ {fmtBankLinks(m.bankPaymentLinks)}</span>
+            <span className="brx-chip brx-c-ok">✓ {fmtBankLinks(m.bankPaymentLinks)}</span>
           ) : m.suggestedCustomerId ? (
             <>
-              <span className="text-[10px] text-muted-foreground">Sugerido: <b className="text-foreground">{m.suggestedCustomerName}</b> · por CUIT {m.suggestedCuit}</span>
+              <span className="brx-ref">Sugerido: <b style={{ color: "#1e2420" }}>{m.suggestedCustomerName}</b> · CUIT {m.suggestedCuit}</span>
               <button
                 onClick={() => openGaliciaApply(m, m.suggestedCustomerId!, m.suggestedCustomerName)}
-                className="text-[11px] text-green-700 hover:text-green-900 font-medium border border-green-300 rounded px-1.5 py-0.5 leading-tight hover:bg-green-50 transition-colors flex-shrink-0"
+                className="brx-chip btn brx-act pay"
               >Aplicar pago</button>
             </>
           ) : (
             <button
               onClick={() => { setGaliciaPickMov(m); setGaliciaPickSearch(""); setGaliciaPickOpen(true); }}
-              className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors flex-shrink-0"
+              className="brx-chip btn brx-act ident"
             >Identificar cliente</button>
           )
         )}
         {/* Asignación de pagos a proveedor: aplicar a la CC del proveedor */}
-        {m.yaAplicadoProv && (
-          <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">✓ aplicado a CC</span>
-        )}
-        {m.yaRegistradoProv && (
-          <span className="text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 rounded px-1.5 py-0.5 font-medium">✓ Ya registrado</span>
-        )}
+        {m.yaAplicadoProv && <span className="brx-chip brx-c-ok">✓ aplicado a CC</span>}
+        {m.yaRegistradoProv && <span className="brx-chip brx-c-gris">✓ Ya registrado</span>}
         {m.esPagoProvPend && (
-          <button
-            onClick={() => openProvApply(m)}
-            className="text-[11px] text-purple-700 hover:text-purple-900 font-medium border border-purple-300 rounded px-1.5 py-0.5 leading-tight hover:bg-purple-50 transition-colors flex-shrink-0"
-          >{m.suggestedSupplierName ? `Aplicar a ${m.suggestedSupplierName}` : "Aplicar pago"}</button>
+          <button onClick={() => openProvApply(m)} className="brx-chip btn brx-act pay">
+            {m.suggestedSupplierName ? `Aplicar a ${m.suggestedSupplierName}` : "Aplicar pago"}
+          </button>
         )}
+        {m.comprobante && <span className="brx-ref">N.º {m.comprobante}</span>}
       </>
     );
   };
@@ -666,11 +644,13 @@ export default function BancosPage() {
     <BankSection
       source="mp"
       title="Mercado Pago"
+      logoSrc={LOGO_MP}
+      logoTall
       headerAction={
-        <Button variant="outline" size="sm" onClick={() => syncReportMut.mutate()} disabled={syncReportMut.isPending}>
-          <RefreshCw className={`h-4 w-4 mr-1 ${syncReportMut.isPending ? "animate-spin" : ""}`} />
+        <button className="brx-bankaction" onClick={() => syncReportMut.mutate()} disabled={syncReportMut.isPending}>
+          <RefreshCw className={`h-3.5 w-3.5 ${syncReportMut.isPending ? "animate-spin" : ""}`} />
           {syncReportMut.isPending ? "Sincronizando…" : "Sincronizar"}
-        </Button>
+        </button>
       }
       banner={syncResult && (
         <div className="rounded-md border bg-muted/50 px-3 py-2 text-xs text-muted-foreground break-all">{syncResult}</div>
@@ -700,6 +680,7 @@ export default function BancosPage() {
     <BankSection
       source="galicia"
       title="Galicia"
+      logoSrc={LOGO_GALICIA}
       headerAction={
         <>
           <input
@@ -709,10 +690,10 @@ export default function BancosPage() {
             className="hidden"
             onChange={onGaliciaFilePicked}
           />
-          <Button variant="outline" size="sm" onClick={() => galiciaFileRef.current?.click()} disabled={galiciaUploadMut.isPending}>
-            <Upload className={`h-4 w-4 mr-1 ${galiciaUploadMut.isPending ? "animate-pulse" : ""}`} />
+          <button className="brx-bankaction" onClick={() => galiciaFileRef.current?.click()} disabled={galiciaUploadMut.isPending}>
+            <Upload className={`h-3.5 w-3.5 ${galiciaUploadMut.isPending ? "animate-pulse" : ""}`} />
             {galiciaUploadMut.isPending ? "Subiendo…" : "Subir extracto"}
-          </Button>
+          </button>
         </>
       }
       banner={galiciaUpload && (
@@ -765,38 +746,35 @@ export default function BancosPage() {
 
   return (
     <Layout>
-      <div className="p-6 space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold">Bancos</h1>
-          <Button
-            variant="outline" size="sm"
-            onClick={() => setViewLayout(v => (v === "split" ? "tabs" : "split"))}
-            title={viewLayout === "split" ? "Ver en pestañas" : "Ver dividido"}
-          >
-            {viewLayout === "split" ? <><Rows2 className="h-4 w-4 mr-1" /> Pestañas</> : <><Columns2 className="h-4 w-4 mr-1" /> Dividido</>}
-          </Button>
-        </div>
+      <div className="bancos-rx">
+        <style>{BANCOS_CSS}</style>
+        <div className="brx-wrap">
+          <div className="brx-topbar">
+            <h1>Bancos</h1>
+            <button
+              className="brx-btn"
+              onClick={() => setViewLayout(v => (v === "split" ? "tabs" : "split"))}
+              title={viewLayout === "split" ? "Ver en pestañas" : "Ver dividido"}
+            >
+              {viewLayout === "split" ? <><Rows2 className="h-4 w-4" /> Pestañas</> : <><Columns2 className="h-4 w-4" /> Dividido</>}
+            </button>
+          </div>
 
-        {viewLayout === "split" ? (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
-            {mpSection}
-            {galiciaSection}
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div className="inline-flex rounded-lg border bg-muted/40 p-1">
-              <button
-                onClick={() => setActiveTab("mp")}
-                className={`px-4 py-1.5 text-sm rounded-md transition-colors ${activeTab === "mp" ? "bg-white shadow text-foreground font-medium" : "text-muted-foreground hover:text-foreground"}`}
-              >Mercado Pago</button>
-              <button
-                onClick={() => setActiveTab("galicia")}
-                className={`px-4 py-1.5 text-sm rounded-md transition-colors ${activeTab === "galicia" ? "bg-white shadow text-foreground font-medium" : "text-muted-foreground hover:text-foreground"}`}
-              >Galicia</button>
+          {viewLayout === "split" ? (
+            <div className="brx-banks">
+              {mpSection}
+              {galiciaSection}
             </div>
-            {activeTab === "mp" ? mpSection : galiciaSection}
-          </div>
-        )}
+          ) : (
+            <div>
+              <div className="brx-seg" style={{ marginBottom: 18 }}>
+                <button className={activeTab === "mp" ? "active" : ""} onClick={() => setActiveTab("mp")}>Mercado Pago</button>
+                <button className={activeTab === "galicia" ? "active" : ""} onClick={() => setActiveTab("galicia")}>Galicia</button>
+              </div>
+              {activeTab === "mp" ? mpSection : galiciaSection}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Dialog nueva categoría ── */}
