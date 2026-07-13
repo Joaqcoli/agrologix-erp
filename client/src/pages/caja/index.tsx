@@ -13,7 +13,7 @@ import {
   TrendingUp, TrendingDown, DollarSign, Plus, Trash2,
   ChevronLeft, ChevronRight, Wallet, Building2, CreditCard,
   Landmark, Pencil, AlertCircle, CheckCircle2, Clock,
-  ChevronDown, ChevronUp, Users,
+  ChevronDown, ChevronUp, Users, Calendar, ArrowLeftRight, X,
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -249,6 +249,272 @@ type EditOblForm = {
   fechaVencimiento: string; notas: string; pagoParcial: boolean;
 };
 
+// ── Rediseño Caja (Claude Design) ─────────────────────────────────────────────
+// CSS portado de diseno-caja/*.html. Clases prefijadas `crx-` con colores literales
+// (no CSS vars) para que apliquen también dentro de los modales portaleados fuera de .caja-rx.
+const CAJA_RX_CSS = `
+.caja-rx{background:#f4f4f1;min-height:100%;padding:28px 22px 56px;font-family:'Inter',system-ui,sans-serif;color:#1e2420;}
+.caja-rx *{box-sizing:border-box;}
+.crx-wrap{max-width:1120px;margin:0 auto;display:flex;flex-direction:column;gap:30px;}
+.crx-num{font-family:'Bricolage Grotesque','Inter',sans-serif;font-variant-numeric:tabular-nums;letter-spacing:-.01em;}
+.crx-pagetitle{font-family:'Bricolage Grotesque';font-size:27px;font-weight:700;letter-spacing:-.02em;margin:0;}
+.crx-seclabel{font-size:12px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:#9a9e96;margin:0 0 12px 2px;}
+.crx-h2{font-family:'Bricolage Grotesque';font-size:22px;font-weight:700;margin:0;letter-spacing:-.01em;color:#1e2420;}
+.crx-sechead{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;gap:16px;flex-wrap:wrap;}
+.crx-block{display:flex;flex-direction:column;}
+.crx-addbtn{background:#fff;border:1px solid #ecece8;color:#1e2420;font-family:'Inter';font-size:13px;font-weight:500;padding:9px 14px;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:7px;}
+.crx-addbtn:hover{border-color:#d6d6d1;}
+.crx-navbtn{width:31px;height:31px;border-radius:8px;border:1px solid #ecece8;background:#fff;color:#1e2420;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.crx-navbtn:hover:not(:disabled){border-color:#cfcfc9;background:#f6f6f2;}
+.crx-navbtn:disabled{opacity:.35;cursor:default;}
+.crx-grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+@media(max-width:640px){.crx-grid2{grid-template-columns:1fr;}}
+
+/* Efectivo banner */
+.crx-efectivo{background:linear-gradient(140deg,#6d9130 0%,#4f6d1f 100%);border-radius:20px;padding:26px 30px;color:#fff;display:flex;align-items:center;justify-content:space-between;gap:20px;box-shadow:0 6px 20px -10px rgba(79,109,31,.55);}
+.crx-efectivo .l{display:flex;flex-direction:column;gap:6px;}
+.crx-efectivo .cap{font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.78);display:flex;align-items:center;gap:8px;}
+.crx-efectivo .val{font-size:44px;font-weight:700;line-height:1;}
+.crx-efectivo .sub{font-size:13px;color:rgba(255,255,255,.72);}
+.crx-editbtn{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.28);color:#fff;font-family:'Inter';font-size:13px;font-weight:500;padding:9px 14px;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:7px;transition:background .15s;flex:0 0 auto;}
+.crx-editbtn:hover{background:rgba(255,255,255,.26);}
+
+/* cards por cobrar / pagar */
+.crx-card{background:#fff;border:1px solid #ecece8;border-radius:16px;padding:20px 22px;position:relative;overflow:hidden;}
+.crx-card.green::before,.crx-card.coral::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;}
+.crx-card.green::before{background:#6b8a2a;}
+.crx-card.coral::before{background:#c05e42;}
+.crx-card .head{display:flex;align-items:center;gap:9px;color:#8b8f88;font-size:14px;font-weight:500;margin-bottom:14px;}
+.crx-card .ico{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
+.crx-card.green .ico{background:#eef3e3;color:#5f8020;}
+.crx-card.coral .ico{background:#f8ede8;color:#c05e42;}
+.crx-card .amount{font-size:30px;font-weight:700;line-height:1;}
+.crx-card.green .amount{color:#5f8020;}
+.crx-card.coral .amount{color:#c05e42;}
+.crx-card .foot{font-size:12.5px;color:#8b8f88;margin-top:9px;}
+
+/* filtros vencimientos */
+.crx-filters{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px;}
+@media(max-width:640px){.crx-filters{grid-template-columns:1fr;}}
+.crx-fcard{background:#fff;border:1.5px solid #ecece8;border-radius:16px;padding:15px 18px;cursor:pointer;transition:.15s;text-align:left;font-family:inherit;}
+.crx-fcard:hover{border-color:#d6d6d1;}
+.crx-fcard.active.vencido{border-color:#bf4a35;background:#fbf1ef;}
+.crx-fcard.active.semana{border-color:#c08a1e;background:#f9f1de;}
+.crx-fcard.active.futuro{border-color:#6b8a2a;background:#eef3e3;}
+.crx-ftop{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;}
+.crx-flabel{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;}
+.crx-fcard.vencido .crx-flabel{color:#bf4a35;}
+.crx-fcard.semana .crx-flabel{color:#c08a1e;}
+.crx-fcard.futuro .crx-flabel{color:#5f8020;}
+.crx-fbadge{font-size:12px;font-weight:600;padding:2px 9px;border-radius:20px;color:#fff;}
+.crx-fcard.vencido .crx-fbadge{background:#bf4a35;}
+.crx-fcard.semana .crx-fbadge{background:#c08a1e;}
+.crx-fcard.futuro .crx-fbadge{background:#6b8a2a;}
+.crx-fars{font-size:23px;font-weight:700;line-height:1.1;}
+.crx-fusd{font-size:13px;color:#8b8f88;margin-top:2px;font-weight:500;}
+
+/* listas */
+.crx-list{background:#fff;border:1px solid #ecece8;border-radius:16px;overflow:hidden;}
+.crx-lhead{padding:13px 20px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9a9e96;border-bottom:1px solid #f1f1ee;}
+.crx-lhead .r{text-align:right;}
+.crx-row{padding:15px 20px;border-top:1px solid #f4f4f1;}
+.crx-row:first-of-type{border-top:none;}
+.crx-obl-grid{display:grid;grid-template-columns:92px minmax(0,1fr) 128px 150px 120px;align-items:center;gap:12px;}
+.crx-chq-grid{display:grid;grid-template-columns:96px minmax(0,1fr) 150px 270px;align-items:center;gap:12px;}
+.crx-rdate{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:500;white-space:nowrap;}
+.crx-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
+.crx-dot.vencido,.crx-dot.venc{background:#bf4a35;}
+.crx-dot.semana{background:#c08a1e;}
+.crx-dot.futuro,.crx-dot.fut{background:#6b8a2a;}
+.crx-rconcept{font-size:14.5px;font-weight:500;display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;}
+.crx-rconcept .tt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.crx-parcial{font-size:11px;font-weight:600;color:#c08a1e;background:#f9f1de;padding:2px 8px;border-radius:20px;flex:0 0 auto;}
+.crx-pill{font-size:12px;font-weight:600;padding:3px 11px;border-radius:20px;justify-self:start;white-space:nowrap;}
+.crx-ramount{text-align:right;font-size:15px;font-weight:700;white-space:nowrap;}
+.crx-ramount.vencido{color:#bf4a35;}
+.crx-ract{display:flex;align-items:center;justify-content:flex-end;gap:6px;}
+.crx-pay{background:#eef3e3;color:#5f8020;border:none;font-family:'Inter';font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:5px;}
+.crx-pay:hover{background:#e4eed3;}
+.crx-btnp{background:#eef3e3;color:#5f8020;border:none;font-family:'Inter';font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:8px;cursor:pointer;}
+.crx-btnp:hover{background:#e4eed3;}
+.crx-btns{background:#fff;color:#1e2420;border:1px solid #ecece8;font-family:'Inter';font-size:12.5px;font-weight:500;padding:6px 12px;border-radius:8px;cursor:pointer;}
+.crx-btns:hover{border-color:#cfcfc9;background:#f8f8f5;}
+.crx-iconbtn{background:none;border:none;color:#b3b6ae;cursor:pointer;padding:4px;border-radius:6px;display:flex;}
+.crx-iconbtn:hover{color:#1e2420;background:#f2f2ef;}
+.crx-iconbtn.del:hover{color:#bf4a35;}
+.crx-empty{padding:34px 20px;text-align:center;color:#8b8f88;font-size:14px;}
+
+/* cheques en cartera */
+.crx-count{font-size:12px;font-weight:600;color:#5f8020;background:#eef3e3;padding:3px 10px;border-radius:20px;}
+.crx-totalwrap{display:flex;align-items:center;gap:14px;}
+.crx-totalbox{text-align:right;}
+.crx-totalbox .cap{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:#9a9e96;}
+.crx-totalbox .val{font-size:26px;font-weight:700;color:#5f8020;line-height:1.1;}
+.crx-weekbar{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#fbfaf7;border:1px solid #ecece8;border-radius:12px;margin-bottom:14px;gap:12px;}
+.crx-weeknav{display:flex;align-items:center;gap:14px;}
+.crx-weekrange{display:flex;flex-direction:column;line-height:1.15;}
+.crx-weekrange .rg{font-family:'Bricolage Grotesque';font-size:16px;font-weight:600;}
+.crx-weekrange .hint{font-size:11.5px;color:#8b8f88;}
+.crx-weeksum{text-align:right;}
+.crx-weeksum .s{font-size:16px;font-weight:700;}
+.crx-weeksum .c{font-size:11.5px;color:#8b8f88;}
+.crx-who{display:flex;align-items:center;min-width:0;}
+.crx-whopill{display:inline-flex;align-items:center;max-width:100%;background:#eef3e3;color:#5f8020;font-size:13.5px;font-weight:600;padding:5px 14px;border-radius:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+/* cartera vs emisiones (ChequesFlow) */
+.crx-panel{background:#fff;border:1px solid #ecece8;border-radius:18px;padding:24px 26px;}
+.crx-titlewrap{display:flex;align-items:center;gap:13px;}
+.crx-ticon{width:40px;height:40px;border-radius:12px;background:#eef3e3;color:#5f8020;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
+.crx-titlewrap .sub{font-size:12.5px;color:#8b8f88;margin:1px 0 0;}
+.crx-wknav{display:flex;align-items:center;gap:12px;}
+.crx-wkrange{display:flex;flex-direction:column;align-items:center;line-height:1.15;min-width:104px;}
+.crx-wkrange .rg{font-family:'Bricolage Grotesque';font-size:15px;font-weight:600;}
+.crx-wkrange .hint{font-size:11px;color:#8b8f88;}
+.crx-sums{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:24px;}
+@media(max-width:640px){.crx-sums{grid-template-columns:1fr;}}
+.crx-sumcard{border-radius:14px;padding:16px 18px;}
+.crx-sumcard.acr{background:#eef3e3;}
+.crx-sumcard.deb{background:#f8ede8;}
+.crx-sumcard .lab{font-size:11.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;margin-bottom:9px;}
+.crx-sumcard.acr .lab{color:#5f8020;}
+.crx-sumcard.deb .lab{color:#b0553f;}
+.crx-sumcard .amt{font-size:25px;font-weight:700;line-height:1;}
+.crx-sumcard.acr .amt{color:#5f8020;}
+.crx-sumcard.deb .amt{color:#b0553f;}
+.crx-sumcard .sub{font-size:12px;margin-top:6px;color:#8b8f88;}
+.crx-cols{display:grid;grid-template-columns:1fr 1fr;}
+@media(max-width:640px){.crx-cols{grid-template-columns:1fr;}.crx-col.deb{padding-left:0!important;border-left:none!important;padding-top:16px;}}
+.crx-col.acr{padding-right:28px;}
+.crx-col.deb{padding-left:28px;border-left:1px solid #f0f0ec;}
+.crx-colhead{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9a9e96;margin-bottom:6px;}
+.crx-cdot{width:8px;height:8px;border-radius:50%;}
+.crx-col.acr .crx-cdot{background:#6b8a2a;}
+.crx-col.deb .crx-cdot{background:#c05e42;}
+.crx-flowrow{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:14px;padding:12px 0;border-top:1px solid #f4f4f1;}
+.crx-fdate{display:flex;flex-direction:column;line-height:1.2;min-width:52px;}
+.crx-fdate .imp{font-size:13.5px;font-weight:600;}
+.crx-fdate .chq{font-size:11px;color:#8b8f88;}
+.crx-fname{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.crx-fname .ok{font-size:11px;color:#5f8020;font-weight:600;margin-left:6px;}
+.crx-famt{font-weight:700;font-size:14.5px;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap;}
+.crx-famt.done{color:#9a9e96;text-decoration:line-through;}
+.crx-coltotal{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:13px;border-top:1.5px solid #eaeae6;}
+.crx-coltotal .l{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#9a9e96;}
+.crx-coltotal .v{font-family:'Bricolage Grotesque';font-size:17px;font-weight:700;font-variant-numeric:tabular-nums;}
+.crx-col.acr .crx-coltotal .v{color:#5f8020;}
+.crx-col.deb .crx-coltotal .v{color:#b0553f;}
+.crx-flowfoot{margin-top:22px;padding-top:15px;border-top:1px solid #f1f1ee;font-size:12px;color:#8b8f88;line-height:1.55;}
+.crx-flowempty{padding:20px 0;color:#8b8f88;font-size:13px;}
+
+/* control bar + egresos */
+.crx-ctrlbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;gap:14px;flex-wrap:wrap;}
+.crx-ctrlleft{display:flex;align-items:center;gap:16px;flex-wrap:wrap;}
+.crx-seg{display:inline-flex;background:#ecece6;border-radius:10px;padding:3px;}
+.crx-seg button{border:none;background:none;font-family:'Inter';font-size:13px;font-weight:500;color:#8b8f88;padding:6px 16px;border-radius:8px;cursor:pointer;}
+.crx-seg button.active{background:#fff;color:#1e2420;box-shadow:0 1px 2px rgba(0,0,0,.07);}
+.crx-monthnav{display:inline-flex;align-items:center;gap:8px;}
+.crx-mlabel{font-family:'Bricolage Grotesque';font-size:15px;font-weight:600;min-width:118px;text-align:center;}
+.crx-addsolid{background:#6b8a2a;color:#fff;border:none;font-family:'Inter';font-size:13px;font-weight:500;padding:9px 16px;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:7px;}
+.crx-addsolid:hover{background:#5f7d24;}
+.crx-panelcard{background:#fff;border:1px solid #ecece8;border-radius:18px;padding:24px 26px;}
+.crx-panelcard h2{font-family:'Bricolage Grotesque';font-size:19px;font-weight:700;margin:0 0 2px;letter-spacing:-.01em;}
+.crx-per{font-size:12.5px;color:#8b8f88;margin:0 0 20px;}
+.crx-egrid{display:flex;gap:34px;align-items:center;flex-wrap:wrap;}
+.crx-donutwrap{position:relative;width:184px;height:184px;flex:0 0 auto;}
+.crx-donut{width:100%;height:100%;border-radius:50%;}
+.crx-donuthole{position:absolute;inset:27px;background:#fff;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;}
+.crx-donuthole .t{font-size:10.5px;color:#9a9e96;text-transform:uppercase;letter-spacing:.06em;}
+.crx-donuthole .v{font-family:'Bricolage Grotesque';font-size:19px;font-weight:700;color:#c05e42;}
+.crx-legend{flex:1;min-width:240px;}
+.crx-leg{display:grid;grid-template-columns:14px 1fr 40px 104px;align-items:center;gap:11px;padding:6px 0;border-bottom:1px solid #f5f5f2;font-size:13.5px;}
+.crx-leg:last-child{border-bottom:none;}
+.crx-legdot{width:10px;height:10px;border-radius:3px;}
+.crx-legname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.crx-legpct{color:#8b8f88;font-size:12px;text-align:right;}
+.crx-legamt{font-weight:600;text-align:right;font-variant-numeric:tabular-nums;}
+.crx-totalrow{display:flex;justify-content:space-between;align-items:center;margin-top:16px;padding-top:15px;border-top:1.5px solid #eaeae6;}
+.crx-totalrow .tl{font-size:13.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:#9a9e96;}
+.crx-totalrow .tv{font-family:'Bricolage Grotesque';font-size:19px;font-weight:700;color:#c05e42;}
+.crx-accrow{border-top:1px solid #f4f4f1;}
+.crx-accrow:first-child{border-top:none;}
+.crx-acchead{display:grid;grid-template-columns:14px 1fr auto 22px;align-items:center;gap:12px;padding:15px 4px;cursor:pointer;background:none;border:none;width:100%;text-align:left;font-family:inherit;}
+.crx-acchead .name{font-size:14.5px;font-weight:500;color:#1e2420;}
+.crx-acchead .amt{font-weight:700;font-size:15px;font-variant-numeric:tabular-nums;color:#1e2420;}
+.crx-acchead .chev{color:#b3b6ae;transition:transform .2s;display:flex;}
+.crx-accrow.open .chev{transform:rotate(180deg);}
+.crx-accbody{padding:2px 4px 14px 26px;}
+.crx-mv{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:13px;color:#8b8f88;padding:7px 0;border-top:1px dashed #eeeeea;}
+.crx-mv:first-child{border-top:none;}
+.crx-mv .mtxt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.crx-mv .mamt{font-variant-numeric:tabular-nums;white-space:nowrap;display:flex;align-items:center;gap:6px;}
+
+/* retiros de socios */
+.crx-subline{font-size:12.5px;color:#8b8f88;margin:0 0 20px;}
+.crx-subline b{color:#1e2420;font-weight:600;}
+.crx-retgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;}
+.crx-socio{background:#fff;border:1px solid #ecece8;border-radius:16px;padding:20px 22px;cursor:pointer;transition:border-color .15s,box-shadow .15s;text-align:left;font-family:inherit;width:100%;}
+.crx-socio:hover{border-color:#dcc7d5;box-shadow:0 4px 14px -8px rgba(168,107,138,.4);}
+.crx-stop{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;}
+.crx-sname{display:flex;align-items:center;gap:11px;font-size:14.5px;font-weight:500;min-width:0;}
+.crx-sname .tt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.crx-sav{width:30px;height:30px;border-radius:50%;background:#f3ebf0;color:#a86b8a;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
+.crx-spct{font-size:13px;font-weight:600;color:#a86b8a;flex:0 0 auto;}
+.crx-samt{font-size:26px;font-weight:700;line-height:1;margin-bottom:15px;}
+.crx-bar{height:8px;background:#f0edf0;border-radius:20px;overflow:hidden;}
+.crx-fill{height:100%;background:#a86b8a;border-radius:20px;}
+.crx-seemore{font-size:11.5px;color:#8b8f88;margin-top:11px;display:flex;align-items:center;gap:5px;}
+
+/* modal retiros (dentro del Dialog shadcn) */
+.crx-modalhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:10px;}
+.crx-modalhead h3{font-family:'Bricolage Grotesque';font-size:19px;font-weight:700;margin:0;letter-spacing:-.01em;}
+.crx-mrow{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-top:1px solid #f4f4f1;font-size:14px;}
+.crx-mrow:first-of-type{border-top:none;}
+.crx-mrow .mv{font-weight:600;font-variant-numeric:tabular-nums;}
+.crx-mtotal{display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:14px;border-top:1.5px solid #eaeae6;}
+.crx-mtotal .l{font-weight:700;font-size:14.5px;}
+.crx-mtotal .v{font-family:'Bricolage Grotesque';font-size:18px;font-weight:700;color:#a86b8a;}
+`;
+
+// Paleta tierra/oliva apagada del donut (de diseno-caja/caja-rediseno-parte4.html)
+const CRX_PIE_COLORS = [
+  "#6b8a2a","#c8894a","#cbb23f","#7ba05a","#5f8020","#6a9b8f","#a86b8a","#9c7bb0",
+  "#c26247","#8a8f88","#b5985a","#d98c40","#7d8b5a","#b0553f","#6a8f8a","#a3b565",
+];
+
+// Color de la pill de categoría de obligación (según diseno parte2)
+function crxPillStyle(tipo: string): React.CSSProperties {
+  const t = (tipo || "").toLowerCase();
+  if (t.includes("cuota")) return { background: "#e9eff7", color: "#3a67a3" };
+  if (t.includes("alquiler")) return { background: "#f9f1de", color: "#c08a1e" };
+  if (t.includes("impuesto")) return { background: "#efeaf7", color: "#6a4a95" };
+  if (t.includes("servicio")) return { background: "#e3f0ea", color: "#2f7a5f" };
+  if (t.includes("sueldo")) return { background: "#efeaf7", color: "#6a4a95" };
+  if (t.includes("proveedor")) return { background: "#f8ede8", color: "#c05e42" };
+  return { background: "#eef0ec", color: "#6a6f66" };
+}
+
+function crxInitials(name: string): string {
+  const p = (name || "").replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ ]/g, "").trim().split(/\s+/);
+  return ((p[0]?.[0] || "") + (p[1]?.[0] || p[0]?.[1] || "")).toUpperCase();
+}
+
+// Lunes de la semana de una fecha (YYYY-MM-DD) — para agrupar cheques por semana de cobro
+function crxMonday(ymd: string): Date {
+  const [y, m, d] = ymd.slice(0, 10).split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  const g = (dt.getDay() + 6) % 7;
+  dt.setDate(dt.getDate() - g);
+  dt.setHours(0, 0, 0, 0);
+  return dt;
+}
+const crxWeekKey = (dt: Date) => `${dt.getFullYear()}-${dt.getMonth()}-${dt.getDate()}`;
+const CRX_MESES_ABBR = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+function crxWeekRange(ws: Date): string {
+  const we = new Date(ws); we.setDate(we.getDate() + 6);
+  const d1 = ws.getDate(), m1 = CRX_MESES_ABBR[ws.getMonth()], d2 = we.getDate(), m2 = CRX_MESES_ABBR[we.getMonth()];
+  return m1 === m2 ? `${d1} – ${d2} ${m1}` : `${d1} ${m1} – ${d2} ${m2}`;
+}
+
 export default function CajaPage() {
   const { toast } = useToast();
   const [viewMode, setViewMode] = useState<"day" | "week" | "month">("month");
@@ -266,6 +532,10 @@ export default function CajaPage() {
 
   // Acordeón categorías
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
+
+  // Rediseño: filtro de vencimientos (sección 2) y semana de cheques en cartera (sección 4)
+  const [oblFilter, setOblFilter] = useState<"vencido" | "semana" | "futuro">("vencido");
+  const [chequeWeekIdx, setChequeWeekIdx] = useState<number | null>(null);
 
   // Cheques
   const [depositarChequeOpen, setDepositarChequeOpen] = useState(false);
@@ -479,6 +749,28 @@ export default function CajaPage() {
   [cheques]);
   const chequesEnCarteraTotal = useMemo(() => chequesEnCartera.reduce((s, c) => s + c.monto, 0), [chequesEnCartera]);
 
+  // Sección 4: cheques en cartera agrupados por semana de FECHA DE COBRO (navegación bidireccional).
+  const chequeWeeks = useMemo(() => {
+    const map: Record<string, { ws: Date; items: Cheque[] }> = {};
+    for (const c of chequesEnCartera) {
+      const mon = crxMonday(c.fecha_cobro);
+      const k = crxWeekKey(mon);
+      (map[k] = map[k] ?? { ws: mon, items: [] }).items.push(c);
+    }
+    return Object.values(map)
+      .sort((a, b) => a.ws.getTime() - b.ws.getTime())
+      .map(w => ({ ...w, items: w.items.slice().sort((a, b) => a.fecha_cobro.localeCompare(b.fecha_cobro)) }));
+  }, [chequesEnCartera]);
+  const chequeCurrentWeekIdx = useMemo(() => {
+    if (chequeWeeks.length === 0) return 0;
+    const todayMon = crxWeekKey(crxMonday(new Date().toISOString().slice(0, 10)));
+    const i = chequeWeeks.findIndex(w => crxWeekKey(w.ws) === todayMon);
+    if (i >= 0) return i;
+    // sin cheques esta semana: primera semana con cobro >= hoy, si no la última
+    const future = chequeWeeks.findIndex(w => crxWeekKey(w.ws) >= todayMon);
+    return future >= 0 ? future : chequeWeeks.length - 1;
+  }, [chequeWeeks]);
+
   // Deudas (all-time) + Ganancia neta del MES COMPLETO (mismo cálculo del Dashboard)
   const monthStart = todayIso.slice(0, 8) + "01";
   const monthEndExcl = (() => { const d = new Date(todayIso + "T00:00:00"); return new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString().slice(0, 10); })();
@@ -604,7 +896,12 @@ export default function CajaPage() {
     return [...BASE_TIPOS, ...Array.from(new Set(fromDb))];
   }, [obligaciones]);
 
-  const oblPendientes = useMemo(() => (obligaciones ?? []).filter((o: Obligacion) => o.estado === "pendiente"), [obligaciones]);
+  // Se FILTRAN de la vista las obligaciones tipo 'proveedor' (no se borran de la base) — la deuda
+  // a proveedores ya vive en su propia card. Cards de resumen y lista excluyen 'proveedor' para cuadrar.
+  const oblPendientes = useMemo(
+    () => (obligaciones ?? []).filter((o: Obligacion) => o.estado === "pendiente" && o.tipo !== "proveedor"),
+    [obligaciones],
+  );
 
   const today = new Date(); today.setHours(0,0,0,0);
   const endOfWeek = new Date(today); endOfWeek.setDate(today.getDate() + 7);
@@ -747,147 +1044,63 @@ export default function CajaPage() {
 
   return (
     <Layout>
-      <div className="p-6 space-y-6">
-        {/* ── Ganancia neta del mes (simple — Caja se rediseña después) ─────── */}
-        {deudaStats && (
-          <section className="rounded-xl border bg-card p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Ganancia neta del mes</p>
-            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
-              <span>Ganancia real <b className="tabular-nums">{fmt(deudaStats.ganancia_real ?? 0)}</b></span>
-              <span className="text-muted-foreground">−</span>
-              <span>Egresos operativos <b className="tabular-nums">{fmt(deudaStats.egresosOperativos ?? 0)}</b>
-                <span className="text-muted-foreground"> ({deudaStats.cantidadMovimientosEgresos ?? 0} movs)</span></span>
-              <span className="text-muted-foreground">=</span>
-              <span className="text-green-700 dark:text-green-400">Neta <b className="tabular-nums text-base">{fmt(deudaStats.ganancia_neta ?? 0)}</b></span>
-            </div>
-            {deudaStats.fechaCoberturaEgresos && (
-              <p className="text-[11px] text-amber-700 dark:text-amber-500 mt-2">
-                ⏱ Gastos cargados hasta el {(() => { const p = deudaStats.fechaCoberturaEgresos!.split("-"); return `${p[2]}/${p[1]}`; })()} · la neta puede no incluir gastos posteriores
-              </p>
-            )}
-          </section>
-        )}
+      <div className="caja-rx">
+        <style>{CAJA_RX_CSS}</style>
+        <div className="crx-wrap">
+          <h1 className="crx-pagetitle">Caja</h1>
 
-        {/* ── Posición financiera ─────────────────────────────────────────── */}
-        <section className="space-y-4">
-          <h2 className="text-base font-semibold">¿Dónde está mi plata hoy?</h2>
+          {/* ── Sección 1 — Efectivo + Por cobrar + Por pagar ───────────────── */}
+          {(() => {
+            const efc = (cuentas ?? []).find(c => c.tipo === "efectivo");
+            const saldoEf = efc ? getSaldoActual(efc) : null;
+            return (
+              <div className="crx-efectivo">
+                <div className="l">
+                  <div className="cap"><Wallet className="h-3.5 w-3.5" /> Efectivo en caja</div>
+                  <div className="val crx-num">{saldoEf == null ? "…" : fmt(saldoEf)}</div>
+                  <div className="sub">Plata líquida en mano · actualizado hoy</div>
+                </div>
+                <button className="crx-editbtn" disabled={!efc}
+                  onClick={() => { if (!efc) return; setEditCuenta(efc); setEditSaldo(String(efc.saldo_base ?? 0)); setEditCuentaOpen(true); }}>
+                  <Pencil className="h-3.5 w-3.5" /> Editar saldo
+                </button>
+              </div>
+            );
+          })()}
 
-          {/* ── Grupo 1: Lo que tengo (plata líquida) ───────────────────── */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Lo que tengo</h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-              {(cuentas ?? []).filter(c => c.tipo !== "cheque").map(cuenta => {
-                const saldo = getSaldoActual(cuenta);
-                return (
-                  <Card
-                    key={cuenta.id}
-                    className="cursor-pointer hover:border-primary/40 transition-colors"
-                    onClick={() => { setEditCuenta(cuenta); setEditSaldo(String(cuenta.saldo_base ?? 0)); setEditCuentaOpen(true); }}
-                  >
-                    <CardContent className="pt-4 pb-3 px-4">
-                      <div className="flex items-center gap-1.5 mb-1.5">
-                        {CUENTA_ICONS[cuenta.tipo]}
-                        <span className="text-xs font-medium text-muted-foreground truncate flex-1">{cuenta.nombre}</span>
-                        <Pencil className="h-3 w-3 text-muted-foreground/40 flex-shrink-0" />
-                      </div>
-                      <p className={`text-xl font-bold ${saldo >= 0 ? "text-foreground" : "text-red-600"}`}>{fmt(saldo)}</p>
-                      {cuenta.tipo === "mp" ? (
-                        // MP = saldo_base + movimientos de la API (rango acotado a 60 días).
-                        !mpLive ? (
-                          <p className="text-[10px] text-amber-600 mt-0.5">⚠ MP no disponible — último saldo conocido</p>
-                        ) : mpStale ? (
-                          <p className="text-[10px] text-amber-600 mt-0.5">↻ recargá el saldo de MP (base de hace {mpDiasDesdeBase} días)</p>
-                        ) : (
-                          <p className="text-[10px] text-muted-foreground mt-0.5">
-                            {cuenta.saldo_base_fecha && <>base {new Date(cuenta.saldo_base_fecha).toLocaleDateString("es-AR", { day: "numeric", month: "short" })}</>}
-                            {mpDelta !== 0 && (
-                              <span className={mpDelta > 0 ? " text-green-600" : " text-red-600"}>
-                                {" "}{mpDelta > 0 ? "+" : ""}{fmt(mpDelta)}
-                              </span>
-                            )}
-                          </p>
-                        )
-                      ) : (
-                        cuenta.saldo_base_fecha && (
-                          <p className="text-[10px] text-muted-foreground mt-0.5">
-                            base {new Date(cuenta.saldo_base_fecha).toLocaleDateString("es-AR", { day: "numeric", month: "short" })}
-                          </p>
-                        )
-                      )}
-                    </CardContent>
-                  </Card>
-                );
-              })}
-              {/* Disponible total — SOLO plata líquida (MP + Galicia + Efectivo), sin cheques */}
-              <Card className="bg-primary/5 border-primary/20">
-                <CardContent className="pt-4 pb-3 px-4">
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <DollarSign className="h-4 w-4 text-primary" />
-                    <span className="text-xs font-semibold text-primary">Disponible total</span>
-                  </div>
-                  <p className="text-xl font-bold text-primary">
-                    {cuentas ? fmt(cuentas.filter(c => c.tipo !== "cheque").reduce((s, c) => s + getSaldoActual(c), 0)) : "…"}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">solo plata líquida</p>
-                </CardContent>
-              </Card>
+          {/* Por cobrar */}
+          <div className="crx-block">
+            <p className="crx-seclabel">Por cobrar</p>
+            <div className="crx-grid2">
+              <div className="crx-card green">
+                <div className="head"><span className="ico"><CreditCard className="h-4 w-4" /></span> Cheques en cartera</div>
+                <div className="amount crx-num">{fmt(chequesEnCarteraTotal)}</div>
+                <div className="foot">{chequesEnCartera.length} recibido{chequesEnCartera.length !== 1 ? "s" : ""} por cobrar</div>
+              </div>
+              <div className="crx-card green">
+                <div className="head"><span className="ico"><Users className="h-4 w-4" /></span> Deuda de clientes</div>
+                <div className="amount crx-num">{deudaStats ? fmt(deudaStats.deudaClientes) : "…"}</div>
+                <div className="foot">a cobrar de clientes activos</div>
+              </div>
             </div>
           </div>
 
-          {/* ── Grupo 2: Por cobrar (cada card su número, sin sumar entre sí) ── */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Por cobrar</h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-              <Card>
-                <CardContent className="pt-4 pb-3 px-4">
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <CreditCard className="h-4 w-4 text-purple-600" />
-                    <span className="text-xs font-medium text-muted-foreground truncate flex-1">Cheques en cartera</span>
-                  </div>
-                  <p className="text-xl font-bold text-green-600 dark:text-green-400">{fmt(chequesEnCarteraTotal)}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">{chequesEnCartera.length} recibido{chequesEnCartera.length !== 1 ? "s" : ""} por cobrar</p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="pt-4 pb-3 px-4">
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <Users className="h-4 w-4 text-green-600" />
-                    <span className="text-xs font-medium text-muted-foreground truncate flex-1">Deuda de clientes</span>
-                  </div>
-                  <p className="text-xl font-bold text-green-600 dark:text-green-400">{deudaStats ? fmt(deudaStats.deudaClientes) : "…"}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">a cobrar de clientes activos</p>
-                </CardContent>
-              </Card>
+          {/* Por pagar */}
+          <div className="crx-block">
+            <p className="crx-seclabel">Por pagar</p>
+            <div className="crx-grid2">
+              <div className="crx-card coral">
+                <div className="head"><span className="ico"><CreditCard className="h-4 w-4" /></span> Cheques emitidos</div>
+                <div className="amount crx-num">{fmt(chequesEmitidosTotal)}</div>
+                <div className="foot">comprometido, aún no salió de Galicia</div>
+              </div>
+              <div className="crx-card coral">
+                <div className="head"><span className="ico"><Building2 className="h-4 w-4" /></span> Deuda a proveedores</div>
+                <div className="amount crx-num">{deudaStats ? fmt(deudaStats.deudaProveedores) : "…"}</div>
+                <div className="foot">compras pendientes de pago</div>
+              </div>
             </div>
           </div>
-
-          {/* ── Grupo 3: Por pagar (cada card su número, sin sumar entre sí) ── */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Por pagar</h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-              <Card>
-                <CardContent className="pt-4 pb-3 px-4">
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <CreditCard className="h-4 w-4 text-purple-600" />
-                    <span className="text-xs font-medium text-muted-foreground truncate flex-1">Cheques emitidos</span>
-                  </div>
-                  <p className="text-xl font-bold text-red-600 dark:text-red-400">{fmt(chequesEmitidosTotal)}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">comprometido, aún no salió de Galicia</p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="pt-4 pb-3 px-4">
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <Building2 className="h-4 w-4 text-red-600" />
-                    <span className="text-xs font-medium text-muted-foreground truncate flex-1">Deuda a proveedores</span>
-                  </div>
-                  <p className="text-xl font-bold text-red-600 dark:text-red-400">{deudaStats ? fmt(deudaStats.deudaProveedores) : "…"}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">compras pendientes de pago</p>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-        </section>
 
         {/* ── Edit saldo base ──────────────────────────────────────────────── */}
         <Dialog open={editCuentaOpen} onOpenChange={setEditCuentaOpen}>
@@ -925,139 +1138,77 @@ export default function CajaPage() {
           </DialogContent>
         </Dialog>
 
-        {/* ── Próximos pagos y vencimientos ─────────────────────────────── */}
-        <section className="space-y-3">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h2 className="text-base font-semibold">Próximos pagos y vencimientos</h2>
-            <Button size="sm" variant="outline" onClick={() => { setOblForm(emptyOblForm()); setOblDialogOpen(true); }}>
-              <Plus className="h-4 w-4 mr-1" /> Agregar obligación
-            </Button>
+        {/* ── Sección 2 — Próximos pagos y vencimientos ──────────────────── */}
+        <div className="crx-block">
+          <div className="crx-sechead">
+            <h2 className="crx-h2">Próximos pagos y vencimientos</h2>
+            <button className="crx-addbtn" onClick={() => { setOblForm(emptyOblForm()); setOblDialogOpen(true); }}>
+              <Plus className="h-3.5 w-3.5" /> Agregar obligación
+            </button>
           </div>
 
-          {/* Resumen */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <Card className="border-red-200 bg-red-50/40">
-              <CardContent className="pt-4 pb-3 px-4">
-                <div className="flex items-center gap-2 mb-1">
-                  <AlertCircle className="h-4 w-4 text-red-600" />
-                  <span className="text-xs font-medium text-red-700">Vencido</span>
-                  {oblVencido.length > 0 && <Badge className="ml-auto bg-red-600 text-white text-[10px] h-4 px-1">{oblVencido.length}</Badge>}
+          {/* Filtros clickeables (recalculados EXCLUYENDO 'proveedor') */}
+          <div className="crx-filters">
+            {([
+              { g: "vencido" as const, label: "Vencido", icon: <AlertCircle className="h-3.5 w-3.5" />, count: oblVencido.length, tot: totVencido },
+              { g: "semana" as const, label: "Esta semana", icon: <Clock className="h-3.5 w-3.5" />, count: oblSemana.length, tot: totSemana },
+              { g: "futuro" as const, label: "Próximos 30 días", icon: <Calendar className="h-3.5 w-3.5" />, count: oblFuturo.length, tot: totFuturo },
+            ]).map(f => (
+              <button key={f.g} className={`crx-fcard ${f.g}${oblFilter === f.g ? " active" : ""}`} onClick={() => setOblFilter(f.g)}>
+                <div className="crx-ftop">
+                  <span className="crx-flabel">{f.icon}{f.label}</span>
+                  <span className="crx-fbadge">{f.count}</span>
                 </div>
-                {totVencido.ars > 0 && <p className="text-xl font-bold text-red-700">{fmt(totVencido.ars)}</p>}
-                {totVencido.usd > 0 && <p className={`font-bold text-red-700 ${totVencido.ars > 0 ? "text-sm" : "text-xl"}`}>USD {totVencido.usd.toLocaleString("es-AR", { minimumFractionDigits: 0 })}</p>}
-                {totVencido.ars === 0 && totVencido.usd === 0 && <p className="text-xl font-bold text-red-700">$0</p>}
-              </CardContent>
-            </Card>
-            <Card className="border-yellow-200 bg-yellow-50/40">
-              <CardContent className="pt-4 pb-3 px-4">
-                <div className="flex items-center gap-2 mb-1">
-                  <Clock className="h-4 w-4 text-yellow-600" />
-                  <span className="text-xs font-medium text-yellow-700">Esta semana</span>
-                  {oblSemana.length > 0 && <Badge className="ml-auto bg-yellow-500 text-white text-[10px] h-4 px-1">{oblSemana.length}</Badge>}
-                </div>
-                {totSemana.ars > 0 && <p className="text-xl font-bold text-yellow-700">{fmt(totSemana.ars)}</p>}
-                {totSemana.usd > 0 && <p className={`font-bold text-yellow-700 ${totSemana.ars > 0 ? "text-sm" : "text-xl"}`}>USD {totSemana.usd.toLocaleString("es-AR", { minimumFractionDigits: 0 })}</p>}
-                {totSemana.ars === 0 && totSemana.usd === 0 && <p className="text-xl font-bold text-yellow-700">$0</p>}
-              </CardContent>
-            </Card>
-            <Card className="border-gray-200">
-              <CardContent className="pt-4 pb-3 px-4">
-                <div className="flex items-center gap-2 mb-1">
-                  <DollarSign className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-xs font-medium text-muted-foreground">Próximos 30 días</span>
-                  {oblFuturo.length > 0 && <Badge variant="secondary" className="ml-auto text-[10px] h-4 px-1">{oblFuturo.length}</Badge>}
-                </div>
-                {totFuturo.ars > 0 && <p className="text-xl font-bold text-foreground">{fmt(totFuturo.ars)}</p>}
-                {totFuturo.usd > 0 && <p className={`font-bold text-foreground ${totFuturo.ars > 0 ? "text-sm" : "text-xl"}`}>USD {totFuturo.usd.toLocaleString("es-AR", { minimumFractionDigits: 0 })}</p>}
-                {totFuturo.ars === 0 && totFuturo.usd === 0 && <p className="text-xl font-bold text-foreground">$0</p>}
-              </CardContent>
-            </Card>
+                <div className="crx-fars crx-num">{fmt(f.tot.ars)}</div>
+                {f.tot.usd > 0 && <div className="crx-fusd crx-num">USD {f.tot.usd.toLocaleString("es-AR")}</div>}
+              </button>
+            ))}
           </div>
 
-          {/* Lista pendientes */}
-          {oblVisible.length > 0 && (
-            <div className="border rounded-lg overflow-hidden">
-              <div className="overflow-x-auto"><table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="text-left px-3 py-2 font-medium w-6" />
-                    <th className="text-left px-3 py-2 font-medium">Vencimiento</th>
-                    <th className="text-left px-3 py-2 font-medium">Concepto</th>
-                    <th className="text-left px-3 py-2 font-medium">Categoría</th>
-                    <th className="text-right px-3 py-2 font-medium">Monto</th>
-                    <th className="px-3 py-2" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {(oblVisible as Obligacion[]).map(ob => {
-                    const sem = oblSemaforoClass(ob.fecha_vencimiento);
-                    const rowColor = sem === "vencido" ? "bg-red-50/60" : sem === "semana" ? "bg-yellow-50/40" : "";
-                    const dotColor = sem === "vencido" ? "bg-red-500" : sem === "semana" ? "bg-yellow-400" : "bg-gray-300";
-                    const isUSD = (ob.moneda ?? "ARS") === "USD";
-                    return (
-                      <tr key={ob.id} className={`border-t hover:bg-muted/20 ${rowColor}`}>
-                        <td className="px-3 py-2">
-                          <span className={`inline-block h-2.5 w-2.5 rounded-full ${dotColor}`} />
-                        </td>
-                        <td className="px-3 py-2 tabular-nums text-muted-foreground whitespace-nowrap">
-                          {ob.fecha_vencimiento.slice(5).split("-").reverse().join("/")}
-                        </td>
-                        <td className="px-3 py-2 font-medium">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="truncate max-w-[180px]">{oblLabel(ob)}</span>
-                            {ob.pago_parcial && (
-                              <Badge className="bg-amber-100 text-amber-700 border border-amber-300 text-[10px] px-1.5 py-0 h-4 font-medium">pago parcial</Badge>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-3 py-2">
-                          <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${TIPO_BADGE[ob.tipo] ?? TIPO_BADGE.otro}`}>
-                            {ob.tipo}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 text-right font-semibold text-red-700 whitespace-nowrap">
-                          {isUSD ? `USD ${ob.monto.toLocaleString("es-AR")}` : fmt(ob.monto)}
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          <div className="flex items-center gap-1 justify-end">
-                            <Button
-                              size="sm" variant="ghost"
-                              className="h-7 text-xs text-green-700 hover:text-green-800 hover:bg-green-50"
-                              onClick={() => { setPagarObl(ob); setPagarCuentaId(null); setPagarMonto(String(ob.monto)); setPagarCotizacion(""); setPagarOblOpen(true); }}
-                            >
-                              <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Pagar
-                            </Button>
-                            <Button
-                              size="icon" variant="ghost" className="h-7 w-7"
-                              onClick={() => {
-                                setEditObl(ob);
-                                setEditForm({ concepto: ob.concepto, tipo: ob.tipo, moneda: (ob.moneda ?? "ARS") as "ARS" | "USD", monto: String(ob.monto), fechaVencimiento: ob.fecha_vencimiento, notas: ob.notas ?? "", pagoParcial: ob.pago_parcial ?? false });
-                                setEditTipoCustom(!allTipos.includes(ob.tipo));
-                                setEditOblOpen(true);
-                              }}
-                            >
-                              <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-                            </Button>
-                            <Button
-                              size="icon" variant="ghost" className="h-7 w-7"
-                              onClick={() => delOblMutation.mutate(ob.id)}
-                              disabled={delOblMutation.isPending}
-                            >
-                              <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table></div>
-            </div>
-          )}
-          {oblVisible.length === 0 && (
-            <p className="text-sm text-muted-foreground">Sin obligaciones pendientes.</p>
-          )}
-        </section>
+          {/* Lista del grupo seleccionado */}
+          {(() => {
+            const groups: Record<typeof oblFilter, Obligacion[]> = { vencido: oblVencido, semana: oblSemana, futuro: oblFuturo };
+            const items = (groups[oblFilter] as Obligacion[]).slice().sort((a, b) => a.fecha_vencimiento.localeCompare(b.fecha_vencimiento));
+            return (
+              <div className="crx-list">
+                <div className="crx-lhead crx-obl-grid">
+                  <span>Vencimiento</span><span>Concepto</span><span>Categoría</span><span className="r">Monto</span><span></span>
+                </div>
+                {items.length === 0 ? (
+                  <div className="crx-empty">No hay vencimientos en este período.</div>
+                ) : items.map(ob => {
+                  const sem = oblSemaforoClass(ob.fecha_vencimiento);
+                  const isUSD = (ob.moneda ?? "ARS") === "USD";
+                  return (
+                    <div key={ob.id} className="crx-row crx-obl-grid">
+                      <div className="crx-rdate"><span className={`crx-dot ${sem}`} />{ob.fecha_vencimiento.slice(5).split("-").reverse().join("/")}</div>
+                      <div className="crx-rconcept"><span className="tt">{oblLabel(ob)}</span>{ob.pago_parcial && <span className="crx-parcial">pago parcial</span>}</div>
+                      <span className="crx-pill" style={crxPillStyle(ob.tipo)}>{ob.tipo}</span>
+                      <div className={`crx-ramount${sem === "vencido" ? " vencido" : ""}`}>{isUSD ? `USD ${ob.monto.toLocaleString("es-AR")}` : fmt(ob.monto)}</div>
+                      <div className="crx-ract">
+                        <button className="crx-pay" onClick={() => { setPagarObl(ob); setPagarCuentaId(null); setPagarMonto(String(ob.monto)); setPagarCotizacion(""); setPagarOblOpen(true); }}>
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Pagar
+                        </button>
+                        <button className="crx-iconbtn" title="Editar"
+                          onClick={() => {
+                            setEditObl(ob);
+                            setEditForm({ concepto: ob.concepto, tipo: ob.tipo, moneda: (ob.moneda ?? "ARS") as "ARS" | "USD", monto: String(ob.monto), fechaVencimiento: ob.fecha_vencimiento, notas: ob.notas ?? "", pagoParcial: ob.pago_parcial ?? false });
+                            setEditTipoCustom(!allTipos.includes(ob.tipo));
+                            setEditOblOpen(true);
+                          }}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button className="crx-iconbtn del" title="Eliminar" onClick={() => delOblMutation.mutate(ob.id)} disabled={delOblMutation.isPending}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </div>
 
         {/* Dialog: agregar obligación */}
         <Dialog open={oblDialogOpen} onOpenChange={v => { setOblDialogOpen(v); if (!v) { setOblForm(emptyOblForm()); setOblTipoCustom(false); } }}>
@@ -1412,66 +1563,78 @@ export default function CajaPage() {
         {/* ── Flujo semanal de cheques (cartera vs emisiones, por fecha de impacto) ── */}
         <ChequesFlow cheques={cheques ?? []} />
 
-        {/* ── Cheques en cartera ────────────────────────────────────────── */}
-        <section className="space-y-3">
-          <div className="flex items-center gap-2">
-            <h2 className="text-base font-semibold">Cheques en cartera</h2>
-            <Badge variant="secondary">{chequesEnCartera.length}</Badge>
-            <span className="text-sm text-muted-foreground ml-auto font-medium">
-              Total: {fmt(chequesEnCartera.reduce((s, c) => s + c.monto, 0))}
-            </span>
-            <Button size="sm" variant="outline" className="h-7"
-              onClick={() => { setChequeForm({ monto: "", fechaCobro: "", contraparte: "", numero: "" }); setAddChequeOpen(true); }}>
-              <Plus className="h-4 w-4 mr-1" /> Agregar
-            </Button>
-          </div>
-          {chequesEnCartera.length === 0 ? (
-            <p className="text-sm text-muted-foreground border rounded-lg px-3 py-4 text-center">No hay cheques en cartera.</p>
-          ) : (
-            <div className="border rounded-lg overflow-hidden">
-              <div className="overflow-x-auto"><table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="text-left px-3 py-2 font-medium">Cobro</th>
-                    <th className="text-left px-3 py-2 font-medium">De quién</th>
-                    <th className="text-right px-3 py-2 font-medium">Monto</th>
-                    <th className="px-3 py-2" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {chequesEnCartera.map(ch => (
-                    <tr key={ch.id} className="border-t hover:bg-muted/20">
-                      <td className="px-3 py-2 tabular-nums text-muted-foreground">{ch.fecha_cobro.slice(5).split("-").reverse().join("/")}/{ch.fecha_cobro.slice(2,4)}</td>
-                      <td className="px-3 py-2 font-medium">{ch.contraparte}</td>
-                      <td className="px-3 py-2 text-right font-semibold text-purple-700">{fmt(ch.monto)}</td>
-                      <td className="px-3 py-2 text-right">
-                        <div className="flex items-center gap-1 justify-end">
-                          <Button size="sm" variant="outline" className="h-7 text-xs"
-                            onClick={() => { setActiveCheque(ch); setChequeCuentaDestinoId(null); setChequeComision(""); setDepositarChequeOpen(true); }}>
-                            Depositar
-                          </Button>
-                          <Button size="sm" variant="ghost" className="h-7 text-xs"
-                            onClick={() => { setActiveCheque(ch); setChequeEndosarA(""); setEndosarChequeOpen(true); }}>
-                            Endosar
-                          </Button>
-                          <Button size="icon" variant="ghost" className="h-7 w-7" title="Editar"
-                            onClick={() => { setActiveCheque(ch); setChequeForm({ monto: String(Math.round(ch.monto)), fechaCobro: ch.fecha_cobro.slice(0, 10), contraparte: ch.contraparte, numero: ch.numero ?? "" }); setEditChequeOpen(true); }}>
-                            <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-                          </Button>
-                          <Button size="icon" variant="ghost" className="h-7 w-7" title="Eliminar"
-                            disabled={deleteChequeMut.isPending}
-                            onClick={() => { if (window.confirm(`¿Eliminar el cheque de ${ch.contraparte} por ${fmt(ch.monto)}?`)) deleteChequeMut.mutate(ch.id); }}>
-                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                          </Button>
+        {/* ── Sección 4 — Cheques en cartera (por semana de cobro) ───────── */}
+        <div className="crx-block">
+          {(() => {
+            const total = chequesEnCartera.reduce((s, c) => s + c.monto, 0);
+            const hasWeeks = chequeWeeks.length > 0;
+            const idx = Math.min(Math.max(chequeWeekIdx ?? chequeCurrentWeekIdx, 0), Math.max(chequeWeeks.length - 1, 0));
+            const wk = hasWeeks ? chequeWeeks[idx] : null;
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const todayMon = crxWeekKey(crxMonday(todayStr));
+            const wkSum = wk ? wk.items.reduce((s, c) => s + c.monto, 0) : 0;
+            return (
+              <>
+                <div className="crx-sechead">
+                  <div className="crx-titlewrap">
+                    <h2 className="crx-h2">Cheques en cartera</h2>
+                    <span className="crx-count">{chequesEnCartera.length} cheque{chequesEnCartera.length !== 1 ? "s" : ""}</span>
+                  </div>
+                  <div className="crx-totalwrap">
+                    <div className="crx-totalbox">
+                      <div className="cap">Total en cartera</div>
+                      <div className="val crx-num">{fmt(total)}</div>
+                    </div>
+                    <button className="crx-addbtn" onClick={() => { setChequeForm({ monto: "", fechaCobro: "", contraparte: "", numero: "" }); setAddChequeOpen(true); }}>
+                      <Plus className="h-3.5 w-3.5" /> Agregar
+                    </button>
+                  </div>
+                </div>
+
+                {!hasWeeks ? (
+                  <div className="crx-list"><div className="crx-empty">No hay cheques en cartera.</div></div>
+                ) : (
+                  <>
+                    <div className="crx-weekbar">
+                      <div className="crx-weeknav">
+                        <button className="crx-navbtn" disabled={idx === 0} onClick={() => setChequeWeekIdx(Math.max(idx - 1, 0))}><ChevronLeft className="h-4 w-4" /></button>
+                        <div className="crx-weekrange">
+                          <span className="rg">{crxWeekRange(wk!.ws)}</span>
+                          <span className="hint">{crxWeekKey(wk!.ws) === todayMon ? "semana actual" : (crxWeekKey(wk!.ws) < todayMon ? "semana pasada" : "")}</span>
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table></div>
-            </div>
-          )}
-        </section>
+                        <button className="crx-navbtn" disabled={idx >= chequeWeeks.length - 1} onClick={() => setChequeWeekIdx(Math.min(idx + 1, chequeWeeks.length - 1))}><ChevronRight className="h-4 w-4" /></button>
+                      </div>
+                      <div className="crx-weeksum">
+                        <div className="s crx-num">{fmt(wkSum)}</div>
+                        <div className="c">{wk!.items.length} cheque{wk!.items.length !== 1 ? "s" : ""}</div>
+                      </div>
+                    </div>
+                    <div className="crx-list">
+                      <div className="crx-lhead crx-chq-grid"><span>Cobro</span><span>De quién</span><span className="r">Monto</span><span></span></div>
+                      {wk!.items.map(ch => {
+                        const venc = ch.fecha_cobro.slice(0, 10) < todayStr;
+                        const dd = ch.fecha_cobro.slice(5).split("-").reverse().join("/");
+                        return (
+                          <div key={ch.id} className="crx-row crx-chq-grid">
+                            <div className="crx-rdate"><span className={`crx-dot ${venc ? "venc" : "fut"}`} />{dd}</div>
+                            <div className="crx-who"><span className="crx-whopill">{ch.contraparte}</span></div>
+                            <div className="crx-ramount">{fmt(ch.monto)}</div>
+                            <div className="crx-ract">
+                              <button className="crx-btnp" onClick={() => { setActiveCheque(ch); setChequeCuentaDestinoId(null); setChequeComision(""); setDepositarChequeOpen(true); }}>Depositar</button>
+                              <button className="crx-btns" onClick={() => { setActiveCheque(ch); setChequeEndosarA(""); setEndosarChequeOpen(true); }}>Endosar</button>
+                              <button className="crx-iconbtn" title="Editar" onClick={() => { setActiveCheque(ch); setChequeForm({ monto: String(Math.round(ch.monto)), fechaCobro: ch.fecha_cobro.slice(0, 10), contraparte: ch.contraparte, numero: ch.numero ?? "" }); setEditChequeOpen(true); }}><Pencil className="h-3.5 w-3.5" /></button>
+                              <button className="crx-iconbtn del" title="Eliminar" disabled={deleteChequeMut.isPending} onClick={() => { if (window.confirm(`¿Eliminar el cheque de ${ch.contraparte} por ${fmt(ch.monto)}?`)) deleteChequeMut.mutate(ch.id); }}><Trash2 className="h-3.5 w-3.5" /></button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </>
+            );
+          })()}
+        </div>
 
         {/* Dialog: agregar / editar cheque en cartera */}
         <Dialog open={addChequeOpen || editChequeOpen} onOpenChange={v => { if (!v) { setAddChequeOpen(false); setEditChequeOpen(false); setActiveCheque(null); } }}>
@@ -1611,47 +1774,37 @@ export default function CajaPage() {
           </DialogContent>
         </Dialog>
 
-        {/* ── Retiros de socios ─────────────────────────────────────── */}
-        <section className="space-y-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h2 className="text-base font-semibold flex items-center gap-2">
-              <Users className="h-4 w-4 text-muted-foreground" /> Retiros de socios
-            </h2>
-            <span className="text-xs text-muted-foreground">— {label}</span>
-            <Button size="sm" variant="outline" className="ml-auto"
-              onClick={() => setRetiroDialogOpen(true)}>
-              <Plus className="h-4 w-4 mr-1" /> Cargar retiro
-            </Button>
+        {/* ── Retiros de socios (malva) ──────────────────────────────────── */}
+        <div className="crx-block">
+          <div className="crx-sechead" style={{ marginBottom: 6 }}>
+            <h2 className="crx-h2">Retiros de socios</h2>
+            <button className="crx-addbtn" onClick={() => setRetiroDialogOpen(true)}>
+              <Plus className="h-3.5 w-3.5" /> Cargar retiro
+            </button>
           </div>
-          {(socios ?? []).filter((s: any) => s.activo).length > 0 && (
-            <div className="grid grid-cols-2 gap-3">
+          <p className="crx-subline">Total retirado en {label.toLowerCase()} · <b className="crx-num">{fmt(retirosTotalPeriodo)}</b> · tocá un socio para ver el histórico</p>
+          {(socios ?? []).filter((s: any) => s.activo).length === 0 ? (
+            <p className="crx-subline" style={{ marginBottom: 0 }}>Sin socios activos.</p>
+          ) : (
+            <div className="crx-retgrid">
               {(socios ?? []).filter((s: any) => s.activo).map((s: any) => {
                 const total = retirosBySocio[s.id] ?? 0;
                 const pct = retirosTotalPeriodo > 0 ? Math.round((total / retirosTotalPeriodo) * 100) : 0;
                 return (
-                  <Card key={s.id} className="cursor-pointer hover:border-primary/40 transition-colors"
-                    onClick={() => setSocioDetailId(s.id)}>
-                    <CardContent className="pt-4 pb-3 px-4">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="text-sm font-semibold">{s.nombre}</span>
-                        {pct > 0 && <span className="text-[10px] text-muted-foreground ml-auto">{pct}%</span>}
-                      </div>
-                      <p className="text-xl font-bold text-orange-700">{fmt(total)}</p>
-                      {retirosTotalPeriodo > 0 && (
-                        <div className="mt-2 h-1.5 bg-muted rounded-full overflow-hidden">
-                          <div className="h-full bg-orange-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
+                  <button key={s.id} className="crx-socio" onClick={() => setSocioDetailId(s.id)}>
+                    <div className="crx-stop">
+                      <span className="crx-sname"><span className="crx-sav">{crxInitials(s.nombre)}</span><span className="tt">{s.nombre}</span></span>
+                      <span className="crx-spct">{pct}%</span>
+                    </div>
+                    <div className="crx-samt crx-num">{fmt(total)}</div>
+                    <div className="crx-bar"><div className="crx-fill" style={{ width: `${pct}%` }} /></div>
+                    <div className="crx-seemore"><Calendar className="h-3 w-3" /> Ver histórico mensual</div>
+                  </button>
                 );
               })}
             </div>
           )}
-          {retirosPeriodo.length === 0 && (
-            <p className="text-xs text-muted-foreground">Sin retiros en este período.</p>
-          )}
-        </section>
+        </div>
 
         {/* Dialog: agregar retiro manual */}
         <Dialog open={retiroDialogOpen} onOpenChange={v => { setRetiroDialogOpen(v); if (!v) setRetiroForm({ socioId: "", monto: "", fecha: new Date().toISOString().slice(0,10), notas: "" }); }}>
@@ -1702,236 +1855,131 @@ export default function CajaPage() {
           const totalSocio = meses.reduce((s, [, v]) => s + (v as number), 0);
           return (
             <Dialog open onOpenChange={v => { if (!v) setSocioDetailId(null); }}>
-              <DialogContent className="max-w-sm">
-                <DialogHeader><DialogTitle>Retiros — {socio?.nombre}</DialogTitle></DialogHeader>
-                <div className="py-1 space-y-1 max-h-72 overflow-y-auto">
+              <DialogContent className="max-w-[440px]">
+                <div className="crx-modalhead"><h3>Retiros — {socio?.nombre}</h3></div>
+                <div style={{ maxHeight: 340, overflowY: "auto" }}>
                   {meses.length === 0 ? (
-                    <p className="text-sm text-muted-foreground py-2 text-center">Sin retiros registrados.</p>
+                    <p className="crx-subline" style={{ margin: "8px 0", textAlign: "center" }}>Sin retiros registrados.</p>
                   ) : meses.map(([mes, total]) => {
                     const [y, m] = mes.split("-");
                     const label2 = `${MONTHS_ES[parseInt(m) - 1]} ${y}`;
                     return (
-                      <div key={mes} className="flex items-center justify-between px-1 py-1.5 border-b last:border-0">
-                        <span className="text-sm text-muted-foreground">{label2}</span>
-                        <span className="text-sm font-semibold text-orange-700">{fmt(total as number)}</span>
-                      </div>
+                      <div key={mes} className="crx-mrow"><span className="mm">{label2}</span><span className="mv crx-num">{fmt(total as number)}</span></div>
                     );
                   })}
                 </div>
                 {meses.length > 0 && (
-                  <div className="flex items-center justify-between px-1 pt-2 border-t">
-                    <span className="text-sm font-bold">Total acumulado</span>
-                    <span className="text-sm font-bold text-orange-700">{fmt(totalSocio)}</span>
-                  </div>
+                  <div className="crx-mtotal"><span className="l">Total acumulado</span><span className="v crx-num">{fmt(totalSocio)}</span></div>
                 )}
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setSocioDetailId(null)}>Cerrar</Button>
-                </DialogFooter>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 20 }}>
+                  <button className="crx-btns" style={{ padding: "9px 18px" }} onClick={() => setSocioDetailId(null)}>Cerrar</button>
+                </div>
               </DialogContent>
             </Dialog>
           );
         })()}
 
-        {/* Header */}
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <h1 className="text-2xl font-bold">Caja</h1>
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex gap-1 bg-muted rounded-lg p-1">
+        {/* ── Sección 5 — Egresos por categoría + Detalle ─────────────────── */}
+        {/* Control bar: selector de período (reubicado) + Agregar movimiento */}
+        <div className="crx-ctrlbar">
+          <div className="crx-ctrlleft">
+            <div className="crx-seg">
               {(["day", "week", "month"] as const).map(p => (
-                <button
-                  key={p}
-                  onClick={() => { setViewMode(p); if (p !== "month") setMonthOffset(0); }}
-                  className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                    viewMode === p ? "bg-white shadow text-foreground" : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
+                <button key={p} className={viewMode === p ? "active" : ""}
+                  onClick={() => { setViewMode(p); if (p !== "month") setMonthOffset(0); }}>
                   {p === "day" ? "Hoy" : p === "week" ? "Semana" : "Mes"}
                 </button>
               ))}
             </div>
             {viewMode === "month" && (
-              <div className="flex items-center gap-1">
-                <Button variant="ghost" size="icon" className="h-8 w-8"
-                  onClick={() => setMonthOffset(o => o - 1)}>
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <span className="text-sm font-semibold min-w-36 text-center">{label}</span>
-                <Button variant="ghost" size="icon" className="h-8 w-8"
-                  onClick={() => setMonthOffset(o => o + 1)}
-                  disabled={monthOffset >= 0}>
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-                {monthOffset < 0 && (
-                  <Button variant="ghost" size="sm" className="text-xs h-7 ml-1"
-                    onClick={() => setMonthOffset(0)}>
-                    Hoy
-                  </Button>
-                )}
+              <div className="crx-monthnav">
+                <button className="crx-navbtn" onClick={() => setMonthOffset(o => o - 1)}><ChevronLeft className="h-4 w-4" /></button>
+                <span className="crx-mlabel">{label}</span>
+                <button className="crx-navbtn" onClick={() => setMonthOffset(o => o + 1)} disabled={monthOffset >= 0}><ChevronRight className="h-4 w-4" /></button>
               </div>
             )}
-            <Button size="sm" onClick={() => setDialogOpen(true)}>
-              <Plus className="h-4 w-4 mr-1" /> Agregar
-            </Button>
           </div>
+          <button className="crx-addsolid" onClick={() => setDialogOpen(true)}>
+            <Plus className="h-3.5 w-3.5" /> Agregar movimiento
+          </button>
         </div>
 
-        {/* Totals row */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <TrendingUp className="h-4 w-4 text-green-600" /> Ingresos
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold text-green-700">{isLoading ? "..." : fmt(data?.totalIngresos ?? 0)}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <TrendingDown className="h-4 w-4 text-red-600" /> Egresos
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold text-red-700">{isLoading ? "..." : fmt(data?.totalEgresos ?? 0)}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <DollarSign className="h-4 w-4 text-blue-600" /> Neto
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className={`text-2xl font-bold ${(data?.saldo ?? 0) >= 0 ? "text-blue-700" : "text-red-700"}`}>
-                {isLoading ? "..." : fmt(data?.saldo ?? 0)}
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Method breakdown for period */}
-        <section>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-            Por método de pago — {label}
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {(["EFECTIVO", "TRANSFERENCIA", "CHEQUE"] as MethodKey[]).map(k => {
-              const cfg = METHOD_CONFIG[k];
-              const mb = methodBreakdown[k];
-              const neto = mb.ingresos - mb.egresos;
-              return (
-                <Card key={k}>
-                  <CardContent className="px-4 pt-4 pb-3">
-                    <div className="flex items-center gap-2 mb-2">
-                      {cfg.icon}
-                      <span className="text-sm font-semibold">{cfg.label}</span>
-                    </div>
-                    <p className={`text-2xl font-bold mb-2 ${neto >= 0 ? cfg.color : "text-red-700"}`}>
-                      {isLoading ? "..." : fmt(neto)}
-                    </p>
-                    <div className="flex gap-3 text-xs text-muted-foreground">
-                      <span className="text-green-600">↑ {fmt(mb.ingresos)}</span>
-                      <span className="text-red-600">↓ {fmt(mb.egresos)}</span>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* Pie: egresos por categoría */}
-        {pieData.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium">Egresos por categoría — {label}</CardTitle>
-            </CardHeader>
-            <CardContent className="flex gap-6 items-center">
-              <div className="w-48 h-48 flex-shrink-0">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={pieData} dataKey="value" cx="50%" cy="50%" outerRadius={80} innerRadius={32}>
-                      {pieData.map((_, i) => (
-                        <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(v: number) => fmt(v)} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="flex-1 space-y-2 text-sm overflow-hidden">
-                {pieData.map((d, i) => {
-                  const total = pieData.reduce((acc, x) => acc + x.value, 0);
-                  const pct = total > 0 ? Math.round((d.value / total) * 100) : 0;
-                  return (
-                    <div key={i} className="flex items-center gap-2">
-                      <span
-                        className="h-3 w-3 rounded-full flex-shrink-0"
-                        style={{ background: PIE_COLORS[i % PIE_COLORS.length] }}
-                      />
-                      <span className="truncate text-muted-foreground flex-1">{d.name}</span>
-                      <span className="text-xs text-muted-foreground w-8 text-right">{pct}%</span>
-                      <span className="font-semibold tabular-nums w-24 text-right">{fmt(d.value)}</span>
-                    </div>
-                  );
-                })}
-                <div className="border-t border-border pt-2 mt-1 flex items-center gap-2 font-bold">
-                  <span className="flex-1 text-foreground uppercase text-xs">Total</span>
-                  <span className="tabular-nums w-24 text-right text-red-600 dark:text-red-400">
-                    {fmt(pieData.reduce((acc, x) => acc + x.value, 0))}
-                  </span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* ── Acordeón: egresos por categoría ─────────────────────────── */}
-        {categoriaData.length > 0 && (
-          <section className="space-y-1">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-              Detalle por categoría — {label}
-            </p>
-            <div className="border rounded-lg overflow-hidden divide-y">
-              {categoriaData.map(({ cat, total, items }, ci) => {
-                const isOpen = expandedCat === cat;
-                const color = PIE_COLORS[ci % PIE_COLORS.length];
-                return (
-                  <div key={cat}>
-                    <button
-                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-muted/30 transition-colors text-left"
-                      onClick={() => setExpandedCat(isOpen ? null : cat)}
-                    >
-                      <span className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
-                      <span className="flex-1 text-sm font-medium truncate">{cat}</span>
-                      <span className="text-sm font-semibold text-red-700 tabular-nums">{fmt(total)}</span>
-                      {isOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />}
-                    </button>
-                    {isOpen && (
-                      <div className="bg-muted/20 divide-y">
-                        {items.map(item => (
-                          <div key={item.id} className="flex items-center gap-3 px-6 py-1.5 text-xs">
-                            <span className="text-muted-foreground tabular-nums w-10 flex-shrink-0">{fmtDate(item.date)}</span>
-                            <span className="flex-1 truncate text-muted-foreground">{item.description}{item.counterpart ? ` — ${item.counterpart}` : ""}</span>
-                            <span className="font-medium text-red-700 tabular-nums">{fmt(item.amount)}</span>
-                            {item.sourceType === "manual" && !item.isBankSync && (
-                              <Button size="icon" variant="ghost" className="h-5 w-5 -my-0.5"
-                                onClick={() => delMutation.mutate(item.sourceId)} disabled={delMutation.isPending}>
-                                <Trash2 className="h-3 w-3 text-muted-foreground" />
-                              </Button>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
+        {/* Egresos por categoría (donut conic-gradient) */}
+        <div className="crx-panelcard">
+          <h2>Egresos por categoría</h2>
+          <p className="crx-per">{label}</p>
+          {pieData.length === 0 ? (
+            <div className="crx-empty">Sin egresos en este período.</div>
+          ) : (() => {
+            const total = pieData.reduce((a, x) => a + x.value, 0);
+            let acc = 0;
+            const stops = pieData.map((d, i) => {
+              const s = total > 0 ? (acc / total) * 360 : 0; acc += d.value; const e = total > 0 ? (acc / total) * 360 : 0;
+              return `${CRX_PIE_COLORS[i % CRX_PIE_COLORS.length]} ${s}deg ${e}deg`;
+            }).join(",");
+            return (
+              <>
+                <div className="crx-egrid">
+                  <div className="crx-donutwrap">
+                    <div className="crx-donut" style={{ background: `conic-gradient(${stops})` }} />
+                    <div className="crx-donuthole"><span className="t">Total egresos</span><span className="v crx-num">{fmt(total)}</span></div>
                   </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
+                  <div className="crx-legend">
+                    {pieData.map((d, i) => {
+                      const pct = total > 0 ? Math.round((d.value / total) * 100) : 0;
+                      return (
+                        <div key={d.name} className="crx-leg">
+                          <span className="crx-legdot" style={{ background: CRX_PIE_COLORS[i % CRX_PIE_COLORS.length] }} />
+                          <span className="crx-legname">{d.name}</span>
+                          <span className="crx-legpct">{pct}%</span>
+                          <span className="crx-legamt crx-num">{fmt(d.value)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="crx-totalrow"><span className="tl">Total</span><span className="tv crx-num">{fmt(total)}</span></div>
+              </>
+            );
+          })()}
+        </div>
+
+        {/* Detalle por categoría (acordeón) */}
+        <div className="crx-panelcard">
+          <h2>Detalle por categoría</h2>
+          <p className="crx-per">{label}</p>
+          {categoriaData.length === 0 ? (
+            <div className="crx-empty">Sin egresos en este período.</div>
+          ) : categoriaData.map(({ cat, total, items }, ci) => {
+            const isOpen = expandedCat === cat;
+            const color = CRX_PIE_COLORS[ci % CRX_PIE_COLORS.length];
+            return (
+              <div key={cat} className={`crx-accrow${isOpen ? " open" : ""}`}>
+                <button className="crx-acchead" onClick={() => setExpandedCat(isOpen ? null : cat)}>
+                  <span className="crx-legdot" style={{ background: color }} />
+                  <span className="name">{cat}</span>
+                  <span className="amt crx-num">{fmt(total)}</span>
+                  <span className="chev"><ChevronDown className="h-4 w-4" /></span>
+                </button>
+                {isOpen && (
+                  <div className="crx-accbody">
+                    {items.map(item => (
+                      <div key={item.id} className="crx-mv">
+                        <span className="mtxt">{fmtDate(item.date)} · {item.description}{item.counterpart ? ` — ${item.counterpart}` : ""}</span>
+                        <span className="mamt crx-num">{fmt(item.amount)}
+                          {item.sourceType === "manual" && !item.isBankSync && (
+                            <button className="crx-iconbtn del" title="Eliminar" onClick={() => delMutation.mutate(item.sourceId)} disabled={delMutation.isPending}><Trash2 className="h-3 w-3" /></button>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        </div>
       </div>
 
       {/* Dialog agregar movimiento */}

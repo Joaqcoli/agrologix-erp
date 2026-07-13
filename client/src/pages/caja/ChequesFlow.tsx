@@ -43,41 +43,23 @@ type Cheque = {
   monto: number; fecha_cobro: string; estado: string; contraparte: string;
 };
 
-// Paleta sobria del mockup
-const C = {
-  green: "#6b8a2a", greenBar: "#8fae4a", greenTrack: "#eef2e3",
-  coral: "#b06a5d", coralBar: "#c98a7d", coralTrack: "#f1e4e0",
-};
-
-function ResumenCard({ label, valor, sub, barColor, trackColor, valorColor }: {
-  label: string; valor: string; sub: string; barColor: string; trackColor: string; valorColor?: string;
-}) {
-  return (
-    <div className="flex-1 min-w-[140px] rounded-xl border border-border bg-card p-4">
-      <p className="text-[11.5px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className="mt-1 text-[22px] font-medium tabular-nums leading-none" style={valorColor ? { color: valorColor } : undefined}>{valor}</p>
-      <div className="mt-2 h-1 w-full rounded-[3px]" style={{ background: trackColor }}>
-        <div className="h-1 rounded-[3px]" style={{ width: "100%", background: barColor }} />
-      </div>
-      <p className="mt-1.5 text-[11px] text-muted-foreground">{sub}</p>
-    </div>
-  );
+// Rediseño (usa las clases crx-* definidas en caja/index.tsx, este componente se renderiza adentro)
+const fmtMoneySigned = (n: number) => (n < 0 ? "−" : "+") + "$" + Math.round(Math.abs(n)).toLocaleString("es-AR");
+const MESES_ABBR = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+function fmtRange(l: Date, d: Date): string {
+  const m1 = MESES_ABBR[l.getMonth()], m2 = MESES_ABBR[d.getMonth()];
+  return m1 === m2 ? `${l.getDate()} – ${d.getDate()} ${m1}` : `${l.getDate()} ${m1} – ${d.getDate()} ${m2}`;
 }
 
-function ChequeRow({ impacto, fechaCheque, nombre, monto, cobrado }: { impacto: Date; fechaCheque: string; nombre: string; monto: number; cobrado?: boolean }) {
+function FlowRow({ impacto, fechaCheque, nombre, monto, cobrado }: { impacto: Date; fechaCheque: string; nombre: string; monto: number; cobrado?: boolean }) {
   return (
-    <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 border-t border-border py-2 first:border-t-0">
-      <div className="leading-tight">
-        <p className="text-[12px] font-medium tabular-nums capitalize">{fmtRowDate(impacto)}</p>
-        <p className="text-[9.5px] text-muted-foreground tabular-nums">cheq {fmtDM(parseYMD(fechaCheque))}</p>
+    <div className="crx-flowrow">
+      <div className="crx-fdate">
+        <span className="imp" style={{ textTransform: "capitalize" }}>{fmtRowDate(impacto)}</span>
+        <span className="chq">cheq {fmtDM(parseYMD(fechaCheque))}</span>
       </div>
-      <div className="min-w-0 flex items-center gap-1.5">
-        <p className="text-[13px] truncate" title={nombre}>{nombre}</p>
-        {cobrado && (
-          <span className="flex-shrink-0 text-[9px] font-medium rounded px-1 py-0.5" style={{ background: C.greenTrack, color: C.green }}>✓ Cobrado</span>
-        )}
-      </div>
-      <p className={`text-[13px] font-medium tabular-nums ${cobrado ? "text-muted-foreground line-through" : "text-foreground"}`}>{fmtMoney(monto)}</p>
+      <div className="crx-fname" title={nombre}>{nombre}{cobrado && <span className="ok">✓ Cobrado</span>}</div>
+      <div className={`crx-famt${cobrado ? " done" : ""}`}>{fmtMoney(monto)}</div>
     </div>
   );
 }
@@ -113,78 +95,57 @@ export default function ChequesFlow({ cheques }: { cheques: Cheque[] }) {
   const neto = totalAcr - totalDeb;
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-4 sm:p-5">
-      {/* Encabezado */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2.5">
-          <div className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: 9, background: C.greenTrack }}>
-            <ArrowLeftRight style={{ width: 17, height: 17, color: C.green }} />
-          </div>
+    <div className="crx-panel">
+      <div className="crx-sechead" style={{ marginBottom: 22 }}>
+        <div className="crx-titlewrap">
+          <span className="crx-ticon"><ArrowLeftRight style={{ width: 19, height: 19 }} /></span>
           <div>
-            <h3 className="text-[15px] font-medium leading-tight">Cheques: cartera vs emisiones</h3>
-            <p className="text-[12.5px] text-muted-foreground leading-tight">por fecha de acreditación real</p>
+            <h2 className="crx-h2" style={{ fontSize: 20 }}>Cheques: cartera vs emisiones</h2>
+            <p className="sub">por fecha de acreditación real</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setWeekOffset(w => Math.max(0, w - 1))}
-            disabled={weekOffset === 0}
-            className="flex items-center justify-center rounded-lg border border-border hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            style={{ width: 32, height: 32 }} title="Semana anterior"
-          ><ChevronLeft className="h-4 w-4" /></button>
-          <span className="text-[12.5px] text-muted-foreground tabular-nums min-w-[88px] text-center">{fmtDM(lunes)} – {fmtDM(domingo)}</span>
-          <button
-            onClick={() => setWeekOffset(w => w + 1)}
-            className="flex items-center justify-center rounded-lg border border-border hover:bg-muted transition-colors"
-            style={{ width: 32, height: 32 }} title="Semana siguiente"
-          ><ChevronRight className="h-4 w-4" /></button>
+        <div className="crx-wknav">
+          <button className="crx-navbtn" onClick={() => setWeekOffset(w => Math.max(0, w - 1))} disabled={weekOffset === 0} title="Semana anterior"><ChevronLeft className="h-4 w-4" /></button>
+          <div className="crx-wkrange">
+            <span className="rg">{fmtRange(lunes, domingo)}</span>
+            <span className="hint">{weekOffset === 0 ? "semana actual" : weekOffset === 1 ? "próxima semana" : `en ${weekOffset} semanas`}</span>
+          </div>
+          <button className="crx-navbtn" onClick={() => setWeekOffset(w => w + 1)} title="Semana siguiente"><ChevronRight className="h-4 w-4" /></button>
         </div>
       </div>
 
-      {/* 3 cards resumen (mismo tamaño) */}
-      <div className="mt-4 flex gap-3 flex-wrap">
-        <ResumenCard label="Se acredita" valor={fmtMoney(totalAcr)} sub={`${acredita.length} cheque${acredita.length === 1 ? "" : "s"} entran`} barColor={C.greenBar} trackColor={C.greenTrack} />
-        <ResumenCard label="Se debita" valor={fmtMoney(totalDeb)} sub={`${debita.length} cheque${debita.length === 1 ? "" : "s"} salen`} barColor={C.coralBar} trackColor={C.coralTrack} />
-        <ResumenCard label="Neto semana" valor={(neto < 0 ? "−" : "") + fmtMoney(Math.abs(neto))} sub={neto >= 0 ? "te sobra" : "te falta"} barColor={neto >= 0 ? C.greenBar : C.coralBar} trackColor={neto >= 0 ? C.greenTrack : C.coralTrack} valorColor={neto >= 0 ? C.green : C.coral} />
+      <div className="crx-sums">
+        <div className="crx-sumcard acr"><div className="lab">Se acredita</div><div className="amt crx-num">{fmtMoney(totalAcr)}</div><div className="sub">{acredita.length} cheque{acredita.length === 1 ? "" : "s"} entran</div></div>
+        <div className="crx-sumcard deb"><div className="lab">Se debita</div><div className="amt crx-num">{fmtMoney(totalDeb)}</div><div className="sub">{debita.length} cheque{debita.length === 1 ? "" : "s"} salen</div></div>
+        <div className="crx-sumcard" style={{ background: neto >= 0 ? "#eef3e3" : "#f8ede8" }}>
+          <div className="lab" style={{ color: neto >= 0 ? "#5f8020" : "#b0553f" }}>Neto semana</div>
+          <div className="amt crx-num" style={{ color: neto >= 0 ? "#5f8020" : "#b0553f" }}>{fmtMoneySigned(neto)}</div>
+          <div className="sub">{neto > 0 ? "te sobra" : neto < 0 ? "te falta" : "queda igual"}</div>
+        </div>
       </div>
 
-      {/* Detalle: dos columnas */}
-      <div className="mt-4 rounded-xl border border-border bg-card grid grid-cols-1 md:grid-cols-2 md:divide-x divide-border">
-        {/* Se acredita */}
-        <div className="p-4">
-          <div className="flex items-center gap-1.5 mb-1">
-            <span className="inline-block rounded-full" style={{ width: 7, height: 7, background: C.greenBar }} />
-            <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Se acredita</span>
-          </div>
+      <div className="crx-cols">
+        <div className="crx-col acr">
+          <div className="crx-colhead"><span className="crx-cdot" />Se acredita</div>
           {acredita.length === 0 ? (
-            <p className="text-[12px] text-muted-foreground py-3">Sin cheques esta semana</p>
+            <div className="crx-flowempty">Sin cheques esta semana</div>
           ) : acredita.map(c => (
-            <ChequeRow key={c.id} impacto={c._imp} fechaCheque={c.fecha_cobro} nombre={c.contraparte} monto={c.monto} cobrado={c._cobrado} />
+            <FlowRow key={c.id} impacto={c._imp} fechaCheque={c.fecha_cobro} nombre={c.contraparte} monto={c.monto} cobrado={c._cobrado} />
           ))}
-          <div className="mt-1 pt-2 flex items-center justify-between" style={{ borderTop: "1.5px solid hsl(var(--border))" }}>
-            <span className="text-[13.5px] font-medium" style={{ color: C.green }}>Total que entra</span>
-            <span className="text-[13.5px] font-medium tabular-nums" style={{ color: C.green }}>{fmtMoney(totalAcr)}</span>
-          </div>
+          <div className="crx-coltotal"><span className="l">Total que entra</span><span className="v crx-num">{fmtMoney(totalAcr)}</span></div>
         </div>
-        {/* Se debita */}
-        <div className="p-4 border-t border-border md:border-t-0">
-          <div className="flex items-center gap-1.5 mb-1">
-            <span className="inline-block rounded-full" style={{ width: 7, height: 7, background: C.coralBar }} />
-            <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Se debita</span>
-          </div>
+        <div className="crx-col deb">
+          <div className="crx-colhead"><span className="crx-cdot" />Se debita</div>
           {debita.length === 0 ? (
-            <p className="text-[12px] text-muted-foreground py-3">Sin cheques esta semana</p>
+            <div className="crx-flowempty">Sin cheques esta semana</div>
           ) : debita.map(c => (
-            <ChequeRow key={c.id} impacto={c._imp} fechaCheque={c.fecha_cobro} nombre={`${c.contraparte}${c.numero ? ` · Nº ${c.numero}` : ""}`} monto={c.monto} cobrado={c._cobrado} />
+            <FlowRow key={c.id} impacto={c._imp} fechaCheque={c.fecha_cobro} nombre={`${c.contraparte}${c.numero ? ` · Nº ${c.numero}` : ""}`} monto={c.monto} cobrado={c._cobrado} />
           ))}
-          <div className="mt-1 pt-2 flex items-center justify-between" style={{ borderTop: "1.5px solid hsl(var(--border))" }}>
-            <span className="text-[13.5px] font-medium" style={{ color: C.coral }}>Total que sale</span>
-            <span className="text-[13.5px] font-medium tabular-nums" style={{ color: C.coral }}>{fmtMoney(totalDeb)}</span>
-          </div>
+          <div className="crx-coltotal"><span className="l">Total que sale</span><span className="v crx-num">{fmtMoney(totalDeb)}</span></div>
         </div>
       </div>
 
-      <p className="mt-3 text-[11px] text-muted-foreground leading-snug">
+      <p className="crx-flowfoot">
         Emitidos: se debitan a las 24hs hábiles (viernes → lunes; fin de semana → martes). Recibidos: se acreditan a las 48hs hábiles (viernes → martes; fin de semana → miércoles). No contempla feriados.
       </p>
     </div>
