@@ -162,6 +162,38 @@ function FuzzyProductPicker({
   );
 }
 
+// ── Rediseño Carga de Pedido (Claude Design) — CSS de diseno-caja/carga-pedido-rediseno.html ──
+const CPX_CSS = `
+.cpx-wrap{max-width:760px;margin:0 auto;}
+.cpx-pagehead{display:flex;align-items:flex-start;gap:16px;margin-bottom:22px;}
+.cpx-back{width:40px;height:40px;border-radius:11px;border:1px solid #ecece8;background:#fff;color:#1e2420;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:0 0 auto;margin-top:3px;}
+.cpx-back:hover{border-color:#cfcfc9;background:#f6f6f2;}
+.cpx-pagehead h1{font-family:'Bricolage Grotesque';font-size:27px;font-weight:700;margin:0;letter-spacing:-.02em;line-height:1.1;color:#1e2420;}
+.cpx-pagehead .sub{font-size:14px;color:#8b8f88;margin:5px 0 0;}
+.cpx-formcard{background:#fff;border:1px solid #ecece8;border-radius:18px;padding:28px 30px;font-family:'Inter',system-ui,sans-serif;}
+.cpx-field{margin-bottom:22px;}
+.cpx-field:last-of-type{margin-bottom:0;}
+.cpx-label{display:block;font-size:14.5px;font-weight:600;color:#3a3f38;margin-bottom:9px;}
+.cpx-label .req{color:#5f8020;}
+.cpx-input,.cpx-textarea{width:100%;font-family:'Inter';font-size:14.5px;color:#1e2420;background:#fff;border:1px solid #ecece8;border-radius:11px;padding:12px 14px;transition:border-color .15s,box-shadow .15s;}
+.cpx-input:focus,.cpx-textarea:focus{outline:none;border-color:#6b8a2a;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
+.cpx-combo{position:relative;}
+.cpx-inputwrap{position:relative;}
+.cpx-inputwrap>svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:#8b8f88;pointer-events:none;}
+.cpx-inputwrap .cpx-input{padding-left:40px;}
+.cpx-dropdown{position:absolute;left:0;right:0;top:calc(100% + 6px);background:#fff;border:1px solid #ecece8;border-radius:12px;box-shadow:0 12px 34px -12px rgba(0,0,0,.22);padding:6px;z-index:20;max-height:250px;overflow:auto;}
+.cpx-opt{padding:11px 13px;border-radius:9px;font-size:14.5px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.cpx-opt:hover{background:#eef3e3;color:#5f8020;}
+.cpx-opt.empty{color:#8b8f88;cursor:default;}
+.cpx-opt.empty:hover{background:none;color:#8b8f88;}
+.cpx-textarea{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:14px;line-height:1.7;resize:vertical;min-height:170px;}
+.cpx-hint{font-size:12.5px;color:#8b8f88;margin:9px 0 0;}
+.cpx-ivachip{display:inline-flex;align-items:center;font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:20px;background:#eef3e3;color:#5f8020;margin-top:10px;}
+.cpx-analyze{width:100%;margin-top:26px;background:#6b8a2a;color:#fff;border:none;font-family:'Inter';font-size:15px;font-weight:600;padding:14px;border-radius:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:9px;transition:background .15s;}
+.cpx-analyze:hover{background:#5f7d24;}
+.cpx-analyze:disabled{opacity:.5;cursor:default;}
+`;
+
 export default function IntakePage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -177,6 +209,15 @@ export default function IntakePage() {
   });
   const [rawText, setRawText] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");
+  // Rediseño: desplegable del combo de cliente (solo presentación; la búsqueda/lista no cambia)
+  const [comboOpen, setComboOpen] = useState(false);
+  const comboRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!comboOpen) return;
+    const h = (e: MouseEvent) => { if (!comboRef.current?.contains(e.target as Node)) setComboOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [comboOpen]);
 
   // Parsed results
   const [parsed, setParsed] = useState<ParsedLine[]>([]);
@@ -392,100 +433,107 @@ export default function IntakePage() {
 
   return (
     <Layout title="Carga Pedido">
-      <div className="p-6 max-w-2xl mx-auto space-y-5">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => step === "preview" ? setStep("input") : setLocation("/orders")}>
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">Carga de Pedido</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              {step === "input" ? "Pega el texto del pedido y procesaremos las líneas automáticamente" : "Revisa las líneas detectadas y confirma"}
-            </p>
-          </div>
-        </div>
-
+      <div style={{ background: "#f4f4f1", minHeight: "100%" }}>
+        <style>{CPX_CSS}</style>
         {step === "input" ? (
-          <Card>
-            <CardContent className="pt-5 space-y-4">
-              {/* Customer selector with search */}
-              <div className="space-y-1.5">
-                <Label>Cliente *</Label>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                  <Input
-                    placeholder="Buscar cliente..."
-                    value={customerSearch}
-                    onChange={(e) => setCustomerSearch(e.target.value)}
-                    className="pl-8 mb-1"
-                    data-testid="input-customer-search"
-                  />
-                </div>
-                <div className="border border-border rounded-md overflow-hidden max-h-36 overflow-y-auto">
-                  {filteredCustomers.length === 0 ? (
-                    <p className="text-xs text-muted-foreground p-3">Sin resultados</p>
-                  ) : (
-                    filteredCustomers.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => { setCustomerId(c.id); setCustomerSearch(""); }}
-                        className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between hover:bg-muted/50 transition-colors ${customerId === c.id ? "bg-primary/10 text-primary font-medium" : "text-foreground"}`}
-                        data-testid={`customer-option-${c.id}`}
-                      >
-                        <span>{c.name}</span>
-                        {customerId === c.id && <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" />}
-                      </button>
-                    ))
+          <div className="cpx-wrap" style={{ padding: "34px 24px 56px" }}>
+            <div className="cpx-pagehead">
+              <button className="cpx-back" onClick={() => setLocation("/orders")} aria-label="Volver">
+                <ArrowLeft className="h-[18px] w-[18px]" />
+              </button>
+              <div>
+                <h1>Carga de pedido</h1>
+                <p className="sub">Pegá el texto del pedido y procesamos las líneas automáticamente</p>
+              </div>
+            </div>
+
+            <div className="cpx-formcard">
+              {/* Cliente — buscador con desplegable (misma lista/búsqueda que hoy) */}
+              <div className="cpx-field">
+                <label className="cpx-label">Cliente <span className="req">*</span></label>
+                <div className="cpx-combo" ref={comboRef}>
+                  <div className="cpx-inputwrap">
+                    <Search className="h-4 w-4" />
+                    <input
+                      className="cpx-input"
+                      placeholder="Buscar cliente..."
+                      autoComplete="off"
+                      value={customerSearch}
+                      onFocus={() => setComboOpen(true)}
+                      onChange={(e) => { setCustomerSearch(e.target.value); setComboOpen(true); }}
+                      data-testid="input-customer-search"
+                    />
+                  </div>
+                  {comboOpen && (
+                    <div className="cpx-dropdown">
+                      {filteredCustomers.length === 0 ? (
+                        <div className="cpx-opt empty">Sin resultados</div>
+                      ) : (
+                        filteredCustomers.map((c) => (
+                          <div
+                            key={c.id}
+                            className="cpx-opt"
+                            onMouseDown={() => { setCustomerId(c.id); setCustomerSearch(c.name); setComboOpen(false); }}
+                            data-testid={`customer-option-${c.id}`}
+                          >
+                            <span>{c.name}</span>
+                            {customerId === c.id && <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />}
+                          </div>
+                        ))
+                      )}
+                    </div>
                   )}
                 </div>
-                {selectedCustomer && (
-                  <div className="flex items-center gap-2 mt-1">
-                    <Badge variant="default" className="text-xs">{selectedCustomer.name}</Badge>
-                    {selectedCustomer.hasIva && <Badge variant="outline" className="text-xs">Con IVA</Badge>}
-                  </div>
-                )}
+                {selectedCustomer?.hasIva && <span className="cpx-ivachip">Con IVA</span>}
               </div>
 
-              {/* Date */}
-              <div className="space-y-1.5">
-                <Label htmlFor="intake-date">Fecha</Label>
-                <Input
-                  id="intake-date"
+              {/* Fecha */}
+              <div className="cpx-field">
+                <label className="cpx-label">Fecha</label>
+                <input
                   type="date"
+                  className="cpx-input"
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
                   data-testid="input-intake-date"
                 />
               </div>
 
-              {/* Raw text */}
-              <div className="space-y-1.5">
-                <Label htmlFor="raw-text">Texto del pedido *</Label>
-                <Textarea
-                  id="raw-text"
+              {/* Texto del pedido */}
+              <div className="cpx-field">
+                <label className="cpx-label">Texto del pedido <span className="req">*</span></label>
+                <textarea
+                  className="cpx-textarea"
                   value={rawText}
                   onChange={(e) => setRawText(e.target.value)}
                   placeholder={"5 cajon limon\n2 kg tomate perita\n10 saco papa\nlechuga francesa 2 cajon"}
-                  rows={8}
-                  className="font-mono text-sm resize-none"
                   data-testid="textarea-raw-text"
                 />
-                <p className="text-xs text-muted-foreground">Una línea por producto. Formato: cantidad unidad producto (el orden es flexible)</p>
+                <p className="cpx-hint">Una línea por producto. Formato: cantidad unidad producto (el orden es flexible).</p>
               </div>
 
-              <Button
-                className="w-full"
+              <button
+                className="cpx-analyze"
                 onClick={handleParse}
                 disabled={!customerId || !rawText.trim()}
                 data-testid="button-parse"
               >
-                <Sparkles className="mr-2 h-4 w-4" />
+                <Sparkles className="h-[17px] w-[17px]" />
                 Analizar pedido
-              </Button>
-            </CardContent>
-          </Card>
+              </button>
+            </div>
+          </div>
         ) : (
+          <div className="p-6 max-w-2xl mx-auto space-y-5">
+            <div className="flex items-center gap-3">
+              <Button variant="ghost" size="icon" onClick={() => setStep("input")}>
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+              <div>
+                <h2 className="text-xl font-semibold text-foreground">Carga de Pedido</h2>
+                <p className="text-sm text-muted-foreground mt-0.5">Revisa las líneas detectadas y confirma</p>
+              </div>
+            </div>
           <>
             {/* Preview header info */}
             <Card className="border-primary/20 bg-primary/5">
@@ -667,6 +715,7 @@ export default function IntakePage() {
               </Button>
             </div>
           </>
+          </div>
         )}
 
         {/* Merge/Replace dialog */}
