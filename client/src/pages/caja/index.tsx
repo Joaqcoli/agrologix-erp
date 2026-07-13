@@ -319,7 +319,8 @@ const CAJA_RX_CSS = `
 .crx-lhead .r{text-align:right;}
 .crx-row{padding:15px 20px;border-top:1px solid #f4f4f1;}
 .crx-row:first-of-type{border-top:none;}
-.crx-obl-grid{display:grid;grid-template-columns:92px minmax(0,1fr) 128px 150px 120px;align-items:center;gap:12px;}
+.crx-obl-grid{display:grid;grid-template-columns:88px minmax(0,1fr) 118px 144px 184px;align-items:center;gap:12px;}
+.crx-ract{flex-wrap:nowrap;}
 .crx-chq-grid{display:grid;grid-template-columns:96px minmax(0,1fr) 150px 270px;align-items:center;gap:12px;}
 .crx-rdate{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:500;white-space:nowrap;}
 .crx-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
