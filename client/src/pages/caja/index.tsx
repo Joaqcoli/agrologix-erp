@@ -949,6 +949,24 @@ export default function CajaPage() {
         sourceId: p.id,
         isBankSync: false,
       });
+      // Retención impositiva: el cliente la pagó (a AFIP, no a mí) → queda como cobro (ingreso),
+      // y además es un gasto impositivo para mí → suma como egreso "Retenciones impositivas".
+      // Nunca se cruzan en un mismo gráfico (RETENCION no entra en el desglose por método).
+      if ((p.method ?? "").toUpperCase() === "RETENCION") {
+        items.push({
+          id: `ret-${p.id}`,
+          date: p.date,
+          description: "Retención impositiva",
+          counterpart: p.customerName,
+          method: p.method,
+          category: "Retenciones impositivas",
+          type: "egreso",
+          amount: parseFloat(p.amount),
+          sourceType: "payment",
+          sourceId: p.id,
+          isBankSync: false,
+        });
+      }
     }
     for (const p of data?.supplierPayments ?? []) {
       items.push({
@@ -1027,11 +1045,14 @@ export default function CajaPage() {
       .map(([name, value]) => ({ name, value: Math.round(value) }));
   }, [feed, afectaEgresosMap]);
 
-  // Accordion: egresos agrupados por categoría del período
+  // Accordion: egresos agrupados por categoría del período.
+  // Excluye lo mismo que la dona (afecta_egresos=false): retiros, banco propio, mercadería,
+  // pago a proveedor, cheque rechazado — no son gastos operativos.
   const categoriaData = useMemo(() => {
     const map: Record<string, { total: number; items: FeedItem[] }> = {};
     for (const item of feed) {
       if (item.type !== "egreso") continue;
+      if (isExcludedFromPie(item.category)) continue;
       if (!map[item.category]) map[item.category] = { total: 0, items: [] };
       map[item.category].total += item.amount;
       map[item.category].items.push(item);
@@ -1039,7 +1060,7 @@ export default function CajaPage() {
     return Object.entries(map)
       .sort((a, b) => b[1].total - a[1].total)
       .map(([cat, d]) => ({ cat, total: d.total, items: d.items.sort((a, b) => b.date.localeCompare(a.date)) }));
-  }, [feed]);
+  }, [feed, afectaEgresosMap]);
 
   const bankCatNames = (bankCats ?? []).map(c => c.name);
 
