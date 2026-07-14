@@ -185,6 +185,8 @@ export const orderItems = pgTable("order_items", {
   parseStatus: text("parse_status"),
   bolsaType: text("bolsa_type"), // null | 'bolsa' | 'bolsa_propia'
   isBonification: boolean("is_bonification").default(false),
+  // Alias de nombre SOLO para remito y factura-PDF. NO reemplaza productId ni toca stock/costo.
+  aliasNombre: text("alias_nombre"),
 });
 
 // ─── Product Units (stock + cost per unit per product) ─────────────────────────

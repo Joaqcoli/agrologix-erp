@@ -1411,5 +1411,10 @@ export async function runNcMigrations() {
       AND ABS(sm.unit_cost::numeric - t.new_cost) > 0.01
   `); } catch (e) { console.error("Step 7 rinde envase fix failed:", e); }
 
+  // ─── Alias de nombre por línea de pedido (solo remito/factura-PDF) ────────────
+  // Aditiva, nullable, default NULL. NO reemplaza product_id ni toca stock/costo.
+  // Rollback: ALTER TABLE order_items DROP COLUMN IF EXISTS alias_nombre;
+  try { await db.execute(sql`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS alias_nombre TEXT DEFAULT NULL`); } catch {}
+
   console.log("NC migrations complete.");
 }

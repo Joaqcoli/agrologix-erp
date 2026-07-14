@@ -1548,7 +1548,7 @@ export default function CCCustomerDetailPage({
   const handleDownloadRemitos = async () => {
     const ids = Array.from(selectedOrderIds);
     if (ids.length === 0) return;
-    type RemitoItem = { product: { name: string; sku: string } | null; quantity: string; unit: string; pricePerUnit: string; subtotal: string; bolsaType?: string | null; isBonification?: boolean | null };
+    type RemitoItem = { product: { name: string; sku: string } | null; productId?: number | null; quantity: string; unit: string; pricePerUnit: string; subtotal: string; bolsaType?: string | null; isBonification?: boolean | null; aliasNombre?: string | null };
     let ok = 0;
     for (const oid of ids) {
       try {
@@ -1564,9 +1564,11 @@ export default function CCCustomerDetailPage({
         if (!remitoItems) {
           remitoItems = (order.items ?? []).map((item: any) => ({
             product: item.product ? { name: item.product.name, sku: item.product.sku ?? "" } : null,
+            productId: item.productId ?? null,
             quantity: String(item.quantity), unit: String(item.unit),
             pricePerUnit: String(item.pricePerUnit ?? "0"), subtotal: String(item.subtotal),
             bolsaType: item.bolsaType ?? null, isBonification: item.isBonification ?? false,
+            aliasNombre: item.aliasNombre ?? null,
           }));
         }
         const remitoFolio = order.remitoNum != null
@@ -1592,7 +1594,9 @@ export default function CCCustomerDetailPage({
         if (order.customer.bolsaFv) {
           const merged = new Map<string, RemitoItem>();
           for (const item of remito.order.items) {
-            const key = String(item.product?.name ?? Math.random());
+            // Clave alias-aware: alias distinto (o producto distinto) ⇒ no fusiona
+            const dispName = ((item as any).aliasNombre ?? "").trim() || item.product?.name || "";
+            const key = dispName ? `${dispName}||${(item as any).productId ?? item.product?.name ?? "x"}` : String(Math.random());
             if (merged.has(key)) {
               const ex = merged.get(key)!;
               merged.set(key, { ...ex, quantity: String(parseFloat(ex.quantity) + parseFloat(item.quantity)), subtotal: String(parseFloat(ex.subtotal) + parseFloat(item.subtotal)) });

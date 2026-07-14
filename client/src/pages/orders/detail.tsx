@@ -15,14 +15,14 @@ import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle, Check, X, Lock, ChevronsUpDown, Trash2, Plus, Edit, Receipt } from "lucide-react";
+import { ArrowLeft, Calendar, CheckCircle2, Download, AlertTriangle, Check, X, Lock, ChevronsUpDown, Trash2, Plus, Edit, Receipt, Wand2 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { generateRemitoPDF, generateInvoicePDF } from "@/lib/pdf";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { Customer, Product } from "@shared/schema";
 import type { Order, OrderItem } from "@shared/schema";
 import { ivaRateOf } from "@shared/iva";
@@ -228,8 +228,13 @@ function ItemRow({
   onDelete: (itemId: number) => void;
   onProductSelect: (productId: number | null) => void;
   onBolsaToggle: (type: "bolsa" | "bolsa_propia") => void;
+  onAliasSave: (alias: string | null) => void;
 }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [aliasOpen, setAliasOpen] = useState(false);
+  const alias = (calc.item.aliasNombre ?? "").trim() || null;
+  const [aliasInput, setAliasInput] = useState(alias ?? "");
+  useEffect(() => { setAliasInput(alias ?? ""); }, [alias, aliasOpen]);
   const canEdit = isDraft || isApproved;
   const isDirty = !!draft && hasDraftChanges(draft, calc);
 
@@ -314,11 +319,59 @@ function ItemRow({
             />
           ) : (
             <span
-              className={`font-medium ${calc.item.product ? "text-foreground" : "text-muted-foreground italic"} ${canEdit ? "cursor-pointer hover:underline" : ""}`}
+              className={`font-medium ${alias ? "text-foreground" : calc.item.product ? "text-foreground" : "text-muted-foreground italic"} ${canEdit ? "cursor-pointer hover:underline" : ""}`}
               onClick={canEdit ? onStartEdit : undefined}
+              title={alias ? `Nombre real: ${calc.name}` : undefined}
             >
-              {calc.name}
+              {alias ?? calc.name}
             </span>
+          )}
+          {/* Varita: alias de nombre para remito/factura (NO cambia producto/stock/costo) */}
+          {canEdit && (
+            <Popover open={aliasOpen} onOpenChange={setAliasOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  title={alias ? `Sale como "${alias}" en remito y factura` : "Poner nombre alias para remito y factura"}
+                  className={`inline-flex items-center justify-center h-5 w-5 rounded shrink-0 transition-colors ${alias ? "text-violet-600 bg-violet-100 dark:text-violet-300 dark:bg-violet-900/40" : "text-muted-foreground hover:text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/20"}`}
+                >
+                  <Wand2 className="h-3 w-3" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-72 p-3" align="start">
+                <p className="text-xs font-semibold mb-1">Alias de nombre</p>
+                <p className="text-[10px] text-muted-foreground mb-2 leading-snug">
+                  Solo cambia cómo figura en el <b>remito</b> y la <b>factura</b>. El producto real, el stock y el costo no se tocan.
+                </p>
+                <p className="text-[10px] text-muted-foreground mb-2">Producto real: <span className="font-medium text-foreground">{calc.name}</span></p>
+                <Input
+                  autoFocus
+                  value={aliasInput}
+                  onChange={(e) => setAliasInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") { e.preventDefault(); onAliasSave(aliasInput.trim() || null); setAliasOpen(false); }
+                    if (e.key === "Escape") setAliasOpen(false);
+                  }}
+                  placeholder={calc.name}
+                  className="h-8 text-xs mb-2"
+                />
+                <div className="flex items-center justify-between gap-2">
+                  {alias ? (
+                    <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive hover:text-destructive"
+                      onClick={() => { onAliasSave(null); setAliasOpen(false); }}>
+                      Quitar alias
+                    </Button>
+                  ) : <span />}
+                  <Button size="sm" className="h-7 text-xs"
+                    onClick={() => { onAliasSave(aliasInput.trim() || null); setAliasOpen(false); }}>
+                    Guardar
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+          )}
+          {alias && !isEditing && (
+            <span className="text-[10px] text-muted-foreground italic whitespace-nowrap">real: {calc.name}</span>
           )}
           {!calc.item.product && !isEditing && <Badge variant="outline" className="text-[9px] py-0">Sin producto</Badge>}
           {calc.isLowMargin && <Badge variant="destructive" className="text-[9px] py-0 px-1">Margen bajo</Badge>}
@@ -768,6 +821,17 @@ export default function OrderDetailPage({ id }: { id: number }) {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const aliasMutation = useMutation({
+    mutationFn: ({ itemId, aliasNombre }: { itemId: number; aliasNombre: string | null }) =>
+      apiRequest("PATCH", `/api/orders/${id}/items/${itemId}`, { aliasNombre }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      toast({ title: "Alias guardado" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const remitoNumMutation = useMutation({
     mutationFn: (remitoNum: number | null) =>
       apiRequest("PATCH", `/api/orders/${id}/remito-num`, { remitoNum }),
@@ -1015,7 +1079,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const handleDownloadRemito = async () => {
     try {
       if (!order) return;
-      type RemitoItem = { product: { name: string; sku: string } | null; quantity: string; unit: string; pricePerUnit: string; subtotal: string; bolsaType?: string | null; isBonification?: boolean | null };
+      type RemitoItem = { product: { name: string; sku: string } | null; productId?: number | null; quantity: string; unit: string; pricePerUnit: string; subtotal: string; bolsaType?: string | null; isBonification?: boolean | null; aliasNombre?: string | null };
 
       let remitoItems: RemitoItem[];
       let remitoFolio: string;
@@ -1031,12 +1095,14 @@ export default function OrderDetailPage({ id }: { id: number }) {
       } else {
         remitoItems = order.items.map((item) => ({
           product: item.product ? { name: item.product.name, sku: (item.product as any).sku ?? "" } : null,
+          productId: item.productId ?? null,
           quantity: String(item.quantity),
           unit: String(item.unit),
           pricePerUnit: String(item.pricePerUnit ?? "0"),
           subtotal: String(item.subtotal),
           bolsaType: (item as any).bolsaType ?? null,
           isBonification: (item as any).isBonification ?? false,
+          aliasNombre: (item as any).aliasNombre ?? null,
         }));
         remitoFolio = order.remitoNum != null
           ? String(order.remitoNum)
@@ -1067,7 +1133,9 @@ export default function OrderDetailPage({ id }: { id: number }) {
       if (order.customer.bolsaFv) {
         const merged = new Map<string, RemitoItem>();
         for (const item of remito.order.items) {
-          const key = String(item.product?.name ?? Math.random());
+          // Clave alias-aware: alias distinto (o producto distinto) ⇒ no fusiona
+          const dispName = ((item as any).aliasNombre ?? "").trim() || item.product?.name || "";
+          const key = dispName ? `${dispName}||${(item as any).productId ?? item.product?.name ?? "x"}` : String(Math.random());
           if (merged.has(key)) {
             const existing = merged.get(key)!;
             merged.set(key, {
@@ -1522,6 +1590,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
                       onDelete={(itemId) => deleteItemMutation.mutate(itemId)}
                       onProductSelect={(productId) => handleProductSelect(c.id, productId)}
                       onBolsaToggle={(type) => handleBolsaToggle(c.id, c.bolsaType, type)}
+                      onAliasSave={(aliasNombre) => aliasMutation.mutate({ itemId: c.id, aliasNombre })}
                     />
                   ))}
                   {addingItem && (

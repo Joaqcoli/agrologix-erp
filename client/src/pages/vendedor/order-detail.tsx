@@ -117,11 +117,13 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
         },
         items: order.items.map((item) => ({
           product: item.product ?? null,
+          productId: (item as any).productId ?? null,
           quantity: item.quantity,
           unit: item.unit,
           pricePerUnit: item.pricePerUnit ?? "0",
           subtotal: item.subtotal,
           isBonification: item.isBonification,
+          aliasNombre: (item as any).aliasNombre ?? null,
         })),
         total: order.total,
       },

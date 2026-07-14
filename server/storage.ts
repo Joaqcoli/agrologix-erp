@@ -1627,6 +1627,7 @@ export const storage = {
       overrideCostPerUnit?: string | null;
       bolsaType?: string | null;
       isBonification?: boolean;
+      aliasNombre?: string | null;
     },
     customerId: number,
   ): Promise<{ item: OrderItem; orderTotal: string }> {
@@ -1747,6 +1748,11 @@ export const storage = {
       if (margin !== null) updateData.margin = margin.toFixed(4);
       if (patch.bolsaType !== undefined) updateData.bolsaType = patch.bolsaType;
       if (patch.isBonification !== undefined) updateData.isBonification = patch.isBonification;
+      // Alias de nombre: solo texto para remito/factura-PDF. Vacío → NULL (cae al nombre real).
+      if (patch.aliasNombre !== undefined) {
+        const a = patch.aliasNombre?.trim();
+        updateData.aliasNombre = a ? a : null;
+      }
 
       const [updated] = await tx.update(orderItems).set(updateData).where(eq(orderItems.id, itemId)).returning();
 
@@ -3170,7 +3176,8 @@ export const storage = {
     if (!order) return undefined;
     const itemsRes: any = await db.execute(drizzleSql`
       SELECT oi.id, oi.product_id AS "productId", oi.quantity, oi.unit,
-             COALESCE(p.name, oi.raw_product_name) AS "productName"
+             COALESCE(p.name, oi.raw_product_name) AS "productName",
+             oi.alias_nombre AS "aliasNombre"
       FROM order_items oi
       LEFT JOIN products p ON p.id = oi.product_id
       WHERE oi.order_id = ${id}

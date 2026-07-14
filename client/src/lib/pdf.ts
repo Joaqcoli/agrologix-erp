@@ -23,6 +23,7 @@ type RemitoData = {
       pricePerUnit: string;
       subtotal: string;
       isBonification?: boolean | null;
+      aliasNombre?: string | null;
     }[];
     total: string;
   };
@@ -33,10 +34,25 @@ function itemIvaRate(product?: { ivaRate?: string | number | null } | null): num
   return ivaRateOf(product);
 }
 
-/** Merge items with the same product name+unit into a single row (bolsa/bolsa_propia + normal). */
-function mergeForPDF<T extends {
+/** Regla ÚNICA de nombre a mostrar en documentos del cliente (remito/factura):
+ *  si la línea tiene alias_nombre con valor → ese; si no → nombre real del producto. */
+function displayItemName(item: {
   product?: { name: string; [k: string]: any } | null;
   rawProductName?: string | null;
+  aliasNombre?: string | null;
+}): string {
+  const alias = (item.aliasNombre ?? "").trim();
+  if (alias) return alias;
+  return (item.product?.name ?? item.rawProductName ?? "").trim();
+}
+
+/** Merge items with the same DISPLAY name (alias-aware) + unit + product into a single row
+ *  (bolsa/bolsa_propia + normal). Alias distinto ⇒ clave distinta ⇒ NO se fusionan. */
+function mergeForPDF<T extends {
+  product?: { name: string; [k: string]: any } | null;
+  productId?: number | null;
+  rawProductName?: string | null;
+  aliasNombre?: string | null;
   quantity: string;
   unit: string;
   pricePerUnit?: string | null;
@@ -46,10 +62,11 @@ function mergeForPDF<T extends {
   const result: T[] = [];
   const idx = new Map<string, number>();
   for (const item of items) {
-    const name = (item.product?.name ?? item.rawProductName ?? "").trim();
+    const name = displayItemName(item);
     const isBonif = !!(item as any).isBonification;
     if (!name || isBonif) { result.push(item); continue; }
-    const key = `${name.toLowerCase()}||${item.unit.toLowerCase()}`;
+    // Clave incluye productId: dos productos reales distintos con el MISMO alias no se fusionan.
+    const key = `${name.toLowerCase()}||${item.unit.toLowerCase()}||${item.productId ?? item.product?.id ?? "x"}`;
     if (idx.has(key)) {
       const i = idx.get(key)!;
       const ex = result[i];
@@ -323,7 +340,7 @@ export async function generateRemitoPDF(data: RemitoData, opts?: { hidePrecios?:
     const sub    = parseFloat(item.subtotal);
     const price  = parseFloat(item.pricePerUnit);
     const isBonif = !!(item as any).isBonification;
-    const pName  = (item.product?.name ?? "Producto sin nombre") + (isBonif ? " (Bonificacion)" : "");
+    const pName  = (displayItemName(item) || "Producto sin nombre") + (isBonif ? " (Bonificacion)" : "");
     const unit   = item.unit.toUpperCase();
     const iva    = itemIvaRate(item.product);
     const subIva = sub * (1 + iva);
@@ -882,7 +899,9 @@ export async function generateInvoicePDF(data: {
     folio: string;
     items: {
       product?: { name: string } | null;
+      productId?: number | null;
       rawProductName?: string | null;
+      aliasNombre?: string | null;
       quantity: string;
       unit: string;
       pricePerUnit?: string | null;
@@ -1083,7 +1102,7 @@ export async function generateInvoicePDF(data: {
   } else {
     const mergedItems = mergeForPDF(order.items);
     pdfRows = mergedItems.map((item) => {
-      const pName = item.product?.name ?? item.rawProductName ?? "Producto sin nombre";
+      const pName = displayItemName(item) || "Producto sin nombre";
       const rate  = itemIvaRate(item.product);
       const rawPrice = parseFloat(item.pricePerUnit ?? "0");
       const rawSub   = parseFloat(item.subtotal) || 0;

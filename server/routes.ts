@@ -697,6 +697,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         overrideCostPerUnit: z.string().nullable().optional(),
         bolsaType: z.string().nullable().optional(),
         isBonification: z.boolean().optional(),
+        aliasNombre: z.string().nullable().optional(),
       });
       const patch = schema.parse(req.body);
 
@@ -2069,11 +2070,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const orderId = Number(req.params.id);
       const order = await galponAssertDraft(orderId, res);
       if (!order) return;
-      // SOLO cantidad/unidad/producto — se ignora cualquier campo de precio/costo
+      // SOLO cantidad/unidad/producto/alias — se ignora cualquier campo de precio/costo
       const patch: any = {};
       if (req.body.quantity !== undefined) patch.quantity = String(req.body.quantity);
       if (req.body.unit !== undefined) patch.unit = String(req.body.unit);
       if (req.body.productId !== undefined) patch.productId = req.body.productId;
+      // Alias de nombre: solo texto para remito/factura. No es precio ni costo.
+      if (req.body.aliasNombre !== undefined) patch.aliasNombre = req.body.aliasNombre == null ? null : String(req.body.aliasNombre);
       await storage.updateOrderItem(orderId, Number(req.params.itemId), patch, order.customerId);
       return res.json({ ok: true });
     } catch (e: any) { return res.status(400).json({ error: e.message }); }

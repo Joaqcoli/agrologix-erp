@@ -154,12 +154,14 @@ export default function InvoicesPage() {
         const order = await fetch(`/api/orders/${waRow.orderId}`, { credentials: "include" }).then((r) => r.json());
         const remitoItems = order.items.map((item: any) => ({
           product: item.product ? { name: item.product.name, sku: item.product.sku ?? "" } : null,
+          productId: item.productId ?? null,
           quantity: String(item.quantity),
           unit: String(item.unit),
           pricePerUnit: String(item.pricePerUnit ?? "0"),
           subtotal: String(item.subtotal),
           bolsaType: item.bolsaType ?? null,
           isBonification: item.isBonification ?? false,
+          aliasNombre: item.aliasNombre ?? null,
         }));
         const remito = {
           folio: order.remitoNum != null ? String(order.remitoNum) : order.folio,
