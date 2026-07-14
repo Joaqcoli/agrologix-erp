@@ -46,10 +46,16 @@ export default function GalponOrders() {
       const details = await Promise.all(
         orders.map((o) => fetch(`/api/galpon/orders/${o.id}`, { credentials: "include" }).then((r) => r.json()))
       );
-      generateArmadoPDF(
-        details.map((d: any) => ({ folio: remitoLabel(d), customerName: d.customerName, createdByName: d.createdByName, items: d.items })),
-        dateLabel,
-      );
+      // Bolsa / Bolsa propia (Bolsa FV): no se arman ni se sacan de stock → fuera del pedido impreso
+      const isBolsa = (it: any) => it.bolsaType === "bolsa" || it.bolsaType === "bolsa_propia";
+      const armado = details
+        .map((d: any) => ({
+          folio: remitoLabel(d), customerName: d.customerName, createdByName: d.createdByName,
+          items: (d.items ?? []).filter((it: any) => !isBolsa(it)),
+        }))
+        .filter((d) => d.items.length > 0); // pedidos que quedan solo con bolsa no se imprimen
+      if (armado.length === 0) return; // nada para armar (todo era bolsa)
+      generateArmadoPDF(armado, dateLabel);
     } finally { setPrinting(false); }
   };
 

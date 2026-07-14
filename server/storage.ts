@@ -3177,7 +3177,8 @@ export const storage = {
     const itemsRes: any = await db.execute(drizzleSql`
       SELECT oi.id, oi.product_id AS "productId", oi.quantity, oi.unit,
              COALESCE(p.name, oi.raw_product_name) AS "productName",
-             oi.alias_nombre AS "aliasNombre"
+             oi.alias_nombre AS "aliasNombre",
+             oi.bolsa_type AS "bolsaType"
       FROM order_items oi
       LEFT JOIN products p ON p.id = oi.product_id
       WHERE oi.order_id = ${id}
