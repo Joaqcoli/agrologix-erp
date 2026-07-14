@@ -1611,18 +1611,17 @@ export default function OrderDetailPage({ id }: { id: number }) {
                       )}
                     </AlertDialogDescription>
                   </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel onClick={() => setStockIssueState(null)}>Cancelar</AlertDialogCancel>
+                  <AlertDialogFooter className="flex-col gap-2 sm:flex-col sm:space-x-0">
                     {si.status === "zero" ? (
                       <>
                         <AlertDialogAction
-                          className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                          className="w-full bg-secondary text-secondary-foreground hover:bg-secondary/80"
                           onClick={() => handleStockIssueAnswer("zero")}
                         >
                           Costo $0 — Sin descontar stock
                         </AlertDialogAction>
                         <AlertDialogAction
-                          className="bg-amber-600 hover:bg-amber-700 text-white"
+                          className="w-full bg-amber-600 hover:bg-amber-700 text-white"
                           onClick={() => handleStockIssueAnswer("rinde")}
                         >
                           Sumar al Rinde (${si.knownCostBase > 0 ? fmt(si.knownCostBase) : "?"}/u)
@@ -1631,19 +1630,20 @@ export default function OrderDetailPage({ id }: { id: number }) {
                     ) : (
                       <>
                         <AlertDialogAction
-                          className="bg-blue-600 hover:bg-blue-700 text-white"
+                          className="w-full bg-blue-600 hover:bg-blue-700 text-white"
                           onClick={() => handleStockIssueAnswer("prorate")}
                         >
                           Prorratear costo
                         </AlertDialogAction>
                         <AlertDialogAction
-                          className="bg-amber-600 hover:bg-amber-700 text-white"
+                          className="w-full bg-amber-600 hover:bg-amber-700 text-white"
                           onClick={() => handleStockIssueAnswer("rinde")}
                         >
                           Sumar al Rinde (costo real)
                         </AlertDialogAction>
                       </>
                     )}
+                    <AlertDialogCancel className="w-full mt-0" onClick={() => setStockIssueState(null)}>Cancelar</AlertDialogCancel>
                   </AlertDialogFooter>
                 </>
               )}
