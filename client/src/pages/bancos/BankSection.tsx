@@ -234,13 +234,13 @@ export function CategoryPicker({
   onAddNew: () => void;
 }) {
   const current = categories.find(c => c.id === categoryId);
-  const hasCat = !!(current || categoryName);
   const label = current?.name ?? categoryName ?? "Categorizar";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button className={hasCat ? `brx-chip btn ${chipColorClass(label)}` : "brx-chip btn brx-act"}>
-          {label} <ChevronDown className="h-3 w-3" />
+        <button className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
+          <span className={current || categoryName ? "text-foreground font-medium" : ""}>{label}</span>
+          <ChevronDown className="h-3 w-3" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-52">
@@ -425,53 +425,61 @@ export function BankSection(props: BankSectionProps) {
         )}
       </div>
 
-      {/* Feed */}
+      {/* Movements — estética original sobria (pre-rediseño) */}
       {isLoading ? (
-        <div className="brx-empty">Cargando movimientos…</div>
+        <p className="text-sm text-muted-foreground">Cargando movimientos...</p>
       ) : grouped.length === 0 ? (
-        <div className="brx-empty">Sin movimientos para los filtros seleccionados.</div>
+        <p className="text-sm text-muted-foreground">Sin movimientos para los filtros seleccionados.</p>
       ) : (
-        <div>
+        <div className="space-y-5">
           {grouped.map(([dateKey, movs]) => (
             <div key={dateKey}>
-              <div className="brx-daygroup">{fmtDateLong(dateKey)}</div>
-              {movs.map(m => {
-                const isOutgoing = m.isOutgoing ?? false;
-                const gross = m.grossAmount ?? Math.abs(parseFloat(String(m.total ?? m.amount ?? 0)));
-                const fee = m.feeAmount ?? 0;
-                const net = m.netAmount ?? (isOutgoing ? gross + fee : gross - fee);
-                return (
-                  <div key={m.id} className="brx-mv">
-                    <span className={`brx-dir ${isOutgoing ? "out" : "in"}`}>
-                      {isOutgoing ? <ArrowUpRight className="h-[17px] w-[17px]" /> : <ArrowDownLeft className="h-[17px] w-[17px]" />}
-                    </span>
-                    <div className="brx-mvmid">
-                      <div className="brx-mvrow1">{props.renderName(m)}</div>
-                      <div className="brx-mvrow2">
-                        <CategoryPicker
-                          movId={m.id}
-                          categoryId={m.categoryId}
-                          categoryName={m.categoryName}
-                          categories={props.categories}
-                          onSelect={(_id, catId) => props.onCategorize(m, catId)}
-                          onAddNew={() => props.onAddNewForMov(m.id)}
-                        />
-                        {props.renderRowExtra?.(m)}
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 px-1">
+                {fmtDateLong(dateKey)}
+              </p>
+              <div className="bg-card border rounded-2xl overflow-hidden divide-y">
+                {movs.map(m => {
+                  const isOutgoing = m.isOutgoing ?? false;
+                  const gross = m.grossAmount ?? Math.abs(parseFloat(String(m.total ?? m.amount ?? 0)));
+                  const fee = m.feeAmount ?? 0;
+                  const net = m.netAmount ?? (isOutgoing ? gross + fee : gross - fee);
+                  return (
+                    <div key={m.id} className="flex items-start gap-3 px-4 py-3 hover:bg-muted/40 transition-colors">
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${isOutgoing ? "bg-red-50" : "bg-green-50"}`}>
+                        {isOutgoing ? <ArrowUpRight className="h-5 w-5 text-red-500" /> : <ArrowDownLeft className="h-5 w-5 text-green-500" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        {props.renderName(m)}
+                        <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+                          <CategoryPicker
+                            movId={m.id}
+                            categoryId={m.categoryId}
+                            categoryName={m.categoryName}
+                            categories={props.categories}
+                            onSelect={(_id, catId) => props.onCategorize(m, catId)}
+                            onAddNew={() => props.onAddNewForMov(m.id)}
+                          />
+                          {props.renderRowExtra?.(m)}
+                        </div>
+                      </div>
+                      <div className="flex gap-3 items-start flex-shrink-0">
+                        {fee > 0 && (
+                          <div className="text-right space-y-0.5">
+                            <p className="text-sm text-foreground">{fmt(gross)}</p>
+                            <p className="text-xs text-orange-600">comisión {fmt(fee)}</p>
+                          </div>
+                        )}
+                        <div className="text-right space-y-0.5">
+                          <p className={`font-bold text-sm ${isOutgoing ? "text-red-600" : "text-green-700"}`}>
+                            {isOutgoing ? "-" : "+"}{fmt(net)}
+                          </p>
+                          <p className="text-xs text-muted-foreground">{fmtTime(m.date_created)}</p>
+                        </div>
                       </div>
                     </div>
-                    <div className="brx-amtblock">
-                      <div className="brx-amtline1">
-                        {fee > 0 && <span className="brx-gross brx-num">{fmt(gross)}</span>}
-                        <span className={`brx-net brx-num ${isOutgoing ? "neg" : "pos"}`}>{isOutgoing ? "-" : "+"}{fmt(net)}</span>
-                      </div>
-                      <div className="brx-amtline2">
-                        {fee > 0 && <span className="brx-fee brx-num">comisión {fmt(fee)}</span>}
-                        <span className="brx-time">{fmtTime(m.date_created)}</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           ))}
         </div>

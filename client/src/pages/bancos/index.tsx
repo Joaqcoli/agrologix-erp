@@ -550,52 +550,68 @@ export default function BancosPage() {
     const subtitle = m.description || m.type;
     if (identified) {
       return (
-        <>
-          <span className="brx-mvname" title={m.displayName ?? ""}>{m.displayName}</span>
-          <span className="brx-tag">{CONTACT_TYPE_LABELS[m.contactType ?? "otro"] ?? m.contactType}</span>
-          <button onClick={() => openEditContactDialog(m)} className="brx-pen" title="Editar contacto">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <ContactTypeIcon type={m.contactType ?? "otro"} />
+          <p className="font-semibold text-sm leading-tight">{m.displayName}</p>
+          <span className="text-[10px] text-muted-foreground bg-muted rounded px-1.5 py-0.5">
+            {CONTACT_TYPE_LABELS[m.contactType ?? "otro"] ?? m.contactType}
+          </span>
+          <button onClick={() => openEditContactDialog(m)} className="text-muted-foreground/40 hover:text-muted-foreground transition-colors" title="Editar contacto">
             <Pencil className="h-3 w-3" />
           </button>
-        </>
+        </div>
       );
     }
     return (
-      <>
-        <span className="brx-mvname" title={m.displayName || subtitle}>{m.displayName || subtitle}</span>
-        {fmtRawId(m.rawIdentifier) && <span className="brx-idraw">{fmtRawId(m.rawIdentifier)}</span>}
-        <button onClick={() => openIdentifyDialog(m)} className="brx-chip btn brx-act ident">Identificar</button>
-      </>
+      <div className="flex items-center gap-2 flex-wrap">
+        <p className="font-semibold text-sm leading-tight text-foreground">{m.displayName || subtitle}</p>
+        {fmtRawId(m.rawIdentifier) && (
+          <span className="text-xs text-muted-foreground font-mono">{fmtRawId(m.rawIdentifier)}</span>
+        )}
+        <button onClick={() => openIdentifyDialog(m)} className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors flex-shrink-0">
+          Identificar
+        </button>
+      </div>
     );
   };
 
   const mpRenderRowExtra = (m: MpMovement) => (
     <>
-      {m.source === "xlsx" && <span className="brx-tag">Reporte</span>}
+      {m.source === "xlsx" && (
+        <span className="text-[10px] bg-orange-100 text-orange-700 rounded px-1.5 py-0.5 font-medium">Reporte</span>
+      )}
       {!m.isOutgoing && m.contactType === "cliente" && m.entityId && (
         (m.bankPaymentLinks && m.bankPaymentLinks.length > 0) ? (
-          <span className="brx-chip brx-c-ok">✓ {fmtBankLinks(m.bankPaymentLinks)}</span>
+          <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">✓ {fmtBankLinks(m.bankPaymentLinks)}</span>
         ) : (
           <button
             onClick={() => { setApplyPayMov(m); setApplyAmounts(new Map()); setApplyPayOpen(true); }}
-            className="brx-chip btn brx-act pay"
+            className="text-[11px] text-green-700 hover:text-green-900 font-medium border border-green-300 rounded px-1.5 py-0.5 leading-tight hover:bg-green-50 transition-colors flex-shrink-0"
           >
             Aplicar pago
           </button>
         )
       )}
       {/* Pago a proveedor: aplicar a la CC del proveedor (espejo del de Galicia) */}
-      {m.yaAplicadoProv && <span className="brx-chip brx-c-ok">✓ aplicado a CC</span>}
-      {m.yaRegistradoProv && <span className="brx-chip brx-c-gris">✓ Ya registrado</span>}
+      {m.yaAplicadoProv && (
+        <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">✓ aplicado a CC</span>
+      )}
+      {m.yaRegistradoProv && (
+        <span className="text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 rounded px-1.5 py-0.5 font-medium">✓ Ya registrado</span>
+      )}
       {m.esPagoProvPend && (
-        <button onClick={() => openProvApply(m)} className="brx-chip btn brx-act pay">
-          {m.suggestedSupplierName ? `Aplicar a ${m.suggestedSupplierName}` : "Aplicar pago"}
-        </button>
+        <button
+          onClick={() => openProvApply(m)}
+          className="text-[11px] text-purple-700 hover:text-purple-900 font-medium border border-purple-300 rounded px-1.5 py-0.5 leading-tight hover:bg-purple-50 transition-colors flex-shrink-0"
+        >{m.suggestedSupplierName ? `Aplicar a ${m.suggestedSupplierName}` : "Aplicar pago"}</button>
       )}
     </>
   );
 
   const galiciaRenderName = (m: MpMovement) => (
-    <span className="brx-mvname" title={m.displayName || m.description || ""}>{m.displayName || m.description}</span>
+    <div className="flex items-center gap-2 flex-wrap">
+      <p className="font-semibold text-sm leading-tight text-foreground">{m.displayName || m.description}</p>
+    </div>
   );
 
   // Abre el diálogo "Aplicar pago" para un cobro de Galicia, con el cliente (sugerido o elegido)
@@ -610,35 +626,44 @@ export default function BancosPage() {
     const esCobroPendiente = m.asignacionCc === "pendiente";
     return (
       <>
-        {m.yaContabilizado && <span className="brx-chip brx-c-azul">ya contabilizado</span>}
+        {m.comprobante && (
+          <span className="text-[10px] text-muted-foreground font-mono">N.º {m.comprobante}</span>
+        )}
+        {m.yaContabilizado && (
+          <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 font-medium">ya contabilizado</span>
+        )}
         {/* Asignación de cobros: cobro pendiente de asignar a factura/CC */}
         {esCobroPendiente && (
           (m.bankPaymentLinks && m.bankPaymentLinks.length > 0) ? (
-            <span className="brx-chip brx-c-ok">✓ {fmtBankLinks(m.bankPaymentLinks)}</span>
+            <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">✓ {fmtBankLinks(m.bankPaymentLinks)}</span>
           ) : m.suggestedCustomerId ? (
             <>
-              <span className="brx-ref">Sugerido: <b style={{ color: "#1e2420" }}>{m.suggestedCustomerName}</b> · CUIT {m.suggestedCuit}</span>
+              <span className="text-[10px] text-muted-foreground">Sugerido: <b className="text-foreground">{m.suggestedCustomerName}</b> · por CUIT {m.suggestedCuit}</span>
               <button
                 onClick={() => openGaliciaApply(m, m.suggestedCustomerId!, m.suggestedCustomerName)}
-                className="brx-chip btn brx-act pay"
+                className="text-[11px] text-green-700 hover:text-green-900 font-medium border border-green-300 rounded px-1.5 py-0.5 leading-tight hover:bg-green-50 transition-colors flex-shrink-0"
               >Aplicar pago</button>
             </>
           ) : (
             <button
               onClick={() => { setGaliciaPickMov(m); setGaliciaPickSearch(""); setGaliciaPickOpen(true); }}
-              className="brx-chip btn brx-act ident"
+              className="text-[11px] text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-1.5 py-0.5 leading-tight hover:bg-blue-50 transition-colors flex-shrink-0"
             >Identificar cliente</button>
           )
         )}
         {/* Asignación de pagos a proveedor: aplicar a la CC del proveedor */}
-        {m.yaAplicadoProv && <span className="brx-chip brx-c-ok">✓ aplicado a CC</span>}
-        {m.yaRegistradoProv && <span className="brx-chip brx-c-gris">✓ Ya registrado</span>}
-        {m.esPagoProvPend && (
-          <button onClick={() => openProvApply(m)} className="brx-chip btn brx-act pay">
-            {m.suggestedSupplierName ? `Aplicar a ${m.suggestedSupplierName}` : "Aplicar pago"}
-          </button>
+        {m.yaAplicadoProv && (
+          <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">✓ aplicado a CC</span>
         )}
-        {m.comprobante && <span className="brx-ref">N.º {m.comprobante}</span>}
+        {m.yaRegistradoProv && (
+          <span className="text-[10px] bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 rounded px-1.5 py-0.5 font-medium">✓ Ya registrado</span>
+        )}
+        {m.esPagoProvPend && (
+          <button
+            onClick={() => openProvApply(m)}
+            className="text-[11px] text-purple-700 hover:text-purple-900 font-medium border border-purple-300 rounded px-1.5 py-0.5 leading-tight hover:bg-purple-50 transition-colors flex-shrink-0"
+          >{m.suggestedSupplierName ? `Aplicar a ${m.suggestedSupplierName}` : "Aplicar pago"}</button>
+        )}
       </>
     );
   };
@@ -670,7 +695,6 @@ export default function BancosPage() {
           <CardContent><p className="text-2xl font-bold">{fmt(balance.available_balance ?? 0)}</p></CardContent>
         </Card>
       )}
-      showStatusFilter
       categories={categories}
       onAddCategory={() => { setPendingMovId(null); setNewCatOpen(true); }}
       onEditCategory={(cat) => { setEditCat(cat); setEditCatName(cat.name); setEditCatOpen(true); }}
