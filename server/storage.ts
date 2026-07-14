@@ -1113,7 +1113,7 @@ export const storage = {
     const res: any = await db.execute(drizzleSql`
       SELECT
         sm.id,
-        sm.created_at::text AS created_at,
+        (sm.created_at - interval '3 hours')::text AS created_at,  -- UTC → hora Argentina (UTC-3)
         sm.product_id,
         p.name AS product_name,
         COALESCE(p.category, 'Sin categoría') AS category,
@@ -1139,9 +1139,12 @@ export const storage = {
       LIMIT 2000
     `);
     const rows = (res.rows ?? res) as any[];
-    const today = new Date(); const yest = new Date(Date.now() - 86400000);
+    // Ventana "hoy/ayer" en hora Argentina (UTC-3), igual que created_at arriba, para que
+    // una merma cargada a la noche AR (que en UTC cae al día siguiente) siga siendo "hoy".
+    const AR_OFFSET = 3 * 3600000;
     const iso = (d: Date) => d.toISOString().slice(0, 10);
-    const todayISO = iso(today), yestISO = iso(yest);
+    const todayISO = iso(new Date(Date.now() - AR_OFFSET));
+    const yestISO = iso(new Date(Date.now() - AR_OFFSET - 86400000));
 
     return rows.map((r) => {
       const notes: string = r.notes ?? "";
