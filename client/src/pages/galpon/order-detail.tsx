@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { generateRemitoPDF } from "@/lib/pdf";
-import { ArrowLeft, Trash2, Plus, CheckCircle2, Printer, Wand2 } from "lucide-react";
+import { ArrowLeft, Trash2, Plus, CheckCircle2, Printer, Wand2, X } from "lucide-react";
 
 const UNITS = ["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"];
 
@@ -44,18 +44,22 @@ function AliasWand({ alias, realName, canEdit, onSave }: {
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-72 p-3" align="start">
-        <p className="text-xs font-semibold mb-1">Alias de nombre</p>
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <p className="text-xs font-semibold">Alias de nombre</p>
+          <button type="button" onClick={() => setOpen(false)} title="Cerrar sin guardar"
+            className="text-muted-foreground hover:text-foreground -mt-0.5"><X className="h-3.5 w-3.5" /></button>
+        </div>
         <p className="text-[10px] text-muted-foreground mb-2 leading-snug">Solo cambia cómo figura en el <b>remito</b>. El producto real no se toca.</p>
         <p className="text-[10px] text-muted-foreground mb-2">Producto real: <span className="font-medium text-foreground">{realName}</span></p>
         <Input autoFocus value={val} onChange={(e) => setVal(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onSave(val.trim() || null); setOpen(false); } if (e.key === "Escape") setOpen(false); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onSave(val.trim() || null); setOpen(false); } if (e.key === "Escape") { e.preventDefault(); setOpen(false); } }}
           placeholder={realName} className="h-8 text-xs mb-2" />
         <div className="flex items-center justify-between gap-2">
           {alias ? (
-            <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive hover:text-destructive"
+            <Button type="button" variant="ghost" size="sm" className="h-7 text-xs text-destructive hover:text-destructive"
               onClick={() => { onSave(null); setOpen(false); }}>Quitar alias</Button>
           ) : <span />}
-          <Button size="sm" className="h-7 text-xs" onClick={() => { onSave(val.trim() || null); setOpen(false); }}>Guardar</Button>
+          <Button type="button" size="sm" className="h-7 text-xs" onClick={() => { onSave(val.trim() || null); setOpen(false); }}>Guardar</Button>
         </div>
       </PopoverContent>
     </Popover>
@@ -90,7 +94,16 @@ export default function GalponOrderDetail({ id }: { id: number }) {
   const editMut = useMutation({
     mutationFn: ({ itemId, patch }: { itemId: number; patch: any }) =>
       apiRequest("PATCH", `/api/galpon/orders/${id}/items/${itemId}`, patch),
-    onSuccess: invalidate, onError: onErr,
+    // Update optimista: el cambio (ej. alias) se refleja al instante aunque el refetch tarde
+    onMutate: async ({ itemId, patch }) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/galpon/orders", id] });
+      const snapshot = queryClient.getQueryData(["/api/galpon/orders", id]);
+      queryClient.setQueryData(["/api/galpon/orders", id], (old: any) =>
+        old ? { ...old, items: old.items.map((it: any) => it.id === itemId ? { ...it, ...patch } : it) } : old);
+      return { snapshot };
+    },
+    onError: (e: any, _v, ctx: any) => { if (ctx?.snapshot) queryClient.setQueryData(["/api/galpon/orders", id], ctx.snapshot); onErr(e); },
+    onSettled: invalidate,
   });
   const addMut = useMutation({
     mutationFn: (body: any) => apiRequest("POST", `/api/galpon/orders/${id}/items`, body),

@@ -211,6 +211,7 @@ function ItemRow({
   onDelete,
   onProductSelect,
   onBolsaToggle,
+  onAliasSave,
 }: {
   calc: CalcItem;
   allProducts: Product[];
@@ -319,11 +320,16 @@ function ItemRow({
             />
           ) : (
             <span
-              className={`font-medium ${alias ? "text-foreground" : calc.item.product ? "text-foreground" : "text-muted-foreground italic"} ${canEdit ? "cursor-pointer hover:underline" : ""}`}
+              className={`font-medium ${alias ? "text-violet-700 dark:text-violet-300" : calc.item.product ? "text-foreground" : "text-muted-foreground italic"} ${canEdit ? "cursor-pointer hover:underline" : ""}`}
               onClick={canEdit ? onStartEdit : undefined}
               title={alias ? `Nombre real: ${calc.name}` : undefined}
             >
               {alias ?? calc.name}
+            </span>
+          )}
+          {alias && !isEditing && (
+            <span className="inline-flex items-center gap-0.5 text-[9px] py-0 px-1 rounded bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300 border border-violet-200 dark:border-violet-800">
+              <Wand2 className="h-2.5 w-2.5" /> alias
             </span>
           )}
           {/* Varita: alias de nombre para remito/factura (NO cambia producto/stock/costo) */}
@@ -339,7 +345,14 @@ function ItemRow({
                 </button>
               </PopoverTrigger>
               <PopoverContent className="w-72 p-3" align="start">
-                <p className="text-xs font-semibold mb-1">Alias de nombre</p>
+                <div className="flex items-start justify-between gap-2 mb-1">
+                  <p className="text-xs font-semibold">Alias de nombre</p>
+                  <button type="button" onClick={() => setAliasOpen(false)}
+                    title="Cerrar sin guardar"
+                    className="text-muted-foreground hover:text-foreground -mt-0.5">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
                 <p className="text-[10px] text-muted-foreground mb-2 leading-snug">
                   Solo cambia cómo figura en el <b>remito</b> y la <b>factura</b>. El producto real, el stock y el costo no se tocan.
                 </p>
@@ -350,19 +363,19 @@ function ItemRow({
                   onChange={(e) => setAliasInput(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") { e.preventDefault(); onAliasSave(aliasInput.trim() || null); setAliasOpen(false); }
-                    if (e.key === "Escape") setAliasOpen(false);
+                    if (e.key === "Escape") { e.preventDefault(); setAliasOpen(false); }
                   }}
                   placeholder={calc.name}
                   className="h-8 text-xs mb-2"
                 />
                 <div className="flex items-center justify-between gap-2">
                   {alias ? (
-                    <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive hover:text-destructive"
+                    <Button type="button" variant="ghost" size="sm" className="h-7 text-xs text-destructive hover:text-destructive"
                       onClick={() => { onAliasSave(null); setAliasOpen(false); }}>
                       Quitar alias
                     </Button>
                   ) : <span />}
-                  <Button size="sm" className="h-7 text-xs"
+                  <Button type="button" size="sm" className="h-7 text-xs"
                     onClick={() => { onAliasSave(aliasInput.trim() || null); setAliasOpen(false); }}>
                     Guardar
                   </Button>
@@ -824,12 +837,25 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const aliasMutation = useMutation({
     mutationFn: ({ itemId, aliasNombre }: { itemId: number; aliasNombre: string | null }) =>
       apiRequest("PATCH", `/api/orders/${id}/items/${itemId}`, { aliasNombre }),
-    onSuccess: () => {
+    // Update optimista: el alias se refleja al instante (la base está lejos, el refetch tarda unos segundos)
+    onMutate: async ({ itemId, aliasNombre }) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/orders", id] });
+      const snapshot = queryClient.getQueryData(["/api/orders", id]);
+      queryClient.setQueryData(["/api/orders", id], (old: FullOrder | undefined) => {
+        if (!old) return old;
+        return { ...old, items: old.items.map((it) => it.id === itemId ? { ...it, aliasNombre } : it) };
+      });
+      return { snapshot };
+    },
+    onError: (e: any, _vars, ctx: any) => {
+      if (ctx?.snapshot) queryClient.setQueryData(["/api/orders", id], ctx.snapshot);
+      toast({ title: "Error al guardar alias", description: e.message, variant: "destructive" });
+    },
+    onSuccess: () => { toast({ title: "Alias guardado" }); },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
-      toast({ title: "Alias guardado" });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const remitoNumMutation = useMutation({
