@@ -14,10 +14,54 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Pencil, Trash2, Users, Building2, Phone, Mail } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, Users, Building2, Phone, Mail, MapPin } from "lucide-react";
 import type { Customer } from "@shared/schema";
 
 const EMPTY: Partial<Customer> = { name: "", rfc: "", cuit: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ccType: "por_saldo", bolsaFv: false, blackPot: false, salespersonName: "", commissionPct: "0", parentCustomerId: null };
+
+// ── Rediseño Clientes (Claude Design) — CSS de diseno-caja/clientes-rediseno.html ──
+const CLX_CSS = `
+.clientes-rx{background:#f4f4f1;min-height:100%;padding:30px 24px 56px;font-family:'Inter',system-ui,sans-serif;color:#1e2420;}
+.clientes-rx *{box-sizing:border-box;}
+.clx-wrap{max-width:1360px;margin:0 auto;}
+.clx-top{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:18px;}
+.clx-title{font-family:'Bricolage Grotesque';font-size:27px;font-weight:700;margin:0;letter-spacing:-.02em;}
+.clx-subtitle{font-size:13.5px;color:#8b8f88;margin-top:5px;}
+.clx-btnnew{display:inline-flex;align-items:center;gap:8px;background:#6b8a2a;color:#fff;border:none;border-radius:11px;padding:11px 18px;font-family:'Inter';font-size:14px;font-weight:600;cursor:pointer;}
+.clx-btnnew:hover{background:#5f7d24;}
+.clx-search{position:relative;margin-bottom:22px;}
+.clx-search>svg{position:absolute;left:16px;top:50%;transform:translateY(-50%);color:#8b8f88;pointer-events:none;}
+.clx-search input{width:100%;background:#fff;border:1px solid #ecece8;border-radius:12px;padding:13px 16px 13px 46px;font-family:'Inter';font-size:14px;color:#1e2420;}
+.clx-search input::placeholder{color:#a9ada4;}
+.clx-search input:focus{outline:none;border-color:#5f8020;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
+.clx-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(370px,1fr));gap:12px;}
+.clx-ccard{display:flex;align-items:flex-start;gap:13px;background:#fff;border:1px solid #ecece8;border-radius:14px;padding:14px 15px;transition:border-color .15s,box-shadow .15s;}
+.clx-ccard:hover{border-color:#dcdcd6;box-shadow:0 2px 10px rgba(30,36,32,.05);}
+.clx-cube{width:38px;height:38px;border-radius:10px;background:#eef3e3;color:#5f8020;display:flex;align-items:center;justify-content:center;flex:0 0 auto;margin-top:1px;}
+.clx-cinfo{flex:1;min-width:0;}
+.clx-cname{font-weight:600;font-size:14.5px;letter-spacing:-.01em;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.clx-csub{font-size:12px;color:#8b8f88;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.clx-cbadges{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px;}
+.clx-b{font-size:10.5px;font-weight:600;padding:2px 9px;border-radius:20px;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;}
+.clx-b-si{background:#e9eff7;color:#3a67a3;}
+.clx-b-no{background:transparent;color:#9a9e96;border:1px solid #e2e2dd;}
+.clx-b-grupo{background:#eef3e3;color:#5f8020;}
+.clx-b-sede{background:#f1f2ee;color:#6f7469;}
+.clx-b-grp{background:#f8ede8;color:#b0553f;}
+.clx-b-loc{background:#f1f2ee;color:#6f7469;}
+.clx-b-bolsa{background:#eef3e3;color:#5f8020;}
+.clx-ctel{display:flex;align-items:center;gap:7px;font-size:12.5px;color:#8b8f88;margin-top:10px;font-variant-numeric:tabular-nums;}
+.clx-ctel.mail{margin-top:5px;}
+.clx-ctel>svg{flex:0 0 auto;}
+.clx-ctel>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.clx-cacts{display:flex;gap:2px;flex:0 0 auto;}
+.clx-ic{width:30px;height:30px;border:none;background:transparent;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#8b8f88;}
+.clx-ic:hover{background:#f1f1ee;color:#1e2420;}
+.clx-ic.del:hover{background:#f8ede8;color:#b0553f;}
+.clx-empty{background:#fff;border:1px solid #ecece8;border-radius:16px;padding:48px 20px;text-align:center;color:#8b8f88;display:flex;flex-direction:column;align-items:center;gap:10px;}
+.clx-empty .big{font-size:15px;font-weight:600;color:#1e2420;}
+.clx-emptyic{width:48px;height:48px;border-radius:50%;background:#f1f1ec;display:flex;align-items:center;justify-content:center;color:#8b8f88;}
+`;
 
 export default function CustomersPage() {
   const { toast } = useToast();
@@ -83,111 +127,73 @@ export default function CustomersPage() {
 
   return (
     <Layout title="Clientes">
-      <div className="p-6 space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">Clientes</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">{filtered.length} cliente{filtered.length !== 1 ? "s" : ""} registrado{filtered.length !== 1 ? "s" : ""}</p>
+      <div className="clientes-rx">
+        <style>{CLX_CSS}</style>
+        <div className="clx-wrap">
+          {/* Encabezado */}
+          <div className="clx-top">
+            <div>
+              <h1 className="clx-title">Clientes</h1>
+              <div className="clx-subtitle">{filtered.length} cliente{filtered.length !== 1 ? "s" : ""} registrado{filtered.length !== 1 ? "s" : ""}</div>
+            </div>
+            <button className="clx-btnnew" onClick={openCreate} data-testid="button-add-customer">
+              <Plus className="h-[17px] w-[17px]" /> Nuevo Cliente
+            </button>
           </div>
-          <Button onClick={openCreate} data-testid="button-add-customer">
-            <Plus className="mr-2 h-4 w-4" /> Nuevo Cliente
-          </Button>
-        </div>
 
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar por nombre, RFC o ciudad..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-            data-testid="input-search-customers"
-          />
-        </div>
+          {/* Buscador */}
+          <div className="clx-search">
+            <Search className="h-[18px] w-[18px]" />
+            <input placeholder="Buscar por nombre, RFC o ciudad..." value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-customers" />
+          </div>
 
-        {isLoading ? (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {[1, 2, 3, 4, 5, 6].map((i) => <Skeleton key={i} className="h-36 w-full rounded-lg" />)}
-          </div>
-        ) : filtered.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-16 gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-                <Users className="h-6 w-6 text-muted-foreground" />
-              </div>
-              <p className="text-sm font-medium text-foreground">Sin clientes</p>
-              <p className="text-sm text-muted-foreground text-center">Agrega tu primer cliente para comenzar.</p>
-              <Button size="sm" onClick={openCreate}>
-                <Plus className="mr-2 h-4 w-4" /> Agregar Cliente
-              </Button>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {grouped.map((c) => {
-              const isChild = !!c.parentCustomerId;
-              const isGroup = hasChildren(c.id);
-              return (
-                <Card
-                  key={c.id}
-                  className={`hover-elevate${isChild ? " ml-4 border-l-4 border-l-muted-foreground/20" : ""}`}
-                  data-testid={`card-customer-${c.id}`}
-                >
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-start gap-3 flex-1 min-w-0">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 shrink-0">
-                          <Building2 className="h-5 w-5 text-primary" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-foreground truncate" title={c.name}>{c.name}</p>
-                          {isChild && (
-                            <p className="text-[11px] text-muted-foreground mt-0.5">Sede de {getParentName(c.parentCustomerId)}</p>
-                          )}
-                          {c.rfc && !isChild && <p className="text-xs text-muted-foreground mt-0.5">{c.rfc}</p>}
-                          <div className="flex flex-wrap gap-1 mt-1.5">
-                            {isGroup && <Badge variant="secondary" className="text-[10px]">Grupo</Badge>}
-                            {isChild && <Badge variant="outline" className="text-[10px] text-muted-foreground">Sede</Badge>}
-                            {c.city && <Badge variant="secondary" className="text-[10px]">{c.city}</Badge>}
-                            <Badge variant={c.hasIva ? "default" : "outline"} className="text-[10px]">
-                              {c.hasIva ? "Con IVA" : "Sin IVA"}
-                            </Badge>
-                            {c.bolsaFv && (
-                              <Badge variant="outline" className="text-[10px] text-green-600 border-green-300">Bolsa FV</Badge>
-                            )}
-                            {c.blackPot && (
-                              <Badge variant="outline" className="text-[10px] text-orange-600 border-orange-300">Black Pot</Badge>
-                            )}
-                          </div>
-                        </div>
+          {isLoading ? (
+            <div className="clx-grid">
+              {[1, 2, 3, 4, 5, 6].map((i) => <Skeleton key={i} className="h-20 w-full rounded-2xl" />)}
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="clx-empty">
+              <div className="clx-emptyic"><Users className="h-6 w-6" /></div>
+              <div className="big">Sin clientes</div>
+              <div>Agrega tu primer cliente para comenzar.</div>
+              <button className="clx-btnnew" style={{ marginTop: 6 }} onClick={openCreate}><Plus className="h-[17px] w-[17px]" /> Agregar Cliente</button>
+            </div>
+          ) : (
+            <div className="clx-grid">
+              {grouped.map((c) => {
+                const isChild = !!c.parentCustomerId;
+                const isGroup = hasChildren(c.id);
+                return (
+                  <div key={c.id} className="clx-ccard" data-testid={`card-customer-${c.id}`}>
+                    <div className="clx-cube"><Building2 className="h-[19px] w-[19px]" /></div>
+                    <div className="clx-cinfo">
+                      <div className="clx-cname" title={c.name}>{c.name}</div>
+                      {isChild ? (
+                        <div className="clx-csub">Sede de {getParentName(c.parentCustomerId)}</div>
+                      ) : c.rfc ? (
+                        <div className="clx-csub">{c.rfc}</div>
+                      ) : null}
+                      <div className="clx-cbadges">
+                        {isGroup && <span className="clx-b clx-b-grupo">Grupo</span>}
+                        {isChild && <span className="clx-b clx-b-sede">Sede</span>}
+                        <span className={`clx-b ${c.hasIva ? "clx-b-si" : "clx-b-no"}`}>{c.hasIva ? "Con IVA" : "Sin IVA"}</span>
+                        {c.blackPot && <span className="clx-b clx-b-grp">Black Pot</span>}
+                        {c.bolsaFv && <span className="clx-b clx-b-bolsa">Bolsa FV</span>}
+                        {c.city && <span className="clx-b clx-b-loc"><MapPin className="h-[11px] w-[11px]" />{c.city}</span>}
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openEdit(c)} data-testid={`button-edit-customer-${c.id}`}>
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setDeleteId(c.id)} data-testid={`button-delete-customer-${c.id}`}>
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
+                      {c.phone && <div className="clx-ctel"><Phone className="h-[13px] w-[13px]" /><span>{c.phone}</span></div>}
+                      {c.email && <div className="clx-ctel mail"><Mail className="h-[13px] w-[13px]" /><span>{c.email}</span></div>}
                     </div>
-                    <div className="mt-3 space-y-1">
-                      {c.phone && (
-                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                          <Phone className="h-3 w-3 shrink-0" /> <span className="truncate">{c.phone}</span>
-                        </div>
-                      )}
-                      {c.email && (
-                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                          <Mail className="h-3 w-3 shrink-0" /> <span className="truncate">{c.email}</span>
-                        </div>
-                      )}
+                    <div className="clx-cacts">
+                      <button className="clx-ic" onClick={() => openEdit(c)} data-testid={`button-edit-customer-${c.id}`} title="Editar"><Pencil className="h-4 w-4" /></button>
+                      <button className="clx-ic del" onClick={() => setDeleteId(c.id)} data-testid={`button-delete-customer-${c.id}`} title="Eliminar"><Trash2 className="h-4 w-4" /></button>
                     </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
