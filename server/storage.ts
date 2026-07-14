@@ -4924,14 +4924,20 @@ export const storage = {
     `);
 
     // 3) Totales merma/rinde del período
+    // Rinde = movimientos "Rinde" (manual 'Rinde' + 'Rinde — Pedido…' del rinde de pedido:
+    //   producto que salió vendido sin stock, valuado al último costo).
+    // Merma = movimientos "Merma" (ajuste de stock a la baja, mercadería que faltaba).
+    // Se usa prefijo (ILIKE 'Rinde%' / 'Merma%') para NO contar la VENTA del rinde
+    // ("Stock insuficiente (rinde)…", que es la salida ya incluida en la ganancia bruta),
+    // ni reversiones ("Reversión…" / "REVERTIDO"), ni correcciones/ajustes de peso.
     const mermaRow = await db.execute(drizzleSql`
       SELECT
-        COALESCE(SUM(CASE WHEN sm.notes ILIKE '%Merma%' THEN sm.quantity::numeric * COALESCE(sm.unit_cost::numeric, 0) ELSE 0 END), 0) AS merma,
-        COALESCE(SUM(CASE WHEN sm.notes ILIKE '%Rinde%' THEN sm.quantity::numeric * COALESCE(sm.unit_cost::numeric, 0) ELSE 0 END), 0) AS rinde
+        COALESCE(SUM(CASE WHEN sm.notes ILIKE 'Merma%' THEN sm.quantity::numeric * COALESCE(sm.unit_cost::numeric, 0) ELSE 0 END), 0) AS merma,
+        COALESCE(SUM(CASE WHEN sm.notes ILIKE 'Rinde%' THEN sm.quantity::numeric * COALESCE(sm.unit_cost::numeric, 0) ELSE 0 END), 0) AS rinde
       FROM stock_movements sm
       WHERE sm.created_at >= ${from}::timestamp
         AND sm.created_at < ${to}::timestamp
-        AND (sm.notes ILIKE '%Merma%' OR sm.notes ILIKE '%Rinde%')
+        AND (sm.notes ILIKE 'Merma%' OR sm.notes ILIKE 'Rinde%')
     `);
 
     // 5a) Vacíos recibidos en el período

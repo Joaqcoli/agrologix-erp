@@ -176,8 +176,13 @@ export default function AjustesStockPage() {
     () => rows.filter((r) => { const d = r.createdAt.slice(0, 10); return d >= monthStartISO && d <= todayISO; }),
     [rows, monthStartISO, todayISO],
   );
-  const rinde = monthRows.reduce((s, r) => s + Math.max(0, r.value ?? 0), 0);
-  const merma = monthRows.reduce((s, r) => s + Math.min(0, r.value ?? 0), 0);
+  // MISMA definición que el dashboard: rinde = movimientos "Rinde" (manual + rinde de pedido:
+  // producto vendido sin stock, al último costo); merma = movimientos "Merma" (ajuste a la baja).
+  // Se excluye la VENTA del rinde ("Stock insuficiente…"), correcciones y ajuste de peso.
+  const isRindeNote = (r: Adj) => /^Rinde/i.test(r.notes ?? "");
+  const isMermaNote = (r: Adj) => /^Merma/i.test(r.notes ?? "");
+  const rinde = monthRows.filter(isRindeNote).reduce((s, r) => s + (r.value ?? 0), 0);
+  const merma = monthRows.filter(isMermaNote).reduce((s, r) => s + (r.value ?? 0), 0);
   const diferencia = rinde + merma;
 
   const renderTable = (items: Adj[], emptyMsg: string) => (
