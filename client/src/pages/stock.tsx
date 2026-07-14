@@ -648,7 +648,7 @@ function AdjustmentHistory() {
 // ─── Category Filter Bar ──────────────────────────────────────────────────────
 function CategoryFilter({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="flex flex-wrap gap-1.5" style={{ fontFamily: "Inter, sans-serif" }}>
       <Button size="sm" variant={value === "all" ? "default" : "outline"} className="h-7 text-xs" onClick={() => onChange("all")}>Todas</Button>
       {PRODUCT_CATEGORIES.map((cat) => (
         <Button key={cat} size="sm" variant={value === cat ? "default" : "outline"} className="h-7 text-xs" onClick={() => onChange(cat)}>{cat}</Button>
@@ -921,13 +921,13 @@ export default function StockPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-foreground flex items-center gap-2">
+            <h2 className="text-foreground flex items-center gap-2" style={{ fontFamily: "'Bricolage Grotesque', sans-serif", fontWeight: 700, fontSize: "27px", letterSpacing: "-0.02em" }}>
               <Warehouse className="h-5 w-5 text-primary" /> Stock
             </h2>
-            <p className="text-sm text-muted-foreground mt-0.5">Stock actual por producto y unidad</p>
+            <p className="text-sm text-muted-foreground mt-0.5" style={{ fontFamily: "Inter, sans-serif" }}>Stock actual por producto y unidad</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={handlePrintStock}>
+            <Button variant="outline" size="sm" onClick={handlePrintStock} style={{ fontFamily: "Inter, sans-serif" }}>
               <Printer className="mr-2 h-3.5 w-3.5" /> Imprimir stock
             </Button>
             <Button
@@ -935,6 +935,7 @@ export default function StockPage() {
               size="sm"
               className="text-destructive border-destructive/30 hover:bg-destructive/5 hover:text-destructive"
               onClick={() => setResetOpen(true)}
+              style={{ fontFamily: "Inter, sans-serif" }}
             >
               <Trash2 className="mr-2 h-3.5 w-3.5" /> Limpiar Stock
             </Button>
@@ -946,7 +947,7 @@ export default function StockPage() {
           <Card>
             <CollapsibleTrigger asChild>
               <CardHeader className="pb-3 cursor-pointer hover:bg-muted/30 rounded-t-lg transition-colors select-none">
-                <CardTitle className="text-sm font-semibold flex items-center justify-between">
+                <CardTitle className="text-sm font-semibold flex items-center justify-between" style={{ fontFamily: "Inter, sans-serif" }}>
                   <span className="flex items-center gap-2">
                     <Plus className="h-4 w-4" /> Cargar Stock
                   </span>
@@ -1083,6 +1084,7 @@ export default function StockPage() {
               onChange={(e) => setSearch(e.target.value)}
               className="pl-9"
               data-testid="input-search-stock"
+              style={{ fontFamily: "Inter, sans-serif" }}
             />
           </div>
           <CategoryFilter value={categoryFilter} onChange={setCategoryFilter} />

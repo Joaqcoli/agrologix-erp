@@ -209,8 +209,8 @@ export default function InvoicesPage() {
       <div className="p-6 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-xl font-semibold text-foreground">Facturas Electrónicas</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">{filtered.length} factura{filtered.length !== 1 ? "s" : ""}</p>
+            <h2 className="text-foreground" style={{ fontFamily: "'Bricolage Grotesque', sans-serif", fontWeight: 700, fontSize: "27px", letterSpacing: "-0.02em" }}>Facturas Electrónicas</h2>
+            <p className="text-sm text-muted-foreground mt-0.5" style={{ fontFamily: "Inter, sans-serif" }}>{filtered.length} factura{filtered.length !== 1 ? "s" : ""}</p>
           </div>
         </div>
 
@@ -223,10 +223,11 @@ export default function InvoicesPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-9"
+              style={{ fontFamily: "Inter, sans-serif" }}
             />
           </div>
           <Select value={customerFilter} onValueChange={setCustomerFilter}>
-            <SelectTrigger className="w-[200px]">
+            <SelectTrigger className="w-[200px]" style={{ fontFamily: "Inter, sans-serif" }}>
               <SelectValue placeholder="Todos los clientes" />
             </SelectTrigger>
             <SelectContent>
@@ -236,8 +237,8 @@ export default function InvoicesPage() {
               ))}
             </SelectContent>
           </Select>
-          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-[140px]" placeholder="Desde" />
-          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-[140px]" placeholder="Hasta" />
+          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-[140px]" placeholder="Desde" style={{ fontFamily: "Inter, sans-serif" }} />
+          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-[140px]" placeholder="Hasta" style={{ fontFamily: "Inter, sans-serif" }} />
         </div>
 
         {isLoading ? (
