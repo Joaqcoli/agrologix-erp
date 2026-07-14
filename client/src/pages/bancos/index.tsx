@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -94,6 +94,11 @@ export default function BancosPage() {
   const [applyPayOpen, setApplyPayOpen] = useState(false);
   const [applyPayMov, setApplyPayMov] = useState<MpMovement | null>(null);
   const [applyAmounts, setApplyAmounts] = useState<Map<number, string>>(new Map());
+  // Retención opcional al aplicar el pago desde Banco (mismo mecanismo que la CC: payment method=RETENCION)
+  const [retAmount, setRetAmount] = useState("");
+  const [retType, setRetType] = useState("IIBB");
+  const [applySubmitting, setApplySubmitting] = useState(false);
+  useEffect(() => { if (!applyPayOpen) { setRetAmount(""); setRetType("IIBB"); setApplySubmitting(false); } }, [applyPayOpen]);
 
   // Asignación de cobros Galicia — picker manual de cliente (cobros sin CUIT/match)
   const [galiciaPickOpen, setGaliciaPickOpen] = useState(false);
@@ -989,34 +994,47 @@ export default function BancosPage() {
           setApplyAmounts(next);
         };
 
-        const handleConfirm = () => {
+        const handleConfirm = async () => {
           setApplyPayError(null);
+          setApplySubmitting(true);
           const movId = applyPayMov.id;
+          const customerId = applyPayMov.entityId!;
           const links = [...applyAmounts.entries()].map(([pedidoId, monto]) => ({ pedidoId, montoAplicado: parseFloat(monto) }));
+          const orderIds = [...applyAmounts.keys()];
           const date = (applyPayMov.date_created ?? new Date().toISOString()).slice(0, 10);
-          // Galicia: aplica a CC + marca asignado + carga CUIT al cliente si no tenía
-          if (applyPayMov.source === "galicia") {
-            galiciaApplyMut.mutate({
-              movementId: String(movId), customerId: applyPayMov.entityId!, date, links,
-              galiciaId: String(movId), loadCuit: applyPayMov.suggestedCuit ?? undefined,
-            });
-            return;
-          }
-          applyPayMut.mutate(
-            { movementId: String(movId), customerId: applyPayMov.entityId!, date, links },
-            {
-              onSuccess: (result: { paymentId: number; bankLinks: BankPaymentLink[] }) => {
-                qc.setQueriesData<MpMovementsResponse>(
-                  { queryKey: ["/api/mp/movements"] },
-                  (old) => {
-                    if (!old?.results) return old;
-                    return { ...old, results: old.results.map(m => String(m.id) === String(movId) ? { ...m, bankPaymentLinks: result.bankLinks } : m) };
-                  }
-                );
-                setApplyPayOpen(false); setApplyPayMov(null); setApplyAmounts(new Map()); setApplyPayError(null);
-              },
+          const retNum = parseFloat(retAmount) || 0;
+          try {
+            // 1) Aplicar el cobro que ENTRÓ al banco (cobranza) — igual que hoy
+            if (applyPayMov.source === "galicia") {
+              await galiciaApplyMut.mutateAsync({
+                movementId: String(movId), customerId, date, links,
+                galiciaId: String(movId), loadCuit: applyPayMov.suggestedCuit ?? undefined,
+              });
+            } else {
+              const result = await applyPayMut.mutateAsync({ movementId: String(movId), customerId, date, links });
+              qc.setQueriesData<MpMovementsResponse>(
+                { queryKey: ["/api/mp/movements"] },
+                (old) => {
+                  if (!old?.results) return old;
+                  return { ...old, results: old.results.map(m => String(m.id) === String(movId) ? { ...m, bankPaymentLinks: (result as any).bankLinks } : m) };
+                }
+              );
             }
-          );
+            // 2) Retención opcional — MISMO camino que la CC del cliente (payment method=RETENCION)
+            if (retNum > 0) {
+              await apiRequest("POST", "/api/payments", {
+                customerId, date, amount: retAmount, method: "RETENCION", notes: retType, orderIds,
+              });
+            }
+            qc.invalidateQueries({ queryKey: ["/api/ar/cc"] });
+            qc.invalidateQueries({ queryKey: ["/api/caja/summary"] });
+            qc.invalidateQueries({ queryKey: ["/api/customers/pedidos-pendientes"] });
+            setApplyPayOpen(false); setApplyPayMov(null); setApplyAmounts(new Map()); setApplyPayError(null);
+          } catch (e: any) {
+            setApplyPayError(e?.message ?? "No se pudo aplicar el pago");
+          } finally {
+            setApplySubmitting(false);
+          }
         };
 
         return (
@@ -1079,6 +1097,35 @@ export default function BancosPage() {
                     </div>
                   </div>
                 )}
+
+                {/* Retención opcional — se registra en la CC como en la cuenta corriente (method RETENCION) */}
+                <div className="rounded-lg border border-blue-200 dark:border-blue-900 bg-blue-50/40 px-3 py-2.5 space-y-2">
+                  <p className="text-xs font-semibold text-blue-700 dark:text-blue-400">Retención (opcional)</p>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <span className="text-[11px] text-muted-foreground">Monto retención</span>
+                      <Input type="number" min="0" step="0.01" value={retAmount} onChange={e => setRetAmount(e.target.value)} placeholder="0" className="h-8 mt-0.5" />
+                    </div>
+                    <div className="w-36">
+                      <span className="text-[11px] text-muted-foreground">Tipo</span>
+                      <Select value={retType} onValueChange={setRetType}>
+                        <SelectTrigger className="h-8 mt-0.5"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="IIBB">IIBB</SelectItem>
+                          <SelectItem value="IVA">IVA</SelectItem>
+                          <SelectItem value="Ganancias">Ganancias</SelectItem>
+                          <SelectItem value="SUSS">SUSS</SelectItem>
+                          <SelectItem value="Otro">Otro</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  {(parseFloat(retAmount) || 0) > 0 && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Cobranza {fmt(totalAssigned)} + retención {fmt(parseFloat(retAmount) || 0)} = <b className="text-foreground">{fmt(totalAssigned + (parseFloat(retAmount) || 0))}</b> a la cuenta corriente.
+                    </p>
+                  )}
+                </div>
               </div>
 
               {applyPayError && (<p className="text-sm text-destructive bg-destructive/10 rounded px-3 py-2">{applyPayError}</p>)}
@@ -1103,8 +1150,8 @@ export default function BancosPage() {
                 )}
                 <div className="flex gap-2 sm:ml-auto">
                   <Button variant="outline" onClick={() => { setApplyPayOpen(false); setApplyPayMov(null); setApplyAmounts(new Map()); setApplyPayError(null); }}>Cancelar</Button>
-                  <Button onClick={handleConfirm} disabled={!canConfirm || applyPayMut.isPending || galiciaApplyMut.isPending}>
-                    {(applyPayMut.isPending || galiciaApplyMut.isPending) ? "Aplicando..." : applyPayMov.source === "galicia" ? "Aplicar a CC" : "Confirmar"}
+                  <Button onClick={handleConfirm} disabled={!canConfirm || applySubmitting}>
+                    {applySubmitting ? "Aplicando..." : applyPayMov.source === "galicia" ? "Aplicar a CC" : "Confirmar"}
                   </Button>
                 </div>
               </DialogFooter>
