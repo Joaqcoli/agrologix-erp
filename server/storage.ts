@@ -4689,7 +4689,7 @@ export const storage = {
       `),
       // Cheques emitidos a este proveedor (para el detalle + plazo)
       db.execute(drizzleSql`
-        SELECT id, monto::float AS monto, fecha_cobro AS "fechaCobro",
+        SELECT id, numero, monto::float AS monto, fecha_cobro AS "fechaCobro",
                created_at AS "createdAt", estado, notas
         FROM cheques
         WHERE supplier_id = ${supplierId} AND tipo = 'emitido'
@@ -4742,10 +4742,13 @@ export const storage = {
       Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
     const emitidos = (chequesRows.rows as any[]).map((c) => {
       const fechaEmision = toDay(c.createdAt);
+      // Fuente de verdad = columna cheques.numero (misma que Caja). Fallback: parsear notas
+      // (cheques viejos que guardaban el Nº solo en las notas) para no perder el dato.
+      const numCol = typeof c.numero === "string" ? c.numero.trim() : (c.numero ?? null);
       const numMatch = typeof c.notas === "string" ? c.notas.match(/N[º°o]\s*([^\s,;]+)/i) : null;
       return {
         id: Number(c.id),
-        numero: numMatch ? numMatch[1] : (c.notas ?? null),
+        numero: numCol || (numMatch ? numMatch[1] : null),
         monto: Number(c.monto),
         fechaEmision,
         fechaCobro: String(c.fechaCobro),
