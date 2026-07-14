@@ -25,6 +25,67 @@ const fmtStock = (v: number) => v.toLocaleString("es-MX", { maximumFractionDigit
 
 type ProductUnitWithProduct = ProductUnit & { product: Product };
 
+// ── Rediseño Productos (Claude Design) — CSS de diseno-caja/productos-rediseno.html ──
+const PRX_CSS = `
+.prods-rx{background:#f4f4f1;min-height:100%;padding:30px 24px 56px;font-family:'Inter',system-ui,sans-serif;color:#1e2420;}
+.prods-rx *{box-sizing:border-box;}
+.prx-wrap{max-width:1360px;margin:0 auto;}
+.prx-top{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:18px;}
+.prx-title{font-family:'Bricolage Grotesque';font-size:27px;font-weight:700;margin:0;letter-spacing:-.02em;}
+.prx-subtitle{font-size:13.5px;color:#8b8f88;margin-top:5px;}
+.prx-hbtns{display:flex;gap:10px;flex-wrap:wrap;}
+.prx-btn{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #ecece8;border-radius:10px;padding:10px 16px;font-family:'Inter';font-size:14px;font-weight:500;color:#1e2420;cursor:pointer;}
+.prx-btn:hover{border-color:#cfcfc9;background:#f6f6f2;}
+.prx-btn svg{color:#8b8f88;}
+.prx-btnnew{display:inline-flex;align-items:center;gap:8px;background:#6b8a2a;color:#fff;border:none;border-radius:11px;padding:11px 18px;font-family:'Inter';font-size:14px;font-weight:600;cursor:pointer;}
+.prx-btnnew:hover{background:#5f7d24;}
+.prx-search{position:relative;margin-bottom:16px;}
+.prx-search>svg{position:absolute;left:16px;top:50%;transform:translateY(-50%);color:#8b8f88;pointer-events:none;}
+.prx-search input{width:100%;background:#fff;border:1px solid #ecece8;border-radius:12px;padding:13px 16px 13px 46px;font-family:'Inter';font-size:14px;color:#1e2420;}
+.prx-search input::placeholder{color:#a9ada4;}
+.prx-search input:focus{outline:none;border-color:#5f8020;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
+.prx-filters{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:22px;}
+.prx-filters button{border:1px solid #ecece8;background:#fff;color:#5d625a;font-family:'Inter';font-size:13.5px;font-weight:500;padding:8px 16px;border-radius:20px;cursor:pointer;}
+.prx-filters button:hover{border-color:#cfcfc9;}
+.prx-filters button.on{background:#6b8a2a;color:#fff;border-color:#6b8a2a;}
+.prx-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;}
+.prx-pcard{display:flex;align-items:center;gap:13px;background:#fff;border:1px solid #ecece8;border-radius:14px;padding:13px 15px;transition:border-color .15s,box-shadow .15s;}
+.prx-pcard:hover{border-color:#dcdcd6;box-shadow:0 2px 10px rgba(30,36,32,.05);}
+.prx-cube{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
+.prx-pinfo{flex:1;min-width:0;}
+.prx-pname{font-weight:600;font-size:14.5px;letter-spacing:-.01em;line-height:1.25;margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.prx-pbadges{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.prx-cat{font-size:10.5px;font-weight:600;padding:2px 9px;border-radius:20px;white-space:nowrap;}
+.prx-unit{font-size:10.5px;font-weight:600;color:#6f7469;background:#f1f2ee;border:1px solid #e6e7e1;padding:2px 8px;border-radius:20px;white-space:nowrap;}
+.prx-unit.none{color:#adb1a8;background:#f6f6f3;border-color:#eeeeea;font-weight:500;}
+.prx-pacts{display:flex;gap:2px;flex:0 0 auto;}
+.prx-ic{width:30px;height:30px;border:none;background:transparent;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#8b8f88;}
+.prx-ic:hover{background:#f1f1ee;color:#1e2420;}
+.prx-ic.del:hover{background:#f8ede8;color:#b0553f;}
+.prx-c-verdura{background:#eef3e3;color:#5f8020;}
+.prx-c-fruta{background:#f8ede8;color:#b0553f;}
+.prx-c-hliviana{background:#e9eff7;color:#3a67a3;}
+.prx-c-hpesada{background:#f9f1de;color:#c08a1e;}
+.prx-c-hongos{background:#f3ebf0;color:#a86b8a;}
+.prx-c-huevos{background:#f0eee6;color:#8a7a3e;}
+.prx-empty{background:#fff;border:1px solid #ecece8;border-radius:16px;padding:48px 20px;text-align:center;color:#8b8f88;display:flex;flex-direction:column;align-items:center;gap:10px;}
+.prx-empty .big{font-size:15px;font-weight:600;color:#1e2420;}
+.prx-emptyic{width:48px;height:48px;border-radius:50%;background:#f1f1ec;display:flex;align-items:center;justify-content:center;color:#8b8f88;}
+`;
+
+// Clase de color por categoría (cubo + badge), según la maqueta
+function catClass(cat: string | null | undefined): string {
+  switch (cat) {
+    case "Verdura": return "prx-c-verdura";
+    case "Fruta": return "prx-c-fruta";
+    case "Hortaliza Liviana": return "prx-c-hliviana";
+    case "Hortaliza Pesada": return "prx-c-hpesada";
+    case "Hongos/Hierbas": return "prx-c-hongos";
+    case "Huevos": return "prx-c-huevos";
+    default: return "prx-c-verdura";
+  }
+}
+
 // ─── Import Dialog ────────────────────────────────────────────────────────────
 type PreviewLine = { raw: string; name: string; unit: string; productExists: boolean; unitExists: boolean };
 
@@ -133,23 +194,15 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
 // ─── Category Filter Bar ─────────────────────────────────────────────────────
 function CategoryFilter({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <div className="flex flex-wrap gap-1.5">
-      <Button
-        size="sm"
-        variant={value === "all" ? "default" : "outline"}
-        className="h-7 text-xs"
-        onClick={() => onChange("all")}
-        data-testid="cat-filter-all"
-      >Todas</Button>
+    <div className="prx-filters">
+      <button className={value === "all" ? "on" : ""} onClick={() => onChange("all")} data-testid="cat-filter-all">Todas</button>
       {PRODUCT_CATEGORIES.map((cat) => (
-        <Button
+        <button
           key={cat}
-          size="sm"
-          variant={value === cat ? "default" : "outline"}
-          className="h-7 text-xs"
+          className={value === cat ? "on" : ""}
           onClick={() => onChange(cat)}
           data-testid={`cat-filter-${cat.toLowerCase().replace(/\//g, "-").replace(/\s+/g, "-")}`}
-        >{cat}</Button>
+        >{cat}</button>
       ))}
     </div>
   );
@@ -163,54 +216,30 @@ function ProductCard({ product, productUnitMap, onEdit, onDelete }: {
   onDelete: (id: number) => void;
 }) {
   const units = productUnitMap.get(product.id) ?? [];
+  const cc = catClass(product.category);
   return (
-    <Card data-testid={`card-product-${product.id}`}>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex items-start gap-3 flex-1 min-w-0">
-            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 shrink-0">
-              <Package className="h-5 w-5 text-primary" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-foreground truncate" title={product.name}>{product.name}</p>
-              {product.category && (
-                <Badge variant="outline" className="text-[10px] mt-0.5">{product.category}</Badge>
-              )}
-              <div className="flex flex-wrap gap-1 mt-1.5">
-                {units.length === 0 ? (
-                  <Badge variant="outline" className="text-[10px] text-muted-foreground">Sin unidades</Badge>
-                ) : (
-                  units.map((pu) => <Badge key={pu.id} variant="secondary" className="text-[10px]">{pu.unit}</Badge>)
-                )}
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-1 shrink-0">
-            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => onEdit(product)} data-testid={`button-edit-product-${product.id}`}>
-              <Pencil className="h-3.5 w-3.5" />
-            </Button>
-            <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => onDelete(product.id)} data-testid={`button-delete-product-${product.id}`}>
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+    <div className="prx-pcard" data-testid={`card-product-${product.id}`}>
+      <div className={`prx-cube ${cc}`}><Package className="h-[19px] w-[19px]" /></div>
+      <div className="prx-pinfo">
+        <div className="prx-pname" title={product.name}>{product.name}</div>
+        <div className="prx-pbadges">
+          {product.category && <span className={`prx-cat ${cc}`}>{product.category}</span>}
+          {units.length === 0 ? (
+            <span className="prx-unit none">Sin unidades</span>
+          ) : (
+            units.map((pu) => <span key={pu.id} className="prx-unit">{pu.unit}</span>)
+          )}
         </div>
-        {units.length > 0 && (
-          <div className="mt-3 pt-3 border-t border-border space-y-1.5">
-            {units.map((pu) => {
-              const stock = parseFloat(pu.stockQty as string);
-              const cost = parseFloat(pu.avgCost as string);
-              return (
-                <div key={pu.id} className="flex items-center justify-between text-xs">
-                  <span className="font-medium text-muted-foreground w-14 shrink-0">{pu.unit}</span>
-                  <span className={`font-semibold ${stock < 0 ? "text-destructive" : "text-foreground"}`}>{fmtStock(stock)}</span>
-                  <span className="text-muted-foreground">{cost > 0 ? `$${fmt(cost)}` : "—"}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      </div>
+      <div className="prx-pacts">
+        <button className="prx-ic" onClick={() => onEdit(product)} data-testid={`button-edit-product-${product.id}`} title="Editar">
+          <Pencil className="h-4 w-4" />
+        </button>
+        <button className="prx-ic del" onClick={() => onDelete(product.id)} data-testid={`button-delete-product-${product.id}`} title="Eliminar">
+          <Trash2 className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -358,48 +387,47 @@ export default function ProductsPage() {
 
   return (
     <Layout title="Productos">
-      <div className="p-6 space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">Productos</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">{activeProducts.length} productos activos</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => setImportOpen(true)} data-testid="button-import-products">
-              <Upload className="mr-2 h-4 w-4" /> Importar
-            </Button>
-            <Button onClick={openCreate} data-testid="button-add-product">
-              <Plus className="mr-2 h-4 w-4" /> Nuevo Producto
-            </Button>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <div className="flex flex-col gap-3">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input placeholder="Buscar por nombre..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" data-testid="input-search-products" />
+      <div className="prods-rx">
+        <style>{PRX_CSS}</style>
+        <div className="prx-wrap">
+          {/* Encabezado */}
+          <div className="prx-top">
+            <div>
+              <h1 className="prx-title">Productos</h1>
+              <div className="prx-subtitle">{activeProducts.length} productos activos</div>
             </div>
-            <CategoryFilter value={categoryFilter} onChange={setCategoryFilter} />
+            <div className="prx-hbtns">
+              <button className="prx-btn" onClick={() => setImportOpen(true)} data-testid="button-import-products">
+                <Upload className="h-4 w-4" /> Importar
+              </button>
+              <button className="prx-btnnew" onClick={openCreate} data-testid="button-add-product">
+                <Plus className="h-[17px] w-[17px]" /> Nuevo Producto
+              </button>
+            </div>
           </div>
+
+          {/* Buscador */}
+          <div className="prx-search">
+            <Search className="h-[18px] w-[18px]" />
+            <input placeholder="Buscar por nombre..." value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-products" />
+          </div>
+
+          {/* Filtros por categoría */}
+          <CategoryFilter value={categoryFilter} onChange={setCategoryFilter} />
 
           {isLoading ? (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {[1,2,3,4,5,6].map((i) => <Skeleton key={i} className="h-36 w-full rounded-lg" />)}
+            <div className="prx-grid">
+              {[1,2,3,4,5,6].map((i) => <Skeleton key={i} className="h-16 w-full rounded-2xl" />)}
             </div>
           ) : filteredProducts.length === 0 ? (
-            <Card>
-              <CardContent className="flex flex-col items-center justify-center py-16 gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-                  <Package className="h-6 w-6 text-muted-foreground" />
-                </div>
-                <p className="text-sm font-medium text-foreground">Sin productos</p>
-                <p className="text-sm text-muted-foreground">Agrega tu primer producto o cambia los filtros.</p>
-                <Button size="sm" onClick={openCreate}><Plus className="mr-2 h-4 w-4" />Agregar</Button>
-              </CardContent>
-            </Card>
+            <div className="prx-empty">
+              <div className="prx-emptyic"><Package className="h-6 w-6" /></div>
+              <div className="big">Sin productos</div>
+              <div>Agrega tu primer producto o cambia los filtros.</div>
+              <button className="prx-btnnew" style={{ marginTop: 6 }} onClick={openCreate}><Plus className="h-[17px] w-[17px]" /> Agregar</button>
+            </div>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="prx-grid">
               {filteredProducts.map((p) => (
                 <ProductCard key={p.id} product={p} productUnitMap={productUnitMap} onEdit={openEdit} onDelete={(id) => setDeleteId(id)} />
               ))}
