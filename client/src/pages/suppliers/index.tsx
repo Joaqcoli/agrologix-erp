@@ -14,10 +14,68 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Search, Pencil, Trash2, Download } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, Download, ChevronDown } from "lucide-react";
 import type { Supplier } from "@shared/schema";
 
 const EMPTY: Partial<Supplier> = { name: "", cuit: "", email: "", phone: "", address: "", notes: "" };
+
+// ── Rediseño Proveedores (Claude Design) — CSS de diseno-caja/proveedores-rediseno.html ──
+const PVX_CSS = `
+.prov-rx{background:#f4f4f1;min-height:100%;padding:30px 24px 56px;font-family:'Inter',system-ui,sans-serif;color:#1e2420;}
+.prov-rx *{box-sizing:border-box;}
+.pvx-wrap{max-width:1360px;margin:0 auto;}
+.pvx-num{font-family:'Bricolage Grotesque','Inter',sans-serif;font-variant-numeric:tabular-nums;letter-spacing:-.01em;}
+.pvx-top{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:18px;}
+.pvx-title{font-family:'Bricolage Grotesque';font-size:27px;font-weight:700;margin:0;letter-spacing:-.02em;}
+.pvx-subtitle{font-size:13.5px;color:#8b8f88;margin-top:5px;}
+.pvx-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.pvx-seg{display:inline-flex;background:#eeeeea;border-radius:10px;padding:3px;gap:2px;}
+.pvx-seg button{border:none;background:transparent;font-family:'Inter';font-size:13px;font-weight:600;color:#6f7469;padding:7px 15px;border-radius:8px;cursor:pointer;}
+.pvx-seg button.on{background:#6b8a2a;color:#fff;box-shadow:0 1px 2px rgba(0,0,0,.12);}
+.pvx-sel{position:relative;display:inline-flex;}
+.pvx-sel select{appearance:none;-webkit-appearance:none;background:#fff;border:1px solid #ecece8;border-radius:10px;padding:9px 34px 9px 14px;font-family:'Inter';font-size:13.5px;font-weight:500;color:#1e2420;cursor:pointer;min-width:96px;}
+.pvx-sel select:focus{outline:none;border-color:#5f8020;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
+.pvx-sel svg{position:absolute;right:12px;top:50%;transform:translateY(-50%);pointer-events:none;color:#8b8f88;}
+.pvx-dateinput{background:#fff;border:1px solid #ecece8;border-radius:10px;padding:9px 13px;font-family:'Inter';font-size:13.5px;color:#1e2420;}
+.pvx-dateinput:focus{outline:none;border-color:#5f8020;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
+.pvx-btn{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #ecece8;border-radius:10px;padding:9px 15px;font-family:'Inter';font-size:13.5px;font-weight:500;color:#1e2420;cursor:pointer;}
+.pvx-btn:hover:not(:disabled){border-color:#cfcfc9;background:#f6f6f2;}
+.pvx-btn:disabled{opacity:.5;cursor:default;}
+.pvx-btn svg{color:#5f8020;}
+.pvx-btnnew{display:inline-flex;align-items:center;gap:8px;background:#6b8a2a;color:#fff;border:none;border-radius:11px;padding:10px 17px;font-family:'Inter';font-size:14px;font-weight:600;cursor:pointer;}
+.pvx-btnnew:hover{background:#5f7d24;}
+.pvx-search{position:relative;max-width:620px;margin-bottom:22px;}
+.pvx-search>svg{position:absolute;left:15px;top:50%;transform:translateY(-50%);color:#8b8f88;pointer-events:none;}
+.pvx-search input{width:100%;background:#fff;border:1px solid #ecece8;border-radius:12px;padding:13px 15px 13px 44px;font-family:'Inter';font-size:14px;color:#1e2420;}
+.pvx-search input::placeholder{color:#a9ada4;}
+.pvx-search input:focus{outline:none;border-color:#5f8020;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
+.pvx-card{background:#fff;border:1px solid #ecece8;border-radius:16px;padding:6px 4px 8px;overflow:hidden;}
+.pvx-cardhead{font-family:'Bricolage Grotesque';font-size:15px;font-weight:700;letter-spacing:-.01em;padding:18px 22px 14px;}
+.pvx-tblwrap{overflow-x:auto;}
+table.pvx-tbl{width:100%;border-collapse:collapse;}
+.pvx-tbl th{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#9a9e96;text-align:right;padding:0 22px 13px;border-bottom:1px solid #eeeeea;white-space:nowrap;}
+.pvx-tbl th.l{text-align:left;}
+.pvx-tbl td{padding:14px 22px;border-bottom:1px solid #f5f5f2;font-size:14px;text-align:right;white-space:nowrap;}
+.pvx-tbl td.l{text-align:left;}
+.pvx-tbl tbody tr:hover td{background:#f8f8f5;cursor:pointer;}
+.pvx-prov{font-weight:600;color:#1e2420;}
+.pvx-cuit{font-size:11px;color:#8b8f88;margin-top:2px;}
+.pvx-deb{color:#b0553f;font-weight:600;}
+.pvx-fac{color:#1e2420;}
+.pvx-pay{color:#5f8020;font-weight:600;}
+.pvx-dash{color:#c8ccc3;}
+.pvx-sal{color:#b0553f;font-weight:700;}
+.pvx-sal.pos{color:#5f8020;}
+.pvx-pct{color:#7a7f77;font-weight:500;}
+.pvx-tbl tfoot td{border-top:1.5px solid #eaeae6;border-bottom:none;font-weight:700;padding-top:15px;}
+.pvx-tbl tfoot td.l{font-family:'Bricolage Grotesque';text-transform:uppercase;}
+.pvx-actions{display:inline-flex;align-items:center;gap:2px;opacity:0;transition:opacity .15s;}
+.pvx-tbl tbody tr:hover .pvx-actions{opacity:1;}
+.pvx-iconbtn{background:none;border:none;color:#b3b6ae;cursor:pointer;padding:6px;border-radius:7px;display:inline-flex;}
+.pvx-iconbtn:hover{color:#1e2420;background:#f2f2ef;}
+.pvx-iconbtn.del:hover{color:#c05e42;background:#f8ede8;}
+.pvx-err{font-size:13.5px;color:#b0553f;padding:12px 16px;background:#f8ede8;border:1px solid #e6cdc4;border-radius:12px;margin-bottom:16px;}
+`;
 
 const MONTHS = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -25,7 +83,8 @@ const MONTHS = [
 ];
 
 const fmtInt = (v: number) => Math.round(v).toLocaleString("es-AR");
-const fmtPct = (v: number) => v.toFixed(2) + "%";
+// % con coma decimal (es-AR): 28,77%
+const fmtPct = (v: number) => v.toFixed(2).replace(".", ",") + "%";
 
 type APRow = {
   supplierId: number;
@@ -39,11 +98,11 @@ type APRow = {
 type APTotals = { saldoMesAnterior: number; facturacion: number; cobranza: number; saldo: number };
 type APSummary = { fromDate: string; toDate: string; suppliers: APRow[]; totals: APTotals };
 
-// Para proveedores, saldo positivo = lo que les debemos (a pagar)
+// Para proveedores, saldo positivo = lo que les debemos (a pagar). Solo cambia el color por signo.
 function SaldoBadge({ saldo }: { saldo: number }) {
-  if (saldo > 0) return <span className="font-bold text-destructive">${fmtInt(saldo)}</span>;
-  if (saldo < 0) return <span className="font-bold text-green-600 dark:text-green-400">${fmtInt(saldo)}</span>;
-  return <span className="text-muted-foreground">$0</span>;
+  if (saldo > 0) return <span className="pvx-sal pvx-num">${fmtInt(saldo)}</span>;
+  if (saldo < 0) return <span className="pvx-sal pos pvx-num">${fmtInt(saldo)}</span>;
+  return <span className="pvx-dash pvx-num">$0</span>;
 }
 
 type FilterType = "mes" | "semana" | "dia";
@@ -203,160 +262,104 @@ export default function SuppliersPage() {
 
   return (
     <Layout title="Proveedores">
-      <div className="p-5 max-w-[1400px] mx-auto space-y-4">
-        {/* Header */}
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex-1">
-            <h2 className="text-xl font-bold text-foreground">Proveedores</h2>
-            <p className="text-sm text-muted-foreground">{periodLabel}</p>
-          </div>
-
-          {/* Period selector */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex rounded-md border border-border overflow-hidden text-xs">
-              {(["mes", "semana", "dia"] as FilterType[]).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setFilterType(t)}
-                  className={`px-2.5 py-1.5 capitalize transition-colors ${filterType === t ? "bg-primary text-primary-foreground" : "hover:bg-muted/50 text-muted-foreground"}`}
-                >
-                  {t === "mes" ? "Mes" : t === "semana" ? "Semana" : "Día"}
-                </button>
-              ))}
+      <div className="prov-rx">
+        <style>{PVX_CSS}</style>
+        <div className="pvx-wrap">
+          {/* Encabezado */}
+          <div className="pvx-top">
+            <div>
+              <h1 className="pvx-title">Proveedores</h1>
+              <div className="pvx-subtitle">{periodLabel}</div>
             </div>
-
-            {filterType === "mes" && (
-              <>
-                <Select value={String(selectedMonth)} onValueChange={(v) => setSelectedMonth(Number(v))}>
-                  <SelectTrigger className="h-9 w-36 text-sm" data-testid="select-month"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {MONTHS.map((m, i) => <SelectItem key={i + 1} value={String(i + 1)}>{m}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <Select value={String(selectedYear)} onValueChange={(v) => setSelectedYear(Number(v))}>
-                  <SelectTrigger className="h-9 w-24 text-sm" data-testid="select-year"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {years.map((y) => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </>
-            )}
-            {filterType === "dia" && (
-              <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)}
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm" data-testid="input-filter-date" />
-            )}
-            {filterType === "semana" && (
-              <input type="week" value={selectedWeek} onChange={(e) => setSelectedWeek(e.target.value)}
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm" data-testid="input-filter-week" />
-            )}
-
-            <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting || isLoading || filterType !== "mes"} title={filterType !== "mes" ? "Exportar solo disponible para vista mensual" : ""} data-testid="button-export-ap-cc">
-              <Download className="mr-2 h-4 w-4" />
-              {exporting ? "..." : "Exportar XLSX"}
-            </Button>
-
-            <Button onClick={openCreate} data-testid="button-add-supplier">
-              <Plus className="mr-2 h-4 w-4" /> Nuevo Proveedor
-            </Button>
+            <div className="pvx-controls">
+              <div className="pvx-seg">
+                {(["mes", "semana", "dia"] as FilterType[]).map((t) => (
+                  <button key={t} className={filterType === t ? "on" : ""} onClick={() => setFilterType(t)}>
+                    {t === "mes" ? "Mes" : t === "semana" ? "Semana" : "Día"}
+                  </button>
+                ))}
+              </div>
+              {filterType === "mes" && (
+                <>
+                  <div className="pvx-sel">
+                    <select value={String(selectedMonth)} onChange={(e) => setSelectedMonth(Number(e.target.value))} data-testid="select-month">
+                      {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                    </select>
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </div>
+                  <div className="pvx-sel">
+                    <select value={String(selectedYear)} onChange={(e) => setSelectedYear(Number(e.target.value))} data-testid="select-year">
+                      {years.map((y) => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </div>
+                </>
+              )}
+              {filterType === "dia" && (
+                <input type="date" className="pvx-dateinput" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} data-testid="input-filter-date" />
+              )}
+              {filterType === "semana" && (
+                <input type="week" className="pvx-dateinput" value={selectedWeek} onChange={(e) => setSelectedWeek(e.target.value)} data-testid="input-filter-week" />
+              )}
+              <button className="pvx-btn" onClick={handleExport} disabled={exporting || isLoading || filterType !== "mes"} title={filterType !== "mes" ? "Exportar solo disponible para vista mensual" : ""} data-testid="button-export-ap-cc">
+                <Download className="h-4 w-4" /> {exporting ? "..." : "Exportar XLSX"}
+              </button>
+              <button className="pvx-btnnew" onClick={openCreate} data-testid="button-add-supplier">
+                <Plus className="h-[17px] w-[17px]" /> Nuevo Proveedor
+              </button>
+            </div>
           </div>
-        </div>
 
-        {/* Search */}
-        <div className="relative max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar por nombre, CUIT o teléfono..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-            data-testid="input-search-suppliers"
-          />
-        </div>
-
-        {error && (
-          <div className="text-sm text-destructive p-3 bg-destructive/10 rounded-md">
-            Error al cargar: {String(error)}
+          {/* Buscador */}
+          <div className="pvx-search">
+            <Search className="h-[17px] w-[17px]" />
+            <input placeholder="Buscar por nombre, CUIT o teléfono..." value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-suppliers" />
           </div>
-        )}
 
-        {/* Table */}
-        <Card className="overflow-hidden">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold">Por Proveedor — {periodLabel}</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
+          {error && <div className="pvx-err">Error al cargar: {String(error)}</div>}
+
+          {/* Tabla */}
+          <div className="pvx-card">
+            <div className="pvx-cardhead">Por proveedor — {periodLabel}</div>
+            <div className="pvx-tblwrap">
+              <table className="pvx-tbl">
                 <thead>
-                  <tr className="border-b-2 border-border bg-muted/40">
-                    <th className="text-left py-2 px-3 font-semibold text-muted-foreground uppercase tracking-wide">Proveedor</th>
-                    <th className="text-right py-2 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Saldo Anterior</th>
-                    <th className="text-right py-2 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Facturación</th>
-                    <th className="text-right py-2 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Pagos</th>
-                    <th className="text-right py-2 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Saldo Actual</th>
-                    <th className="text-right py-2 px-3 font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">%</th>
-                    <th className="py-2 px-3 w-px"></th>
+                  <tr>
+                    <th className="l">Proveedor</th>
+                    <th>Saldo anterior</th><th>Facturación</th><th>Pagos</th><th>Saldo actual</th><th>%</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {isLoading ? (
                     Array.from({ length: 6 }).map((_, i) => (
-                      <tr key={i} className="border-b border-border">
+                      <tr key={i}>
                         {Array.from({ length: 7 }).map((_, j) => (
-                          <td key={j} className="py-2 px-3"><Skeleton className="h-4 w-full" /></td>
+                          <td key={j} className={j === 0 ? "l" : ""}><Skeleton className="h-4 w-full" /></td>
                         ))}
                       </tr>
                     ))
                   ) : rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="py-8 text-center text-muted-foreground">
-                        {search ? "Sin proveedores que coincidan" : "Sin movimientos en este período"}
-                      </td>
-                    </tr>
+                    <tr><td colSpan={7} style={{ textAlign: "center", padding: "40px 22px", color: "#8b8f88" }}>{search ? "Sin proveedores que coincidan" : "Sin movimientos en este período"}</td></tr>
                   ) : rows.map((row) => {
                     const s = supplierMap.get(row.supplierId);
                     return (
-                      <tr
-                        key={row.supplierId}
-                        className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer group"
-                        onClick={() => setLocation(`/suppliers/${row.supplierId}/cc`)}
-                        data-testid={`row-supplier-${row.supplierId}`}
-                      >
-                        <td className="py-2 px-3">
-                          <div className="flex flex-col">
-                            <span className="font-medium text-foreground group-hover:text-primary transition-colors">{row.supplierName}</span>
-                            {s?.cuit && <span className="text-[10px] text-muted-foreground">CUIT: {s.cuit}</span>}
-                          </div>
+                      <tr key={row.supplierId} onClick={() => setLocation(`/suppliers/${row.supplierId}/cc`)} data-testid={`row-supplier-${row.supplierId}`}>
+                        <td className="l">
+                          <div className="pvx-prov">{row.supplierName}</div>
+                          {s?.cuit && <div className="pvx-cuit">CUIT: {s.cuit}</div>}
                         </td>
-                        <td className="py-2 px-3 text-right whitespace-nowrap">
-                          {row.saldoMesAnterior !== 0 ? <SaldoBadge saldo={row.saldoMesAnterior} /> : <span className="text-muted-foreground">—</span>}
-                        </td>
-                        <td className="py-2 px-3 text-right text-foreground whitespace-nowrap font-medium">
-                          {row.facturacion > 0 ? `$${fmtInt(row.facturacion)}` : <span className="text-muted-foreground">—</span>}
-                        </td>
-                        <td className="py-2 px-3 text-right whitespace-nowrap">
-                          {row.cobranza > 0
-                            ? <span className="text-green-600 dark:text-green-400">${fmtInt(row.cobranza)}</span>
-                            : <span className="text-muted-foreground">—</span>}
-                        </td>
-                        <td className="py-2 px-3 text-right whitespace-nowrap">
-                          <SaldoBadge saldo={row.saldo} />
-                        </td>
-                        <td className="py-2 px-3 text-right whitespace-nowrap">
-                          {row.pct > 0
-                            ? <span className="text-muted-foreground font-mono">{fmtPct(row.pct)}</span>
-                            : <span className="text-muted-foreground">0.00%</span>}
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        <td>{row.saldoMesAnterior !== 0 ? <SaldoBadge saldo={row.saldoMesAnterior} /> : <span className="pvx-dash">—</span>}</td>
+                        <td>{row.facturacion > 0 ? <span className="pvx-fac pvx-num">${fmtInt(row.facturacion)}</span> : <span className="pvx-dash">—</span>}</td>
+                        <td>{row.cobranza > 0 ? <span className="pvx-pay pvx-num">${fmtInt(row.cobranza)}</span> : <span className="pvx-dash">—</span>}</td>
+                        <td><SaldoBadge saldo={row.saldo} /></td>
+                        <td>{row.pct > 0 ? <span className="pvx-pct pvx-num">{fmtPct(row.pct)}</span> : <span className="pvx-dash pvx-num">0,00%</span>}</td>
+                        <td onClick={(e) => e.stopPropagation()}>
                           {s && (
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(s)} data-testid={`button-edit-supplier-${s.id}`} title="Editar">
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => setDeleteId(s.id)} data-testid={`button-delete-supplier-${s.id}`} title="Eliminar">
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
+                            <span className="pvx-actions">
+                              <button className="pvx-iconbtn" onClick={() => openEdit(s)} data-testid={`button-edit-supplier-${s.id}`} title="Editar"><Pencil className="h-3.5 w-3.5" /></button>
+                              <button className="pvx-iconbtn del" onClick={() => setDeleteId(s.id)} data-testid={`button-delete-supplier-${s.id}`} title="Eliminar"><Trash2 className="h-3.5 w-3.5" /></button>
+                            </span>
                           )}
                         </td>
                       </tr>
@@ -365,23 +368,21 @@ export default function SuppliersPage() {
                 </tbody>
                 {data && rows.length > 0 && !search && (
                   <tfoot>
-                    <tr className="border-t-2 border-border bg-muted/20">
-                      <td className="py-2.5 px-3 font-bold text-foreground uppercase tracking-wide">TOTAL</td>
-                      <td className="py-2.5 px-3 text-right font-bold whitespace-nowrap"><SaldoBadge saldo={data.totals.saldoMesAnterior} /></td>
-                      <td className="py-2.5 px-3 text-right font-bold text-foreground whitespace-nowrap">${fmtInt(data.totals.facturacion)}</td>
-                      <td className="py-2.5 px-3 text-right font-bold text-green-600 dark:text-green-400 whitespace-nowrap">
-                        {data.totals.cobranza > 0 ? `$${fmtInt(data.totals.cobranza)}` : "—"}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-bold whitespace-nowrap"><SaldoBadge saldo={data.totals.saldo} /></td>
-                      <td className="py-2.5 px-3 text-right whitespace-nowrap text-muted-foreground">—</td>
-                      <td className="py-2.5 px-2"></td>
+                    <tr>
+                      <td className="l">Total</td>
+                      <td><SaldoBadge saldo={data.totals.saldoMesAnterior} /></td>
+                      <td><span className="pvx-fac pvx-num">${fmtInt(data.totals.facturacion)}</span></td>
+                      <td>{data.totals.cobranza > 0 ? <span className="pvx-pay pvx-num">${fmtInt(data.totals.cobranza)}</span> : <span className="pvx-dash">—</span>}</td>
+                      <td><SaldoBadge saldo={data.totals.saldo} /></td>
+                      <td><span className="pvx-dash">—</span></td>
+                      <td></td>
                     </tr>
                   </tfoot>
                 )}
               </table>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
