@@ -21,7 +21,7 @@ import {
   type BankContact, type InsertBankContact,
   type MpMovementIdentifier,
 } from "@shared/schema";
-import { eq, desc, asc, and, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
+import { eq, desc, asc, and, or, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
 import { ivaRateOf } from "@shared/iva";
 import bcrypt from "bcryptjs";
@@ -620,7 +620,7 @@ export const storage = {
         AND upper(oi.unit::text) = ${canonical}
         AND o.status = 'approved'
         AND oi.price_per_unit::numeric > 0
-      ORDER BY o.order_date DESC, o.id DESC
+      ORDER BY o.approved_at DESC NULLS LAST, o.order_date DESC, o.id DESC
       LIMIT 1
     `);
     const rows = result.rows as any[];
@@ -629,17 +629,34 @@ export const storage = {
   },
 
   async _getGroupPeerIds(customerId: number): Promise<number[]> {
+    const ids = new Set<number>();
+    // 1) Grupos de precio MANUALES (client_group_members) — ej. QUINQUELA-MARQUESA,
+    //    COMO SIEMPRE-MESTIZO, que comparten precio pero NO son padre-hijo.
     const memberships = await db
       .select({ groupId: clientGroupMembers.groupId })
       .from(clientGroupMembers)
       .where(eq(clientGroupMembers.customerId, customerId));
-    if (memberships.length === 0) return [];
-    const groupIds = memberships.map((m) => m.groupId);
-    const peers = await db
-      .select({ customerId: clientGroupMembers.customerId })
-      .from(clientGroupMembers)
-      .where(and(inArray(clientGroupMembers.groupId, groupIds), ne(clientGroupMembers.customerId, customerId)));
-    return [...new Set(peers.map((p) => p.customerId))];
+    if (memberships.length > 0) {
+      const groupIds = memberships.map((m) => m.groupId);
+      const peers = await db
+        .select({ customerId: clientGroupMembers.customerId })
+        .from(clientGroupMembers)
+        .where(and(inArray(clientGroupMembers.groupId, groupIds), ne(clientGroupMembers.customerId, customerId)));
+      for (const p of peers) ids.add(p.customerId);
+    }
+    // 2) Grupo por PADRE: todos los hijos del mismo padre + el padre. Así CUALQUIER
+    //    cliente del mismo grupo padre comparte precios automáticamente, sin depender
+    //    del nombre ni de una carga manual en client_group_members.
+    const [me] = await db
+      .select({ parentId: customers.parentCustomerId })
+      .from(customers).where(eq(customers.id, customerId)).limit(1);
+    const rootId = me?.parentId ?? customerId; // hijo → su padre; padre/standalone → él mismo
+    const family = await db
+      .select({ id: customers.id })
+      .from(customers)
+      .where(or(eq(customers.parentCustomerId, rootId), eq(customers.id, rootId)));
+    for (const f of family) if (f.id !== customerId) ids.add(f.id);
+    return [...ids];
   },
 
   async _recalcProductSummary(pid: number, tx: any = db): Promise<void> {

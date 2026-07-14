@@ -489,6 +489,7 @@ export async function runMigrations() {
     INSERT INTO client_group_members (group_id, customer_id)
     SELECT g.id, c.id FROM client_groups g CROSS JOIN customers c
     WHERE g.name = 'BLACK POT' AND c.name ILIKE '%COLEGIO%' AND c.active = true
+      AND c.parent_customer_id IS NOT NULL  -- solo hijos, no otros padres (ej. COLEGIO BARTOLOME MITRE)
     ON CONFLICT (group_id, customer_id) DO NOTHING
   `);
   await db.execute(sql`
