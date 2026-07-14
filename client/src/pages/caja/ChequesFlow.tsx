@@ -130,7 +130,7 @@ export default function ChequesFlow({ cheques }: { cheques: Cheque[] }) {
           {acredita.length === 0 ? (
             <div className="crx-flowempty">Sin cheques esta semana</div>
           ) : acredita.map(c => (
-            <FlowRow key={c.id} impacto={c._imp} fechaCheque={c.fecha_cobro} nombre={c.contraparte} monto={c.monto} cobrado={c._cobrado} />
+            <FlowRow key={c.id} impacto={c._imp} fechaCheque={c.fecha_cobro} nombre={`${c.contraparte}${c.numero ? ` · Nº ${c.numero}` : ""}`} monto={c.monto} cobrado={c._cobrado} />
           ))}
           <div className="crx-coltotal"><span className="l">Total que entra</span><span className="v crx-num">{fmtMoney(totalAcr)}</span></div>
         </div>
