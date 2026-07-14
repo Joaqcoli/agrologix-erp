@@ -2595,13 +2595,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           } as any, (req as any).session?.userId ?? null);
         }
       } else if (accion === "editar") {
-        // Editar datos del cheque en cartera (monto, fecha de cobro, de quién)
+        // Editar datos del cheque en cartera (monto, fecha de cobro, de quién, número)
         await storage.patchCheque(id, {
           ...(monto !== undefined ? { monto: parseFloat(monto) } : {}),
           ...(fechaCobro !== undefined ? { fechaCobro } : {}),
           ...(contraparte !== undefined ? { contraparte } : {}),
           ...(numero !== undefined ? { numero: (numero ?? "").trim() || null } : {}),
         });
+        // Cheque propio emitido → mantener SINCRONIZADA su obligación vinculada:
+        // fecha_vencimiento = fecha de cobro, monto = monto del cheque. Antes quedaban descalzados.
+        if (cheque.obligacion_id && (fechaCobro !== undefined || monto !== undefined)) {
+          await storage.patchObligacion(cheque.obligacion_id, {
+            ...(fechaCobro !== undefined ? { fechaVencimiento: fechaCobro } : {}),
+            ...(monto !== undefined ? { monto: String(parseFloat(monto)) } : {}),
+          });
+        }
       }
       return res.json(await storage.getCheques().then(cs => (cs as any[]).find(c => c.id === id)));
     } catch (e: any) { return res.status(500).json({ error: e.message }); }

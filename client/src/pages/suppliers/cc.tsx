@@ -13,7 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2, Wallet, Clock, Unlink, Link2 } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2, Wallet, Clock, Unlink, Link2, Pencil } from "lucide-react";
 import React, { useState } from "react";
 import { jsPDF } from "jspdf";
 
@@ -626,6 +626,29 @@ export default function SupplierCCPage({
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  // Editar un cheque EMITIDO en cartera (fecha de cobro + número). El monto NO se toca acá.
+  // El backend sincroniza la obligación vinculada y se refleja en la sección Cheques de Caja.
+  const [editChequeTarget, setEditChequeTarget] = useState<ChequeRow | null>(null);
+  const [editChequeFecha, setEditChequeFecha] = useState("");
+  const [editChequeNumero, setEditChequeNumero] = useState("");
+  const openEditCheque = (c: ChequeRow) => {
+    setEditChequeTarget(c);
+    setEditChequeFecha(String(c.fechaCobro).slice(0, 10));
+    setEditChequeNumero(c.numero ?? "");
+  };
+  const editChequeMutation = useMutation({
+    mutationFn: ({ id, fechaCobro, numero }: { id: number; fechaCobro: string; numero: string }) =>
+      apiRequest("PATCH", `/api/caja/cheques/${id}`, { accion: "editar", fechaCobro, numero }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ap/cc/supplier", supplierId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/cheques"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/caja/obligaciones"] });
+      setEditChequeTarget(null);
+      toast({ title: "Cheque actualizado", description: "Se actualizó la fecha en la sección Cheques." });
+    },
+    onError: (e: any) => toast({ title: "No se pudo editar el cheque", description: e.message, variant: "destructive" }),
+  });
+
   const fmtDate = (d: string) => {
     const [y, m, day] = String(d).slice(0, 10).split("-").map(Number);
     return new Date(y, (m || 1) - 1, day || 1).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
@@ -1053,15 +1076,27 @@ export default function SupplierCCPage({
                           <td className="py-1.5 px-3 text-right font-semibold text-foreground">${fmtInt(c.monto)}</td>
                           <td className="py-1.5 px-3 text-right text-muted-foreground">{c.plazoDias} días</td>
                           <td className="py-1.5 px-3">
-                            <span className={`inline-flex items-center text-[9px] py-0.5 px-1.5 rounded-full ${
-                              est.vencido
-                                ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                                : c.estado === "cobrado"
-                                  ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                                  : "bg-muted text-muted-foreground"
-                            }`}>
-                              {est.label}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <span className={`inline-flex items-center text-[9px] py-0.5 px-1.5 rounded-full ${
+                                est.vencido
+                                  ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                                  : c.estado === "cobrado"
+                                    ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                                    : "bg-muted text-muted-foreground"
+                              }`}>
+                                {est.label}
+                              </span>
+                              {c.estado === "en_cartera" && (
+                                <button
+                                  type="button"
+                                  title="Editar fecha / número del cheque"
+                                  onClick={() => openEditCheque(c)}
+                                  className="text-muted-foreground/50 hover:text-foreground transition-colors"
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1194,6 +1229,41 @@ export default function SupplierCCPage({
           onClose={() => setReimputePayment(null)}
         />
       )}
+
+      {/* Editar cheque emitido en cartera (fecha de cobro + número) */}
+      <Dialog open={!!editChequeTarget} onOpenChange={(o) => { if (!o) setEditChequeTarget(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Editar cheque emitido</DialogTitle></DialogHeader>
+          {editChequeTarget && (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Monto <span className="font-semibold text-foreground">${fmtInt(editChequeTarget.monto)}</span>
+                {data?.supplier.name ? ` · ${data.supplier.name}` : ""}
+              </p>
+              <div>
+                <Label className="text-xs">Fecha de cobro</Label>
+                <Input type="date" className="mt-1" value={editChequeFecha} onChange={e => setEditChequeFecha(e.target.value)} />
+              </div>
+              <div>
+                <Label className="text-xs">Número de cheque</Label>
+                <Input className="mt-1" value={editChequeNumero} onChange={e => setEditChequeNumero(e.target.value)} placeholder="Nº del talonario" />
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-snug">
+                Se actualiza también en la sección <b>Cheques</b> de Caja y en la fecha de la obligación (cuándo Galicia lo debita). No cambia el monto.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditChequeTarget(null)}>Cancelar</Button>
+            <Button
+              disabled={!editChequeFecha || editChequeMutation.isPending}
+              onClick={() => editChequeTarget && editChequeMutation.mutate({ id: editChequeTarget.id, fechaCobro: editChequeFecha, numero: editChequeNumero.trim() })}
+            >
+              {editChequeMutation.isPending ? "Guardando…" : "Guardar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Layout>
   );
 }
