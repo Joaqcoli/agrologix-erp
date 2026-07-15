@@ -88,7 +88,9 @@ export function parseGaliciaExtracto(buffer: Buffer): GaliciaParsedMovement[] {
       debito: esEgreso ? Math.abs(debito) : null,
       credito: esEgreso ? null : Math.abs(credito),
       grupoConcepto: get(iGrupo),
-      concepto: get(iConcepto),
+      // Formato nuevo de Galicia (2026-07): la columna CONCEPTO viene vacía y el texto
+      // clasificable está en DESCRIPCION. Fallback → así reglas y cruce de cheques siguen andando.
+      concepto: get(iConcepto) || get(iDesc),
       comprobante,
       leyendas,
       saldo,

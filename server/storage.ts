@@ -6175,7 +6175,7 @@ export const storage = {
     // Los RECHAZO CHEQUE / COM. no tienen "ECHEQ" → no entran. El match estricto (nº+monto) protege igual.
     const echeqs = (await exec.execute(drizzleSql`
       SELECT comprobante, debito::float AS monto FROM galicia_movements
-      WHERE concepto ILIKE '%ECHEQ%' AND debito IS NOT NULL ORDER BY fecha`)).rows as any[];
+      WHERE (concepto ILIKE '%ECHEQ%' OR descripcion ILIKE '%ECHEQ%') AND debito IS NOT NULL ORDER BY fecha`)).rows as any[];
     const cheques = (await exec.execute(drizzleSql`
       SELECT c.id, c.numero, c.monto::float AS monto, c.estado, c.contraparte, c.obligacion_id, c.notas,
              o.concepto AS obl_concepto, o.tipo AS obl_tipo, o.estado AS obl_estado
@@ -6237,7 +6237,8 @@ export const storage = {
     const creditos = (await exec.execute(drizzleSql`
       SELECT comprobante, credito::float AS monto, fecha::text AS fecha
       FROM galicia_movements
-      WHERE (concepto ILIKE '%CHEQUE%' OR concepto ILIKE '%CANJE%')
+      WHERE (concepto ILIKE '%CHEQUE%' OR concepto ILIKE '%CANJE%' OR concepto ILIKE '%ECHEQ%'
+             OR descripcion ILIKE '%CHEQUE%' OR descripcion ILIKE '%CANJE%' OR descripcion ILIKE '%ECHEQ%')
         AND credito IS NOT NULL
       ORDER BY fecha`)).rows as any[];
     const cheques = (await exec.execute(drizzleSql`
