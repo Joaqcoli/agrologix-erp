@@ -1688,6 +1688,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/ap/payments", requireAuth, async (req, res) => {
     try {
       const data = insertSupplierPaymentSchema.parse(req.body);
+      // Endoso de cheque de cartera: si no se cargó nota, auto-describir el pago con el
+      // cheque endosado (contraparte + Nº) para poder identificarlo en la CC del proveedor.
+      const chequeInfo0 = req.body.chequeInfo as { tipo?: string; chequeCarteraId?: number } | undefined;
+      if (data.method === "CHEQUE" && chequeInfo0?.tipo === "cartera" && chequeInfo0.chequeCarteraId
+          && !(data.notes && data.notes.trim())) {
+        const chs = await storage.getCheques();
+        const ch = (chs as any[]).find((c) => c.id === chequeInfo0.chequeCarteraId);
+        if (ch) data.notes = `Cheque ${ch.contraparte} endosado${ch.numero ? ` Nº${ch.numero}` : ""}`;
+      }
       const payment = await storage.createSupplierPayment(data, req.session.userId!);
       // Imputar a las compras elegidas (purchaseIds[]) o FIFO sobre todas si no se eligió ninguna.
       // Si el pago apunta a una compra puntual (purchaseId), esa imputación la maneja el netting legacy.
