@@ -4231,6 +4231,52 @@ export const storage = {
       for (const p of paymentsIn.rows as any[]) {
         (p as any).lines = linesByPay.get(Number(p.id)) ?? [];
       }
+
+      // Detalle para el desplegable del cobro: facturas/remitos pagados (con monto aplicado)
+      // + cheques (número + fecha de cobro). Solo lectura.
+      const appliedRows = (await db.execute(drizzleSql.raw(`
+        SELECT pol.payment_id, o.folio, o.remito_num AS "remitoNum",
+               o.invoice_number AS "invoiceNumber", pol.amount_applied::numeric AS "amountApplied"
+        FROM payment_order_links pol
+        JOIN orders o ON o.id = pol.order_id
+        WHERE pol.payment_id = ANY(ARRAY[${payIds.join(",")}]::int[])
+        ORDER BY o.remito_num, o.folio
+      `))).rows as any[];
+      const appliedByPay = new Map<number, any[]>();
+      for (const a of appliedRows) {
+        const pid = Number(a.payment_id);
+        if (!appliedByPay.has(pid)) appliedByPay.set(pid, []);
+        appliedByPay.get(pid)!.push({
+          folio: a.folio, remitoNum: a.remitoNum, invoiceNumber: a.invoiceNumber,
+          amountApplied: a.amountApplied != null ? Math.round(Number(a.amountApplied)) : null,
+        });
+      }
+      // Cheques del pago: por vínculo directo (cheques.payment_id) o vía línea (payment_lines.cheque_id)
+      const chequeRows = (await db.execute(drizzleSql.raw(`
+        SELECT ch.id, ch.numero, ch.fecha_cobro::text AS "fechaCobro", ch.monto::numeric AS monto,
+               COALESCE(ch.payment_id, pl.payment_id) AS "paymentId"
+        FROM cheques ch
+        LEFT JOIN payment_lines pl ON pl.cheque_id = ch.id
+        WHERE ch.payment_id = ANY(ARRAY[${payIds.join(",")}]::int[])
+           OR pl.payment_id = ANY(ARRAY[${payIds.join(",")}]::int[])
+      `))).rows as any[];
+      const chequesByPay = new Map<number, any[]>();
+      const seenCheque = new Set<string>();
+      for (const ch of chequeRows) {
+        const pid = Number(ch.paymentId);
+        const key = `${pid}:${ch.id}`;
+        if (seenCheque.has(key)) continue;
+        seenCheque.add(key);
+        if (!chequesByPay.has(pid)) chequesByPay.set(pid, []);
+        chequesByPay.get(pid)!.push({
+          numero: ch.numero ?? null, fechaCobro: ch.fechaCobro,
+          monto: ch.monto != null ? Math.round(Number(ch.monto)) : null,
+        });
+      }
+      for (const p of paymentsIn.rows as any[]) {
+        (p as any).appliedOrders = appliedByPay.get(Number(p.id)) ?? [];
+        (p as any).chequeDetails = chequesByPay.get(Number(p.id)) ?? [];
+      }
     }
 
     // Opening balance: sum across all IDs

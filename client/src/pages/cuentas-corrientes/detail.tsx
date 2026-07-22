@@ -16,8 +16,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2, Building2, Pencil, Clock } from "lucide-react";
-import { useState, useRef, useMemo, useEffect } from "react";
+import { ArrowLeft, Plus, Trash2, FileText, Download, CheckCircle2, Building2, Pencil, Clock, ChevronRight, ChevronDown } from "lucide-react";
+import { useState, useRef, useMemo, useEffect, Fragment } from "react";
 import type { Payment, Withholding } from "@shared/schema";
 import { PAYMENT_METHODS } from "@shared/schema";
 import { jsPDF } from "jspdf";
@@ -67,7 +67,12 @@ type OrderRow = {
   paidAmount: number;
   customerId?: number;
 };
-type PaymentRow = Payment & { orderFolio?: string | null; lines?: { method: string; amount: number }[] };
+type PaymentRow = Payment & {
+  orderFolio?: string | null;
+  lines?: { method: string; amount: number }[];
+  appliedOrders?: { folio: string | null; remitoNum: number | null; invoiceNumber: string | null; amountApplied: number | null }[];
+  chequeDetails?: { numero: string | null; fechaCobro: string | null; monto: number | null }[];
+};
 
 // ── Date range helpers ──────────────────────────────────────────────────────────
 
@@ -1273,6 +1278,7 @@ export default function CCCustomerDetailPage({
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showWithholdingModal, setShowWithholdingModal] = useState(false);
   const [editingPayment, setEditingPayment] = useState<PaymentRow | null>(null);
+  const [expandedPaymentId, setExpandedPaymentId] = useState<number | null>(null);
   const [selectedSubsidiary, setSelectedSubsidiary] = useState<CCDetail["subsidiaries"] extends (infer T)[] ? T : never | null>(null);
   const [waDialog, setWaDialog] = useState(false);
   const [waMessage, setWaMessage] = useState("");
@@ -2030,22 +2036,32 @@ export default function CCCustomerDetailPage({
                     </tr>
                   </thead>
                   <tbody>
-                    {data?.payments.map((p) => (
-                      <tr key={p.id} className="border-b border-border last:border-0" data-testid={`row-payment-${p.id}`}>
-                        <td className="py-1.5 px-3 text-muted-foreground">{p.date}</td>
+                    {data?.payments.map((p) => {
+                      const pr = p as PaymentRow;
+                      const expanded = expandedPaymentId === p.id;
+                      const toggle = () => setExpandedPaymentId(expanded ? null : p.id);
+                      return (
+                      <Fragment key={p.id}>
+                      <tr className="border-b border-border last:border-0 cursor-pointer hover:bg-muted/30" data-testid={`row-payment-${p.id}`} onClick={toggle}>
+                        <td className="py-1.5 px-3 text-muted-foreground">
+                          <div className="flex items-center gap-1">
+                            {expanded ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
+                            {p.date}
+                          </div>
+                        </td>
                         <td className="py-1.5 px-3">
                           <div className="flex items-center gap-1 flex-wrap">
                             <Badge variant="outline" className="text-[9px] py-0">{p.method}</Badge>
-                            {(p as PaymentRow).orderFolio && (
+                            {pr.orderFolio && (
                               <Badge className="text-[9px] py-0 bg-primary/10 text-primary border-primary/20 font-mono border">
-                                {(p as PaymentRow).orderFolio}
+                                {pr.orderFolio}
                               </Badge>
                             )}
                           </div>
                           {/* Desglose de líneas para pagos compuestos (MIXTO) */}
-                          {((p as PaymentRow).lines?.length ?? 0) > 1 && (
+                          {(pr.lines?.length ?? 0) > 1 && (
                             <p className="text-[10px] text-muted-foreground mt-0.5">
-                              {(p as PaymentRow).lines!
+                              {pr.lines!
                                 .map((l) => `${l.method.charAt(0) + l.method.slice(1).toLowerCase().replace(/_/g, " ")} $${fmtInt(l.amount)}`)
                                 .join(" · ")}
                             </p>
@@ -2055,14 +2071,14 @@ export default function CCCustomerDetailPage({
                         <td className="py-1.5 px-3">
                           <div className="flex items-center gap-0.5">
                             <button
-                              onClick={() => setEditingPayment(p as PaymentRow)}
+                              onClick={(e) => { e.stopPropagation(); setEditingPayment(pr); }}
                               className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
                               data-testid={`button-edit-payment-${p.id}`}
                             >
                               <Pencil className="h-3 w-3" />
                             </button>
                             <button
-                              onClick={() => deletePaymentMutation.mutate(p.id)}
+                              onClick={(e) => { e.stopPropagation(); deletePaymentMutation.mutate(p.id); }}
                               disabled={deletePaymentMutation.isPending}
                               className="p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
                               data-testid={`button-delete-payment-${p.id}`}
@@ -2072,7 +2088,58 @@ export default function CCCustomerDetailPage({
                           </div>
                         </td>
                       </tr>
-                    ))}
+                      {expanded && (
+                        <tr className="border-b border-border bg-muted/20" data-testid={`row-payment-detail-${p.id}`}>
+                          <td colSpan={4} className="px-3 py-2.5">
+                            <div className="flex flex-col gap-2 text-[11px]">
+                              {/* Facturas / remitos pagados */}
+                              <div>
+                                <p className="font-semibold text-muted-foreground uppercase tracking-wide text-[9px] mb-1">Facturas pagadas</p>
+                                {(pr.appliedOrders?.length ?? 0) === 0 ? (
+                                  <p className="text-muted-foreground">Sin facturas vinculadas (pago no imputado a remitos).</p>
+                                ) : (
+                                  <div className="flex flex-col gap-0.5">
+                                    {pr.appliedOrders!.map((o, i) => (
+                                      <div key={i} className="flex items-center justify-between gap-2">
+                                        <span className="font-mono">
+                                          {o.remitoNum != null ? `Remito N° ${o.remitoNum}` : o.folio}
+                                          {o.invoiceNumber ? <span className="text-muted-foreground"> · Fac. {o.invoiceNumber}</span> : null}
+                                        </span>
+                                        {o.amountApplied != null && <span className="font-semibold text-green-600">${fmtInt(o.amountApplied)}</span>}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                              {/* Cheques */}
+                              {(pr.chequeDetails?.length ?? 0) > 0 && (
+                                <div>
+                                  <p className="font-semibold text-muted-foreground uppercase tracking-wide text-[9px] mb-1">Cheque{pr.chequeDetails!.length > 1 ? "s" : ""}</p>
+                                  <div className="flex flex-col gap-0.5">
+                                    {pr.chequeDetails!.map((ch, i) => (
+                                      <div key={i} className="flex items-center gap-2">
+                                        <span className="font-mono">N° {ch.numero ?? "—"}</span>
+                                        {ch.fechaCobro && <span className="text-muted-foreground">cobro {ch.fechaCobro}</span>}
+                                        {ch.monto != null && <span className="font-semibold ml-auto">${fmtInt(ch.monto)}</span>}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {/* Datos del pago */}
+                              <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-muted-foreground pt-0.5 border-t border-border/60">
+                                <span>Fecha: <b className="text-foreground">{p.date}</b></span>
+                                <span>Método: <b className="text-foreground">{p.method}</b></span>
+                                <span>Total: <b className="text-green-600">${fmtInt(parseFloat(p.amount as string))}</b></span>
+                                {p.notes && <span>Nota: <b className="text-foreground">{p.notes}</b></span>}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
+                      );
+                    })}
                   </tbody>
                 </table></div>
               )}
