@@ -2119,8 +2119,8 @@ export default function CCCustomerDetailPage({
                                     {pr.chequeDetails!.map((ch, i) => (
                                       <div key={i} className="flex items-center gap-2">
                                         <span className="font-mono">N° {ch.numero ?? "—"}</span>
-                                        {ch.fechaCobro && <span className="text-muted-foreground">cobro {ch.fechaCobro}</span>}
-                                        {ch.monto != null && <span className="font-semibold ml-auto">${fmtInt(ch.monto)}</span>}
+                                        {ch.monto != null && <span className="font-semibold text-green-600">${fmtInt(ch.monto)}</span>}
+                                        {ch.fechaCobro && <span className="text-muted-foreground">· cobro {ch.fechaCobro}</span>}
                                       </div>
                                     ))}
                                   </div>
