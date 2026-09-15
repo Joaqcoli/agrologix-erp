@@ -788,6 +788,10 @@ export const storage = {
       await tx.delete(stockMovements)
         .where(and(eq(stockMovements.referenceType, "purchase"), eq(stockMovements.referenceId, id)));
       await tx.delete(productCostHistory).where(eq(productCostHistory.purchaseId, id));
+      // Pago automático (efectivo/transferencia) vinculado a la compra:
+      // borrarlo también, si no la FK supplier_payments.purchase_id bloquea el DELETE.
+      // El cascade de supplier_payment_purchase_links limpia imputaciones si hubiera.
+      await tx.delete(supplierPayments).where(eq(supplierPayments.purchaseId, id));
       await tx.delete(purchaseItems).where(eq(purchaseItems.purchaseId, id));
       await tx.delete(purchases).where(eq(purchases.id, id));
     });
