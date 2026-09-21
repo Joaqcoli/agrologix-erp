@@ -1656,10 +1656,15 @@ export const storage = {
     customerId: number,
   ): Promise<{ item: OrderItem; orderTotal: string }> {
     return db.transaction(async (tx) => {
-      const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+      // Lock del pedido (FOR UPDATE): serializa PATCHes concurrentes al mismo pedido.
+      // El galpón manda un PATCH por campo (fire-and-forget) y con la latencia
+      // Render↔Supabase las transacciones se superponen: un patch que no tocaba la
+      // cantidad recalculaba el subtotal con un snapshot viejo y pisaba el correcto
+      // (ej. brócoli VA-001203: qty 4 × $3200 con subtotal viejo 1,5 × $3200).
+      const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).for("update").limit(1);
       const [item] = await tx.select().from(orderItems).where(
         and(eq(orderItems.id, itemId), eq(orderItems.orderId, orderId))
-      ).limit(1);
+      ).for("update").limit(1);
       if (!item) throw new Error("Item not found");
 
       const isApproved = order?.status === "approved";
@@ -1758,10 +1763,12 @@ export const storage = {
       const price = newPriceRaw !== undefined && newPriceRaw !== null
         ? Number(newPriceRaw)
         : (bolsaAutoPrice ?? existingPrice);
-      const subtotal = price != null && price > 0 ? qty * price : 0;
       const margin = price && price > 0 ? (price - effectiveCost) / price : null;
 
-      const updateData: Record<string, any> = { subtotal: subtotal.toFixed(2) };
+      // El subtotal NO se calcula acá en JS: se recalcula en SQL sobre la fila ya
+      // actualizada (ver más abajo), para que sea atómico aunque otro patch
+      // concurrente haya cambiado cantidad o precio en el medio.
+      const updateData: Record<string, any> = {};
       if (patch.quantity !== undefined) updateData.quantity = qty.toFixed(4);
       if (patch.unit !== undefined) updateData.unit = patch.unit;
       if (patch.productId !== undefined) updateData.productId = patch.productId;
@@ -1778,7 +1785,15 @@ export const storage = {
         updateData.aliasNombre = a ? a : null;
       }
 
-      const [updated] = await tx.update(orderItems).set(updateData).where(eq(orderItems.id, itemId)).returning();
+      if (Object.keys(updateData).length > 0) {
+        await tx.update(orderItems).set(updateData).where(eq(orderItems.id, itemId));
+      }
+      // Subtotal SIEMPRE recalculado en SQL con los valores persistidos de la fila
+      // (cantidad × precio actuales) — misma semántica que el cálculo JS anterior:
+      // sin precio o precio ≤ 0 → subtotal 0 (bonificación / ítem sin precio).
+      const [updated] = await tx.update(orderItems).set({
+        subtotal: drizzleSql`CASE WHEN ${orderItems.pricePerUnit} IS NULL OR ${orderItems.pricePerUnit} <= 0 THEN 0 ELSE round(${orderItems.quantity} * ${orderItems.pricePerUnit}, 2) END` as any,
+      }).where(eq(orderItems.id, itemId)).returning();
 
       // Recalculate order total
       const allItems = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
@@ -1870,7 +1885,8 @@ export const storage = {
     },
   ): Promise<{ item: OrderItem; orderTotal: string }> {
     return db.transaction(async (tx) => {
-      const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+      // Mismo lock que updateOrderItem: serializa contra patches concurrentes del pedido
+      const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).for("update").limit(1);
       if (!order) throw new Error("Order not found");
       const isApproved = order.status === "approved";
 
@@ -1937,7 +1953,8 @@ export const storage = {
 
   async deleteOrderItem(orderId: number, itemId: number): Promise<{ orderTotal: string }> {
     return db.transaction(async (tx) => {
-      const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+      // Mismo lock que updateOrderItem: serializa contra patches concurrentes del pedido
+      const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).for("update").limit(1);
       if (!order) throw new Error("Order not found");
 
       const [item] = await tx.select().from(orderItems).where(
