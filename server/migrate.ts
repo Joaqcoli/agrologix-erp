@@ -1020,6 +1020,8 @@ export async function runMigrations() {
  *  Se llama por separado para garantizar que corran aunque runMigrations() falle. */
 export async function runNcMigrations() {
   try { await db.execute(sql`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS condicion_iva_receptor_id INTEGER`); } catch {}
+  // Modo de presentación elegido al emitir ('agrupado' | 'completo') — el PDF usa siempre este modo
+  try { await db.execute(sql`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS detail_mode TEXT`); } catch {}
   try {
     await db.execute(sql`
       UPDATE invoices SET condicion_iva_receptor_id = 1

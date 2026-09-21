@@ -41,6 +41,7 @@ type InvoiceRow = {
   total: string;
   ivaAmount: string;
   description: string | null;
+  detailMode: "completo" | "agrupado" | null;
   createdAt: string;
   customerName: string;
   customerPhone: string | null;
@@ -95,10 +96,12 @@ export default function InvoicesPage() {
     inv.cae.includes(search)
   );
 
-  const handleDownloadPDF = async (inv: InvoiceRow, mode: "completo" | "agrupado" = "agrupado") => {
+  const handleDownloadPDF = async (inv: InvoiceRow) => {
     try {
       const detail = await fetch(`/api/invoices/${inv.id}`).then((r) => r.json());
-      await generateInvoicePDF(detail, mode);
+      // La factura es UNA sola: siempre se genera con el modo elegido al emitirla.
+      // Facturas viejas (sin modo persistido) caen a "agrupado".
+      await generateInvoicePDF(detail, detail?.invoice?.detailMode ?? "agrupado");
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     }
@@ -186,7 +189,7 @@ export default function InvoicesPage() {
       }
       if (waOption === "factura" || waOption === "ambos") {
         const detail = await fetch(`/api/invoices/${waRow.id}`, { credentials: "include" }).then((r) => r.json());
-        await generateInvoicePDF(detail, "agrupado");
+        await generateInvoicePDF(detail, detail?.invoice?.detailMode ?? "agrupado");
       }
       window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(waMessage)}`, "_blank");
       setWaRow(null);
@@ -289,11 +292,9 @@ export default function InvoicesPage() {
                     <td className="px-4 py-3 text-muted-foreground text-xs">{inv.orderRemitoNum ?? "—"}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => handleDownloadPDF(inv, "agrupado")} title="PDF agrupado (Frutas/Huevos)">
+                        <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => handleDownloadPDF(inv)}
+                          title={inv.detailMode === "completo" ? "PDF (detallado, como se emitió)" : "PDF (agrupado, como se emitió)"}>
                           <Download className="h-3.5 w-3.5 mr-1" /> PDF
-                        </Button>
-                        <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => handleDownloadPDF(inv, "completo")} title="PDF con el detalle de cada producto">
-                          <Download className="h-3.5 w-3.5 mr-1" /> Detallado
                         </Button>
                         <Button
                           size="sm" variant="ghost"

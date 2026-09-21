@@ -2182,7 +2182,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.post("/api/invoices/create", requireAuth, async (req, res) => {
     try {
-      const { orderId, invoiceType, description, condicionIva, ivaIncluido } = z.object({
+      const { orderId, invoiceType, description, condicionIva, ivaIncluido, detailMode } = z.object({
         orderId: z.number(),
         invoiceType: z.enum(["A", "B", "C"]),
         description: z.string().optional(),
@@ -2190,6 +2190,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         condicionIva: z.number().int().default(5),
         /** true = el subtotal del ítem ya incluye IVA → calcular neto dividiendo */
         ivaIncluido: z.boolean().default(false),
+        /** Modo de presentación del PDF, elegido al emitir — se persiste y es el único modo válido */
+        detailMode: z.enum(["completo", "agrupado"]).default("agrupado"),
       }).parse(req.body);
 
       const order = await storage.getOrder(orderId);
@@ -2215,7 +2217,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         // Tasa del producto (products.iva_rate, única fuente). Bucket 21% si rate ≥ 0,2.
         const rate = ivaRateOf(item.product);
         const is21 = rate >= 0.2;
-        const sub = parseFloat(item.subtotal ?? "0") || 0;
+        // Cantidad × precio VIGENTES al tocar el botón (lo mismo que muestra el
+        // remito/pedido), no el subtotal almacenado — inmune a subtotales viejos.
+        const sub = (parseFloat(item.quantity as string) || 0) * (parseFloat((item.pricePerUnit as string) ?? "0") || 0);
         // Para Factura B el precio ya incluye IVA (no discriminado). Para A con ivaIncluido=true, ídem.
         const netSub = (invoiceType === "B" || ivaIncluido) ? sub / (1 + rate) : sub;
         if (is21) {
@@ -2284,6 +2288,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ivaAmount: String(totalIVA.toFixed(2)),
         condicionIvaReceptorId: condicionIva,
         description: effectiveDescription,
+        detailMode,
       });
 
       await storage.updateOrderInvoiceNumber(orderId, formattedNumber);

@@ -5444,7 +5444,7 @@ export const storage = {
   async createInvoice(data: InsertInvoice): Promise<Invoice> {
     // Use explicit raw SQL to avoid RETURNING * including condicion_iva_receptor_id
     // if the migration hasn't run yet.
-    const { condicionIvaReceptorId, ...rest } = data as any;
+    const { condicionIvaReceptorId, detailMode, ...rest } = data as any;
     const rows = await db.execute(drizzleSql`
       INSERT INTO invoices (order_id, customer_id, invoice_type, invoice_number, point_of_sale, cae, cae_expiry, total, iva_amount, description)
       VALUES (${rest.orderId}, ${rest.customerId}, ${rest.invoiceType}, ${rest.invoiceNumber}, ${rest.pointOfSale ?? 4},
@@ -5460,6 +5460,12 @@ export const storage = {
         await db.execute(drizzleSql`UPDATE invoices SET condicion_iva_receptor_id = ${condicionIvaReceptorId} WHERE id = ${inv.id}`);
       } catch { /* column not yet created by migration */ }
     }
+    if (detailMode != null) {
+      try {
+        await db.execute(drizzleSql`UPDATE invoices SET detail_mode = ${detailMode} WHERE id = ${inv.id}`);
+        (inv as any).detailMode = detailMode;
+      } catch { /* column not yet created by migration */ }
+    }
     return inv;
   },
 
@@ -5471,6 +5477,7 @@ export const storage = {
         i.invoice_type AS "invoiceType", i.invoice_number AS "invoiceNumber",
         i.point_of_sale AS "pointOfSale", i.cae, i.cae_expiry AS "caeExpiry",
         i.total, i.iva_amount AS "ivaAmount", i.description,
+        i.detail_mode AS "detailMode",
         i.created_at AS "createdAt",
         c.name AS "customerName", c.phone AS "customerPhone",
         o.remito_num AS "orderRemitoNum"
@@ -5519,6 +5526,11 @@ export const storage = {
       const cRows = await db.execute(drizzleSql`SELECT condicion_iva_receptor_id AS "condicionIvaReceptorId" FROM invoices WHERE id = ${id}`);
       inv.condicionIvaReceptorId = (cRows.rows[0] as any)?.condicionIvaReceptorId ?? null;
     } catch { inv.condicionIvaReceptorId = null; }
+    // Modo de presentación persistido al emitir (columna puede no existir aún)
+    try {
+      const dRows = await db.execute(drizzleSql`SELECT detail_mode AS "detailMode" FROM invoices WHERE id = ${id}`);
+      (inv as any).detailMode = (dRows.rows[0] as any)?.detailMode ?? null;
+    } catch { (inv as any).detailMode = null; }
 
     const [customer] = await db.select().from(customers).where(eq(customers.id, inv.customerId));
     const [order]    = await db.select().from(orders).where(eq(orders.id, inv.orderId));

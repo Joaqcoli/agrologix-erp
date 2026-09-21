@@ -402,6 +402,9 @@ export const invoices = pgTable("invoices", {
   ivaAmount: numeric("iva_amount", { precision: 12, scale: 2 }).notNull(),
   condicionIvaReceptorId: integer("condicion_iva_receptor_id"),
   description: text("description"),
+  // Modo de presentación elegido al emitir: 'agrupado' | 'completo'.
+  // El PDF SIEMPRE se genera con este modo — la factura es una sola.
+  detailMode: text("detail_mode"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 export type Invoice = typeof invoices.$inferSelect;

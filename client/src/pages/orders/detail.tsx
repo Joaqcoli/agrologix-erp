@@ -1220,7 +1220,8 @@ export default function OrderDetailPage({ id }: { id: number }) {
         }
         if (iid) {
           const det = await fetch(`/api/invoices/${iid}`, { credentials: "include" }).then((r) => r.json());
-          await generateInvoicePDF(det, invoiceForm.detailMode);
+          // Siempre el modo persistido al emitir (no el estado local del formulario)
+          await generateInvoicePDF(det, det?.invoice?.detailMode ?? "agrupado");
         }
       }
       window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(waMessage)}`, "_blank");
@@ -1429,8 +1430,16 @@ export default function OrderDetailPage({ id }: { id: number }) {
                   <Download className="mr-2 h-4 w-4" /> Remito PDF
                 </Button>
                 {!order.invoiceNumber && !emittedInvoice ? (
-                  <Button size="sm" variant="outline" onClick={() => {
-                    setInvoiceForm({ type: "A", description: "FRUTAS Y VERDURAS", condicionIva: 1, detailMode: "agrupado", ivaIncluido: false });
+                  <Button size="sm" variant="outline" onClick={async () => {
+                    // Pre-seleccionar el modo con el que se facturó por última vez a este
+                    // cliente (cada cliente tiene su forma); si nunca se facturó → agrupado.
+                    let lastMode: "completo" | "agrupado" = "agrupado";
+                    try {
+                      const billingId = parentCustomerId ?? order.customerId;
+                      const prev = await fetch(`/api/invoices?customerId=${billingId}`, { credentials: "include" }).then((r) => r.json());
+                      if (prev?.[0]?.detailMode === "completo") lastMode = "completo";
+                    } catch { /* sin historial → default agrupado */ }
+                    setInvoiceForm({ type: "A", description: "FRUTAS Y VERDURAS", condicionIva: 1, detailMode: lastMode, ivaIncluido: false });
                     setInvoiceDialog(true);
                   }}>
                     <Receipt className="mr-2 h-4 w-4" /> Emitir Factura
@@ -1446,7 +1455,8 @@ export default function OrderDetailPage({ id }: { id: number }) {
                       }
                       if (!invoiceId) { toast({ title: "No se encontró la factura", variant: "destructive" }); return; }
                       const detail = await fetch(`/api/invoices/${invoiceId}`, { credentials: "include" }).then((r) => r.json());
-                      await generateInvoicePDF(detail, invoiceForm.detailMode);
+                      // Siempre el modo persistido al emitir (no el estado local del formulario)
+                      await generateInvoicePDF(detail, detail?.invoice?.detailMode ?? "agrupado");
                     } catch (e: any) {
                       toast({ title: "Error", description: e.message, variant: "destructive" });
                     }
