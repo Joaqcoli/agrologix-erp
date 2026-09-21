@@ -697,6 +697,9 @@ function PaymentModal({
   const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([]);
   const [retentionAmount, setRetentionAmount] = useState("");
   const [retentionType, setRetentionType] = useState("IIBB");
+  // Diferencia chica para que el pago cierre contra las facturas (no mueve caja):
+  // positiva = faltó plata y se perdona; negativa = sobró. Se registra como pago DIFERENCIA.
+  const [diffAmount, setDiffAmount] = useState("");
   // Líneas que componen el pago: cada una su método + monto (efectivo + transferencia + cheques).
   // Default: una línea EFECTIVO. Con una sola línea, su monto = el total (no se muestra el input).
   type PayLine = { method: string; monto: string; numero: string; fechaCobro: string; cuentaId: number | null };
@@ -742,8 +745,13 @@ function PaymentModal({
     .reduce((s, o) => s + orderRemaining(o), 0);
 
   const retAmt = parseFloat(retentionAmount || "0");
-  const combinedAmount = parseFloat(amount || "0") + (isNaN(retAmt) ? 0 : retAmt);
+  const diffAmt = parseFloat(diffAmount || "0"); // puede ser negativa (sobró plata)
+  const combinedAmount = parseFloat(amount || "0") + (isNaN(retAmt) ? 0 : retAmt) + (isNaN(diffAmt) ? 0 : diffAmt);
   const coversSelected = selectedTotal > 0 && combinedAmount >= selectedTotal - 0.5;
+  // Residuo contra lo seleccionado (sin contar la diferencia ya tipeada) — sugerencia de auto-completado
+  const residuo = selectedTotal > 0
+    ? Math.round((selectedTotal - (parseFloat(amount || "0") || 0) - (isNaN(retAmt) ? 0 : retAmt)) * 100) / 100
+    : 0;
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -783,6 +791,18 @@ function PaymentModal({
           orderIds: selectedOrderIds,
         });
       }
+      // Diferencia: mismo mecanismo que la retención (baja la CC sin mover caja).
+      // Positiva = faltó y se perdona; negativa = sobró (cancela el crédito de centavos).
+      if (!isNaN(diffAmt) && Math.abs(diffAmt) >= 0.01) {
+        await apiRequest("POST", "/api/payments", {
+          customerId,
+          date,
+          amount: diffAmount,
+          method: "DIFERENCIA",
+          notes: "Diferencia de cobro",
+          orderIds: selectedOrderIds,
+        });
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ar/cc"] });
@@ -792,7 +812,7 @@ function PaymentModal({
       queryClient.invalidateQueries({ queryKey: ["/api/caja/cuentas"] });
       toast({ title: "Pago registrado" });
       setAmount(""); setNotes(""); setSelectedOrderIds([]);
-      setRetentionAmount(""); setRetentionType("IIBB");
+      setRetentionAmount(""); setRetentionType("IIBB"); setDiffAmount("");
       setLines([{ method: "EFECTIVO", monto: "", numero: "", fechaCobro: "", cuentaId: null }]);
       onClose();
     },
@@ -847,7 +867,7 @@ function PaymentModal({
                   <Select value={l.method} onValueChange={v => updateLine(i, { method: v, cuentaId: null })}>
                     <SelectTrigger className="h-8 text-sm flex-1"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {PAYMENT_METHODS.filter((m) => m !== "RETENCION" && m !== "MIXTO").map((m) => (
+                      {PAYMENT_METHODS.filter((m) => m !== "RETENCION" && m !== "MIXTO" && m !== "DIFERENCIA").map((m) => (
                         <SelectItem key={m} value={m}>{m.replace(/_/g, " ")}</SelectItem>
                       ))}
                     </SelectContent>
@@ -1001,6 +1021,46 @@ function PaymentModal({
                 Pago <strong>${fmtInt(parseFloat(amount || "0"))}</strong> + Ret. <strong>${fmtInt(retAmt)}</strong> = <strong>${fmtInt(combinedAmount)}</strong>
                 {coversSelected && selectedTotal > 0 && (
                   <span className="ml-1.5 text-green-600 font-medium">✓ Cubre el total seleccionado</span>
+                )}
+              </p>
+            )}
+          </div>
+
+          {/* ── Diferencia ── */}
+          <div className="rounded-md border border-amber-200 bg-amber-50/40 dark:bg-amber-950/20 dark:border-amber-800 p-3 space-y-2">
+            <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">Diferencia (opcional)</p>
+            <p className="text-[10px] text-muted-foreground">
+              Ajuste chico para que el pago cierre contra las facturas sin dejar saldos de centavos.
+              Positiva = faltó y no se reclama · negativa = sobró.
+            </p>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">$</span>
+              <Input
+                type="number"
+                step="0.01"
+                value={diffAmount}
+                onChange={(e) => setDiffAmount(e.target.value)}
+                placeholder="0.00"
+                className="flex-1"
+                data-testid="input-diff-amount"
+              />
+              {selectedTotal > 0 && Math.abs(residuo) >= 0.01 && Math.abs(residuo - diffAmt) >= 0.01 && (
+                <Button
+                  type="button" variant="outline" size="sm" className="shrink-0 text-xs"
+                  onClick={() => setDiffAmount(residuo.toFixed(2))}
+                  data-testid="button-diff-autofill"
+                >
+                  Completar {residuo > 0 ? "+" : ""}{residuo.toLocaleString("es-AR", { minimumFractionDigits: 2 })}
+                </Button>
+              )}
+            </div>
+            {!isNaN(diffAmt) && Math.abs(diffAmt) >= 0.01 && (
+              <p className="text-[10px] text-muted-foreground">
+                Pago <strong>${fmtInt(parseFloat(amount || "0"))}</strong>
+                {retAmt > 0 && <> + Ret. <strong>${fmtInt(retAmt)}</strong></>}
+                {" "}{diffAmt >= 0 ? "+" : "−"} Dif. <strong>${Math.abs(diffAmt).toLocaleString("es-AR", { minimumFractionDigits: 2 })}</strong> = <strong>${fmtInt(combinedAmount)}</strong>
+                {coversSelected && selectedTotal > 0 && Math.abs(combinedAmount - selectedTotal) < 0.01 && (
+                  <span className="ml-1.5 text-green-600 font-medium">✓ Cierra exacto</span>
                 )}
               </p>
             )}

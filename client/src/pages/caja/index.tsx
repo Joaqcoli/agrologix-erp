@@ -154,6 +154,7 @@ const METHOD_LABEL: Record<string, string> = {
   MP: "Mercado Pago",
   OTRO: "Otro",
   RETENCION: "Retención",
+  DIFERENCIA: "Diferencia",
 };
 
 type MethodKey = "EFECTIVO" | "TRANSFERENCIA" | "CHEQUE";
@@ -936,6 +937,9 @@ export default function CajaPage() {
   const feed = useMemo((): FeedItem[] => {
     const items: FeedItem[] = [];
     for (const p of data?.payments ?? []) {
+      // DIFERENCIA: ajuste contable de la CC (centavos perdonados/sobrantes) — no es plata real,
+      // no entra al flujo de caja (mismo espíritu que la exclusión de RETENCION del desglose).
+      if ((p.method ?? "").toUpperCase() === "DIFERENCIA") continue;
       items.push({
         id: `pmt-${p.id}`,
         date: p.date,

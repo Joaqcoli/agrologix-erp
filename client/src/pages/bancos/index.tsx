@@ -97,8 +97,11 @@ export default function BancosPage() {
   // Retención opcional al aplicar el pago desde Banco (mismo mecanismo que la CC: payment method=RETENCION)
   const [retAmount, setRetAmount] = useState("");
   const [retType, setRetType] = useState("IIBB");
+  // Diferencia chica para que el cobro cierre contra las facturas (positiva = faltó y se
+  // perdona, negativa = sobró). Mismo mecanismo que la CC: payment method=DIFERENCIA.
+  const [difAmount, setDifAmount] = useState("");
   const [applySubmitting, setApplySubmitting] = useState(false);
-  useEffect(() => { if (!applyPayOpen) { setRetAmount(""); setRetType("IIBB"); setApplySubmitting(false); } }, [applyPayOpen]);
+  useEffect(() => { if (!applyPayOpen) { setRetAmount(""); setRetType("IIBB"); setDifAmount(""); setApplySubmitting(false); } }, [applyPayOpen]);
 
   // Asignación de cobros Galicia — picker manual de cliente (cobros sin CUIT/match)
   const [galiciaPickOpen, setGaliciaPickOpen] = useState(false);
@@ -1050,6 +1053,13 @@ export default function BancosPage() {
                 customerId, date, amount: retAmount, method: "RETENCION", notes: retType, orderIds,
               });
             }
+            // 3) Diferencia opcional — ajuste chico para que cierre contra las facturas (no mueve caja)
+            const difNum = parseFloat(difAmount) || 0;
+            if (Math.abs(difNum) >= 0.01) {
+              await apiRequest("POST", "/api/payments", {
+                customerId, date, amount: difAmount, method: "DIFERENCIA", notes: "Diferencia de cobro", orderIds,
+              });
+            }
             qc.invalidateQueries({ queryKey: ["/api/ar/cc"] });
             qc.invalidateQueries({ queryKey: ["/api/caja/summary"] });
             qc.invalidateQueries({ queryKey: ["/api/customers/pedidos-pendientes"] });
@@ -1147,6 +1157,20 @@ export default function BancosPage() {
                   {(parseFloat(retAmount) || 0) > 0 && (
                     <p className="text-[11px] text-muted-foreground">
                       Cobranza {fmt(totalAssigned)} + retención {fmt(parseFloat(retAmount) || 0)} = <b className="text-foreground">{fmt(totalAssigned + (parseFloat(retAmount) || 0))}</b> a la cuenta corriente.
+                    </p>
+                  )}
+                </div>
+
+                {/* Diferencia opcional — ajuste chico para cerrar contra las facturas (no mueve caja) */}
+                <div className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50/40 px-3 py-2.5 space-y-1.5">
+                  <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">Diferencia (opcional)</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Si el cobro no cierra por centavos/pocos pesos: positiva = faltó y no se reclama · negativa = sobró.
+                  </p>
+                  <Input type="number" step="0.01" value={difAmount} onChange={e => setDifAmount(e.target.value)} placeholder="0.00" className="h-8" />
+                  {Math.abs(parseFloat(difAmount) || 0) >= 0.01 && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Baja la CC por <b className="text-foreground">{fmt((parseFloat(difAmount) || 0))}</b> extra sin registrar plata en caja.
                     </p>
                   )}
                 </div>

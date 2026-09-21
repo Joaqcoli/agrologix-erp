@@ -226,7 +226,9 @@ export const remitos = pgTable("remitos", {
 
 // ─── Cuentas Corrientes ───────────────────────────────────────────────────────
 
-export const PAYMENT_METHODS = ["EFECTIVO", "TRANSFERENCIA", "CHEQUE", "CUENTA_CORRIENTE", "OTRO", "RETENCION", "MIXTO"] as const;
+// DIFERENCIA: ajuste chico (centavos/pocos pesos) para que el pago cierre contra las
+// facturas — positivo si faltó plata (se perdona), negativo si sobró. No mueve caja.
+export const PAYMENT_METHODS = ["EFECTIVO", "TRANSFERENCIA", "CHEQUE", "CUENTA_CORRIENTE", "OTRO", "RETENCION", "MIXTO", "DIFERENCIA"] as const;
 export type PaymentMethod = typeof PAYMENT_METHODS[number];
 
 export const payments = pgTable("payments", {
