@@ -510,6 +510,17 @@ export async function runMigrations() {
     WHERE g.name = 'COMO SIEMPRE-MESTIZO' AND c.name IN ('COMO SIEMPRE LAGUNA', 'MESTIZO')
     ON CONFLICT (group_id, customer_id) DO NOTHING
   `);
+  // PLANTA COLEGIOS + COLEGIO SIMBRON: CC separadas, precio compartido (2026-09-27)
+  await db.execute(sql`
+    INSERT INTO client_groups (name) VALUES ('SIMBRON-PLANTA COLEGIOS')
+    ON CONFLICT (name) DO NOTHING
+  `);
+  await db.execute(sql`
+    INSERT INTO client_group_members (group_id, customer_id)
+    SELECT g.id, c.id FROM client_groups g CROSS JOIN customers c
+    WHERE g.name = 'SIMBRON-PLANTA COLEGIOS' AND c.name IN ('COLEGIO SIMBRON', 'PLANTA COLEGIOS')
+    ON CONFLICT (group_id, customer_id) DO NOTHING
+  `);
 
   // ─── price_history: track unit per price record ──────────────────────────────
   await db.execute(sql`ALTER TABLE price_history ADD COLUMN IF NOT EXISTS unit TEXT`);
