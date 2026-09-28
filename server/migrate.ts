@@ -521,6 +521,17 @@ export async function runMigrations() {
     WHERE g.name = 'SIMBRON-PLANTA COLEGIOS' AND c.name IN ('COLEGIO SIMBRON', 'PLANTA COLEGIOS')
     ON CONFLICT (group_id, customer_id) DO NOTHING
   `);
+  // BORGO + NISI MASA: CC separadas, precio compartido (2026-09-28)
+  await db.execute(sql`
+    INSERT INTO client_groups (name) VALUES ('BORGO-NISI MASA')
+    ON CONFLICT (name) DO NOTHING
+  `);
+  await db.execute(sql`
+    INSERT INTO client_group_members (group_id, customer_id)
+    SELECT g.id, c.id FROM client_groups g CROSS JOIN customers c
+    WHERE g.name = 'BORGO-NISI MASA' AND upper(c.name) IN ('BORGO', 'NISI MASA')
+    ON CONFLICT (group_id, customer_id) DO NOTHING
+  `);
 
   // ─── price_history: track unit per price record ──────────────────────────────
   await db.execute(sql`ALTER TABLE price_history ADD COLUMN IF NOT EXISTS unit TEXT`);
