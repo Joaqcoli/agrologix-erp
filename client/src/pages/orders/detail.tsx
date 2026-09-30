@@ -64,13 +64,19 @@ type FullOrder = Order & {
   items: FullOrderItem[];
 };
 
-type ItemDraft = {
+type ItemDraftFields = {
   qty: string;
   unit: string;
   price: string;
   cost: string;
   productId: number | null;
 };
+
+// `orig` = valores que tenía la línea cuando el usuario empezó a editarla. Los cambios
+// se detectan contra ese snapshot (no contra el pedido cacheado) y al guardar se manda
+// SOLO lo que el usuario cambió: si tocó la cantidad no viaja el precio, así un precio
+// propagado desde otro pedido del grupo no se pisa con el que la pantalla tenía en memoria.
+type ItemDraft = ItemDraftFields & { orig: ItemDraftFields };
 
 type CalcItem = {
   id: number;
@@ -116,18 +122,24 @@ type StockIssueState = {
   decisions: Record<number, ApprovalDecision>;
 } | null;
 
-function hasDraftChanges(draft: ItemDraft, calc: CalcItem): boolean {
-  const origQty = fmtCantidad(calc.qty);
-  const origUnit = dbEnumToCanonical(calc.unit);
-  const origPrice = calc.hasPrice ? String(Math.round(calc.pricePerUnit!)) : "";
-  const origCost = String(Math.round(calc.effectiveCostPerUnit));
-  return (
-    draft.qty !== origQty ||
-    draft.unit !== origUnit ||
-    draft.price !== origPrice ||
-    draft.cost !== origCost ||
-    draft.productId !== (calc.item.productId ?? null)
-  );
+function draftFieldsFromCalc(calc: CalcItem): ItemDraftFields {
+  return {
+    qty: fmtCantidad(calc.qty),
+    unit: dbEnumToCanonical(calc.unit),
+    price: calc.hasPrice ? String(Math.round(calc.pricePerUnit!)) : "",
+    cost: String(Math.round(calc.effectiveCostPerUnit)),
+    productId: calc.item.productId ?? null,
+  };
+}
+
+// Campos que el usuario cambió respecto al snapshot de inicio de edición.
+function changedDraftFields(draft: ItemDraft): (keyof ItemDraftFields)[] {
+  const keys: (keyof ItemDraftFields)[] = ["qty", "unit", "price", "cost", "productId"];
+  return keys.filter((k) => draft[k] !== draft.orig[k]);
+}
+
+function hasDraftChanges(draft: ItemDraft, _calc: CalcItem): boolean {
+  return changedDraftFields(draft).length > 0;
 }
 
 // ─── ProductCombobox ───────────────────────────────────────────────────────────
@@ -223,7 +235,7 @@ function ItemRow({
   draft: ItemDraft | undefined;
   isSaving: boolean;
   onStartEdit: () => void;
-  onFieldChange: (field: keyof ItemDraft, value: string | number | null) => void;
+  onFieldChange: (field: keyof ItemDraftFields, value: string | number | null) => void;
   onSave: () => void;
   onCancel: () => void;
   onDelete: (itemId: number) => void;
@@ -906,6 +918,12 @@ export default function OrderDetailPage({ id }: { id: number }) {
   // ── Queries ───────────────────────────────────────────────────────────────
   const { data: order, isLoading } = useQuery<FullOrder>({
     queryKey: ["/api/orders", id],
+    // El precio de una línea puede cambiar desde OTRO pedido del grupo (propagación) o
+    // desde otra pestaña/dispositivo. Mostrar lo cacheado al instante pero pedirlo
+    // siempre al servidor al abrir y al volver a la pestaña.
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
   });
 
   const { data: allProducts = [] } = useQuery<Product[]>({
@@ -923,20 +941,15 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const handleStartEdit = (calc: CalcItem) => {
     setEditingId(calc.id);
     if (!drafts[calc.id]) {
+      const fields = draftFieldsFromCalc(calc);
       setDrafts((prev) => ({
         ...prev,
-        [calc.id]: {
-          qty: fmtCantidad(calc.qty),
-          unit: dbEnumToCanonical(calc.unit),
-          price: calc.hasPrice ? String(Math.round(calc.pricePerUnit!)) : "",
-          cost: String(Math.round(calc.effectiveCostPerUnit)),
-          productId: calc.item.productId ?? null,
-        },
+        [calc.id]: { ...fields, orig: fields },
       }));
     }
   };
 
-  const handleFieldChange = (itemId: number, field: keyof ItemDraft, value: string | number | null) => {
+  const handleFieldChange = (itemId: number, field: keyof ItemDraftFields, value: string | number | null) => {
     setDrafts((prev) => ({
       ...prev,
       [itemId]: { ...prev[itemId]!, [field]: value as string },
@@ -983,20 +996,17 @@ export default function OrderDetailPage({ id }: { id: number }) {
       })
       .map((c) => {
         const d = drafts[c.id]!;
-        // Solo tocar el override del costo si el usuario REALMENTE cambió el costo.
-        // Si no, undefined → el backend preserva el estado actual (no marca "Manual" al
-        // editar cantidad/precio/unidad sin tocar el costo).
-        const costChanged = d.cost !== String(Math.round(c.effectiveCostPerUnit));
-        return {
-          itemId: c.id,
-          data: {
-            quantity: d.qty,
-            unit: d.unit,
-            pricePerUnit: d.price !== "" ? d.price : null,
-            overrideCostPerUnit: costChanged ? (d.cost !== "" ? d.cost : null) : undefined,
-            productId: d.productId,
-          },
-        };
+        // Mandar SOLO lo que el usuario cambió (contra el snapshot de inicio de edición).
+        // Lo que no viaja, el backend lo preserva: no se pisa un precio propagado desde
+        // otro pedido del grupo, y el costo no se marca "Manual" si no se tocó.
+        const changed = new Set(changedDraftFields(d));
+        const data: Record<string, any> = {};
+        if (changed.has("qty")) data.quantity = d.qty;
+        if (changed.has("unit")) data.unit = d.unit;
+        if (changed.has("price")) data.pricePerUnit = d.price !== "" ? d.price : null;
+        if (changed.has("cost")) data.overrideCostPerUnit = d.cost !== "" ? d.cost : null;
+        if (changed.has("productId")) data.productId = d.productId;
+        return { itemId: c.id, data };
       });
 
     if (patches.length === 0) {
