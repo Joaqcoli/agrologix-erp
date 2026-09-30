@@ -7,6 +7,18 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+// Si el error es un 409 con advertencias que el usuario debe confirmar (ej. compra en una
+// unidad inusual o costo muy distinto al de la última compra), devuelve la lista; si no, null.
+export function confirmWarningsFromError(e: unknown): string[] | null {
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  if (!msg.startsWith("409:")) return null;
+  try {
+    const body = JSON.parse(msg.slice(4).trim());
+    if (body?.code === "CONFIRM_REQUIRED" && Array.isArray(body.warnings)) return body.warnings as string[];
+  } catch { /* noop */ }
+  return null;
+}
+
 export async function apiRequest(
   method: string,
   url: string,

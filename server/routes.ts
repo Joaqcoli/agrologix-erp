@@ -569,6 +569,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         supplierName: z.string().min(1),
         supplierId: z.number().int().positive().nullable().optional(),
         affectsStock: z.boolean().optional(),
+        confirm: z.boolean().optional(),
         purchaseDate: z.string(),
         notes: z.string().optional(),
         totalEmptyCost: z.string().optional(),
@@ -591,7 +592,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         totalEmptyCost: data.totalEmptyCost,
       });
       return res.json(purchase);
-    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+    } catch (e: any) {
+      if (e?.code === "CONFIRM_REQUIRED") return res.status(409).json({ code: e.code, warnings: e.warnings, error: e.message });
+      return res.status(400).json({ error: e.message });
+    }
   });
 
   app.delete("/api/purchases/:id", requireAuth, async (req, res) => {
@@ -614,9 +618,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         createdBy: req.session.userId!,
         totalEmptyCostExtra: (data as any).totalEmptyCostExtra ?? undefined,
         items: data.items as any,
+        confirm: req.body?.confirm === true,
       });
       return res.status(201).json(purchase);
-    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+    } catch (e: any) {
+      // Advertencias (unidad de compra inusual / costo muy distinto): el front las muestra y reenvía con confirm=true
+      if (e?.code === "CONFIRM_REQUIRED") return res.status(409).json({ code: e.code, warnings: e.warnings, error: e.message });
+      return res.status(400).json({ error: e.message });
+    }
   });
 
   // ─── Orders ────────────────────────────────────────────────────────────────

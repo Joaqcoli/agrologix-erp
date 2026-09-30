@@ -260,7 +260,12 @@ export const storage = {
       weightPerPackage?: string;
       emptyCost?: string;
     }[];
+    confirm?: boolean; // true = el usuario ya vio y aceptó las advertencias
   }): Promise<Purchase> {
+    if (!data.confirm) {
+      const warnings = await this._purchaseWarnings(data.items);
+      if (warnings.length > 0) throw Object.assign(new Error(warnings.join("\n")), { code: "CONFIRM_REQUIRED", warnings });
+    }
     // Pre-compute totals (no DB)
     let total = 0;
     let totalEmptyCost = 0;
@@ -490,6 +495,65 @@ export const storage = {
   // ── Helper: obtener costo por unidad para un producto dado ──────────────────
   // ignoreStock=false (default): retorna "0" si no hay stock — el costo solo existe si hay mercadería
   // ignoreStock=true: retorna el último costo conocido sin importar el stock (para rinde / display de dialog)
+  // Unidades base en las que este producto cuenta su stock (filas product_units con base_unit,
+  // excluyendo envases). REGLA (usuario, 2026-09-30): el stock se cuenta en la unidad que viene
+  // adentro de lo que se compra (morrón: cajón con KG → KG; huevo: cajón con MAPLES → MAPLE).
+  // Un producto puede tener más de una si de verdad se compra de dos formas (remolacha: atados o kg).
+  async _baseUnitsOf(productId: number, tx: any = db): Promise<string[]> {
+    const rows = await tx.select({ unit: productUnits.unit }).from(productUnits)
+      .where(and(
+        eq(productUnits.productId, productId),
+        drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+        drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
+      ));
+    return rows.map((r: any) => String(r.unit));
+  },
+
+  // Rechaza contar/ajustar stock en una unidad que el producto no usa. Así el conteo del galpón
+  // ("7 morrones" en UNIDAD) no crea una fila de stock paralela con costo propio, que era el
+  // origen de los costos disparatados (morrón verde por cajón a $11.046 en vez de $35.000).
+  async _assertBaseUnitAllowed(productId: number, canonicalUnit: string, tx: any = db): Promise<void> {
+    const bases = await this._baseUnitsOf(productId, tx);
+    if (bases.length === 0 || bases.includes(canonicalUnit)) return;
+    const [p] = await tx.select({ name: products.name }).from(products).where(eq(products.id, productId)).limit(1);
+    throw new Error(`${p?.name ?? "Producto " + productId}: el stock se cuenta en ${bases.join(" / ")}, no en ${canonicalUnit}. Contalo en ${bases.join(" o ")}.`);
+  },
+
+  // Advertencias al cargar una compra (se muestran al usuario y debe confirmarlas):
+  //  (a) la línea viene en una unidad base que el producto no usa (crearía una fila de stock nueva)
+  //  (b) el costo por unidad base se va más de 3× (para arriba o abajo) de la última compra en esa unidad
+  async _purchaseWarnings(
+    items: { productId: number; unit: string; costPerUnit: string }[],
+    excludePurchaseId: number | null = null,
+    tx: any = db,
+  ): Promise<string[]> {
+    const warnings: string[] = [];
+    for (const item of items) {
+      const unit = dbEnumToCanonical(item.unit);
+      if (['CAJON', 'BOLSA', 'BANDEJA'].includes(unit)) continue;
+      const [p] = await tx.select({ name: products.name }).from(products).where(eq(products.id, item.productId)).limit(1);
+      const name = p?.name ?? `Producto ${item.productId}`;
+      const bases = await this._baseUnitsOf(item.productId, tx);
+      if (bases.length > 0 && !bases.includes(unit)) {
+        warnings.push(`${name}: se compra en ${bases.join(" / ")} y esta línea está en ${unit}. ¿Es correcto?`);
+      }
+      const cost = parseFloat(item.costPerUnit);
+      if (cost > 0) {
+        const res: any = await tx.execute(drizzleSql`
+          SELECT pi.cost_per_unit::float AS c FROM purchase_items pi JOIN purchases pu ON pu.id = pi.purchase_id
+          WHERE pi.product_id = ${item.productId} AND pi.unit::text = ${unit} AND pi.cost_per_unit::numeric > 0
+            AND (${excludePurchaseId}::int IS NULL OR pi.purchase_id <> ${excludePurchaseId}::int)
+          ORDER BY pu.purchase_date DESC, pi.id DESC LIMIT 1
+        `);
+        const last = (res.rows ?? res)[0]?.c as number | undefined;
+        if (last && last > 0 && (cost > last * 3 || cost < last / 3)) {
+          warnings.push(`${name}: costo $${Math.round(cost)} por ${unit} contra $${Math.round(last)} en la última compra. ¿Está bien la unidad y el precio?`);
+        }
+      }
+    }
+    return warnings;
+  },
+
   async _getCostForUnit(productId: number, unit: string, tx: any = db, ignoreStock = false): Promise<string> {
     const canonical = dbEnumToCanonical(unit);
     const isPackageUnit = ['CAJON', 'BOLSA', 'BANDEJA'].includes(canonical);
@@ -539,14 +603,30 @@ export const storage = {
     // CRÍTICO: solo buscar filas base que NO sean unidades de envase (excluye rows CAJON mal marcados)
     // Ordenar por stockQty DESC para preferir filas con stock real sobre filas históricas vacías
     if (isPackageUnit) {
-      const [baseRow] = await tx.select().from(productUnits)
-        .where(and(
-          eq(productUnits.productId, productId),
-          drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
-          drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
-        ))
-        .orderBy(drizzleSql`${productUnits.stockQty}::numeric DESC, ${productUnits.avgCost}::numeric DESC`)
+      // La última compra de ese envase dice qué trae adentro (KG, ATADO, MAPLE...). La fila base
+      // del costo tiene que ser ESA unidad: un cajón de remolacha trae atados, uno de champignon
+      // trae kg. Antes se tomaba "la fila con más stock" y podía mezclar unidades.
+      const [lastPkgPi] = await tx.select({ unit: purchaseItems.unit })
+        .from(purchaseItems)
+        .where(and(eq(purchaseItems.productId, productId), eq(purchaseItems.purchaseUnit, canonical as any)))
+        .orderBy(desc(purchaseItems.id))
         .limit(1);
+      const baseConds = [
+        eq(productUnits.productId, productId),
+        drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+        drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
+      ];
+      let [baseRow] = lastPkgPi
+        ? await tx.select().from(productUnits)
+            .where(and(...baseConds, eq(productUnits.unit, dbEnumToCanonical(lastPkgPi.unit as string))))
+            .limit(1)
+        : [undefined];
+      if (!baseRow) {
+        [baseRow] = await tx.select().from(productUnits)
+          .where(and(...baseConds))
+          .orderBy(drizzleSql`${productUnits.stockQty}::numeric DESC, ${productUnits.avgCost}::numeric DESC`)
+          .limit(1);
+      }
       if (baseRow && parseFloat(baseRow.avgCost as string) > 0) {
         if (ignoreStock || parseFloat(baseRow.stockQty as string) > 0) {
           const [recentPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
@@ -808,7 +888,12 @@ export const storage = {
     notes?: string;
     totalEmptyCost?: string;
     items: { productId: number; quantity: string; unit: "KG" | "UNIDAD" | "CAJON" | "BOLSA" | "ATADO" | "MAPLE" | "BANDEJA"; costPerUnit: string; costPerPurchaseUnit?: string; purchaseQty?: string; purchaseUnit?: string; weightPerPackage?: string; affectsStock?: boolean }[];
+    confirm?: boolean; // true = el usuario ya vio y aceptó las advertencias
   }): Promise<Purchase> {
+    if (!data.confirm) {
+      const warnings = await this._purchaseWarnings(data.items, id);
+      if (warnings.length > 0) throw Object.assign(new Error(warnings.join("\n")), { code: "CONFIRM_REQUIRED", warnings });
+    }
     return db.transaction(async (tx) => {
       const purchaseDateStr = data.purchaseDate.toISOString().slice(0, 10);
 
@@ -3351,6 +3436,7 @@ export const storage = {
         }
       } else {
         // Base unit (KG/UNIDAD/ATADO/MAPLE/etc.): upsert and set baseUnit
+        await this._assertBaseUnitAllowed(item.productId, canonicalUnit);
         const [existing] = await db.select().from(productUnits)
           .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
           .limit(1);
@@ -3415,6 +3501,7 @@ export const storage = {
         }
       } else {
         // Base unit (KG/UNIDAD/ATADO/MAPLE/etc.)
+        await this._assertBaseUnitAllowed(item.productId, canonicalUnit);
         const [existing] = await db.select().from(productUnits)
           .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, canonicalUnit)))
           .limit(1);

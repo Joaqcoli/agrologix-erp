@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient, apiRequest, confirmWarningsFromError } from "@/lib/queryClient";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -68,6 +68,8 @@ export default function EditPurchasePage({ id }: { id: number }) {
   const [items, setItems] = useState<PurchaseItem[]>([{ productId: 0, quantity: "", unit: "KG", costPerUnit: "", weightPerPackage: "", baseUnit: "KG" }]);
   const [initialized, setInitialized] = useState(false);
   const [stockDialogOpen, setStockDialogOpen] = useState(false);
+  // Advertencias del servidor (unidad inusual / costo muy distinto) pendientes de confirmar
+  const [confirmReq, setConfirmReq] = useState<{ warnings: string[]; payload: any } | null>(null);
 
   const { data: purchase, isLoading: loadingPurchase } = useQuery<any>({
     queryKey: ["/api/purchases", id],
@@ -138,7 +140,11 @@ export default function EditPurchasePage({ id }: { id: number }) {
       toast({ title: "Compra actualizada", description: "Se ajustó el inventario y el costo promedio." });
       setLocation(`/purchases/${id}`);
     },
-    onError: (e: any) => toast({ title: "Error al guardar", description: e.message, variant: "destructive" }),
+    onError: (e: any, payload: any) => {
+      const warnings = confirmWarningsFromError(e);
+      if (warnings) { setConfirmReq({ warnings, payload }); return; }
+      toast({ title: "Error al guardar", description: e.message, variant: "destructive" });
+    },
   });
 
   // Fix 1: unshift so new item appears at top
@@ -701,6 +707,28 @@ export default function EditPurchasePage({ id }: { id: number }) {
             </AlertDialogAction>
             <AlertDialogAction onClick={() => submitPurchase(true)}>
               Sí, afectar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!confirmReq} onOpenChange={(o) => { if (!o) setConfirmReq(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revisá esta compra antes de guardar</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div>
+                <ul className="list-disc pl-5 space-y-2 text-sm">
+                  {confirmReq?.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+                <p className="mt-3">Si es un error de carga, cancelá y corregí la línea. Si está bien así, confirmá.</p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setConfirmReq(null)}>Cancelar y corregir</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { const p = confirmReq?.payload; setConfirmReq(null); if (p) updateMutation.mutate({ ...p, confirm: true }); }}>
+              Está bien, guardar igual
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
