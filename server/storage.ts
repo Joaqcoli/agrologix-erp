@@ -1830,6 +1830,19 @@ export const storage = {
               AND o.customer_id = ANY(ARRAY[${peerIdsSql}]::int[])
               AND o.status = 'draft'
           `);
+          // Recalcular el total de los borradores de pares que recibieron el precio.
+          // Antes solo se actualizaba el subtotal de la línea y orders.total quedaba
+          // con el valor viejo si el borrador se aprobaba sin tocarlo.
+          await tx.execute(drizzleSql`
+            UPDATE orders o
+            SET total = (SELECT COALESCE(SUM(oi.subtotal::numeric), 0) FROM order_items oi WHERE oi.order_id = o.id)
+            WHERE o.status = 'draft'
+              AND o.customer_id = ANY(ARRAY[${peerIdsSql}]::int[])
+              AND EXISTS (
+                SELECT 1 FROM order_items oi
+                WHERE oi.order_id = o.id AND oi.product_id = ${newProductId} AND UPPER(oi.unit::text) = ${unitForHistory}
+              )
+          `);
         }
       }
 
@@ -2385,6 +2398,13 @@ export const storage = {
               AND o.status = 'draft'
           `);
         }
+        // Recalcular el total de los borradores de pares tocados por la sincronización
+        await tx.execute(drizzleSql`
+          UPDATE orders o
+          SET total = (SELECT COALESCE(SUM(oi.subtotal::numeric), 0) FROM order_items oi WHERE oi.order_id = o.id)
+          WHERE o.status = 'draft'
+            AND o.customer_id = ANY(ARRAY[${peerIdsSql}]::int[])
+        `);
       }
 
       // Generate remito
@@ -2398,12 +2418,14 @@ export const storage = {
         customerId: order.customerId,
       }).returning();
 
-      // Update order status
+      // Update order status. El total se recalcula SIEMPRE desde las líneas al aprobar:
+      // el pedido pudo recibir precios propagados desde pares sin que nadie lo editara.
       const [updated] = await tx.update(orders).set({
         status: "approved",
         approvedBy: userId,
         approvedAt: new Date(),
         remitoId: remito.id,
+        total: drizzleSql`(SELECT COALESCE(SUM(oi.subtotal::numeric), 0) FROM order_items oi WHERE oi.order_id = ${orders.id})` as any,
       }).where(eq(orders.id, id)).returning();
 
       return updated;

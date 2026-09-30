@@ -1452,5 +1452,19 @@ export async function runNcMigrations() {
   // Rollback: ALTER TABLE order_items DROP COLUMN IF EXISTS alias_nombre;
   try { await db.execute(sql`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS alias_nombre TEXT DEFAULT NULL`); } catch {}
 
+  // ─── Total del pedido = suma de líneas (reparación + invariante) ──────────────
+  // La propagación de precios a borradores de pares actualizaba order_items.subtotal
+  // sin recalcular orders.total; si el borrador se aprobaba sin tocarlo, quedaba con
+  // el total viejo (69 aprobados desfasados al 2026-09-30, ej. VA-001525). La CC,
+  // la factura y el remito ya usan las líneas; esto corrige lista/dashboard/MP.
+  // Idempotente: solo toca pedidos cuyo total difiere de la suma de sus líneas.
+  try { await db.execute(sql`
+    UPDATE orders o
+    SET total = s.suma
+    FROM (SELECT order_id, COALESCE(SUM(subtotal::numeric), 0) AS suma FROM order_items GROUP BY order_id) s
+    WHERE s.order_id = o.id
+      AND o.total::numeric <> s.suma
+  `); } catch (e) { console.error("orders.total = sum(lines) repair failed:", e); }
+
   console.log("NC migrations complete.");
 }
