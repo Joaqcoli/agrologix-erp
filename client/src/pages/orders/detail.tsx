@@ -926,6 +926,30 @@ export default function OrderDetailPage({ id }: { id: number }) {
     refetchOnWindowFocus: true,
   });
 
+  // Si el pedido se refresca (precio propagado desde OTRO pedido del grupo, u otra
+  // pestaña/dispositivo) mientras una línea está en edición y el usuario NO tocó su
+  // precio, el borrador sigue al servidor: el input muestra el precio nuevo y el
+  // snapshot `orig` se mueve con él, así ese precio nunca vuelve a viajar como "viejo".
+  useEffect(() => {
+    if (!order) return;
+    setDrafts((prev) => {
+      let changed = false;
+      const next: typeof prev = { ...prev };
+      for (const item of order.items) {
+        const d = next[item.id];
+        if (!d) continue;
+        const isBonif = !!(item as any).isBonification;
+        const hasPrice = isBonif || (item.pricePerUnit != null && parseFloat(item.pricePerUnit as string) > 0);
+        const serverPrice = hasPrice ? String(Math.round(parseFloat((item.pricePerUnit as string) ?? "0"))) : "";
+        if (d.price === d.orig.price && d.price !== serverPrice) {
+          next[item.id] = { ...d, price: serverPrice, orig: { ...d.orig, price: serverPrice } };
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [order]);
+
   const { data: allProducts = [] } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
