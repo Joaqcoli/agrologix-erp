@@ -620,16 +620,12 @@ export const storage = {
         AND upper(oi.unit::text) = ${canonical}
         AND o.status = 'approved'
         AND oi.price_per_unit::numeric > 0
-      ORDER BY
-        (o.approved_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires')::date DESC NULLS LAST,
-        (o.customer_id = ${customerId}) DESC,
-        o.approved_at DESC NULLS LAST, o.order_date DESC, o.id DESC
+      ORDER BY o.approved_at DESC NULLS LAST, o.order_date DESC, o.id DESC
       LIMIT 1
     `);
-    // Orden: (1) día de aprobación más reciente (hora local); (2) dentro de ese día, el
-    // precio cobrado a ESTE cliente antes que el de un par del grupo (con 16 colegios
-    // aprobados en cualquier orden, "el último aprobado" podía traer un precio distinto
-    // del que se le cobró a este cliente); (3) desempate: última aprobación.
+    // REGLA DEL GRUPO (confirmada por el usuario 2026-09-30): el último precio de cada
+    // producto+unidad es el último aprobado de CUALQUIER miembro del grupo, sin preferir
+    // al propio cliente. La propagación de cambios va solo a borradores de pares.
     const rows = result.rows as any[];
     if (rows.length > 0) return String(rows[0].price_per_unit);
     return null;
