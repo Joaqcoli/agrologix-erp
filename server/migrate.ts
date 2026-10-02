@@ -1466,5 +1466,11 @@ export async function runNcMigrations() {
       AND o.total::numeric <> s.suma
   `); } catch (e) { console.error("orders.total = sum(lines) repair failed:", e); }
 
+  // ─── IVA desde una fecha (2026-10-02): customers.iva_since ───────────────────
+  // NULL = el IVA aplica a todos los pedidos del cliente (comportamiento de siempre).
+  // Con fecha = solo pedidos con order_date >= iva_since (ej. Fabric Sushi desde 2026-10-02:
+  // los pedidos anteriores y su cuenta corriente quedan sin IVA). Regla única en shared/iva.ts.
+  await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS iva_since DATE`);
+
   console.log("NC migrations complete.");
 }

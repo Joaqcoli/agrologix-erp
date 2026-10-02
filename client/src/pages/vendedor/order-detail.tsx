@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, Download, CheckCircle2, Clock, XCircle, FileText, Calendar } from "lucide-react";
 import { generateRemitoPDF } from "@/lib/pdf";
 import type { Customer } from "@shared/schema";
-import { ivaRateOf } from "@shared/iva";
+import { ivaRateOf, hasIvaOn } from "@shared/iva";
 
 import { fmtDecimal, fmtCantidad } from "@/lib/format";
 const fmt = (v: string | number, dec = 2) => fmtDecimal(v, dec);
@@ -86,7 +86,7 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
       ? `VA-${String(order.remitoNum).padStart(6, "0")}`
       : order.folio || "-";
 
-  const totalConIva = order.customer.hasIva
+  const totalConIva = hasIvaOn(order.customer, order.orderDate)
     ? order.items.reduce((sum, item) => {
         if (!item.pricePerUnit || parseFloat(item.pricePerUnit) === 0) return sum;
         const sub = parseFloat(item.quantity) * parseFloat(item.pricePerUnit);
@@ -109,7 +109,7 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
         notes: order.notes,
         customer: {
           name: order.customer.name,
-          hasIva: order.customer.hasIva,
+          hasIva: hasIvaOn(order.customer, order.orderDate),
           rfc: order.customer.rfc,
           address: order.customer.address,
           city: order.customer.city,
@@ -157,7 +157,7 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
                       {cfg.label}
                     </Badge>
                     <Badge variant="secondary">{order.items.length} productos</Badge>
-                    {order.customer.hasIva && (
+                    {hasIvaOn(order.customer, order.orderDate) && (
                       <Badge variant="outline" className="text-primary border-primary/40">Con IVA</Badge>
                     )}
                   </div>
@@ -179,9 +179,9 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
 
               <div className="flex flex-col items-end gap-2">
                 <div className="text-right">
-                  <p className="text-xs text-muted-foreground">{order.customer.hasIva ? "Total + IVA" : "Total"}</p>
+                  <p className="text-xs text-muted-foreground">{hasIvaOn(order.customer, order.orderDate) ? "Total + IVA" : "Total"}</p>
                   <p className="text-2xl font-bold text-foreground">{fmtMoney(totalConIva)}</p>
-                  {order.customer.hasIva && (
+                  {hasIvaOn(order.customer, order.orderDate) && (
                     <p className="text-xs text-muted-foreground">Neto: {fmtMoney(order.total)}</p>
                   )}
                 </div>
@@ -266,7 +266,7 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
                   <td className="py-3 px-3 text-right font-semibold text-sm">Total</td>
                   <td className="py-3 px-4 text-right">
                     <span className="text-lg font-bold">{fmtMoney(totalConIva)}</span>
-                    {order.customer.hasIva && (
+                    {hasIvaOn(order.customer, order.orderDate) && (
                       <span className="text-xs text-muted-foreground ml-1">c/IVA</span>
                     )}
                   </td>

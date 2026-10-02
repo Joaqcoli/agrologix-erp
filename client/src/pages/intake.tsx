@@ -18,6 +18,7 @@ import { ArrowLeft, Sparkles, CheckCircle2, AlertTriangle, XCircle, Search, Chev
 import { parseOrderTextLocal, type ParsedLine, normalize } from "@/lib/orderParser";
 import type { Customer, Product, ProductUnit } from "@shared/schema";
 import { canonicalizeUnit, ALL_CANONICAL_UNITS } from "@shared/units";
+import { hasIvaOn } from "@shared/iva";
 
 const STATUS_ICON = {
   ok: <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400 shrink-0" />,
@@ -484,7 +485,7 @@ export default function IntakePage() {
                     </div>
                   )}
                 </div>
-                {selectedCustomer?.hasIva && <span className="cpx-ivachip">Con IVA</span>}
+                {hasIvaOn(selectedCustomer, date) && <span className="cpx-ivachip">Con IVA</span>}
               </div>
 
               {/* Fecha */}

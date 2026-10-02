@@ -8,7 +8,7 @@ import { sql as drizzleSql } from "drizzle-orm";
 import { insertCustomerSchema, insertProductSchema, insertPurchaseSchema, insertOrderSchema, insertPaymentSchema, insertWithholdingSchema, insertSupplierSchema, insertSupplierPaymentSchema, insertPriceListItemSchema, insertCajaMovementSchema } from "@shared/schema";
 import { z } from "zod";
 import { canonicalizeUnit } from "@shared/units";
-import { ivaRateOf } from "@shared/iva";
+import { ivaRateOf, hasIvaOn } from "@shared/iva";
 import { getHistoricalMonthStats } from "./historical-stats";
 import { getLastVoucher, createVoucher } from "./arca";
 import { syncMpReport } from "./mp-report-sync";
@@ -839,7 +839,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     for (const order of dayOrders) {
       const fullOrder = await storage.getOrder(order.id);
       if (!fullOrder) continue;
-      const hasIva = fullOrder.customer.hasIva;
+      const hasIva = hasIvaOn(fullOrder.customer, fullOrder.orderDate);
 
       rows.push([`Cliente: ${fullOrder.customer.name}`, hasIva ? "Con IVA" : "Sin IVA", `Pedido: ${order.folio}`, `Fecha: ${new Date(fullOrder.orderDate).toLocaleDateString("es-MX")}`]);
       rows.push(hasIva ? [...headerIva, ...headerPurchase] : [...headerBase, ...headerPurchase]);
@@ -890,7 +890,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const fullOrder = await storage.getOrder(Number(req.params.id));
     if (!fullOrder) return res.status(404).json({ error: "Not found" });
 
-    const hasIva = fullOrder.customer.hasIva;
+    const hasIva = hasIvaOn(fullOrder.customer, fullOrder.orderDate);
     const wb = XLSX.utils.book_new();
     const rows: any[][] = [];
 
@@ -1830,7 +1830,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           COALESCE(SUM(
             CASE
               WHEN oi.price_per_unit::numeric = 0 THEN 0
-              WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+              WHEN (c.has_iva = true AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
               ELSE oi.quantity::numeric * oi.price_per_unit::numeric
             END
           ), 0) AS ventas,
@@ -1906,13 +1906,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           o.total::text AS total,
           o.remito_num AS "remitoNum",
           c.name AS "customerName",
-          c.has_iva AS "hasIva",
+          (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) AS "hasIva",
           c.commission_pct::text AS "commissionPct",
           COUNT(oi.id)::int AS "itemCount",
           COALESCE(SUM(
             CASE
               WHEN oi.price_per_unit::numeric = 0 THEN 0
-              WHEN c.has_iva = true THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+              WHEN (c.has_iva = true AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
               ELSE oi.quantity::numeric * oi.price_per_unit::numeric
             END
           ), 0)::text AS "totalConIva"
@@ -1922,7 +1922,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         LEFT JOIN products p ON p.id = oi.product_id
         WHERE c.salesperson_name = ${user.name}
           ${date ? drizzleSql`AND o.order_date::date = ${date}::date` : drizzleSql``}
-        GROUP BY o.id, o.folio, o.order_date, o.status, o.total, o.remito_num, c.name, c.has_iva, c.commission_pct
+        GROUP BY o.id, o.folio, o.order_date, o.status, o.total, o.remito_num, c.name, c.has_iva, c.iva_since, c.commission_pct
         ORDER BY o.order_date DESC, o.id DESC
       `);
       return res.json(rows.rows);

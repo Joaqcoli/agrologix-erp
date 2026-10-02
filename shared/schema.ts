@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, numeric, integer, timestamp, pgEnum, boolean, serial, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, numeric, integer, timestamp, pgEnum, boolean, serial, unique, date } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -32,6 +32,8 @@ export const customers = pgTable("customers", {
   city: text("city"),
   notes: text("notes"),
   hasIva: boolean("has_iva").notNull().default(false),
+  // Fecha desde la que aplica el IVA (NULL = siempre, incluye pedidos viejos). Ver shared/iva.ts hasIvaOn.
+  ivaSince: date("iva_since"),
   ccType: text("cc_type").default("por_saldo"),
   bolsaFv: boolean("bolsa_fv").default(false),
   blackPot: boolean("black_pot").default(false),

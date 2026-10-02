@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { hasIvaOn } from "@shared/iva";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Layout } from "@/components/layout";
 import { Card, CardContent } from "@/components/ui/card";
@@ -175,7 +176,7 @@ export default function InvoicesPage() {
             notes: order.notes,
             customer: {
               name: order.customer.name,
-              hasIva: order.customer.hasIva,
+              hasIva: hasIvaOn(order.customer, order.orderDate),
               rfc: order.customer.rfc ?? null,
               address: order.customer.address ?? null,
               city: order.customer.city ?? null,

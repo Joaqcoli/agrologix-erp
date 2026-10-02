@@ -25,7 +25,7 @@ import { generateRemitoPDF, generateInvoicePDF } from "@/lib/pdf";
 import { useState, useEffect } from "react";
 import type { Customer, Product } from "@shared/schema";
 import type { Order, OrderItem } from "@shared/schema";
-import { ivaRateOf } from "@shared/iva";
+import { ivaRateOf, hasIvaOn } from "@shared/iva";
 import { dbEnumToCanonical, ALL_CANONICAL_UNITS } from "@shared/units";
 
 const WhatsAppIcon = ({ className }: { className?: string }) => (
@@ -1179,7 +1179,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
           notes: order.notes,
           customer: {
             name: order.customer.name,
-            hasIva: order.customer.hasIva,
+            hasIva: hasIvaOn(order.customer, order.orderDate),
             rfc: (order.customer as any).rfc ?? null,
             address: (order.customer as any).address ?? null,
             city: (order.customer as any).city ?? null,
@@ -1295,7 +1295,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const isDraft = order.status === "draft";
   const isApproved = order.status === "approved";
-  const hasIva = order.customer.hasIva;
+  const hasIva = hasIvaOn(order.customer, order.orderDate);
   const hasBolsaFv = !!(order.customer as any).bolsaFv;
   const parentCustomerId: number | null = (order.customer as any).parentCustomerId ?? null;
 

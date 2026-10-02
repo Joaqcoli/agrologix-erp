@@ -1,4 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { hasIvaOn } from "@shared/iva";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { fmtFecha } from "@/lib/format";
 import { useLocation } from "wouter";
@@ -1647,7 +1648,7 @@ export default function CCCustomerDetailPage({
           order: {
             folio: order.folio, orderDate: order.orderDate, notes: order.notes,
             customer: {
-              name: order.customer.name, hasIva: order.customer.hasIva,
+              name: order.customer.name, hasIva: hasIvaOn(order.customer, order.orderDate),
               rfc: order.customer.rfc ?? null, address: order.customer.address ?? null,
               city: order.customer.city ?? null, phone: order.customer.phone ?? null,
             },

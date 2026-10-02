@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Plus, Search, Pencil, Trash2, Users, Building2, Phone, Mail, MapPin } from "lucide-react";
 import type { Customer } from "@shared/schema";
 
-const EMPTY: Partial<Customer> = { name: "", rfc: "", cuit: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ccType: "por_saldo", bolsaFv: false, blackPot: false, salespersonName: "", commissionPct: "0", parentCustomerId: null };
+const EMPTY: Partial<Customer> = { name: "", rfc: "", cuit: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ivaSince: null, ccType: "por_saldo", bolsaFv: false, blackPot: false, salespersonName: "", commissionPct: "0", parentCustomerId: null };
 
 // ── Rediseño Clientes (Claude Design) — CSS de diseno-caja/clientes-rediseno.html ──
 const CLX_CSS = `
@@ -270,6 +270,21 @@ export default function CustomersPage() {
                     data-testid="switch-has-iva"
                   />
                 </div>
+                {form.hasIva && (
+                  <div className="mt-2 flex items-center gap-3 rounded-md border border-border p-3">
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-foreground">IVA desde</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Vacío = aplica a todos los pedidos, viejos incluidos. Con fecha = solo pedidos desde ese día; los anteriores y su cuenta corriente no cambian.</p>
+                    </div>
+                    <Input
+                      type="date"
+                      className="w-44"
+                      value={(form.ivaSince as string | null) ?? ""}
+                      onChange={(e) => setForm({ ...form, ivaSince: e.target.value || null })}
+                      data-testid="input-iva-since"
+                    />
+                  </div>
+                )}
               </div>
               <div className="sm:col-span-2">
                 <div className="flex items-center justify-between rounded-md border border-border p-3">
