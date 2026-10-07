@@ -665,12 +665,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         })).min(1),
       }).parse(req.body);
 
+      // El precio de venta lo decide SIEMPRE el servidor (último precio del grupo para
+      // producto + unidad + cliente, getLastPriceByUnit). El precio que manda la pantalla
+      // del intake es solo una vista previa y puede quedar desactualizado: si el usuario
+      // corregía el producto que el parser eligió mal, la vista previa conservaba el precio
+      // del producto anterior (2026-10-07: "cebolla morada maquinada" con el precio de
+      // "cebolla morada", "manzana roja elegida" con el de "manzana roja").
+      const items = body.items.map(({ pricePerUnit: _ignored, ...it }) => it);
       let order;
       if (body.mode === "merge" && body.existingOrderId) {
-        await storage.addItemsToOrder(body.existingOrderId, body.items);
+        await storage.addItemsToOrder(body.existingOrderId, items);
         order = { id: body.existingOrderId };
       } else if (body.mode === "replace" && body.existingOrderId) {
-        await storage.replaceOrderItems(body.existingOrderId, body.items);
+        await storage.replaceOrderItems(body.existingOrderId, items);
         order = { id: body.existingOrderId };
       } else {
         const folio = await storage.generateOrderFolio();
@@ -680,7 +687,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           orderDate: new Date(body.orderDate),
           notes: body.notes,
           createdBy: req.session.userId!,
-          items: body.items,
+          items,
         });
       }
 

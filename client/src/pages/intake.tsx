@@ -678,10 +678,30 @@ export default function IntakePage() {
                                 onSelect={(pid) => {
                                   setOverrides({ ...overrides, [idx]: pid });
                                   const n = { ...customNames }; delete n[idx]; setCustomNames(n);
+                                  // Producto corregido → volver a buscar el último precio para ESE producto.
+                                  // Antes quedaba el precio del producto que el parser había elegido mal.
+                                  // (El servidor igual recalcula el precio al crear; esto es para que la
+                                  // vista previa muestre lo mismo.)
+                                  const seq = (priceFetchSeq.current[idx] ?? 0) + 1;
+                                  priceFetchSeq.current[idx] = seq;
+                                  setPricePrefills((prev) => { const next = { ...prev }; delete next[idx]; return next; });
+                                  const unitForPrice = unitOverrides[idx] ?? line.unit ?? "KG";
+                                  if (customerId && pid) {
+                                    fetch(`/api/products/${pid}/last-price?customerId=${customerId}&unit=${encodeURIComponent(unitForPrice)}`, { credentials: "include" })
+                                      .then((r) => (r.ok ? r.json() : null))
+                                      .then((data) => {
+                                        if (priceFetchSeq.current[idx] !== seq) return;
+                                        if (data?.price != null) setPricePrefills((prev) => ({ ...prev, [idx]: String(Math.round(parseFloat(data.price))) }));
+                                      })
+                                      .catch(() => {});
+                                  }
                                 }}
                                 onCustom={(name) => {
                                   setCustomNames({ ...customNames, [idx]: name });
                                   const o = { ...overrides }; delete o[idx]; setOverrides(o);
+                                  // Nombre libre (sin producto) → no hay precio conocido
+                                  priceFetchSeq.current[idx] = (priceFetchSeq.current[idx] ?? 0) + 1;
+                                  setPricePrefills((prev) => { const next = { ...prev }; delete next[idx]; return next; });
                                 }}
                               />
                             </div>
