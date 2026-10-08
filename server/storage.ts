@@ -3875,8 +3875,11 @@ export const storage = {
           AND o.status = 'approved'
         GROUP BY o.id, o.folio, o.remito_num, o.order_date, o.invoice_number, c.has_iva, c.iva_since
         ORDER BY o.order_date ASC, o.id ASC
-        LIMIT 500
       `)),
+      // SIN LIMIT: el saldo se calcula aplicando pagos del pedido más viejo al más nuevo sobre
+      // TODOS los aprobados. Con 'LIMIT 500', un cliente con más de 500 pedidos (BLACK POT:
+      // 544 al 2026-10-08) perdía los más nuevos, que entonces no figuraban como pendientes
+      // y la cuenta corriente los mostraba como 'Pagados' sin ningún pago.
     ]);
 
     const totalOpening = Math.round(parseFloat((openingRow.rows[0] as any).total_opening ?? "0"));
