@@ -11,3 +11,6 @@ arca_request.csr
 # Extractos bancarios y CSVs en la raíz — datos sensibles, nunca commitear
 Extracto_*.csv
 /*.csv
+
+# Permisos locales de Claude Code (tienen connection strings) — nunca commitear
+.claude/settings.local.json
