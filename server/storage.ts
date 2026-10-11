@@ -4728,6 +4728,7 @@ export const storage = {
       customerId: number; cliente: string; botActivo: boolean; pedidos: number; renglones: number; comparables: number; errores: number; dudas: number;
       pct: number | null; ultimoPedido: string | null;
       detalle: { fecha: string; folio: string | null; raw: string; bot: string; erp: string; duda: boolean }[];
+      contactos: { id: number; phone: string; name: string | null }[];
     }[];
   }> {
     const tz = "America/Argentina/Buenos_Aires";
@@ -4780,8 +4781,18 @@ export const storage = {
         k.detalle.push({ fecha: l.momento, folio, raw: x.rawLine, bot: fmt(x.productName, x.quantity, x.unit), erp: e ? fmt(e.name, Number(e.qty), e.unit) : "— (no está en el pedido)", duda: x.status === "duda" });
       }
     }
-    const clientes = Array.from(porCliente.values()).map((k) => ({ ...k, pct: k.comparables ? Math.round(1000 * (k.comparables - k.errores) / k.comparables) / 10 : null, detalle: k.detalle.reverse() }))
-      .sort((a, b) => (b.ultimoPedido ?? "").localeCompare(a.ultimoPedido ?? ""));
+    // Clientes con Bot activo aunque todavía no tengan pedidos leídos
+    const activos = (await db.execute(drizzleSql`SELECT id, name FROM customers WHERE active AND bot_activo ORDER BY name`)).rows as any[];
+    for (const a of activos) if (!porCliente.has(Number(a.id))) porCliente.set(Number(a.id), { customerId: Number(a.id), cliente: a.name, botActivo: true, pedidos: 0, renglones: 0, comparables: 0, errores: 0, dudas: 0, pct: null, ultimoPedido: null, detalle: [] });
+    // Teléfonos de pedido de cada cliente de la lista
+    const ids = Array.from(porCliente.keys());
+    const contactos = ids.length ? (await db.select().from(customerContacts).where(inArray(customerContacts.customerId, ids)).orderBy(asc(customerContacts.id))) : [];
+    const clientes = Array.from(porCliente.values()).map((k) => ({
+      ...k,
+      pct: k.comparables ? Math.round(1000 * (k.comparables - k.errores) / k.comparables) / 10 : null,
+      detalle: k.detalle.reverse(),
+      contactos: contactos.filter((c) => c.customerId === k.customerId).map((c) => ({ id: c.id, phone: c.phone, name: c.name })),
+    })).sort((a, b) => Number(b.botActivo) - Number(a.botActivo) || (b.ultimoPedido ?? "").localeCompare(a.ultimoPedido ?? "") || a.cliente.localeCompare(b.cliente));
     return { resumen: { dias: diasResumen, pedidos: resumen.pedidos, renglones: resumen.renglones, pct: resumen.comparables ? Math.round(1000 * (resumen.comparables - resumen.errores) / resumen.comparables) / 10 : null }, clientes };
   },
 

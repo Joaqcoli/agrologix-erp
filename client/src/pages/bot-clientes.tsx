@@ -1,112 +1,317 @@
 /**
- * A-01 · "Bot por cliente": un renglón por cliente con lo que leyó el bot de WhatsApp contra lo que quedó
- * cargado, y el interruptor "Bot activo" para encender/apagar el bot por cliente desde acá.
+ * A-01 · "Bot por cliente" — misma estética que Pedidos (rediseño Claude Design).
+ * Desde el desplegable se eligen los clientes con bot; cada tarjeta tiene el interruptor "Bot activo",
+ * los teléfonos de pedido (varios por cliente; un mismo número puede estar en varios clientes) y las
+ * métricas de lo que leyó el bot contra lo que quedó cargado. Tocar la tarjeta abre los renglones con error.
  */
-import { useState } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Layout } from "@/components/layout";
-import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { fmtFechaHoraAR } from "@/lib/format";
+import { Bot, Search, Plus, X, Phone, ChevronDown, ChevronRight, TrendingUp, Check } from "lucide-react";
+import type { Customer } from "@shared/schema";
+import { formatArPhone } from "@shared/phone";
 
 type Det = { fecha: string; folio: string | null; raw: string; bot: string; erp: string; duda: boolean };
-type Row = { customerId: number; cliente: string; botActivo: boolean; pedidos: number; renglones: number; comparables: number; errores: number; dudas: number; pct: number | null; ultimoPedido: string | null; detalle: Det[] };
+type Contacto = { id: number; phone: string; name: string | null };
+type Row = { customerId: number; cliente: string; botActivo: boolean; pedidos: number; renglones: number; comparables: number; errores: number; dudas: number; pct: number | null; ultimoPedido: string | null; detalle: Det[]; contactos: Contacto[] };
 type Data = { resumen: { dias: number; pedidos: number; renglones: number; pct: number | null }; clientes: Row[] };
 
-const pctClass = (p: number | null) => p == null ? "text-muted-foreground" : p >= 95 ? "text-green-700 font-semibold" : p >= 90 ? "text-yellow-700 font-semibold" : "text-red-700 font-semibold";
+// ── CSS (mismo lenguaje visual que Pedidos: diseno-caja/pedidos-rediseno.html) ──
+const BCX_CSS = `
+.bot-rx{background:#f4f4f1;min-height:100%;padding:30px 24px 56px;font-family:'Inter',system-ui,sans-serif;color:#1e2420;}
+.bot-rx *{box-sizing:border-box;}
+.bcx-wrap{max-width:1180px;margin:0 auto;}
+.bcx-num{font-family:'Bricolage Grotesque','Inter',sans-serif;font-variant-numeric:tabular-nums;letter-spacing:-.01em;}
+.bcx-mono{font-family:ui-monospace,Menlo,Consolas,monospace;}
+.bcx-pagehead{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:24px;flex-wrap:wrap;}
+.bcx-pagehead h1{font-family:'Bricolage Grotesque';font-size:27px;font-weight:700;margin:0;letter-spacing:-.02em;}
+.bcx-pagehead .sub{font-size:14px;color:#8b8f88;margin:5px 0 0;}
+.bcx-combo{position:relative;min-width:300px;}
+.bcx-inputwrap{position:relative;}
+.bcx-inputwrap>svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:#8b8f88;pointer-events:none;}
+.bcx-input{width:100%;font-family:'Inter';font-size:14px;color:#1e2420;background:#fff;border:1px solid #ecece8;border-radius:11px;padding:10px 14px 10px 40px;}
+.bcx-input:focus{outline:none;border-color:#6b8a2a;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
+.bcx-dropdown{position:absolute;left:0;right:0;top:calc(100% + 6px);background:#fff;border:1px solid #ecece8;border-radius:12px;box-shadow:0 12px 34px -12px rgba(0,0,0,.22);padding:6px;z-index:30;max-height:280px;overflow:auto;}
+.bcx-opt{padding:10px 13px;border-radius:9px;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.bcx-opt:hover{background:#eef3e3;color:#5f8020;}
+.bcx-opt .on{font-size:11px;color:#5f8020;font-weight:600;}
+.bcx-opt.empty{color:#8b8f88;cursor:default;}
+.bcx-resumen{background:#fbfaf7;border:1px solid #ecece8;border-radius:16px;padding:20px 22px;margin-bottom:26px;}
+.bcx-rhead{display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap;}
+.bcx-rhead .ic{color:#5f8020;display:flex;}
+.bcx-rhead .t{font-family:'Bricolage Grotesque';font-size:16px;font-weight:700;color:#5f8020;}
+.bcx-rhead .d{font-size:13px;color:#8b8f88;}
+.bcx-metrics{display:grid;grid-template-columns:repeat(3,1fr);}
+@media(max-width:720px){.bcx-metrics{grid-template-columns:1fr;row-gap:18px;}}
+.bcx-metric{padding:0 22px;border-left:1px solid #ecece6;}
+.bcx-metric:first-child{padding-left:0;border-left:none;}
+@media(max-width:720px){.bcx-metric{border-left:none;padding-left:0;}}
+.bcx-metric .lab{font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9a9e96;margin-bottom:9px;}
+.bcx-metric .val{font-size:24px;font-weight:700;line-height:1;}
+.bcx-metric .sub{font-size:12px;color:#8b8f88;margin-top:6px;}
+.bcx-list{display:flex;flex-direction:column;gap:12px;}
+.bcx-card{background:#fff;border:1px solid #ecece8;border-radius:15px;transition:border-color .15s,box-shadow .15s;}
+.bcx-card:hover{border-color:#d9d9d3;box-shadow:0 4px 14px -10px rgba(0,0,0,.25);}
+.bcx-row{display:grid;grid-template-columns:52px minmax(0,1fr) auto auto 24px;align-items:center;gap:16px;padding:18px 20px;cursor:pointer;}
+@media(max-width:820px){.bcx-row{grid-template-columns:52px minmax(0,1fr) 24px;}.bcx-right,.bcx-switch{grid-column:2;justify-self:start;text-align:left;}}
+.bcx-pic{width:46px;height:46px;border-radius:12px;background:#f2f2ec;color:#8f948a;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
+.bcx-pic.on{background:#eef3e3;color:#5f8020;}
+.bcx-mid{min-width:0;}
+.bcx-tags{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;}
+.bcx-chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:20px;white-space:nowrap;}
+.bcx-chip.on{background:#eef3e3;color:#5f8020;}
+.bcx-chip.off{background:#f1f1ec;color:#8b8f88;}
+.bcx-chip.duda{background:#fff3cd;color:#8a6d0b;}
+.bcx-chip.tel{background:#e9eff7;color:#3a67a3;}
+.bcx-name{font-family:'Bricolage Grotesque';font-size:18px;font-weight:700;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.bcx-meta{display:flex;align-items:center;gap:8px;font-size:12.5px;color:#8b8f88;margin-top:5px;flex-wrap:wrap;}
+.bcx-meta .k{color:#1e2420;font-weight:500;}
+.bcx-switch{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;color:#8b8f88;white-space:nowrap;}
+.bcx-right{text-align:right;white-space:nowrap;}
+.bcx-right .rl{font-size:11.5px;color:#8b8f88;}
+.bcx-right .rv{font-size:22px;font-weight:700;margin-top:1px;}
+.bcx-right .rv.ok{color:#5f8020;}
+.bcx-right .rv.mid{color:#c08a1e;}
+.bcx-right .rv.bad{color:#c05e42;}
+.bcx-right .rv.na{color:#b3b6ae;}
+.bcx-right .sub{font-size:11.5px;color:#8b8f88;margin-top:2px;}
+.bcx-chev{color:#c3c6be;display:flex;justify-content:flex-end;}
+.bcx-detail{border-top:1px solid #ecece8;padding:16px 20px 18px 88px;background:#fbfaf7;border-radius:0 0 15px 15px;}
+@media(max-width:820px){.bcx-detail{padding-left:20px;}}
+.bcx-dtitle{font-size:12px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9a9e96;margin:0 0 10px;}
+.bcx-tels{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px;}
+.bcx-tel{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #ecece8;border-radius:10px;padding:7px 11px;font-size:13px;}
+.bcx-tel .n{color:#8b8f88;font-size:12px;}
+.bcx-tel button{border:none;background:none;color:#b3b6ae;cursor:pointer;padding:0;display:flex;}
+.bcx-tel button:hover{color:#c05e42;}
+.bcx-addtel{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.bcx-addtel input{font-family:'Inter';font-size:13px;padding:7px 11px;border:1px solid #ecece8;border-radius:10px;background:#fff;}
+.bcx-addtel input:focus{outline:none;border-color:#6b8a2a;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
+.bcx-btn{border:1px solid #ecece8;background:#fff;color:#1e2420;font-family:'Inter';font-size:13px;font-weight:500;padding:7px 12px;border-radius:10px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;}
+.bcx-btn:hover{border-color:#cfcfc9;background:#f6f6f2;}
+.bcx-btn:disabled{opacity:.55;cursor:default;}
+.bcx-btn.primary{background:#6b8a2a;color:#fff;border:none;font-weight:600;}
+.bcx-btn.primary:hover{background:#5f7d24;}
+.bcx-table{width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;border:1px solid #ecece8;border-radius:12px;overflow:hidden;}
+.bcx-table th{text-align:left;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9a9e96;padding:9px 12px;border-bottom:1px solid #ecece8;background:#fbfaf7;}
+.bcx-table td{padding:8px 12px;border-bottom:1px solid #f1f1ec;vertical-align:top;}
+.bcx-table tr:last-child td{border-bottom:none;}
+.bcx-empty{background:#fff;border:1px solid #ecece8;border-radius:16px;padding:48px 20px;text-align:center;color:#8b8f88;display:flex;flex-direction:column;align-items:center;gap:10px;}
+.bcx-empty .big{font-size:15px;font-weight:600;color:#1e2420;}
+.bcx-emptyic{width:48px;height:48px;border-radius:50%;background:#f1f1ec;display:flex;align-items:center;justify-content:center;color:#8b8f88;}
+.bcx-foot{font-size:12px;color:#8b8f88;margin-top:14px;}
+`;
+
+const pctClass = (p: number | null) => p == null ? "na" : p >= 95 ? "ok" : p >= 90 ? "mid" : "bad";
 
 export default function BotClientesPage() {
   const { toast } = useToast();
   const [open, setOpen] = useState<number | null>(null);
+  const [search, setSearch] = useState("");
+  const [comboOpen, setComboOpen] = useState(false);
+  const comboRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!comboOpen) return;
+    const h = (e: MouseEvent) => { if (!comboRef.current?.contains(e.target as Node)) setComboOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [comboOpen]);
+
   const { data, isLoading, error } = useQuery<Data>({ queryKey: ["/api/bot-clientes"], queryFn: async () => {
     const r = await fetch("/api/bot-clientes", { credentials: "include" });
     if (!r.ok) throw new Error((await r.json()).error ?? "Error");
     return r.json();
   } });
+  const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
+  const invalidate = () => { queryClient.invalidateQueries({ queryKey: ["/api/bot-clientes"] }); queryClient.invalidateQueries({ queryKey: ["/api/customers"] }); };
+
   const toggle = useMutation({
     mutationFn: ({ id, botActivo }: { id: number; botActivo: boolean }) => apiRequest("PATCH", `/api/customers/${id}`, { botActivo }),
-    onSuccess: (_r, v) => { queryClient.invalidateQueries({ queryKey: ["/api/bot-clientes"] }); queryClient.invalidateQueries({ queryKey: ["/api/customers"] }); toast({ title: v.botActivo ? "Bot activado" : "Bot apagado" }); },
+    onSuccess: (_r, v) => { invalidate(); toast({ title: v.botActivo ? "Bot activado" : "Bot apagado" }); },
     onError: (e: any) => toast({ title: "No se pudo cambiar", description: e.message, variant: "destructive" }),
   });
 
+  const activeIds = useMemo(() => new Set((data?.clientes ?? []).filter((c) => c.botActivo).map((c) => c.customerId)), [data]);
+  const options = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return customers.filter((c) => c.active && (!q || c.name.toLowerCase().includes(q))).sort((a, b) => a.name.localeCompare(b.name, "es")).slice(0, 12);
+  }, [customers, search]);
+
   return (
     <Layout title="Bot por cliente">
-      <div className="p-6 max-w-5xl mx-auto space-y-4">
-        <div>
-          <h1 className="text-xl font-semibold">Bot por cliente</h1>
-          <p className="text-sm text-muted-foreground">Lo que leyó el bot de WhatsApp contra lo que quedó cargado. "Renglón con error" = producto, unidad o cantidad distintos. Activá el bot por cliente desde el interruptor.</p>
+      <div className="bot-rx">
+        <style>{BCX_CSS}</style>
+        <div className="bcx-wrap">
+          <div className="bcx-pagehead">
+            <div>
+              <h1>Bot de WhatsApp</h1>
+              <p className="sub">Clientes con el bot prendido, sus teléfonos de pedido y cómo le está yendo</p>
+            </div>
+            {/* Desplegable: elegir clientes para prender el bot */}
+            <div className="bcx-combo" ref={comboRef}>
+              <div className="bcx-inputwrap">
+                <Search className="h-4 w-4" />
+                <input
+                  className="bcx-input"
+                  placeholder="Agregar cliente al bot..."
+                  autoComplete="off"
+                  value={search}
+                  onFocus={() => setComboOpen(true)}
+                  onChange={(e) => { setSearch(e.target.value); setComboOpen(true); }}
+                  data-testid="input-bot-customer-search"
+                />
+              </div>
+              {comboOpen && (
+                <div className="bcx-dropdown">
+                  {options.length === 0 ? <div className="bcx-opt empty">Sin resultados</div> : options.map((c) => (
+                    <div
+                      key={c.id}
+                      className="bcx-opt"
+                      onMouseDown={() => {
+                        if (!activeIds.has(c.id)) toggle.mutate({ id: c.id, botActivo: true });
+                        setSearch(""); setComboOpen(false); setOpen(c.id);
+                      }}
+                      data-testid={`bot-option-${c.id}`}
+                    >
+                      <span>{c.name}</span>
+                      {activeIds.has(c.id) ? <span className="on"><Check className="inline h-3 w-3" /> con bot</span> : <Plus className="h-4 w-4 text-muted-foreground" />}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {isLoading && <p className="text-sm text-muted-foreground">Calculando...</p>}
+          {error && <p className="text-sm text-destructive">{(error as Error).message}</p>}
+
+          {data && (
+            <>
+              <div className="bcx-resumen">
+                <div className="bcx-rhead">
+                  <span className="ic"><TrendingUp className="h-[18px] w-[18px]" /></span>
+                  <span className="t">Últimos {data.resumen.dias} días</span>
+                  <span className="d">todos los clientes, con bot prendido o en sombra</span>
+                </div>
+                <div className="bcx-metrics">
+                  <div className="bcx-metric"><div className="lab">Pedidos leídos</div><div className="val bcx-num">{data.resumen.pedidos}</div><div className="sub">mensajes que el bot interpretó</div></div>
+                  <div className="bcx-metric"><div className="lab">Renglones leídos</div><div className="val bcx-num">{data.resumen.renglones}</div><div className="sub">líneas de producto propuestas</div></div>
+                  <div className="bcx-metric"><div className="lab">% acierto</div><div className={`val bcx-num ${data.resumen.pct == null ? "" : data.resumen.pct >= 95 ? "text-[#5f8020]" : data.resumen.pct >= 90 ? "text-[#c08a1e]" : "text-[#c05e42]"}`}>{data.resumen.pct == null ? "—" : `${data.resumen.pct}%`}</div><div className="sub">renglones iguales a lo que quedó cargado</div></div>
+                </div>
+              </div>
+
+              {data.clientes.length === 0 ? (
+                <div className="bcx-empty">
+                  <div className="bcx-emptyic"><Bot className="h-5 w-5" /></div>
+                  <div className="big">Ningún cliente con bot todavía</div>
+                  <div>Buscá un cliente arriba para prenderle el bot.</div>
+                </div>
+              ) : (
+                <div className="bcx-list">
+                  {data.clientes.map((c) => (
+                    <ClienteCard key={c.customerId} c={c} open={open === c.customerId} onOpen={() => setOpen(open === c.customerId ? null : c.customerId)}
+                      onToggle={(v) => toggle.mutate({ id: c.customerId, botActivo: v })} busy={toggle.isPending} onChanged={invalidate} />
+                  ))}
+                </div>
+              )}
+              <p className="bcx-foot">Tabla: últimos 60 días. "Con error" = el bot leyó un producto, unidad o cantidad distintos de lo que quedó cargado. Un mismo teléfono puede estar en varios clientes (La Marquesa y Quinquela, por ejemplo). Horas de Argentina.</p>
+            </>
+          )}
         </div>
-
-        {isLoading && <p className="text-sm text-muted-foreground">Calculando...</p>}
-        {error && <p className="text-sm text-destructive">{(error as Error).message}</p>}
-        {data && (
-          <>
-            <Card className="border-primary/20 bg-primary/5">
-              <CardContent className="p-4 grid grid-cols-3 gap-3 text-sm">
-                <div><div className="text-xs text-muted-foreground">Pedidos leídos · {data.resumen.dias} días</div><div className="text-2xl">{data.resumen.pedidos}</div></div>
-                <div><div className="text-xs text-muted-foreground">Renglones leídos · {data.resumen.dias} días</div><div className="text-2xl">{data.resumen.renglones}</div></div>
-                <div><div className="text-xs text-muted-foreground">% acierto · {data.resumen.dias} días</div><div className={`text-2xl ${pctClass(data.resumen.pct)}`}>{data.resumen.pct == null ? "—" : `${data.resumen.pct} %`}</div></div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardContent className="p-0 overflow-x-auto">
-                {data.clientes.length === 0 ? <p className="text-sm text-muted-foreground p-4">El bot todavía no leyó ningún pedido.</p> : (
-                  <table className="w-full text-sm">
-                    <thead><tr className="text-left text-xs text-muted-foreground border-b">
-                      <th className="py-2 px-3">Cliente</th><th className="py-2 px-3">Bot activo</th><th className="py-2 px-3">Pedidos leídos</th><th className="py-2 px-3">Renglones leídos</th><th className="py-2 px-3">Con error</th><th className="py-2 px-3">Dudas</th><th className="py-2 px-3">% acierto</th><th className="py-2 px-3">Último pedido</th>
-                    </tr></thead>
-                    <tbody>
-                      {data.clientes.map((c) => (
-                        <>
-                          <tr key={c.customerId} className="border-b hover:bg-muted/30 cursor-pointer" onClick={() => setOpen(open === c.customerId ? null : c.customerId)} data-testid={`bot-row-${c.customerId}`}>
-                            <td className="py-2 px-3 font-medium">{c.cliente}</td>
-                            <td className="py-2 px-3" onClick={(e) => e.stopPropagation()}>
-                              <Switch checked={c.botActivo} disabled={toggle.isPending} onCheckedChange={(v) => toggle.mutate({ id: c.customerId, botActivo: v })} data-testid={`switch-bot-${c.customerId}`} />
-                            </td>
-                            <td className="py-2 px-3">{c.pedidos}</td>
-                            <td className="py-2 px-3">{c.renglones}</td>
-                            <td className="py-2 px-3">{c.errores}{c.comparables < c.renglones ? <span className="text-xs text-muted-foreground"> / {c.comparables} comparables</span> : null}</td>
-                            <td className="py-2 px-3">{c.dudas}</td>
-                            <td className={`py-2 px-3 ${pctClass(c.pct)}`}>{c.pct == null ? "—" : `${c.pct} %`}</td>
-                            <td className="py-2 px-3 text-xs text-muted-foreground font-mono">{c.ultimoPedido ?? ""}</td>
-                          </tr>
-                          {open === c.customerId && (
-                            <tr key={`${c.customerId}-det`} className="border-b bg-muted/20">
-                              <td colSpan={8} className="p-3">
-                                {c.detalle.length === 0 ? <p className="text-xs text-muted-foreground">Sin renglones con error{c.comparables === 0 ? " (todavía no hay pedido cargado para comparar)" : ""}.</p> : (
-                                  <table className="w-full text-xs">
-                                    <thead><tr className="text-left text-muted-foreground"><th className="py-1 pr-3">Cuándo</th><th className="py-1 pr-3">Pedido</th><th className="py-1 pr-3">El cliente escribió</th><th className="py-1 pr-3">El bot leyó</th><th className="py-1 pr-3">Quedó cargado</th></tr></thead>
-                                    <tbody>
-                                      {c.detalle.map((d, i) => (
-                                        <tr key={i} className="border-t border-border/50">
-                                          <td className="py-1 pr-3 font-mono whitespace-nowrap">{d.fecha}</td>
-                                          <td className="py-1 pr-3">{d.folio ?? ""}</td>
-                                          <td className="py-1 pr-3 font-mono">{d.raw}</td>
-                                          <td className="py-1 pr-3">{d.bot} {d.duda && <Badge variant="outline" className="text-[9px] py-0 text-yellow-700 border-yellow-500/40">duda</Badge>}</td>
-                                          <td className="py-1 pr-3">{d.erp}</td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                )}
-                              </td>
-                            </tr>
-                          )}
-                        </>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </CardContent>
-            </Card>
-            <p className="text-[11px] text-muted-foreground">Tabla: últimos 60 días. Último pedido: hora de Argentina. {fmtFechaHoraAR(new Date()) && ""}</p>
-          </>
-        )}
       </div>
     </Layout>
+  );
+}
+
+function ClienteCard({ c, open, onOpen, onToggle, busy, onChanged }: { c: Row; open: boolean; onOpen: () => void; onToggle: (v: boolean) => void; busy: boolean; onChanged: () => void }) {
+  const { toast } = useToast();
+  const [phone, setPhone] = useState("");
+  const [name, setName] = useState("");
+  const add = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/customers/${c.customerId}/contacts`, { phone, name: name.trim() || null }),
+    onSuccess: () => { onChanged(); setPhone(""); setName(""); toast({ title: "Teléfono agregado" }); },
+    onError: (e: any) => toast({ title: "No se pudo agregar", description: e.message, variant: "destructive" }),
+  });
+  const remove = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/customer-contacts/${id}`),
+    onSuccess: () => onChanged(),
+  });
+  const cls = pctClass(c.pct);
+  return (
+    <div className="bcx-card">
+      <div className="bcx-row" onClick={onOpen} data-testid={`bot-card-${c.customerId}`}>
+        <span className={`bcx-pic ${c.botActivo ? "on" : ""}`}><Bot className="h-[22px] w-[22px]" /></span>
+        <div className="bcx-mid">
+          <div className="bcx-tags">
+            <span className={`bcx-chip ${c.botActivo ? "on" : "off"}`}>{c.botActivo ? "Bot activo" : "En sombra"}</span>
+            <span className="bcx-chip tel"><Phone className="h-3 w-3" />{c.contactos.length === 0 ? "sin teléfono" : c.contactos.length === 1 ? "1 teléfono" : `${c.contactos.length} teléfonos`}</span>
+            {c.dudas > 0 && <span className="bcx-chip duda">{c.dudas} {c.dudas === 1 ? "duda" : "dudas"}</span>}
+          </div>
+          <div className="bcx-name">{c.cliente}</div>
+          <div className="bcx-meta">
+            <span><span className="k bcx-num">{c.pedidos}</span> pedidos leídos</span>
+            <span>·</span>
+            <span><span className="k bcx-num">{c.renglones}</span> renglones</span>
+            <span>·</span>
+            <span>con error <span className="k bcx-num">{c.errores} de {c.comparables}</span></span>
+            {c.ultimoPedido && <><span>·</span><span>último <span className="k bcx-mono">{c.ultimoPedido}</span></span></>}
+          </div>
+        </div>
+        <div className="bcx-switch" onClick={(e) => e.stopPropagation()}>
+          <Switch checked={c.botActivo} disabled={busy} onCheckedChange={onToggle} data-testid={`switch-bot-${c.customerId}`} />
+          <span>bot</span>
+        </div>
+        <div className="bcx-right">
+          <div className="rl">% acierto</div>
+          <div className={`rv bcx-num ${cls}`}>{c.pct == null ? "—" : `${c.pct}%`}</div>
+          <div className="sub">{c.comparables === 0 ? "sin pedido para comparar" : `${c.comparables - c.errores} de ${c.comparables} iguales`}</div>
+        </div>
+        <span className="bcx-chev">{open ? <ChevronDown className="h-[18px] w-[18px]" /> : <ChevronRight className="h-[18px] w-[18px]" />}</span>
+      </div>
+
+      {open && (
+        <div className="bcx-detail">
+          <p className="bcx-dtitle">Teléfonos de pedido</p>
+          <div className="bcx-tels">
+            {c.contactos.map((t) => (
+              <span key={t.id} className="bcx-tel">
+                <Phone className="h-3.5 w-3.5 text-[#3a67a3]" />
+                <span className="bcx-mono">{formatArPhone(t.phone)}</span>
+                {t.name && <span className="n">{t.name}</span>}
+                <button type="button" title="Quitar" onClick={() => remove.mutate(t.id)} data-testid={`remove-contact-${t.id}`}><X className="h-3.5 w-3.5" /></button>
+              </span>
+            ))}
+            <span className="bcx-addtel">
+              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="11 2345 6789" style={{ width: 140 }} data-testid={`input-phone-${c.customerId}`} />
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre / rol (Juan - cocina)" style={{ width: 210 }} />
+              <button type="button" className="bcx-btn primary" disabled={!phone.trim() || add.isPending} onClick={() => add.mutate()} data-testid={`add-phone-${c.customerId}`}><Plus className="h-3.5 w-3.5" /> Agregar</button>
+            </span>
+          </div>
+
+          <p className="bcx-dtitle">Renglones con error</p>
+          {c.detalle.length === 0 ? (
+            <p className="text-sm" style={{ color: "#8b8f88" }}>{c.comparables === 0 ? "Todavía no hay un pedido cargado contra el que comparar." : "Ninguno: todo lo que leyó el bot coincide con lo cargado."}</p>
+          ) : (
+            <table className="bcx-table">
+              <thead><tr><th>Cuándo</th><th>Pedido</th><th>El cliente escribió</th><th>El bot leyó</th><th>Quedó cargado</th></tr></thead>
+              <tbody>
+                {c.detalle.map((d, i) => (
+                  <tr key={i}>
+                    <td className="bcx-mono" style={{ whiteSpace: "nowrap" }}>{d.fecha}</td>
+                    <td>{d.folio ?? ""}</td>
+                    <td className="bcx-mono">{d.raw}</td>
+                    <td>{d.bot}{d.duda && <span className="bcx-chip duda" style={{ marginLeft: 6 }}>duda</span>}</td>
+                    <td>{d.erp}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
