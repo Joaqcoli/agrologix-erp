@@ -204,7 +204,7 @@ export const orderIntakeLogs = pgTable("order_intake_logs", {
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   userId: integer("user_id").references(() => users.id),
   customerId: integer("customer_id").notNull().references(() => customers.id),
-  orderId: integer("order_id").references(() => orders.id),
+  orderId: integer("order_id").references(() => orders.id, { onDelete: "set null" }), // el log sobrevive al pedido
   source: text("source").notNull().default("intake"), // 'intake' | 'whatsapp'
   rawText: text("raw_text"),
   hadImage: boolean("had_image").notNull().default(false),

@@ -1529,6 +1529,12 @@ export async function runNcMigrations() {
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `);
+  // 2026-10-12: borrar un pedido creado por el bot fallaba por la FK order_intake_logs.order_id → orders
+  // (sin ON DELETE). El log tiene que sobrevivir al pedido (es la métrica de "Bot por cliente"): SET NULL.
+  try {
+    await db.execute(sql`ALTER TABLE order_intake_logs DROP CONSTRAINT IF EXISTS order_intake_logs_order_id_fkey`);
+    await db.execute(sql`ALTER TABLE order_intake_logs ADD CONSTRAINT order_intake_logs_order_id_fkey FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL`);
+  } catch (e) { console.error("order_intake_logs order_id FK fix failed:", e); }
   // Activación del bot por cliente (2026-10-12): SOMBRA general; si el cliente tiene bot_activo, el agente
   // actúa en ACTIVO para sus mensajes (crea el borrador y responde "pedido recibido").
   await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS bot_activo BOOLEAN NOT NULL DEFAULT FALSE`);
