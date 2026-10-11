@@ -771,6 +771,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ folio: await storage.generateOrderFolio() });
   });
 
+  // A-01: vista "Sombra WhatsApp" (admin): lo que habría cargado el agente vs lo cargado a mano
+  app.get("/api/sombra", requireAuth, async (req, res) => {
+    try {
+      const from = String(req.query.from ?? "");
+      const to = String(req.query.to ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ error: "from y to (YYYY-MM-DD) requeridos" });
+      return res.json(await storage.getSombraReport(from, to));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // A-01: pedidos de una fecha con líneas en duda (aviso y recordatorio del bot; también lo ve admin)
   app.get("/api/orders/dudas", requireAuth, async (req, res) => {
     const date = String(req.query.date ?? "");
@@ -799,6 +809,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         imageBase64: z.string().optional(),
         source: z.enum(["intake", "whatsapp", "simulacion"]).default("intake"), // A-01: el bot manda 'whatsapp'; la prueba offline, 'simulacion'
         externalId: z.string().max(200).optional(),               // A-01: wamid → idempotente
+        meta: z.record(z.any()).optional(),                        // A-01: fecha/clasificación decididas por el agente (vista Sombra)
       }).parse(req.body);
       if (!body.text?.trim() && !body.imageBase64) return res.status(400).json({ error: "Falta el texto o la imagen" });
 
@@ -823,7 +834,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           model: result.model,
           inputTokens: result.usage.inputTokens + result.usage.cacheReadTokens + result.usage.cacheWriteTokens,
           outputTokens: result.usage.outputTokens,
-          proposal: { lines: result.lines, ignoredLines: result.ignoredLines, notes: result.notes, multiLocalWarning: result.multiLocalWarning, usage: result.usage },
+          proposal: { lines: result.lines, ignoredLines: result.ignoredLines, notes: result.notes, multiLocalWarning: result.multiLocalWarning, usage: result.usage, meta: body.meta ?? undefined },
           externalId: body.externalId ?? null,
         });
       } catch (e) { console.error("order_intake_logs insert failed:", e); }

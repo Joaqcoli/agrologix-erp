@@ -12,8 +12,10 @@
   BOT_API_TOKEN` → `botBearerAuth` antes de express-session). Endpoints: `GET /api/customers/by-phone`,
   `GET /api/customers/names`, contactos CRUD, `/api/wa-pending*`, `GET /api/orders/dudas`, `/interpret` e
   `/intake` con `source`. Pantallas: "Números por asignar" (`/wa-pendientes`), "Teléfonos de pedido" en la
-  ficha del cliente, chips WhatsApp / N dudas en Pedidos. **Falta en Render (ERP): `BOT_API_TOKEN` en el
-  Secret File** (valor en el `.env` local). El agente vive en `../asistente-vegex`.
+  ficha del cliente, chips WhatsApp / N dudas en Pedidos. `BOT_API_TOKEN` ya cargado en Render (verificado).
+  Vista **"Sombra WhatsApp"** (`/sombra`, `GET /api/sombra`): % de líneas iguales por día del agente vs lo
+  cargado a mano, dudas, no identificados, peores casos — el número para pasar el agente a ACTIVO (≥95 %).
+  El agente vive en `../asistente-vegex` (Render, modo SOMBRA).
 - 11-oct `b2f04ba` **A-04 · IA en Carga Pedido** (desplegado y verificado: tabla creada en prod a los ~2 min,
   endpoint responde 401 sin sesión). `POST /api/orders/interpret`
   (`server/interpret-order.ts`: Anthropic, `ANTHROPIC_MODEL` default `claude-sonnet-5-5`, structured outputs,
