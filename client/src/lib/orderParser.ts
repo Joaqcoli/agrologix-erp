@@ -8,7 +8,9 @@
  * Future:                 parseOrderTextAI   (OpenAI)
  */
 
-export type ParseStatus = "ok" | "no_qty" | "no_product" | "ambiguous";
+// "duda": línea propuesta por la IA (A-04) que el operador tiene que confirmar o corregir.
+// El parser local nunca la produce.
+export type ParseStatus = "ok" | "no_qty" | "no_product" | "ambiguous" | "duda";
 
 export type ParsedLine = {
   raw: string;
@@ -21,6 +23,7 @@ export type ParsedLine = {
   status: ParseStatus;
   candidates: { id: number; name: string; sku?: string | null }[];
   selectedProductId?: number;
+  reason?: string; // A-04: motivo de la IA (por qué eligió eso o por qué es duda)
 };
 
 // Valid units for the enum (must match DB enum)
@@ -314,7 +317,7 @@ function parseLine(line: string, products: SimpleProduct[]): ParsedLine | null {
   return {
     raw: trimmed,
     quantity,
-    unit: unit ?? "kg",
+    unit: unit ?? "KG",
     unitFromText,
     rawProductName,
     productId: null,

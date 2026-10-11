@@ -1472,5 +1472,26 @@ export async function runNcMigrations() {
   // los pedidos anteriores y su cuenta corriente quedan sin IVA). Regla única en shared/iva.ts.
   await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS iva_since DATE`);
 
+  // ─── A-04 IA en Carga Pedido (2026-10-11): log de interpretaciones ───────────
+  // Tabla nueva, no toca las existentes. Definición en shared/schema.ts (orderIntakeLogs).
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS order_intake_logs (
+      id SERIAL PRIMARY KEY,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      user_id INTEGER REFERENCES users(id),
+      customer_id INTEGER NOT NULL REFERENCES customers(id),
+      order_id INTEGER REFERENCES orders(id),
+      source TEXT NOT NULL DEFAULT 'intake',
+      raw_text TEXT,
+      had_image BOOLEAN NOT NULL DEFAULT FALSE,
+      model TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      proposal JSONB,
+      final JSONB
+    )
+  `);
+  try { await db.execute(sql`CREATE INDEX IF NOT EXISTS order_intake_logs_customer_idx ON order_intake_logs(customer_id, created_at DESC)`); } catch {}
+
   console.log("NC migrations complete.");
 }

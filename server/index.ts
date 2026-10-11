@@ -33,13 +33,14 @@ declare module "http" {
   }
 }
 
-app.use(
-  express.json({
-    verify: (req, _res, buf) => {
-      req.rawBody = buf;
-    },
-  }),
-);
+const jsonParser = express.json({
+  verify: (req, _res, buf) => {
+    req.rawBody = buf;
+  },
+});
+// /api/orders/interpret recibe fotos en base64 (hasta ~12 MB): ese endpoint trae su propio
+// express.json con límite mayor (routes.ts). El resto sigue con el límite default (100 kb).
+app.use((req, res, next) => (req.path === "/api/orders/interpret" ? next() : jsonParser(req, res, next)));
 
 app.use(express.urlencoded({ extended: false }));
 

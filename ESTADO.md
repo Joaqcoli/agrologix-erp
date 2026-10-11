@@ -2,9 +2,19 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-10-11 (reordenamiento; armado desde el historial de git y la memoria de Claude).
+> Última actualización: 2026-10-11 (A-04 IA en Carga Pedido desplegado).
 
 ## Último trabajo (sep–oct 2026)
+- 11-oct **A-04 · IA en Carga Pedido** (commit en `git log`, "feat(intake): IA…"). `POST /api/orders/interpret`
+  (`server/interpret-order.ts`: Anthropic, `ANTHROPIC_MODEL` default `claude-sonnet-5-5`, structured outputs,
+  caché 1 h del catálogo, timeout 30 s + 1 reintento, reglas validadas en el server). Tabla nueva `order_intake_logs`.
+  `intake.tsx`: IA con fallback al parser local (banner "IA no disponible"), dudas en amarillo + candidatos,
+  ignorados, aviso multi-local, nota precargada, foto. Merge/replace, precios, stock: sin cambios.
+  **Prueba offline (40 pedidos del grupo de WhatsApp, historial cortado antes del mensaje):** 75,1 % de líneas
+  iguales (producto+unidad+cantidad), 13,8 % con producto bien y unidad/cantidad distinta, 25,9 % dudas,
+  mediana 5,4 s, USD 0,018 por pedido. Patrones que NO se arreglan con historial: (a) la variante la decide el
+  stock de la semana (Anco Coquena vs Comercial, Naranja Jugo vs Jugo Elegida, Palta Chile vs Brasil);
+  (b) el cliente escribe "atado"/"plantas"/"unidades" y el galpón carga KG pesados.
 - 08-oct `1385258` CC: sin tope de 500 pedidos al calcular pendientes.
 - 07-oct `09fda70` Carga de pedido: el servidor decide el precio; la vista previa rebusca al corregir producto.
 - 02-oct `ca8a6e1` Clientes: IVA desde una fecha (`customers.iva_since`).
@@ -14,9 +24,22 @@
 - 15-sep Compras: borrar el pago automático vinculado al eliminar una compra.
 
 ## En curso / próximo
-- Nada a medio hacer en el código: al 11-oct el repo no tenía cambios sin commitear.
-  Último frente tocado (7–8 oct): precios al crear pedido y pendientes de CC.
+- A-04 recién desplegado: **verificar en producción** (ver "Verificaciones manuales"). Mejoras posibles si
+  Joaquín las pide: pasar el stock actual al modelo para elegir variante; regla por cliente "atado → KG".
+- **A-01 (días de entrega)**: últimos 90 días (sin históricos ni cancelados): Lun 150 · Mar 191 · Mié 100 ·
+  Jue 59 · Vie 280 · Sáb 1 · Dom 0 pedidos.
 - Próximo sugerido: **Caja Paso 2 (MP automático)**, que sigue abierto desde julio.
+
+## Datos que conviene saber (medidos el 2026-10-11)
+- `product_units.is_active` NO refleja lo vendible: desde la consolidación de stock, los envases quedaron
+  inactivos pero se venden (PAPA LAVADA en BOLSA: 488 líneas en 180 días; 69 de 264 pares producto-unidad
+  vendidos están "inactivos"). Para "unidades disponibles" usar activas ∪ vendidas en 180 días
+  (`storage.getActiveCatalogWithUnits`). Ojo: el aviso "unidad nueva" del intake usa `/api/products/stock`.
+- El texto completo pegado en /intake no se guardaba (solo `order_items.raw_product_name`, el fragmento de
+  producto). Desde A-04 queda en `order_intake_logs.raw_text` cuando se usa la IA.
+- En el grupo de WhatsApp el cliente va en la **primera línea** del mensaje (texto libre). Hay encabezados sin
+  cliente en el ERP: "colegio sworn (Virrey del Pino)", "Verazzi", "Colegio san xavier", "Fabric sushi Gorriti",
+  "Washington Lacroze 1973", "Sourhex"; "Hogar" es ambiguo (San Marino / Cardales).
 
 ## Pendiente — Caja (orden acordado)
 - **Paso 2 · Mercado Pago al disponible — ABIERTO.** El saldo del sistema no coincide con la app de MP.
@@ -39,6 +62,10 @@
 - Cambiar contraseñas por defecto de admin y Juan; no hay "cambiar contraseña" en la UI.
 
 ## Verificaciones manuales (las hace Joaquín)
+- **A-04**: en /intake pegar un pedido real de WhatsApp → "Analizar pedido" tiene que mostrar "Interpretado por IA"
+  (si sale el banner amarillo "IA no disponible", falta `ANTHROPIC_API_KEY` en el Secret File de Render).
+  Probar: una duda → elegir candidato o "Confirmar"; subir una foto de pedido; crear el pedido y ver que la
+  nota precargada quedó en el pedido. Un pedido con dos locales tiene que mostrar el aviso naranja.
 - Login como Juan (vendedor) → `/caja` redirige bien. `operador@erp.com` deshabilitado. Vista galpón OK.
 - Costo promedio en una compra con stock existente; edición de peso en galpón actualiza costo.
 - Hoja de armado no parte pedidos entre páginas y muestra Nº de remito.
@@ -49,6 +76,8 @@
 - Bolsa FV: se cobra y factura, costo $0, no descuenta stock.
 - Revalidación de cuenta por request con caché de 8 s (trade-off aceptado).
 - Se trabaja sobre `main` con deploy directo; `develop` abandonada.
+- A-04: el modelo propone, el servidor valida; una línea con unidad no vendible, sin cantidad o sin producto
+  activo siempre queda "duda". En la vía IA no se pisa la unidad con unit-history ni localStorage.
 
 ## Higiene pendiente del repo
 - `enero.xlsx` está commiteado en el repo (datos del negocio). Evaluar sacarlo del tracking.

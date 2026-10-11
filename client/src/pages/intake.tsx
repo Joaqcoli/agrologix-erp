@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { ArrowLeft, Sparkles, CheckCircle2, AlertTriangle, XCircle, Search, ChevronRight } from "lucide-react";
+import { ArrowLeft, Sparkles, CheckCircle2, AlertTriangle, XCircle, Search, ChevronRight, ImageIcon, Loader2, HelpCircle } from "lucide-react";
 import { parseOrderTextLocal, type ParsedLine, normalize } from "@/lib/orderParser";
 import type { Customer, Product, ProductUnit } from "@shared/schema";
 import { canonicalizeUnit, ALL_CANONICAL_UNITS } from "@shared/units";
@@ -25,6 +25,7 @@ const STATUS_ICON = {
   ambiguous: <AlertTriangle className="h-4 w-4 text-yellow-500 shrink-0" />,
   no_product: <AlertTriangle className="h-4 w-4 text-orange-500 shrink-0" />,
   no_qty: <XCircle className="h-4 w-4 text-destructive shrink-0" />,
+  duda: <HelpCircle className="h-4 w-4 text-yellow-500 shrink-0" />,
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -32,6 +33,7 @@ const STATUS_LABEL: Record<string, string> = {
   ambiguous: "Ambiguo",
   no_product: "Producto no encontrado",
   no_qty: "Sin cantidad",
+  duda: "Duda",
 };
 
 const STATUS_BADGE_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
@@ -39,6 +41,27 @@ const STATUS_BADGE_VARIANT: Record<string, "default" | "secondary" | "destructiv
   ambiguous: "outline",
   no_product: "secondary",
   no_qty: "destructive",
+  duda: "outline",
+};
+
+// ── A-04: respuesta de /api/orders/interpret ───────────────────────────────────
+type InterpretLine = {
+  rawLine: string;
+  productId: number | null;
+  productName: string | null;
+  unit: string | null;
+  quantity: number | null;
+  status: "ok" | "duda";
+  reason: string;
+  candidates: { productId: number; name: string }[];
+};
+type InterpretResponse = {
+  lines: InterpretLine[];
+  ignoredLines: string[];
+  notes: string;
+  multiLocalWarning: string | null;
+  model: string;
+  intakeLogId: number | null;
 };
 
 // ── Fuzzy product search (MEJORA 3) ────────────────────────────────────────────
@@ -241,6 +264,17 @@ export default function IntakePage() {
   // Manual quantity overrides for no_qty lines (MEJORA 1)
   const [qtyOverrides, setQtyOverrides] = useState<Record<number, string>>({});
 
+  // ── A-04: vía IA ──
+  const [analyzing, setAnalyzing] = useState(false);
+  // Foto del pedido (opcional): se manda en base64 a /interpret
+  const [image, setImage] = useState<{ name: string; dataUrl: string } | null>(null);
+  // Resultado IA del último análisis (null = se usó el parser local)
+  const [aiInfo, setAiInfo] = useState<{ ignoredLines: string[]; multiLocalWarning: string | null; intakeLogId: number | null; model: string } | null>(null);
+  // Banner cuando la IA falló y se cayó al parser local
+  const [aiBanner, setAiBanner] = useState<string | null>(null);
+  // Nota del pedido (precargada con los comentarios del cliente que detectó la IA)
+  const [orderNotes, setOrderNotes] = useState("");
+
   const { data: customers } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
   const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
   const { data: stockData } = useQuery<(ProductUnit & { product: Product })[]>({ queryKey: ["/api/products/stock"] });
@@ -261,17 +295,95 @@ export default function IntakePage() {
   );
   const activeProducts = (products ?? []).filter((p) => p.active);
 
-  // Parse the text
-  const handleParse = () => {
-    if (!customerId) { toast({ title: "Selecciona un cliente", variant: "destructive" }); return; }
-    if (!rawText.trim()) { toast({ title: "Pega el texto del pedido", variant: "destructive" }); return; }
+  // Background-fetch last price per product+unit for this customer (vale para las dos vías)
+  const prefetchPrices = (lines: ParsedLine[], unitByIdx: Record<number, string>) => {
+    lines.forEach((line, idx) => {
+      if (!line.productId || line.status === "no_qty") return;
+      const effectiveUnit = unitByIdx[idx] ?? line.unit ?? "KG";
+      const seq = (priceFetchSeq.current[idx] ?? 0) + 1;
+      priceFetchSeq.current[idx] = seq;
+      fetch(`/api/products/${line.productId}/last-price?customerId=${customerId}&unit=${encodeURIComponent(effectiveUnit)}`, { credentials: "include" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (priceFetchSeq.current[idx] !== seq) return; // un fetch más nuevo ya ganó
+          if (data?.price != null) {
+            setPricePrefills((prev) => ({ ...prev, [idx]: String(Math.round(parseFloat(data.price))) }));
+          }
+        })
+        .catch(() => {});
+    });
+  };
 
-    const simpleProducts = activeProducts.map((p) => ({ id: p.id, name: p.name, sku: p.sku, unit: p.unit }));
-    const result = parseOrderTextLocal(rawText, simpleProducts);
-    setParsed(result);
+  const resetPreviewState = () => {
     setOverrides({});
     setCustomNames({});
     setQtyOverrides({});
+    setPricePrefills({});
+    priceFetchSeq.current = {}; // invalida fetches en vuelo de un parseo anterior
+  };
+
+  // ── A-04: "Analizar pedido" → IA; si falla, parser local con banner ──
+  const handleParse = async () => {
+    if (!customerId) { toast({ title: "Selecciona un cliente", variant: "destructive" }); return; }
+    if (!rawText.trim() && !image) { toast({ title: "Pega el texto del pedido o subí una foto", variant: "destructive" }); return; }
+
+    setAnalyzing(true);
+    setAiBanner(null);
+    try {
+      const res = await fetch("/api/orders/interpret", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customerId, text: rawText.trim() || undefined, imageBase64: image?.dataUrl }),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { msg = (await res.json()).error ?? msg; } catch {}
+        throw new Error(msg);
+      }
+      applyAiResult(await res.json());
+    } catch (e: any) {
+      if (!rawText.trim()) {
+        toast({ title: "IA no disponible", description: `${e.message}. Para seguir, pegá el texto del pedido.`, variant: "destructive" });
+      } else {
+        setAiBanner(`IA no disponible (${e.message}). Se usó el analizador local.`);
+        applyLegacyParse();
+      }
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const applyAiResult = (data: InterpretResponse) => {
+    const lines: ParsedLine[] = data.lines.map((l) => ({
+      raw: l.rawLine,
+      quantity: l.quantity,
+      unit: l.unit,
+      unitFromText: true, // en la vía IA la unidad ya viene decidida: no se pisa con unit-history ni localStorage
+      rawProductName: l.productName ?? l.rawLine,
+      productId: l.productId,
+      productName: l.productName,
+      status: l.status,
+      candidates: l.candidates.map((c) => ({ id: c.productId, name: c.name })),
+      reason: l.reason,
+    }));
+    setParsed(lines);
+    resetPreviewState();
+    setUnitOverrides({});
+    setAiInfo({ ignoredLines: data.ignoredLines, multiLocalWarning: data.multiLocalWarning, intakeLogId: data.intakeLogId, model: data.model });
+    setOrderNotes(data.notes ?? "");
+    setStep("preview");
+    prefetchPrices(lines, {});
+  };
+
+  // Parser local (vía original, sin cambios de lógica)
+  const applyLegacyParse = () => {
+    const simpleProducts = activeProducts.map((p) => ({ id: p.id, name: p.name, sku: p.sku, unit: p.unit }));
+    const result = parseOrderTextLocal(rawText, simpleProducts);
+    setParsed(result);
+    resetPreviewState();
+    setAiInfo(null);
+    setOrderNotes("");
 
     // Pre-fill unit overrides: DB order history first, then localStorage
     // SOLO cuando el usuario NO escribió una unidad en el texto (line.unitFromText = false)
@@ -289,33 +401,16 @@ export default function IntakePage() {
       if (last) initialUnitOverrides[idx] = last;
     });
     setUnitOverrides(initialUnitOverrides);
-    setPricePrefills({});
-    priceFetchSeq.current = {}; // invalida fetches en vuelo de un parseo anterior
     setStep("preview");
-
-    // Background-fetch last price per product+unit for this customer
-    result.forEach((line, idx) => {
-      if (!line.productId || line.status === "no_qty") return;
-      const effectiveUnit = initialUnitOverrides[idx] ?? line.unit ?? "KG";
-      const seq = (priceFetchSeq.current[idx] ?? 0) + 1;
-      priceFetchSeq.current[idx] = seq;
-      fetch(`/api/products/${line.productId}/last-price?customerId=${customerId}&unit=${encodeURIComponent(effectiveUnit)}`, { credentials: "include" })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (priceFetchSeq.current[idx] !== seq) return; // un fetch más nuevo ya ganó
-          if (data?.price != null) {
-            setPricePrefills((prev) => ({ ...prev, [idx]: String(Math.round(parseFloat(data.price))) }));
-          }
-        })
-        .catch(() => {});
-    });
+    prefetchPrices(result, initialUnitOverrides);
   };
 
-  // Lines that will actually be sent (no_qty excluded unless user provided a manual qty)
+  // Lines that will actually be sent (no_qty excluded unless user provided a manual qty;
+  // ídem una "duda" de la IA sin cantidad)
   const validLines = useMemo(() =>
     parsed
       .map((line, parsedIdx) => ({ ...line, parsedIdx }))
-      .filter((l) => l.status !== "no_qty" || qtyOverrides[l.parsedIdx] !== undefined)
+      .filter((l) => (l.status !== "no_qty" && l.quantity !== null) || qtyOverrides[l.parsedIdx] !== undefined)
       .map(({ parsedIdx, ...line }) => {
         const customName = customNames[parsedIdx];
         const resolvedProductId = customName ? null
@@ -357,7 +452,10 @@ export default function IntakePage() {
           unit: line.unit, // already has unitOverride applied
           pricePerUnit: pricePrefills[line.parsedIdx] ?? null,
           rawProductName: line.rawProductName,
-          parseStatus: line.resolvedProductId ? "ok" : line.status,
+          // Una duda de la IA queda "duda" salvo que el operador la haya confirmado/corregido
+          parseStatus: line.status === "duda" && overrides[line.parsedIdx] === undefined && !customNames[line.parsedIdx]
+            ? "duda"
+            : (line.resolvedProductId ? "ok" : line.status),
         }));
 
       const res = await apiRequest("POST", "/api/orders/intake", {
@@ -365,6 +463,8 @@ export default function IntakePage() {
         orderDate: date,
         mode: payload.mode,
         existingOrderId: payload.existingOrderId,
+        notes: payload.mode === "new" && orderNotes.trim() ? orderNotes.trim() : undefined,
+        intakeLogId: aiInfo?.intakeLogId ?? undefined,
         items,
       });
       return res.json();
@@ -411,6 +511,10 @@ export default function IntakePage() {
   ).length;
   const unresolved = validLines.filter(
     (l) => !l.resolvedProductId && !customNames[l.parsedIdx]
+  ).length;
+  // A-04: dudas de la IA todavía sin confirmar/corregir
+  const dudaCount = parsed.filter(
+    (l, idx) => l.status === "duda" && overrides[idx] === undefined && !customNames[idx]
   ).length;
 
   // Unit validation: check if resolved product has the requested unit in product_units
@@ -510,17 +614,50 @@ export default function IntakePage() {
                   placeholder={"5 cajon limon\n2 kg tomate perita\n10 saco papa\nlechuga francesa 2 cajon"}
                   data-testid="textarea-raw-text"
                 />
-                <p className="cpx-hint">Una línea por producto. Formato: cantidad unidad producto (el orden es flexible).</p>
+                <p className="cpx-hint">Pegá el mensaje tal cual llegó (saludos, dirección y comentarios incluidos): la IA separa lo que es pedido.</p>
+              </div>
+
+              {/* Foto del pedido (A-04) */}
+              <div className="cpx-field">
+                <label className="cpx-label">Foto del pedido <span className="text-muted-foreground font-normal">(opcional)</span></label>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <label className="inline-flex items-center gap-2 text-sm cursor-pointer border border-[#ecece8] rounded-[11px] px-3 py-2 bg-white hover:bg-[#f6f6f2]">
+                    <ImageIcon className="h-4 w-4" />
+                    {image ? "Cambiar foto" : "Subir foto"}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      data-testid="input-intake-image"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = "";
+                        if (!f) return;
+                        if (f.size > 8 * 1024 * 1024) { toast({ title: "La foto supera 8 MB", variant: "destructive" }); return; }
+                        const reader = new FileReader();
+                        reader.onload = () => setImage({ name: f.name, dataUrl: String(reader.result) });
+                        reader.readAsDataURL(f);
+                      }}
+                    />
+                  </label>
+                  {image && (
+                    <>
+                      <img src={image.dataUrl} alt="" className="h-12 w-12 object-cover rounded-md border border-[#ecece8]" />
+                      <span className="text-xs text-muted-foreground truncate max-w-[200px]">{image.name}</span>
+                      <button type="button" className="text-xs underline text-muted-foreground" onClick={() => setImage(null)}>quitar</button>
+                    </>
+                  )}
+                </div>
               </div>
 
               <button
                 className="cpx-analyze"
                 onClick={handleParse}
-                disabled={!customerId || !rawText.trim()}
+                disabled={!customerId || (!rawText.trim() && !image) || analyzing}
                 data-testid="button-parse"
               >
-                <Sparkles className="h-[17px] w-[17px]" />
-                Analizar pedido
+                {analyzing ? <Loader2 className="h-[17px] w-[17px] animate-spin" /> : <Sparkles className="h-[17px] w-[17px]" />}
+                {analyzing ? "Analizando con IA..." : "Analizar pedido"}
               </button>
             </div>
           </div>
@@ -536,6 +673,24 @@ export default function IntakePage() {
               </div>
             </div>
           <>
+            {/* A-04: la IA falló → parser local */}
+            {aiBanner && (
+              <Alert className="border-yellow-400/60 bg-yellow-50 dark:bg-yellow-900/20">
+                <AlertTriangle className="h-4 w-4 text-yellow-600" />
+                <AlertDescription>{aiBanner}</AlertDescription>
+              </Alert>
+            )}
+            {/* A-04: pedido para más de un local */}
+            {aiInfo?.multiLocalWarning && (
+              <Alert className="border-orange-400/60 bg-orange-50 dark:bg-orange-900/20">
+                <AlertTriangle className="h-4 w-4 text-orange-600" />
+                <AlertDescription>
+                  <span className="font-semibold">Pedido para más de un local: </span>{aiInfo.multiLocalWarning}
+                  <span className="block text-xs text-muted-foreground mt-1">Este pedido se crea para {selectedCustomer?.name}. Sacá las líneas del otro local y cargalas aparte.</span>
+                </AlertDescription>
+              </Alert>
+            )}
+
             {/* Preview header info */}
             <Card className="border-primary/20 bg-primary/5">
               <CardContent className="p-4">
@@ -543,9 +698,11 @@ export default function IntakePage() {
                   <div>
                     <p className="text-sm font-semibold text-foreground">{selectedCustomer?.name}</p>
                     <p className="text-xs text-muted-foreground">{new Date(date + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "2-digit", month: "long" })}</p>
+                    {aiInfo && <p className="text-[11px] text-muted-foreground mt-0.5 inline-flex items-center gap-1"><Sparkles className="h-3 w-3" /> Interpretado por IA · revisá las dudas en amarillo</p>}
                   </div>
                   <div className="flex items-center gap-2 flex-wrap text-right">
                     <Badge variant="default">{okCount} OK</Badge>
+                    {dudaCount > 0 && <Badge variant="outline" className="text-yellow-600 border-yellow-500/40">{dudaCount} {dudaCount === 1 ? "duda" : "dudas"}</Badge>}
                     {unresolved > 0 && <Badge variant="secondary">{unresolved} sin producto</Badge>}
                     {unitMismatchIndices.size > 0 && (
                       <Badge variant="outline" className="text-yellow-600 border-yellow-500/40">{unitMismatchIndices.size} con unidad nueva</Badge>
@@ -568,7 +725,11 @@ export default function IntakePage() {
                   const resolvedProductId = overrides[idx] !== undefined ? overrides[idx] : (line.productId ?? 0);
                   const resolvedProduct = activeProducts.find((p) => p.id === resolvedProductId);
                   const isResolved = !!(resolvedProductId || customNames[idx]);
-                  const effectiveStatus = (line.status === "ambiguous" || line.status === "no_product") && isResolved ? "ok" : line.status;
+                  // Una "duda" de la IA solo se resuelve con una acción del operador (confirmar, elegir candidato o producto)
+                  const dudaResolved = overrides[idx] !== undefined || !!customNames[idx];
+                  const effectiveStatus = line.status === "duda"
+                    ? (dudaResolved ? "ok" : "duda")
+                    : ((line.status === "ambiguous" || line.status === "no_product") && isResolved ? "ok" : line.status);
 
                   return (
                     <div
@@ -576,7 +737,7 @@ export default function IntakePage() {
                       className={`rounded-md border p-3 ${
                         effectiveStatus === "ok" ? "border-border bg-card/50"
                         : effectiveStatus === "no_qty" ? "border-destructive/30 bg-destructive/5"
-                        : effectiveStatus === "ambiguous" ? "border-yellow-400/50 bg-yellow-50/10 dark:bg-yellow-900/10"
+                        : (effectiveStatus === "ambiguous" || effectiveStatus === "duda") ? "border-yellow-400/60 bg-yellow-50/40 dark:bg-yellow-900/10"
                         : "border-orange-400/30 bg-orange-50/10 dark:bg-orange-900/10"
                       }`}
                       data-testid={`parsed-line-${idx}`}
@@ -590,6 +751,38 @@ export default function IntakePage() {
                               {STATUS_LABEL[effectiveStatus] ?? effectiveStatus}
                             </Badge>
                           </div>
+                          {/* A-04: motivo de la IA + candidatos + confirmar */}
+                          {line.reason && effectiveStatus !== "ok" && (
+                            <p className="text-xs text-yellow-700 dark:text-yellow-400 mt-1">{line.reason}</p>
+                          )}
+                          {line.status === "duda" && !dudaResolved && (
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                              {line.candidates.map((c) => (
+                                <button
+                                  key={c.id}
+                                  type="button"
+                                  className="text-xs px-2 py-0.5 rounded-full border border-yellow-500/50 bg-background hover:bg-yellow-100 dark:hover:bg-yellow-900/30"
+                                  onClick={() => {
+                                    setOverrides({ ...overrides, [idx]: c.id });
+                                    const n = { ...customNames }; delete n[idx]; setCustomNames(n);
+                                  }}
+                                  data-testid={`candidate-${idx}-${c.id}`}
+                                >
+                                  {c.name}
+                                </button>
+                              ))}
+                              {line.productId && (
+                                <button
+                                  type="button"
+                                  className="text-xs px-2 py-0.5 rounded-full bg-green-700 text-white hover:bg-green-800"
+                                  onClick={() => setOverrides({ ...overrides, [idx]: line.productId! })}
+                                  data-testid={`confirm-${idx}`}
+                                >
+                                  Confirmar {line.productName}
+                                </button>
+                              )}
+                            </div>
+                          )}
 
                           {line.status === "no_qty" ? (
                             /* no_qty: show editable quantity field so staff can fix it */
@@ -711,6 +904,37 @@ export default function IntakePage() {
                     </div>
                   );
                 })}
+              </CardContent>
+            </Card>
+
+            {/* A-04: renglones que la IA no tomó como productos */}
+            {aiInfo && aiInfo.ignoredLines.length > 0 && (
+              <Card>
+                <CardHeader className="pb-2 pt-4">
+                  <CardTitle className="text-sm font-semibold">Ignorado ({aiInfo.ignoredLines.length})</CardTitle>
+                </CardHeader>
+                <CardContent className="pb-4">
+                  <ul className="text-xs text-muted-foreground font-mono space-y-0.5">
+                    {aiInfo.ignoredLines.map((l, i) => <li key={i}>{l}</li>)}
+                  </ul>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* A-04: nota del pedido (precargada con los comentarios del cliente) */}
+            <Card>
+              <CardHeader className="pb-2 pt-4">
+                <CardTitle className="text-sm font-semibold">Nota del pedido</CardTitle>
+              </CardHeader>
+              <CardContent className="pb-4">
+                <Textarea
+                  value={orderNotes}
+                  onChange={(e) => setOrderNotes(e.target.value)}
+                  placeholder="Comentarios del cliente para el armado (maduros, PROPAL, etc.)"
+                  className="text-sm min-h-[60px]"
+                  data-testid="textarea-order-notes"
+                />
+                <p className="text-[11px] text-muted-foreground mt-1">Se guarda en el pedido nuevo (al agregar o reemplazar en un borrador existente no se toca su nota).</p>
               </CardContent>
             </Card>
 

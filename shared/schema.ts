@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, numeric, integer, timestamp, pgEnum, boolean, serial, unique, date } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, numeric, integer, timestamp, pgEnum, boolean, serial, unique, date, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -190,6 +190,27 @@ export const orderItems = pgTable("order_items", {
   // Alias de nombre SOLO para remito y factura-PDF. NO reemplaza productId ni toca stock/costo.
   aliasNombre: text("alias_nombre"),
 });
+
+// ─── Log de interpretación IA en Carga Pedido (A-04) ────────────────────────────
+// Una fila por "Analizar pedido" con IA: texto crudo, propuesta del modelo y tokens.
+// Al "Crear Pedido" se completan order_id y final (las líneas que realmente se guardaron).
+// Tabla creada en server/migrate.ts (CREATE TABLE IF NOT EXISTS order_intake_logs).
+export const orderIntakeLogs = pgTable("order_intake_logs", {
+  id: serial("id").primaryKey(),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  userId: integer("user_id").references(() => users.id),
+  customerId: integer("customer_id").notNull().references(() => customers.id),
+  orderId: integer("order_id").references(() => orders.id),
+  source: text("source").notNull().default("intake"), // 'intake' | 'whatsapp'
+  rawText: text("raw_text"),
+  hadImage: boolean("had_image").notNull().default(false),
+  model: text("model"),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  proposal: jsonb("proposal"),
+  final: jsonb("final"),
+});
+export type OrderIntakeLog = typeof orderIntakeLogs.$inferSelect;
 
 // ─── Product Units (stock + cost per unit per product) ─────────────────────────
 export const productUnits = pgTable("product_units", {

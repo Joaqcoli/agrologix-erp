@@ -1,4 +1,4 @@
-import type { Express, Request, Response, NextFunction } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { createServer, type Server } from "http";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
@@ -12,6 +12,7 @@ import { ivaRateOf, hasIvaOn } from "@shared/iva";
 import { getHistoricalMonthStats } from "./historical-stats";
 import { getLastVoucher, createVoucher } from "./arca";
 import { syncMpReport } from "./mp-report-sync";
+import { interpretOrder, aiEnabled } from "./interpret-order";
 import multer from "multer";
 
 const galiciaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -646,6 +647,45 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(draft ?? null);
   });
 
+  // A-04 — IA en Carga Pedido: interpreta texto/foto y devuelve una PROPUESTA de líneas.
+  // No crea nada: el pedido se crea después con /api/orders/intake (que no cambia).
+  // Deja una fila en order_intake_logs (texto crudo, propuesta, tokens) y devuelve su id
+  // para que "Crear Pedido" lo complete con order_id y las líneas finales.
+  app.post("/api/orders/interpret", express.json({ limit: "12mb" }), requireAuth, async (req, res) => {
+    try {
+      if (!aiEnabled()) return res.status(503).json({ error: "IA no configurada (ANTHROPIC_API_KEY)" });
+      const body = z.object({
+        customerId: z.number(),
+        text: z.string().max(20_000).optional(),
+        imageBase64: z.string().optional(),
+      }).parse(req.body);
+      if (!body.text?.trim() && !body.imageBase64) return res.status(400).json({ error: "Falta el texto o la imagen" });
+
+      const result = await interpretOrder({ customerId: body.customerId, text: body.text, imageBase64: body.imageBase64 });
+
+      let intakeLogId: number | null = null;
+      try {
+        intakeLogId = await storage.createIntakeLog({
+          userId: req.session.userId ?? null,
+          customerId: body.customerId,
+          source: "intake",
+          rawText: body.text?.trim() || null,
+          hadImage: !!body.imageBase64,
+          model: result.model,
+          inputTokens: result.usage.inputTokens + result.usage.cacheReadTokens + result.usage.cacheWriteTokens,
+          outputTokens: result.usage.outputTokens,
+          proposal: { lines: result.lines, ignoredLines: result.ignoredLines, notes: result.notes, multiLocalWarning: result.multiLocalWarning, usage: result.usage },
+        });
+      } catch (e) { console.error("order_intake_logs insert failed:", e); }
+
+      return res.json({ ...result, intakeLogId });
+    } catch (e: any) {
+      const msg = e?.name === "APIConnectionTimeoutError" ? "La IA tardó demasiado (20 s)" : (e?.message ?? "Error");
+      const status = e?.status && e.status >= 400 && e.status < 600 ? 502 : 500;
+      return res.status(e instanceof z.ZodError ? 400 : status).json({ error: msg });
+    }
+  });
+
   // Create order from intake (no prices required)
   app.post("/api/orders/intake", requireAuth, async (req, res) => {
     try {
@@ -655,6 +695,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         notes: z.string().optional(),
         mode: z.enum(["new", "merge", "replace"]).default("new"),
         existingOrderId: z.number().optional(),
+        intakeLogId: z.number().optional(), // A-04: log de la interpretación IA a completar
         items: z.array(z.object({
           productId: z.number().nullable(),
           quantity: z.string(),
@@ -689,6 +730,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           createdBy: req.session.userId!,
           items,
         });
+      }
+
+      // A-04: cerrar el log de la IA con el pedido creado y las líneas finales (nunca rompe la creación)
+      if (body.intakeLogId) {
+        try { await storage.finalizeIntakeLog(body.intakeLogId, body.customerId, order.id, { mode: body.mode, items }); }
+        catch (e) { console.error("order_intake_logs finalize failed:", e); }
       }
 
       return res.status(201).json({ orderId: order.id });

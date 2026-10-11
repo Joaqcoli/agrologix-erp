@@ -8,6 +8,7 @@ import {
   mpMovementIdentifiers,
   creditNotes,
   cuentasFinancieras,
+  orderIntakeLogs,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
@@ -4510,6 +4511,95 @@ export const storage = {
       productId: Number(r.productId),
       unit: r.unit as string,
     }));
+  },
+
+  // ─── A-04 IA en Carga Pedido: contexto para /api/orders/interpret ────────────
+
+  /**
+   * Catálogo activo con sus unidades vendibles (ordenado por nombre, determinístico).
+   * Unidades = product_units activas ∪ unidades realmente vendidas en los últimos 180 días:
+   * desde la consolidación de stock en una sola unidad base, los envases (BOLSA, CAJON…) quedaron
+   * is_active=false en product_units pero se siguen vendiendo (PAPA LAVADA en BOLSA: 488 líneas en 180 días).
+   */
+  async getActiveCatalogWithUnits(): Promise<{ id: number; name: string; category: string | null; units: string[] }[]> {
+    const rows = await db.execute(drizzleSql`
+      WITH u AS (
+        SELECT product_id, unit FROM product_units WHERE is_active
+        UNION
+        SELECT oi.product_id, oi.unit FROM order_items oi
+        JOIN orders o ON o.id = oi.order_id
+        WHERE oi.product_id IS NOT NULL AND o.status <> 'cancelled'
+          AND o.order_date >= now() - interval '180 days'
+      )
+      SELECT p.id, p.name, p.category,
+             COALESCE(array_agg(u.unit ORDER BY u.unit) FILTER (WHERE u.unit IS NOT NULL), '{}') AS units
+      FROM products p
+      LEFT JOIN u ON u.product_id = p.id
+      WHERE p.active
+      GROUP BY p.id, p.name, p.category
+      ORDER BY p.name, p.id
+    `);
+    return (rows.rows as any[]).map((r) => ({
+      id: Number(r.id), name: r.name as string, category: (r.category as string) ?? null,
+      units: (r.units as string[]) ?? [],
+    }));
+  },
+
+  /** Unidad más usada por producto en todos los pedidos de los últimos `days` días (respaldo global). */
+  async getGlobalMostUsedUnits(days = 180): Promise<{ productId: number; unit: string }[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT DISTINCT ON (oi.product_id) oi.product_id AS "productId", oi.unit
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      WHERE oi.product_id IS NOT NULL
+        AND o.status <> 'cancelled'
+        AND o.order_date >= now() - make_interval(days => ${days}::int)
+      GROUP BY oi.product_id, oi.unit
+      ORDER BY oi.product_id, count(*) DESC, oi.unit
+    `);
+    return (rows.rows as any[]).map((r) => ({ productId: Number(r.productId), unit: r.unit as string }));
+  },
+
+  /**
+   * Historial de compra de UN cliente (y sus sedes, si es padre): producto + unidad, veces y última fecha.
+   * `before` ('YYYY-MM-DD') corta el historial (order_date < before): lo usa la prueba offline para no
+   * "ver" el pedido que se está tratando de adivinar. En producción no se pasa.
+   */
+  async getCustomerProductHistory(customerId: number, opts: { days?: number; before?: string } = {}):
+    Promise<{ productId: number; unit: string; times: number; lastDate: string }[]> {
+    const days = opts.days ?? 180;
+    const before = opts.before && /^\d{4}-\d{2}-\d{2}$/.test(opts.before) ? opts.before : null;
+    const rows = await db.execute(drizzleSql`
+      SELECT oi.product_id AS "productId", oi.unit, count(*)::int AS times,
+             to_char(max(o.order_date), 'YYYY-MM-DD') AS "lastDate"
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      WHERE oi.product_id IS NOT NULL
+        AND (o.customer_id = ${customerId} OR o.customer_id IN (SELECT id FROM customers WHERE parent_customer_id = ${customerId}))
+        AND o.status <> 'cancelled'
+        AND o.order_date >= ${before ? drizzleSql`${before}::date` : drizzleSql`now()`} - make_interval(days => ${days}::int)
+        ${before ? drizzleSql`AND o.order_date < ${before}::date` : drizzleSql``}
+      GROUP BY oi.product_id, oi.unit
+      ORDER BY count(*) DESC, max(o.order_date) DESC
+    `);
+    return (rows.rows as any[]).map((r) => ({
+      productId: Number(r.productId), unit: r.unit as string, times: Number(r.times), lastDate: r.lastDate as string,
+    }));
+  },
+
+  async createIntakeLog(data: {
+    userId: number | null; customerId: number; source: string; rawText: string | null; hadImage: boolean;
+    model: string; inputTokens: number | null; outputTokens: number | null; proposal: unknown;
+  }): Promise<number> {
+    const [row] = await db.insert(orderIntakeLogs).values(data).returning({ id: orderIntakeLogs.id });
+    return row.id;
+  },
+
+  /** Al "Crear Pedido": completa order_id y las líneas finales. Solo si el log es de ese cliente. */
+  async finalizeIntakeLog(logId: number, customerId: number, orderId: number, final: unknown): Promise<void> {
+    await db.update(orderIntakeLogs)
+      .set({ orderId, final })
+      .where(and(eq(orderIntakeLogs.id, logId), eq(orderIntakeLogs.customerId, customerId)));
   },
 
   // ─── Suppliers CRUD ───────────────────────────────────────────────────────────
