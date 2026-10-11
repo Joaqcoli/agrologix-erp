@@ -4715,98 +4715,74 @@ export const storage = {
   },
 
   /**
-   * A-01 · "Sombra WhatsApp": compara cada interpretación del agente (order_intake_logs.source = 'whatsapp')
-   * con el pedido real. En SOMBRA: contra el pedido cargado a mano del mismo cliente y fecha de entrega
-   * (proposal.meta.deliveryDate; si no hay fecha, el primer pedido hasta 3 días después del mensaje).
-   * En ACTIVO: contra las líneas finales del pedido que creó el bot (log.final). Agrupa por día del mensaje.
+   * A-01 · "Bot por cliente": un renglón por cliente con lo que leyó el bot (order_intake_logs.source =
+   * 'whatsapp') contra lo que quedó cargado. Comparación por mensaje: si el bot creó el pedido (log.final),
+   * contra las líneas actuales de ese pedido; si no (sombra), contra el pedido cargado a mano del mismo
+   * cliente y fecha de entrega decidida (proposal.meta.deliveryDate; sin fecha, el primer pedido hasta 3 días
+   * después del mensaje). "Renglón con error" = renglón propuesto que no coincide exacto (producto, unidad y
+   * cantidad) con una línea del pedido. % acierto = (comparables − errores) / comparables.
    */
-  async getSombraReport(from: string, to: string): Promise<{
-    dias: { dia: string; mensajes: number; conPedido: number; sinPedido: number; lineasErp: number; iguales: number; pct: number | null; lineasIa: number; dudas: number; noIdentificados: number }[];
-    totales: { mensajes: number; conPedido: number; sinPedido: number; lineasErp: number; iguales: number; pct: number | null; lineasIa: number; dudas: number; noIdentificados: number };
-    peores: { logId: number; dia: string; cliente: string; folio: string | null; fecha: string | null; lineasErp: number; iguales: number; pct: number; dudas: number; diff: string[] }[];
-    noIdentificados: { id: number; dia: string; phone: string; profileName: string | null; texto: string; status: string; reason: string | null }[];
-    clientes: { customerId: number; cliente: string; botActivo: boolean; mensajes: number; conPedido: number; lineasErp: number; iguales: number; pct: number | null; lineasIa: number; dudas: number }[];
+  async getBotPorCliente(opts: { dias?: number; diasResumen?: number } = {}): Promise<{
+    resumen: { dias: number; pedidos: number; renglones: number; pct: number | null };
+    clientes: {
+      customerId: number; cliente: string; botActivo: boolean; pedidos: number; renglones: number; comparables: number; errores: number; dudas: number;
+      pct: number | null; ultimoPedido: string | null;
+      detalle: { fecha: string; folio: string | null; raw: string; bot: string; erp: string; duda: boolean }[];
+    }[];
   }> {
     const tz = "America/Argentina/Buenos_Aires";
+    const dias = opts.dias ?? 60;
+    const diasResumen = opts.diasResumen ?? 7;
     const logs = (await db.execute(drizzleSql`
       SELECT l.id, l.customer_id AS "customerId", c.name AS cliente, c.bot_activo AS "botActivo", l.proposal, l.final, l.order_id AS "orderId",
-             to_char(l.created_at AT TIME ZONE 'UTC' AT TIME ZONE ${tz}, 'YYYY-MM-DD') AS dia, l.created_at AS "createdAt"
+             to_char(l.created_at AT TIME ZONE 'UTC' AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI') AS momento,
+             (l.created_at AT TIME ZONE 'UTC' AT TIME ZONE ${tz})::date AS dia, l.created_at AS "createdAt"
       FROM order_intake_logs l JOIN customers c ON c.id = l.customer_id
-      WHERE l.source = 'whatsapp' AND (l.created_at AT TIME ZONE 'UTC' AT TIME ZONE ${tz})::date BETWEEN ${from}::date AND ${to}::date
+      WHERE l.source = 'whatsapp' AND l.created_at >= now() - make_interval(days => ${dias}::int)
       ORDER BY l.created_at`)).rows as any[];
     const key = (pid: number, unit: string, qty: number) => `${pid}|${unit}|${Math.round(qty * 1000) / 1000}`;
-    type Caso = { logId: number; dia: string; cliente: string; customerId: number; botActivo: boolean; folio: string | null; fecha: string | null; lineasErp: number; iguales: number; pct: number; dudas: number; lineasIa: number; diff: string[]; conPedido: boolean };
-    const casos: Caso[] = [];
+    const fmt = (name: string | null, qty: number | null, unit: string | null) => `${name ?? "∅"} ${qty ?? "?"} ${unit ?? "?"}`;
+    type Det = { fecha: string; folio: string | null; raw: string; bot: string; erp: string; duda: boolean };
+    const porCliente = new Map<number, { customerId: number; cliente: string; botActivo: boolean; pedidos: number; renglones: number; comparables: number; errores: number; dudas: number; pct: number | null; ultimoPedido: string | null; detalle: Det[] }>();
+    const resumen = { dias: diasResumen, pedidos: 0, renglones: 0, comparables: 0, errores: 0 };
+    const limite = new Date(Date.now() - diasResumen * 86400_000);
     for (const l of logs) {
       const prop = (l.proposal ?? {}) as any;
       const lines: any[] = Array.isArray(prop.lines) ? prop.lines : [];
-      const dudas = lines.filter((x) => x.status === "duda").length;
-      let erpItems: { productId: number | null; name: string | null; unit: string; qty: number }[] | null = null;
-      let folio: string | null = null;
-      let fecha: string | null = prop.meta?.deliveryDate ?? null;
-      if (l.final && Array.isArray((l.final as any).items)) {
-        // ACTIVO: lo que quedó en el pedido creado por el bot (hoy) — líneas actuales del pedido
-        const items = (await db.execute(drizzleSql`SELECT oi.product_id AS "productId", p.name, oi.unit, oi.quantity::float AS qty FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.order_id = ${l.orderId}`)).rows as any[];
-        erpItems = items.map((r) => ({ productId: r.productId == null ? null : Number(r.productId), name: r.name, unit: r.unit, qty: Number(r.qty) }));
-        const [o] = (await db.execute(drizzleSql`SELECT folio, to_char(order_date, 'YYYY-MM-DD') AS fecha FROM orders WHERE id = ${l.orderId}`)).rows as any[];
-        folio = o?.folio ?? null; fecha = o?.fecha ?? fecha;
+      if (!porCliente.has(l.customerId)) porCliente.set(l.customerId, { customerId: Number(l.customerId), cliente: l.cliente, botActivo: !!l.botActivo, pedidos: 0, renglones: 0, comparables: 0, errores: 0, dudas: 0, pct: null, ultimoPedido: null, detalle: [] });
+      const k = porCliente.get(l.customerId)!;
+      k.pedidos++; k.renglones += lines.length; k.dudas += lines.filter((x) => x.status === "duda").length; k.ultimoPedido = l.momento;
+      const enResumen = new Date(l.createdAt) >= limite;
+      if (enResumen) { resumen.pedidos++; resumen.renglones += lines.length; }
+      // Pedido contra el que se compara
+      let orderId: number | null = null; let folio: string | null = null;
+      if (l.orderId) {
+        orderId = Number(l.orderId);
+        const [o] = (await db.execute(drizzleSql`SELECT folio FROM orders WHERE id = ${orderId}`)).rows as any[]; folio = o?.folio ?? null;
       } else {
+        const fecha: string | null = prop.meta?.deliveryDate ?? null;
         const ord = fecha
-          ? (await db.execute(drizzleSql`SELECT id, folio, to_char(order_date,'YYYY-MM-DD') AS fecha FROM orders WHERE customer_id = ${l.customerId} AND status <> 'cancelled' AND order_date::date = ${fecha}::date ORDER BY id LIMIT 1`)).rows as any[]
-          : (await db.execute(drizzleSql`SELECT id, folio, to_char(order_date,'YYYY-MM-DD') AS fecha FROM orders WHERE customer_id = ${l.customerId} AND status <> 'cancelled' AND order_date::date >= (${l.createdAt}::timestamp AT TIME ZONE 'UTC' AT TIME ZONE ${tz})::date AND order_date::date <= (${l.createdAt}::timestamp AT TIME ZONE 'UTC' AT TIME ZONE ${tz})::date + 3 ORDER BY order_date, id LIMIT 1`)).rows as any[];
-        if (ord[0]) {
-          folio = ord[0].folio; fecha = ord[0].fecha;
-          const items = (await db.execute(drizzleSql`SELECT oi.product_id AS "productId", p.name, oi.unit, oi.quantity::float AS qty FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.order_id = ${ord[0].id}`)).rows as any[];
-          erpItems = items.map((r) => ({ productId: r.productId == null ? null : Number(r.productId), name: r.name, unit: r.unit, qty: Number(r.qty) }));
-        }
+          ? (await db.execute(drizzleSql`SELECT id, folio FROM orders WHERE customer_id = ${l.customerId} AND status <> 'cancelled' AND order_date::date = ${fecha}::date ORDER BY id LIMIT 1`)).rows as any[]
+          : (await db.execute(drizzleSql`SELECT id, folio FROM orders WHERE customer_id = ${l.customerId} AND status <> 'cancelled' AND order_date::date >= ${l.dia}::date AND order_date::date <= ${l.dia}::date + 3 ORDER BY order_date, id LIMIT 1`)).rows as any[];
+        if (ord[0]) { orderId = Number(ord[0].id); folio = ord[0].folio; }
       }
-      if (!erpItems) { casos.push({ logId: l.id, dia: l.dia, cliente: l.cliente, customerId: Number(l.customerId), botActivo: !!l.botActivo, folio: null, fecha, lineasErp: 0, iguales: 0, pct: 0, dudas, lineasIa: lines.length, diff: [], conPedido: false }); continue; }
-      const erpKeys = new Map<string, typeof erpItems[number]>();
-      for (const it of erpItems) if (it.productId != null) erpKeys.set(key(it.productId, it.unit, it.qty), it);
-      const matched = new Set<string>();
-      const diff: string[] = [];
-      let iguales = 0;
+      if (!orderId) continue; // sin pedido para comparar: no suma ni a comparables ni a errores
+      const items = (await db.execute(drizzleSql`SELECT oi.product_id AS "productId", p.name, oi.unit, oi.quantity::float AS qty FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.order_id = ${orderId}`)).rows as any[];
+      const erpKeys = new Map<string, { name: string | null; qty: number; unit: string; productId: number | null }>();
+      for (const it of items) if (it.productId != null) erpKeys.set(key(Number(it.productId), it.unit, Number(it.qty)), { name: it.name, qty: Number(it.qty), unit: it.unit, productId: Number(it.productId) });
+      const usados = new Set<string>();
       for (const x of lines) {
-        const tag = x.status === "duda" ? "? " : "  ";
-        if (x.productId != null && x.unit && x.quantity != null && erpKeys.has(key(x.productId, x.unit, x.quantity)) && !matched.has(key(x.productId, x.unit, x.quantity))) { iguales++; matched.add(key(x.productId, x.unit, x.quantity)); }
-        else {
-          const e = erpItems.find((it) => it.productId === x.productId);
-          diff.push(`${tag}"${x.rawLine}" → IA ${x.productName ?? "∅"} ${x.quantity ?? "?"} ${x.unit ?? "?"} | ERP ${e ? `${e.name} ${e.qty} ${e.unit}` : "—"}${x.reason ? ` (${x.reason})` : ""}`);
-        }
+        k.comparables++; if (enResumen) resumen.comparables++;
+        const kk = x.productId != null && x.unit && x.quantity != null ? key(x.productId, x.unit, x.quantity) : null;
+        if (kk && erpKeys.has(kk) && !usados.has(kk)) { usados.add(kk); continue; }
+        k.errores++; if (enResumen) resumen.errores++;
+        const e = items.find((it) => it.productId != null && Number(it.productId) === x.productId);
+        k.detalle.push({ fecha: l.momento, folio, raw: x.rawLine, bot: fmt(x.productName, x.quantity, x.unit), erp: e ? fmt(e.name, Number(e.qty), e.unit) : "— (no está en el pedido)", duda: x.status === "duda" });
       }
-      for (const [k, it] of erpKeys) if (!matched.has(k) && !lines.some((x) => x.productId === it.productId)) diff.push(`  ERP tiene ${it.name} ${it.qty} ${it.unit} | IA —`);
-      const lineasErp = erpKeys.size;
-      casos.push({ logId: l.id, dia: l.dia, cliente: l.cliente, customerId: Number(l.customerId), botActivo: !!l.botActivo, folio, fecha, lineasErp, iguales, pct: lineasErp ? iguales / lineasErp : 0, dudas, lineasIa: lines.length, diff, conPedido: true });
     }
-    const pend = (await db.execute(drizzleSql`
-      SELECT id, phone, profile_name AS "profileName", left(coalesce(message_text,''), 120) AS texto, status, reason,
-             to_char(created_at AT TIME ZONE 'UTC' AT TIME ZONE ${tz}, 'YYYY-MM-DD') AS dia
-      FROM wa_pending_numbers WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE ${tz})::date BETWEEN ${from}::date AND ${to}::date
-        AND coalesce(profile_name,'') NOT LIKE 'SIMULACION%' ORDER BY created_at DESC`)).rows as any[];
-    const porDia = new Map<string, { dia: string; mensajes: number; conPedido: number; sinPedido: number; lineasErp: number; iguales: number; pct: number | null; lineasIa: number; dudas: number; noIdentificados: number }>();
-    const dia = (d: string) => { if (!porDia.has(d)) porDia.set(d, { dia: d, mensajes: 0, conPedido: 0, sinPedido: 0, lineasErp: 0, iguales: 0, pct: null, lineasIa: 0, dudas: 0, noIdentificados: 0 }); return porDia.get(d)!; };
-    for (const c of casos) { const d = dia(c.dia); d.mensajes++; if (c.conPedido) { d.conPedido++; d.lineasErp += c.lineasErp; d.iguales += c.iguales; } else d.sinPedido++; d.lineasIa += c.lineasIa; d.dudas += c.dudas; }
-    for (const p of pend) { const d = dia(p.dia); d.noIdentificados++; }
-    const dias = [...porDia.values()].sort((a, b) => b.dia.localeCompare(a.dia)).map((d) => ({ ...d, pct: d.lineasErp ? Math.round(1000 * d.iguales / d.lineasErp) / 10 : null }));
-    const t = dias.reduce((s, d) => ({ mensajes: s.mensajes + d.mensajes, conPedido: s.conPedido + d.conPedido, sinPedido: s.sinPedido + d.sinPedido, lineasErp: s.lineasErp + d.lineasErp, iguales: s.iguales + d.iguales, lineasIa: s.lineasIa + d.lineasIa, dudas: s.dudas + d.dudas, noIdentificados: s.noIdentificados + d.noIdentificados }), { mensajes: 0, conPedido: 0, sinPedido: 0, lineasErp: 0, iguales: 0, lineasIa: 0, dudas: 0, noIdentificados: 0 });
-    const peores = casos.filter((c) => c.conPedido && c.lineasErp > 0).sort((a, b) => a.pct - b.pct).slice(0, 10)
-      .map(({ conPedido: _c, lineasIa: _l, customerId: _i, botActivo: _b, ...rest }) => ({ ...rest, pct: Math.round(1000 * rest.pct) / 10 }));
-    // Por cliente: para decidir a quién activar ("Bot activo")
-    const porCliente = new Map<number, { customerId: number; cliente: string; botActivo: boolean; mensajes: number; conPedido: number; lineasErp: number; iguales: number; pct: number | null; lineasIa: number; dudas: number }>();
-    for (const c of casos) {
-      if (!porCliente.has(c.customerId)) porCliente.set(c.customerId, { customerId: c.customerId, cliente: c.cliente, botActivo: c.botActivo, mensajes: 0, conPedido: 0, lineasErp: 0, iguales: 0, pct: null, lineasIa: 0, dudas: 0 });
-      const k = porCliente.get(c.customerId)!;
-      k.mensajes++; if (c.conPedido) { k.conPedido++; k.lineasErp += c.lineasErp; k.iguales += c.iguales; } k.lineasIa += c.lineasIa; k.dudas += c.dudas;
-    }
-    const clientes = [...porCliente.values()].map((k) => ({ ...k, pct: k.lineasErp ? Math.round(1000 * k.iguales / k.lineasErp) / 10 : null }))
-      .sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1) || b.mensajes - a.mensajes);
-    return {
-      dias,
-      totales: { ...t, pct: t.lineasErp ? Math.round(1000 * t.iguales / t.lineasErp) / 10 : null },
-      peores,
-      noIdentificados: pend.map((p) => ({ id: Number(p.id), dia: p.dia, phone: p.phone, profileName: p.profileName ?? null, texto: p.texto, status: p.status, reason: p.reason ?? null })),
-      clientes,
-    };
+    const clientes = Array.from(porCliente.values()).map((k) => ({ ...k, pct: k.comparables ? Math.round(1000 * (k.comparables - k.errores) / k.comparables) / 10 : null, detalle: k.detalle.reverse() }))
+      .sort((a, b) => (b.ultimoPedido ?? "").localeCompare(a.ultimoPedido ?? ""));
+    return { resumen: { dias: diasResumen, pedidos: resumen.pedidos, renglones: resumen.renglones, pct: resumen.comparables ? Math.round(1000 * (resumen.comparables - resumen.errores) / resumen.comparables) / 10 : null }, clientes };
   },
 
   /** A-01: pedidos de una fecha con líneas en duda (para el aviso y el recordatorio de las 23:00). */

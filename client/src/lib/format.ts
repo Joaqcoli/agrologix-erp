@@ -20,6 +20,16 @@ export function fmtDecimal(v: string | number, dec = 2): string {
 }
 
 /** Fecha → YYYY-MM-DD (no es un monto: no se localiza) */
+/** Fecha y hora en Argentina, 24 h: "12/10/2026 19:55". Acepta Date o ISO. */
+export function fmtFechaHoraAR(d: Date | string | null | undefined): string {
+  if (!d) return "";
+  const date = typeof d === "string" ? new Date(d) : d;
+  if (isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("es-AR", {
+    timeZone: "America/Argentina/Buenos_Aires", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(date).replace(",", "");
+}
+
 export function fmtFecha(d: Date): string {
   return d.toISOString().split("T")[0];
 }

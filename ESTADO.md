@@ -13,11 +13,11 @@
   `GET /api/customers/names`, contactos CRUD, `/api/wa-pending*`, `GET /api/orders/dudas`, `/interpret` e
   `/intake` con `source`. Pantallas: "Números por asignar" (`/wa-pendientes`), "Teléfonos de pedido" en la
   ficha del cliente, chips WhatsApp / N dudas en Pedidos. `BOT_API_TOKEN` ya cargado en Render (verificado).
-  Vista **"Sombra WhatsApp"** (`/sombra`, `GET /api/sombra`): % de líneas iguales por día del agente vs lo
-  cargado a mano, dudas, no identificados, peores casos — el número para pasar el agente a ACTIVO (≥95 %).
+  Vista **"Bot por cliente"** (`/bot-clientes`, `GET /api/bot-clientes`; reemplaza a "Sombra WhatsApp"): por cliente, pedidos y renglones leídos, renglones con error vs lo
+  cargado, dudas, % acierto, interruptor "Bot activo" — el número para activar el bot por cliente (≥95 %).
   El agente vive en `../asistente-vegex` (Render, modo SOMBRA).
   12-oct: **`customers.bot_activo`** ("Bot activo" en la ficha y badge en la lista): el agente actúa en ACTIVO
-  solo para esos clientes. Cliente PRUEBA (167) con el número de Joaquín. Sombra WhatsApp con tabla por cliente.
+  solo para esos clientes. Cliente PRUEBA (167) con el número de Joaquín.
 - 11-oct `b2f04ba` **A-04 · IA en Carga Pedido** (desplegado y verificado: tabla creada en prod a los ~2 min,
   endpoint responde 401 sin sesión). `POST /api/orders/interpret`
   (`server/interpret-order.ts`: Anthropic, `ANTHROPIC_MODEL` default `claude-sonnet-5-5`, structured outputs,

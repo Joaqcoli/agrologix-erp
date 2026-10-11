@@ -15,6 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Phone, Check, X, MessageSquare } from "lucide-react";
 import type { Customer, WaPendingNumber } from "@shared/schema";
 import { formatArPhone } from "@shared/phone";
+import { fmtFechaHoraAR } from "@/lib/format";
 
 type Suggestion = { customerId: number; name: string; reason?: string };
 
@@ -87,7 +88,7 @@ function PendingCard({ row, customers, onAssign, onIgnore, busy, readOnly }: {
           <span className="font-mono text-sm">{formatArPhone(row.phone)}</span>
           {row.profileName && <Badge variant="secondary">{row.profileName}</Badge>}
           {row.reason === "repetido" && <Badge variant="outline" className="text-yellow-600 border-yellow-500/40">teléfono en varios clientes</Badge>}
-          <span className="text-xs text-muted-foreground ml-auto">{row.receivedAt ? new Date(row.receivedAt).toLocaleString("es-AR") : ""}</span>
+          <span className="text-xs text-muted-foreground ml-auto">{fmtFechaHoraAR(row.receivedAt ?? row.createdAt)}</span>
         </div>
         <pre className="text-xs whitespace-pre-wrap bg-muted/40 rounded-md p-3 max-h-48 overflow-auto font-mono"><MessageSquare className="inline h-3 w-3 mr-1" />{row.messageText}</pre>
 

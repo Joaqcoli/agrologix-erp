@@ -771,13 +771,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ folio: await storage.generateOrderFolio() });
   });
 
-  // A-01: vista "Sombra WhatsApp" (admin): lo que habría cargado el agente vs lo cargado a mano
-  app.get("/api/sombra", requireAuth, async (req, res) => {
+  // A-01: vista "Bot por cliente" (admin): lo que leyó el bot vs lo que quedó cargado, un renglón por cliente
+  app.get("/api/bot-clientes", requireAuth, async (req, res) => {
     try {
-      const from = String(req.query.from ?? "");
-      const to = String(req.query.to ?? "");
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ error: "from y to (YYYY-MM-DD) requeridos" });
-      return res.json(await storage.getSombraReport(from, to));
+      const dias = Math.min(365, Math.max(1, Number(req.query.dias ?? 60) || 60));
+      return res.json(await storage.getBotPorCliente({ dias, diasResumen: 7 }));
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
