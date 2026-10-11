@@ -247,6 +247,7 @@ export default function CustomersPage() {
                         <span className={`clx-b ${c.hasIva ? "clx-b-si" : "clx-b-no"}`}>{c.hasIva ? "Con IVA" : "Sin IVA"}</span>
                         {c.blackPot && <span className="clx-b clx-b-grp">Black Pot</span>}
                         {c.bolsaFv && <span className="clx-b clx-b-bolsa">Bolsa FV</span>}
+                        {(c as any).botActivo && <span className="clx-b clx-b-si"><MessageCircle className="h-[11px] w-[11px]" />Bot activo</span>}
                         {c.city && <span className="clx-b clx-b-loc"><MapPin className="h-[11px] w-[11px]" />{c.city}</span>}
                       </div>
                       {c.phone && <div className="clx-ctel"><Phone className="h-[13px] w-[13px]" /><span>{c.phone}</span></div>}
@@ -311,6 +312,17 @@ export default function CustomersPage() {
                 <Input id="phone" value={form.phone ?? ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} data-testid="input-customer-phone" />
               </div>
               {editing && <CustomerContactsSection customerId={editing.id} />}
+              <div className="sm:col-span-2 flex items-center justify-between rounded-md border p-3">
+                <div>
+                  <Label className="font-semibold">Bot activo (WhatsApp)</Label>
+                  <p className="text-[11px] text-muted-foreground">Encendido: el agente crea el borrador y responde "pedido recibido" a este cliente. Apagado: solo registra la propuesta (modo sombra).</p>
+                </div>
+                <Switch
+                  checked={!!(form as any).botActivo}
+                  onCheckedChange={(v) => setForm({ ...form, botActivo: v } as any)}
+                  data-testid="switch-bot-activo"
+                />
+              </div>
               <div className="sm:col-span-2 space-y-1.5">
                 <Label htmlFor="email">Correo</Label>
                 <Input id="email" type="email" value={form.email ?? ""} onChange={(e) => setForm({ ...form, email: e.target.value })} data-testid="input-customer-email" />

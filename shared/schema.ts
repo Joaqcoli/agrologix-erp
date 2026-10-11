@@ -42,6 +42,8 @@ export const customers = pgTable("customers", {
   openingBalance: numeric("opening_balance", { precision: 12, scale: 2 }).notNull().default("0"),
   parentCustomerId: integer("parent_customer_id").references(() => customers.id),
   active: boolean("active").notNull().default(true),
+  // A-01: "Bot activo": el agente de WhatsApp crea el borrador y responde para este cliente aunque el modo general sea SOMBRA
+  botActivo: boolean("bot_activo").notNull().default(false),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 
@@ -215,6 +217,8 @@ export const orderIntakeLogs = pgTable("order_intake_logs", {
   externalId: text("external_id"),
 });
 export type OrderIntakeLog = typeof orderIntakeLogs.$inferSelect;
+
+// (A-01: customers.bot_activo se define en la tabla customers: "Bot activo" por cliente)
 
 // ─── A-01: teléfonos de PEDIDO por cliente (muchos a muchos) ─────────────────────
 // customers.phone es el teléfono de ADMINISTRACIÓN (cobranzas): no se usa para identificar pedidos.

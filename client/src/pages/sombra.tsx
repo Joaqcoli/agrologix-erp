@@ -15,6 +15,7 @@ type Report = {
   totales: { mensajes: number; conPedido: number; sinPedido: number; lineasErp: number; iguales: number; pct: number | null; lineasIa: number; dudas: number; noIdentificados: number };
   peores: { logId: number; dia: string; cliente: string; folio: string | null; fecha: string | null; lineasErp: number; iguales: number; pct: number; dudas: number; diff: string[] }[];
   noIdentificados: { id: number; dia: string; phone: string; profileName: string | null; texto: string; status: string; reason: string | null }[];
+  clientes: { customerId: number; cliente: string; botActivo: boolean; mensajes: number; conPedido: number; lineasErp: number; iguales: number; pct: number | null; lineasIa: number; dudas: number }[];
 };
 
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -75,6 +76,29 @@ export default function SombraPage() {
                     </tbody>
                   </table>
                 )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2 pt-4"><CardTitle className="text-sm font-semibold">Por cliente (para decidir a quién activar)</CardTitle></CardHeader>
+              <CardContent className="pb-4 overflow-x-auto">
+                {data.clientes.length === 0 ? <p className="text-sm text-muted-foreground">Sin datos todavía.</p> : (
+                  <table className="w-full text-sm">
+                    <thead><tr className="text-left text-xs text-muted-foreground border-b"><th className="py-1 pr-3">Cliente</th><th className="py-1 pr-3">Bot</th><th className="py-1 pr-3">Mensajes</th><th className="py-1 pr-3">Con pedido</th><th className="py-1 pr-3">Iguales</th><th className="py-1 pr-3">%</th><th className="py-1 pr-3">Dudas</th></tr></thead>
+                    <tbody>
+                      {data.clientes.map((c) => (
+                        <tr key={c.customerId} className="border-b last:border-0">
+                          <td className="py-1 pr-3"><Link href="/customers" className="hover:underline">{c.cliente}</Link></td>
+                          <td className="py-1 pr-3">{c.botActivo ? <Badge variant="default" className="text-[10px]">activo</Badge> : <span className="text-xs text-muted-foreground">sombra</span>}</td>
+                          <td className="py-1 pr-3">{c.mensajes}</td><td className="py-1 pr-3">{c.conPedido}</td><td className="py-1 pr-3">{c.iguales}/{c.lineasErp}</td>
+                          <td className={`py-1 pr-3 ${pctClass(c.pct)}`}>{c.pct == null ? "—" : `${c.pct} %`}</td>
+                          <td className="py-1 pr-3">{c.dudas}{c.lineasIa ? ` (${Math.round(1000 * c.dudas / c.lineasIa) / 10} %)` : ""}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                <p className="text-[11px] text-muted-foreground mt-2">El interruptor "Bot activo" está en Clientes → editar cliente.</p>
               </CardContent>
             </Card>
 

@@ -1529,6 +1529,9 @@ export async function runNcMigrations() {
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `);
+  // Activación del bot por cliente (2026-10-12): SOMBRA general; si el cliente tiene bot_activo, el agente
+  // actúa en ACTIVO para sus mensajes (crea el borrador y responde "pedido recibido").
+  await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS bot_activo BOOLEAN NOT NULL DEFAULT FALSE`);
   // Usuario "Bot pedidos" (rol operator, lista blanca mínima en routes.ts). Entra solo con BOT_API_TOKEN
   // (Bearer), nunca por login: el hash es de una contraseña aleatoria que no se guarda en ningún lado.
   try {

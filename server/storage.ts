@@ -4639,7 +4639,7 @@ export const storage = {
    */
   async findCustomersByPhone(phone: string): Promise<{
     contacts: { contactId: number; customerId: number; customerName: string; contactName: string | null }[];
-    candidates: { id: number; name: string; parentCustomerId: number | null; via: "contacto" | "sede" | "pista" }[];
+    candidates: { id: number; name: string; parentCustomerId: number | null; via: "contacto" | "sede" | "pista"; botActivo: boolean }[];
   }> {
     const rows = await db.execute(drizzleSql`
       SELECT cc.id AS "contactId", cc.customer_id AS "customerId", c.name AS "customerName", cc.name AS "contactName", c.parent_customer_id AS "parentId"
@@ -4648,27 +4648,26 @@ export const storage = {
     const contacts = (rows.rows as any[]).map((r) => ({
       contactId: Number(r.contactId), customerId: Number(r.customerId), customerName: r.customerName as string, contactName: (r.contactName as string) ?? null,
     }));
-    const candidates: { id: number; name: string; parentCustomerId: number | null; via: "contacto" | "sede" | "pista" }[] = [];
+    const candidates: { id: number; name: string; parentCustomerId: number | null; via: "contacto" | "sede" | "pista"; botActivo: boolean }[] = [];
     const seen = new Set<number>();
-    const push = (c: { id: number; name: string; parentCustomerId: number | null }, via: "contacto" | "sede" | "pista") => {
+    const push = (c: { id: number; name: string; parentCustomerId: number | null; botActivo: boolean }, via: "contacto" | "sede" | "pista") => {
       if (seen.has(c.id)) return; seen.add(c.id); candidates.push({ ...c, via });
     };
+    const sel = { id: customers.id, name: customers.name, parentCustomerId: customers.parentCustomerId, botActivo: customers.botActivo };
     const ids = contacts.map((c) => c.customerId);
     if (ids.length) {
-      const custs = await db.select({ id: customers.id, name: customers.name, parentCustomerId: customers.parentCustomerId })
-        .from(customers).where(and(inArray(customers.id, ids), eq(customers.active, true)));
+      const custs = await db.select(sel).from(customers).where(and(inArray(customers.id, ids), eq(customers.active, true)));
       for (const c of custs) push(c, "contacto");
-      const sedes = await db.select({ id: customers.id, name: customers.name, parentCustomerId: customers.parentCustomerId })
-        .from(customers).where(and(inArray(customers.parentCustomerId, ids), eq(customers.active, true))).orderBy(asc(customers.name));
+      const sedes = await db.select(sel).from(customers).where(and(inArray(customers.parentCustomerId, ids), eq(customers.active, true))).orderBy(asc(customers.name));
       for (const s of sedes) push(s, "sede");
     }
     // Pista: customers.phone (administración) con el mismo número normalizado. Se compara por los últimos 10 dígitos.
     const tail = phone.replace(/\D/g, "").slice(-10);
     if (tail.length === 10) {
       const hints = await db.execute(drizzleSql`
-        SELECT id, name, parent_customer_id AS "parentCustomerId" FROM customers
+        SELECT id, name, parent_customer_id AS "parentCustomerId", bot_activo AS "botActivo" FROM customers
         WHERE active AND phone IS NOT NULL AND right(regexp_replace(phone, '\\D', '', 'g'), 10) = ${tail} ORDER BY name`);
-      for (const h of hints.rows as any[]) push({ id: Number(h.id), name: h.name, parentCustomerId: h.parentCustomerId == null ? null : Number(h.parentCustomerId) }, "pista");
+      for (const h of hints.rows as any[]) push({ id: Number(h.id), name: h.name, parentCustomerId: h.parentCustomerId == null ? null : Number(h.parentCustomerId), botActivo: !!h.botActivo }, "pista");
     }
     return { contacts, candidates };
   },
@@ -4726,16 +4725,17 @@ export const storage = {
     totales: { mensajes: number; conPedido: number; sinPedido: number; lineasErp: number; iguales: number; pct: number | null; lineasIa: number; dudas: number; noIdentificados: number };
     peores: { logId: number; dia: string; cliente: string; folio: string | null; fecha: string | null; lineasErp: number; iguales: number; pct: number; dudas: number; diff: string[] }[];
     noIdentificados: { id: number; dia: string; phone: string; profileName: string | null; texto: string; status: string; reason: string | null }[];
+    clientes: { customerId: number; cliente: string; botActivo: boolean; mensajes: number; conPedido: number; lineasErp: number; iguales: number; pct: number | null; lineasIa: number; dudas: number }[];
   }> {
     const tz = "America/Argentina/Buenos_Aires";
     const logs = (await db.execute(drizzleSql`
-      SELECT l.id, l.customer_id AS "customerId", c.name AS cliente, l.proposal, l.final, l.order_id AS "orderId",
+      SELECT l.id, l.customer_id AS "customerId", c.name AS cliente, c.bot_activo AS "botActivo", l.proposal, l.final, l.order_id AS "orderId",
              to_char(l.created_at AT TIME ZONE 'UTC' AT TIME ZONE ${tz}, 'YYYY-MM-DD') AS dia, l.created_at AS "createdAt"
       FROM order_intake_logs l JOIN customers c ON c.id = l.customer_id
       WHERE l.source = 'whatsapp' AND (l.created_at AT TIME ZONE 'UTC' AT TIME ZONE ${tz})::date BETWEEN ${from}::date AND ${to}::date
       ORDER BY l.created_at`)).rows as any[];
     const key = (pid: number, unit: string, qty: number) => `${pid}|${unit}|${Math.round(qty * 1000) / 1000}`;
-    type Caso = { logId: number; dia: string; cliente: string; folio: string | null; fecha: string | null; lineasErp: number; iguales: number; pct: number; dudas: number; lineasIa: number; diff: string[]; conPedido: boolean };
+    type Caso = { logId: number; dia: string; cliente: string; customerId: number; botActivo: boolean; folio: string | null; fecha: string | null; lineasErp: number; iguales: number; pct: number; dudas: number; lineasIa: number; diff: string[]; conPedido: boolean };
     const casos: Caso[] = [];
     for (const l of logs) {
       const prop = (l.proposal ?? {}) as any;
@@ -4760,7 +4760,7 @@ export const storage = {
           erpItems = items.map((r) => ({ productId: r.productId == null ? null : Number(r.productId), name: r.name, unit: r.unit, qty: Number(r.qty) }));
         }
       }
-      if (!erpItems) { casos.push({ logId: l.id, dia: l.dia, cliente: l.cliente, folio: null, fecha, lineasErp: 0, iguales: 0, pct: 0, dudas, lineasIa: lines.length, diff: [], conPedido: false }); continue; }
+      if (!erpItems) { casos.push({ logId: l.id, dia: l.dia, cliente: l.cliente, customerId: Number(l.customerId), botActivo: !!l.botActivo, folio: null, fecha, lineasErp: 0, iguales: 0, pct: 0, dudas, lineasIa: lines.length, diff: [], conPedido: false }); continue; }
       const erpKeys = new Map<string, typeof erpItems[number]>();
       for (const it of erpItems) if (it.productId != null) erpKeys.set(key(it.productId, it.unit, it.qty), it);
       const matched = new Set<string>();
@@ -4776,7 +4776,7 @@ export const storage = {
       }
       for (const [k, it] of erpKeys) if (!matched.has(k) && !lines.some((x) => x.productId === it.productId)) diff.push(`  ERP tiene ${it.name} ${it.qty} ${it.unit} | IA —`);
       const lineasErp = erpKeys.size;
-      casos.push({ logId: l.id, dia: l.dia, cliente: l.cliente, folio, fecha, lineasErp, iguales, pct: lineasErp ? iguales / lineasErp : 0, dudas, lineasIa: lines.length, diff, conPedido: true });
+      casos.push({ logId: l.id, dia: l.dia, cliente: l.cliente, customerId: Number(l.customerId), botActivo: !!l.botActivo, folio, fecha, lineasErp, iguales, pct: lineasErp ? iguales / lineasErp : 0, dudas, lineasIa: lines.length, diff, conPedido: true });
     }
     const pend = (await db.execute(drizzleSql`
       SELECT id, phone, profile_name AS "profileName", left(coalesce(message_text,''), 120) AS texto, status, reason,
@@ -4789,12 +4789,23 @@ export const storage = {
     for (const p of pend) { const d = dia(p.dia); d.noIdentificados++; }
     const dias = [...porDia.values()].sort((a, b) => b.dia.localeCompare(a.dia)).map((d) => ({ ...d, pct: d.lineasErp ? Math.round(1000 * d.iguales / d.lineasErp) / 10 : null }));
     const t = dias.reduce((s, d) => ({ mensajes: s.mensajes + d.mensajes, conPedido: s.conPedido + d.conPedido, sinPedido: s.sinPedido + d.sinPedido, lineasErp: s.lineasErp + d.lineasErp, iguales: s.iguales + d.iguales, lineasIa: s.lineasIa + d.lineasIa, dudas: s.dudas + d.dudas, noIdentificados: s.noIdentificados + d.noIdentificados }), { mensajes: 0, conPedido: 0, sinPedido: 0, lineasErp: 0, iguales: 0, lineasIa: 0, dudas: 0, noIdentificados: 0 });
-    const peores = casos.filter((c) => c.conPedido && c.lineasErp > 0).sort((a, b) => a.pct - b.pct).slice(0, 10).map(({ conPedido: _c, lineasIa: _l, ...rest }) => ({ ...rest, pct: Math.round(1000 * rest.pct) / 10 }));
+    const peores = casos.filter((c) => c.conPedido && c.lineasErp > 0).sort((a, b) => a.pct - b.pct).slice(0, 10)
+      .map(({ conPedido: _c, lineasIa: _l, customerId: _i, botActivo: _b, ...rest }) => ({ ...rest, pct: Math.round(1000 * rest.pct) / 10 }));
+    // Por cliente: para decidir a quién activar ("Bot activo")
+    const porCliente = new Map<number, { customerId: number; cliente: string; botActivo: boolean; mensajes: number; conPedido: number; lineasErp: number; iguales: number; pct: number | null; lineasIa: number; dudas: number }>();
+    for (const c of casos) {
+      if (!porCliente.has(c.customerId)) porCliente.set(c.customerId, { customerId: c.customerId, cliente: c.cliente, botActivo: c.botActivo, mensajes: 0, conPedido: 0, lineasErp: 0, iguales: 0, pct: null, lineasIa: 0, dudas: 0 });
+      const k = porCliente.get(c.customerId)!;
+      k.mensajes++; if (c.conPedido) { k.conPedido++; k.lineasErp += c.lineasErp; k.iguales += c.iguales; } k.lineasIa += c.lineasIa; k.dudas += c.dudas;
+    }
+    const clientes = [...porCliente.values()].map((k) => ({ ...k, pct: k.lineasErp ? Math.round(1000 * k.iguales / k.lineasErp) / 10 : null }))
+      .sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1) || b.mensajes - a.mensajes);
     return {
       dias,
       totales: { ...t, pct: t.lineasErp ? Math.round(1000 * t.iguales / t.lineasErp) / 10 : null },
       peores,
       noIdentificados: pend.map((p) => ({ id: Number(p.id), dia: p.dia, phone: p.phone, profileName: p.profileName ?? null, texto: p.texto, status: p.status, reason: p.reason ?? null })),
+      clientes,
     };
   },
 
