@@ -3,7 +3,7 @@ import "./env.js";
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
-import { registerRoutes } from "./routes";
+import { registerRoutes, botBearerAuth } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { runMigrations, runNcMigrations } from "./migrate";
@@ -47,6 +47,10 @@ app.use(express.urlencoded({ extended: false }));
 app.set("trust proxy", 1);
 
 const PgStore = connectPgSimple(session);
+
+// A-01: el bot entra con Authorization: Bearer <BOT_API_TOKEN> (sin cookie). Va ANTES de express-session:
+// si el token es válido arma req.session en memoria y express-session no crea ni lee sesiones.
+app.use(botBearerAuth);
 
 app.use(session({
   store: new PgStore({ pool, createTableIfMissing: true }),

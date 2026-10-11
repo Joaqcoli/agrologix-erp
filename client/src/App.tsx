@@ -37,6 +37,7 @@ import LoadListPage from "@/pages/load-list";
 import StockPage from "@/pages/stock";
 import AjustesStockPage from "@/pages/ajustes-stock";
 import IntakePage from "@/pages/intake";
+import WaPendingPage from "@/pages/wa-pending";
 import CuentasCorrientesPage from "@/pages/cuentas-corrientes/index";
 import CCCustomerDetailPage from "@/pages/cuentas-corrientes/detail";
 import SuppliersPage from "@/pages/suppliers/index";
@@ -86,6 +87,7 @@ function Router() {
       <Route path="/stock" component={StockPage} />
       <Route path="/ajustes-stock" component={AjustesStockPage} />
       <Route path="/intake" component={IntakePage} />
+      <Route path="/wa-pendientes" component={WaPendingPage} />
       <Route path="/cuentas-corrientes" component={CuentasCorrientesPage} />
       <Route path="/cuentas-corrientes/:id">
         {(params) => {

@@ -14,8 +14,76 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Pencil, Trash2, Users, Building2, Phone, Mail, MapPin } from "lucide-react";
-import type { Customer } from "@shared/schema";
+import { Plus, Search, Pencil, Trash2, Users, Building2, Phone, Mail, MapPin, MessageCircle, X, Check } from "lucide-react";
+import type { Customer, CustomerContact } from "@shared/schema";
+import { formatArPhone } from "@shared/phone";
+
+// ── A-01: Teléfonos de PEDIDO (customer_contacts). Distintos del teléfono de administración. ──
+function CustomerContactsSection({ customerId }: { customerId: number }) {
+  const { toast } = useToast();
+  const { data: contacts = [] } = useQuery<CustomerContact[]>({ queryKey: ["/api/customers", customerId, "contacts"], queryFn: async () => {
+    const r = await fetch(`/api/customers/${customerId}/contacts`, { credentials: "include" });
+    if (!r.ok) throw new Error("No se pudieron cargar los teléfonos");
+    return r.json();
+  } });
+  const [phone, setPhone] = useState("");
+  const [name, setName] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editPhone, setEditPhone] = useState("");
+  const [editName, setEditName] = useState("");
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/customers", customerId, "contacts"] });
+  const add = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/customers/${customerId}/contacts`, { phone, name: name.trim() || null }),
+    onSuccess: () => { invalidate(); setPhone(""); setName(""); toast({ title: "Teléfono de pedido agregado" }); },
+    onError: (e: any) => toast({ title: "No se pudo agregar", description: e.message, variant: "destructive" }),
+  });
+  const update = useMutation({
+    mutationFn: (id: number) => apiRequest("PATCH", `/api/customer-contacts/${id}`, { phone: editPhone, name: editName.trim() || null }),
+    onSuccess: () => { invalidate(); setEditingId(null); },
+    onError: (e: any) => toast({ title: "No se pudo guardar", description: e.message, variant: "destructive" }),
+  });
+  const remove = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/customer-contacts/${id}`),
+    onSuccess: () => invalidate(),
+  });
+  return (
+    <div className="sm:col-span-2 space-y-2 rounded-md border p-3">
+      <div className="flex items-center gap-2">
+        <MessageCircle className="h-4 w-4 text-green-700" />
+        <Label className="font-semibold">Teléfonos de pedido (WhatsApp)</Label>
+      </div>
+      <p className="text-[11px] text-muted-foreground">Quién manda los pedidos por WhatsApp. Puede haber varios (ej. "Juan - cocina"). El teléfono de arriba es el de administración y no se usa para identificar pedidos.</p>
+      {contacts.length === 0 && <p className="text-xs text-muted-foreground">Sin teléfonos de pedido cargados.</p>}
+      {contacts.map((c) => (
+        <div key={c.id} className="flex flex-wrap items-center gap-2 text-sm">
+          {editingId === c.id ? (
+            <>
+              <Input value={editPhone} onChange={(e) => setEditPhone(e.target.value)} className="h-7 w-40 text-xs font-mono" />
+              <Input value={editName} onChange={(e) => setEditName(e.target.value)} className="h-7 w-44 text-xs" placeholder="Nombre / rol" />
+              <Button type="button" size="sm" variant="outline" className="h-7" onClick={() => update.mutate(c.id)}><Check className="h-3 w-3" /></Button>
+              <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => setEditingId(null)}><X className="h-3 w-3" /></Button>
+            </>
+          ) : (
+            <>
+              <span className="font-mono text-xs">{formatArPhone(c.phone)}</span>
+              {c.name && <span className="text-xs text-muted-foreground">{c.name}</span>}
+              {c.origin === "whatsapp" && <Badge variant="outline" className="text-[10px]">asignado desde WhatsApp</Badge>}
+              <button type="button" className="text-[11px] underline text-muted-foreground" onClick={() => { setEditingId(c.id); setEditPhone(c.phone); setEditName(c.name ?? ""); }}>editar</button>
+              <button type="button" className="text-[11px] underline text-destructive" onClick={() => remove.mutate(c.id)}>borrar</button>
+            </>
+          )}
+        </div>
+      ))}
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="11 2345 6789" className="h-7 w-40 text-xs font-mono" data-testid="input-contact-phone" />
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre / rol (ej. Juan - cocina)" className="h-7 w-52 text-xs" data-testid="input-contact-name" />
+        <Button type="button" size="sm" variant="outline" className="h-7" disabled={!phone.trim() || add.isPending} onClick={() => add.mutate()} data-testid="button-add-contact">
+          <Plus className="h-3 w-3 mr-1" /> Agregar
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 const EMPTY: Partial<Customer> = { name: "", rfc: "", cuit: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ivaSince: null, ccType: "por_saldo", bolsaFv: false, blackPot: false, salespersonName: "", commissionPct: "0", parentCustomerId: null };
 
@@ -239,9 +307,10 @@ export default function CustomersPage() {
                 <Input id="cuit" value={(form as any).cuit ?? ""} onChange={(e) => setForm({ ...form, cuit: e.target.value } as any)} placeholder="30-12345678-9" data-testid="input-customer-cuit" />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="phone">Teléfono</Label>
+                <Label htmlFor="phone">Teléfono (administración)</Label>
                 <Input id="phone" value={form.phone ?? ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} data-testid="input-customer-phone" />
               </div>
+              {editing && <CustomerContactsSection customerId={editing.id} />}
               <div className="sm:col-span-2 space-y-1.5">
                 <Label htmlFor="email">Correo</Label>
                 <Input id="email" type="email" value={form.email ?? ""} onChange={(e) => setForm({ ...form, email: e.target.value })} data-testid="input-customer-email" />

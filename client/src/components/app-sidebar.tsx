@@ -29,6 +29,7 @@ import {
   Banknote,
   Landmark,
   Scale,
+  PhoneIncoming,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
@@ -49,6 +50,7 @@ const navItems = [
   { title: "Caja", url: "/caja", icon: Banknote },
   { title: "Bancos", url: "/bancos", icon: Landmark },
   { title: "Carga Pedido", url: "/intake", icon: MessageSquarePlus },
+  { title: "Números por asignar", url: "/wa-pendientes", icon: PhoneIncoming },
   { title: "Lista de Carga", url: "/load-list", icon: ClipboardList },
   { title: "Lista de Precios", url: "/price-list", icon: Tag },
 ];

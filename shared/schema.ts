@@ -170,6 +170,8 @@ export const orders = pgTable("orders", {
   galponConfirmedAt: timestamp("galpon_confirmed_at"),
   galponConfirmedBy: integer("galpon_confirmed_by").references(() => users.id),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  // A-01: origen del pedido. null = carga manual clásica · 'intake' = /intake con IA · 'whatsapp' = bot
+  source: text("source"),
 });
 
 export const orderItems = pgTable("order_items", {
@@ -209,8 +211,41 @@ export const orderIntakeLogs = pgTable("order_intake_logs", {
   outputTokens: integer("output_tokens"),
   proposal: jsonb("proposal"),
   final: jsonb("final"),
+  // A-01: id del mensaje de WhatsApp (wamid) → idempotencia ante reintentos del webhook
+  externalId: text("external_id"),
 });
 export type OrderIntakeLog = typeof orderIntakeLogs.$inferSelect;
+
+// ─── A-01: teléfonos de PEDIDO por cliente (muchos a muchos) ─────────────────────
+// customers.phone es el teléfono de ADMINISTRACIÓN (cobranzas): no se usa para identificar pedidos.
+// Un cliente puede tener varios encargados que piden; un mismo teléfono puede pedir para varios clientes.
+export const customerContacts = pgTable("customer_contacts", {
+  id: serial("id").primaryKey(),
+  customerId: integer("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  phone: text("phone").notNull(), // normalizado: +549 + 10 dígitos
+  name: text("name"), // "Juan - cocina"
+  origin: text("origin").notNull().default("manual"), // 'manual' | 'whatsapp' (asignado desde Números por asignar) | 'historial'
+  confirmed: boolean("confirmed").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type CustomerContact = typeof customerContacts.$inferSelect;
+
+// ─── A-01: "Números por asignar" (mensajes de WhatsApp de un teléfono desconocido) ─────────
+export const waPendingNumbers = pgTable("wa_pending_numbers", {
+  id: serial("id").primaryKey(),
+  phone: text("phone").notNull(),
+  profileName: text("profile_name"),
+  messageText: text("message_text"),
+  wamid: text("wamid").unique(),
+  receivedAt: timestamp("received_at"),
+  suggestions: jsonb("suggestions"), // [{customerId, name, reason}] hasta 3, propuestos por la IA
+  status: text("status").notNull().default("pending"), // 'pending' | 'assigned' | 'ignored' | 'processed'
+  assignedCustomerIds: jsonb("assigned_customer_ids"), // [customerId, ...]
+  contactName: text("contact_name"),
+  reason: text("reason"), // 'desconocido' | 'repetido' (teléfono con varios clientes y la IA no pudo elegir)
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type WaPendingNumber = typeof waPendingNumbers.$inferSelect;
 
 // ─── Product Units (stock + cost per unit per product) ─────────────────────────
 export const productUnits = pgTable("product_units", {

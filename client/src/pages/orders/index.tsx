@@ -95,6 +95,8 @@ const PDX_CSS = `
 .pdx-chip.prod{background:#f1f1ec;color:#8b8f88;}
 .pdx-chip.iva{background:#e9eff7;color:#3a67a3;}
 .pdx-chip.galpon{background:#e9eff7;color:#3a67a3;}
+.pdx-chip.wa{background:#e6f6ea;color:#1f7a3a;}
+.pdx-chip.duda{background:#fff3cd;color:#8a6d0b;}
 .pdx-pname{font-family:'Bricolage Grotesque';font-size:18px;font-weight:700;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .pdx-pmeta{display:flex;align-items:center;gap:8px;font-size:12.5px;color:#8b8f88;margin-top:5px;flex-wrap:wrap;}
 .pdx-pmeta .rem{color:#1e2420;font-weight:500;}
@@ -275,6 +277,9 @@ export default function OrdersPage() {
                           <span className="pdx-chip prod">{o.itemCount} prod.</span>
                           {o.hasIva && <span className="pdx-chip iva">Con IVA</span>}
                           {(o as any).galponConfirmed && <span className="pdx-chip galpon">Confirmado galpón</span>}
+                          {/* A-01: origen WhatsApp y líneas en duda (parse_status = 'duda') */}
+                          {(o as any).source === "whatsapp" && <span className="pdx-chip wa">WhatsApp</span>}
+                          {((o as any).dudaCount ?? 0) > 0 && <span className="pdx-chip duda">{(o as any).dudaCount} {(o as any).dudaCount === 1 ? "duda" : "dudas"}</span>}
                         </div>
                         <div className="pdx-pname">{o.customerName}</div>
                         <div className="pdx-pmeta">

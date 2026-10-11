@@ -13,6 +13,8 @@ import { getHistoricalMonthStats } from "./historical-stats";
 import { getLastVoucher, createVoucher } from "./arca";
 import { syncMpReport } from "./mp-report-sync";
 import { interpretOrder, aiEnabled } from "./interpret-order";
+import { timingSafeEqual } from "crypto";
+import { normalizeArPhone } from "@shared/phone";
 import multer from "multer";
 
 const galiciaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -67,9 +69,47 @@ function requireGalpon(req: Request, res: Response, next: NextFunction) {
 export const ROLE_API_WHITELIST: Record<string, string[]> = {
   galpon:   ["/api/galpon/", "/api/auth/"],
   vendedor: ["/api/vendedor/", "/api/auth/"],
+  // operator: lo usa SOLO el usuario "Bot pedidos" (A-01, entra por BOT_API_TOKEN). Carlos (operator)
+  // sigue inactivo a nivel login. Lista mínima: identificar cliente, interpretar, crear borrador, dudas.
+  operator: [
+    "/api/auth/",
+    "/api/customers/by-phone",
+    "/api/customers/names",
+    "/api/wa-pending",
+    "/api/orders/interpret",
+    "/api/orders/intake",
+    "/api/orders/draft",
+    "/api/orders/dudas",
+  ],
   // admin: sin entrada → acceso total.
-  // operator: cuenta deprecada, desactivada a nivel login (users.active=false). Sin entrada acá.
 };
+
+// ─── A-01: auth por token de servicio para el bot (sin cookie) ─────────────────
+// Corre ANTES de express-session (server/index.ts). Si el header Authorization trae el BOT_API_TOKEN,
+// se arma un req.session en memoria con el usuario "Bot pedidos" y express-session no toca la base
+// (su middleware hace `if (req.session) return next()`). Sin token válido no hace nada.
+const BOT_EMAIL = "bot@vegetalesargentinos.com";
+let botUserCache: { id: number; role: string; active: boolean; at: number } | null = null;
+export async function botBearerAuth(req: Request, _res: Response, next: NextFunction) {
+  const token = process.env.BOT_API_TOKEN;
+  const header = req.headers.authorization;
+  if (!token || !header || !header.startsWith("Bearer ")) return next();
+  const given = header.slice(7).trim();
+  if (given.length !== token.length || !timingSafeEqual(Buffer.from(given), Buffer.from(token))) return next();
+  try {
+    if (!botUserCache || Date.now() - botUserCache.at > 60_000) {
+      const u = await storage.getUserByEmail(BOT_EMAIL);
+      botUserCache = u ? { id: u.id, role: u.role, active: !!u.active, at: Date.now() } : null;
+    }
+    if (!botUserCache || !botUserCache.active) return next();
+    (req as any).session = {
+      userId: botUserCache.id, userRole: botUserCache.role, cookie: {},
+      destroy: (cb?: (err?: any) => void) => cb && cb(), save: (cb?: (err?: any) => void) => cb && cb(),
+      regenerate: (cb?: (err?: any) => void) => cb && cb(), touch: () => {}, reload: (cb?: (err?: any) => void) => cb && cb(),
+    };
+  } catch (e) { console.error("botBearerAuth:", e); }
+  next();
+}
 
 // Cache en memoria de la revalidación de cuenta activa (M1). Saca 1 round-trip a la
 // base de cada request. TTL corto = ventana máxima del corte al desactivar una cuenta.
@@ -280,6 +320,98 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       return res.json(await storage.getCustomers());
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── A-01: identificación por teléfono de pedido + contactos ───────────────
+  // Solo id/nombre/padre de los clientes activos (lo que el bot necesita para sugerir un cliente)
+  app.get("/api/customers/names", requireAuth, async (_req, res) => {
+    const all = await storage.getCustomers();
+    return res.json(all.filter((c: any) => c.active).map((c: any) => ({ id: c.id, name: c.name, parentCustomerId: c.parentCustomerId ?? null })));
+  });
+
+  app.get("/api/customers/by-phone", requireAuth, async (req, res) => {
+    const phone = normalizeArPhone(String(req.query.phone ?? ""));
+    if (!phone) return res.status(400).json({ error: "Teléfono inválido" });
+    const r = await storage.findCustomersByPhone(phone);
+    return res.json({ phone, ...r });
+  });
+
+  app.get("/api/customers/:id/contacts", requireAuth, async (req, res) => {
+    return res.json(await storage.getCustomerContacts(Number(req.params.id)));
+  });
+
+  app.post("/api/customers/:id/contacts", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({ phone: z.string(), name: z.string().nullable().optional() }).parse(req.body);
+      const phone = normalizeArPhone(body.phone);
+      if (!phone) return res.status(400).json({ error: "Teléfono inválido: tiene que quedar con 10 dígitos (área + número)" });
+      const row = await storage.createCustomerContact({ customerId: Number(req.params.id), phone, name: body.name ?? null, origin: "manual" });
+      return res.status(201).json(row);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.patch("/api/customer-contacts/:id", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({ phone: z.string().optional(), name: z.string().nullable().optional() }).parse(req.body);
+      const data: { phone?: string; name?: string | null } = {};
+      if (body.phone !== undefined) {
+        const phone = normalizeArPhone(body.phone);
+        if (!phone) return res.status(400).json({ error: "Teléfono inválido" });
+        data.phone = phone;
+      }
+      if (body.name !== undefined) data.name = body.name;
+      const row = await storage.updateCustomerContact(Number(req.params.id), data);
+      if (!row) return res.status(404).json({ error: "No existe" });
+      return res.json(row);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.delete("/api/customer-contacts/:id", requireAuth, async (req, res) => {
+    await storage.deleteCustomerContact(Number(req.params.id));
+    return res.json({ ok: true });
+  });
+
+  // ─── A-01: Números por asignar ───────────────────────────────────────────────
+  app.get("/api/wa-pending", requireAuth, async (req, res) => {
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    return res.json(await storage.listWaPending(status));
+  });
+
+  app.post("/api/wa-pending", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({
+        phone: z.string(), profileName: z.string().nullable().optional(), messageText: z.string().nullable().optional(),
+        wamid: z.string().nullable().optional(), receivedAt: z.string().nullable().optional(),
+        suggestions: z.array(z.object({ customerId: z.number(), name: z.string(), reason: z.string().optional() })).max(3).optional(),
+        reason: z.string().nullable().optional(),
+      }).parse(req.body);
+      const phone = normalizeArPhone(body.phone) ?? body.phone;
+      const row = await storage.createWaPending({
+        phone, profileName: body.profileName, messageText: body.messageText, wamid: body.wamid,
+        receivedAt: body.receivedAt ? new Date(body.receivedAt) : null, suggestions: body.suggestions ?? null, reason: body.reason ?? null,
+      });
+      return res.status(201).json(row);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.post("/api/wa-pending/:id/assign", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({ customerIds: z.array(z.number()).min(1), contactName: z.string().nullable().optional() }).parse(req.body);
+      const row = await storage.assignWaPending(Number(req.params.id), body.customerIds, body.contactName ?? null);
+      if (!row) return res.status(404).json({ error: "No existe" });
+      return res.json(row);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.post("/api/wa-pending/:id/ignore", requireAuth, async (req, res) => {
+    await storage.setWaPendingStatus(Number(req.params.id), "ignored");
+    return res.json({ ok: true });
+  });
+
+  // El agente marca "processed" después de reprocesar el mensaje asignado
+  app.post("/api/wa-pending/:id/processed", requireAuth, async (req, res) => {
+    await storage.setWaPendingStatus(Number(req.params.id), "processed");
+    return res.json({ ok: true });
   });
 
   app.get("/api/customers/:id", requireAuth, async (req, res) => {
@@ -639,6 +771,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ folio: await storage.generateOrderFolio() });
   });
 
+  // A-01: pedidos de una fecha con líneas en duda (aviso y recordatorio del bot; también lo ve admin)
+  app.get("/api/orders/dudas", requireAuth, async (req, res) => {
+    const date = String(req.query.date ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date (YYYY-MM-DD) requerida" });
+    return res.json(await storage.getOrdersWithDudas(date));
+  });
+
   // Check if a draft order exists for customer+date (for intake merge flow)
   app.get("/api/orders/draft", requireAuth, async (req, res) => {
     const { customerId, date } = req.query;
@@ -658,8 +797,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         customerId: z.number(),
         text: z.string().max(20_000).optional(),
         imageBase64: z.string().optional(),
+        source: z.enum(["intake", "whatsapp", "simulacion"]).default("intake"), // A-01: el bot manda 'whatsapp'; la prueba offline, 'simulacion'
+        externalId: z.string().max(200).optional(),               // A-01: wamid → idempotente
       }).parse(req.body);
       if (!body.text?.trim() && !body.imageBase64) return res.status(400).json({ error: "Falta el texto o la imagen" });
+
+      // Reintento del webhook de YCloud con el mismo mensaje → devolver la propuesta ya guardada
+      if (body.externalId) {
+        const prev = await storage.getIntakeLogByExternalId(body.externalId);
+        if (prev && prev.customerId === body.customerId && prev.proposal) {
+          return res.json({ ...(prev.proposal as object), model: prev.model, intakeLogId: prev.id, cached: true });
+        }
+      }
 
       const result = await interpretOrder({ customerId: body.customerId, text: body.text, imageBase64: body.imageBase64 });
 
@@ -668,13 +817,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         intakeLogId = await storage.createIntakeLog({
           userId: req.session.userId ?? null,
           customerId: body.customerId,
-          source: "intake",
+          source: body.source,
           rawText: body.text?.trim() || null,
           hadImage: !!body.imageBase64,
           model: result.model,
           inputTokens: result.usage.inputTokens + result.usage.cacheReadTokens + result.usage.cacheWriteTokens,
           outputTokens: result.usage.outputTokens,
           proposal: { lines: result.lines, ignoredLines: result.ignoredLines, notes: result.notes, multiLocalWarning: result.multiLocalWarning, usage: result.usage },
+          externalId: body.externalId ?? null,
         });
       } catch (e) { console.error("order_intake_logs insert failed:", e); }
 
@@ -696,6 +846,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         mode: z.enum(["new", "merge", "replace"]).default("new"),
         existingOrderId: z.number().optional(),
         intakeLogId: z.number().optional(), // A-04: log de la interpretación IA a completar
+        source: z.enum(["intake", "whatsapp"]).optional(), // A-01: origen del pedido
         items: z.array(z.object({
           productId: z.number().nullable(),
           quantity: z.string(),
@@ -717,9 +868,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (body.mode === "merge" && body.existingOrderId) {
         await storage.addItemsToOrder(body.existingOrderId, items);
         order = { id: body.existingOrderId };
+        if (body.source) await storage.setOrderSourceIfNull(body.existingOrderId, body.source);
       } else if (body.mode === "replace" && body.existingOrderId) {
         await storage.replaceOrderItems(body.existingOrderId, items);
         order = { id: body.existingOrderId };
+        if (body.source) await storage.setOrderSourceIfNull(body.existingOrderId, body.source);
       } else {
         const folio = await storage.generateOrderFolio();
         order = await storage.createOrderFromIntake({
@@ -728,6 +881,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           orderDate: new Date(body.orderDate),
           notes: body.notes,
           createdBy: req.session.userId!,
+          source: body.source ?? null,
           items,
         });
       }

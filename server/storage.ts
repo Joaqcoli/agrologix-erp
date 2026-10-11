@@ -8,7 +8,8 @@ import {
   mpMovementIdentifiers,
   creditNotes,
   cuentasFinancieras,
-  orderIntakeLogs,
+  orderIntakeLogs, customerContacts, waPendingNumbers,
+  type OrderIntakeLog, type CustomerContact, type WaPendingNumber,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
@@ -1434,7 +1435,7 @@ export const storage = {
     return `VA-${String(num).padStart(6, "0")}`;
   },
 
-  async getOrders(date?: string): Promise<(Order & { customerName: string; itemCount: number; suggestedRemito: string; hasIva: boolean; totalConIva: string; totalCosto: string })[]> {
+  async getOrders(date?: string): Promise<(Order & { customerName: string; itemCount: number; suggestedRemito: string; hasIva: boolean; totalConIva: string; totalCosto: string; dudaCount: number })[]> {
     let all: Order[];
     if (date) {
       all = await db
@@ -1486,7 +1487,9 @@ export const storage = {
           return sum + qty * cost;
         }, 0);
 
-        return { ...o, customerName: customer?.name ?? "", itemCount: items.length, suggestedRemito, hasIva: orderHasIva, totalConIva: totalConIva.toFixed(2), totalCosto: totalCosto.toFixed(2) };
+        // A-01: líneas en duda (IA/WhatsApp) para el chip de la pantalla Pedidos
+        const dudaCount = items.filter((it) => it.parseStatus === "duda").length;
+        return { ...o, customerName: customer?.name ?? "", itemCount: items.length, suggestedRemito, hasIva: orderHasIva, totalConIva: totalConIva.toFixed(2), totalCosto: totalCosto.toFixed(2), dudaCount };
       })
     );
     return result;
@@ -1533,6 +1536,7 @@ export const storage = {
     orderDate: Date;
     notes?: string;
     createdBy: number;
+    source?: string | null; // A-01: 'intake' | 'whatsapp'
     items: {
       productId: number | null;
       quantity: string;
@@ -1552,6 +1556,7 @@ export const storage = {
       status: "draft",
       lowMarginConfirmed: false,
       remitoNum,
+      source: data.source ?? null,
     }).returning();
 
     const itemsToInsert = await Promise.all(
@@ -4593,10 +4598,136 @@ export const storage = {
 
   async createIntakeLog(data: {
     userId: number | null; customerId: number; source: string; rawText: string | null; hadImage: boolean;
-    model: string; inputTokens: number | null; outputTokens: number | null; proposal: unknown;
+    model: string; inputTokens: number | null; outputTokens: number | null; proposal: unknown; externalId?: string | null;
   }): Promise<number> {
     const [row] = await db.insert(orderIntakeLogs).values(data).returning({ id: orderIntakeLogs.id });
     return row.id;
+  },
+
+  /** A-01: idempotencia ante reintentos del webhook (mismo wamid → misma propuesta). */
+  async getIntakeLogByExternalId(externalId: string): Promise<OrderIntakeLog | undefined> {
+    const [row] = await db.select().from(orderIntakeLogs).where(eq(orderIntakeLogs.externalId, externalId)).limit(1);
+    return row;
+  },
+
+  // ─── A-01: teléfonos de pedido (customer_contacts) ───────────────────────────
+  async getCustomerContacts(customerId: number): Promise<CustomerContact[]> {
+    return db.select().from(customerContacts).where(eq(customerContacts.customerId, customerId)).orderBy(asc(customerContacts.id));
+  },
+
+  async createCustomerContact(data: { customerId: number; phone: string; name?: string | null; origin?: string }): Promise<CustomerContact> {
+    const [row] = await db.insert(customerContacts)
+      .values({ customerId: data.customerId, phone: data.phone, name: data.name ?? null, origin: data.origin ?? "manual" })
+      .onConflictDoUpdate({ target: [customerContacts.customerId, customerContacts.phone], set: { name: data.name ?? null } })
+      .returning();
+    return row;
+  },
+
+  async updateCustomerContact(id: number, data: { phone?: string; name?: string | null }): Promise<CustomerContact | undefined> {
+    const [row] = await db.update(customerContacts).set(data).where(eq(customerContacts.id, id)).returning();
+    return row;
+  },
+
+  async deleteCustomerContact(id: number): Promise<void> {
+    await db.delete(customerContacts).where(eq(customerContacts.id, id));
+  },
+
+  /**
+   * Identificación por teléfono (A-01): primero customer_contacts; customers.phone solo como pista.
+   * Devuelve los clientes activos del teléfono (expandiendo padres a sus sedes activas) para que el
+   * agente/la IA elija entre candidatos según el texto.
+   */
+  async findCustomersByPhone(phone: string): Promise<{
+    contacts: { contactId: number; customerId: number; customerName: string; contactName: string | null }[];
+    candidates: { id: number; name: string; parentCustomerId: number | null; via: "contacto" | "sede" | "pista" }[];
+  }> {
+    const rows = await db.execute(drizzleSql`
+      SELECT cc.id AS "contactId", cc.customer_id AS "customerId", c.name AS "customerName", cc.name AS "contactName", c.parent_customer_id AS "parentId"
+      FROM customer_contacts cc JOIN customers c ON c.id = cc.customer_id
+      WHERE cc.phone = ${phone} AND c.active ORDER BY cc.id`);
+    const contacts = (rows.rows as any[]).map((r) => ({
+      contactId: Number(r.contactId), customerId: Number(r.customerId), customerName: r.customerName as string, contactName: (r.contactName as string) ?? null,
+    }));
+    const candidates: { id: number; name: string; parentCustomerId: number | null; via: "contacto" | "sede" | "pista" }[] = [];
+    const seen = new Set<number>();
+    const push = (c: { id: number; name: string; parentCustomerId: number | null }, via: "contacto" | "sede" | "pista") => {
+      if (seen.has(c.id)) return; seen.add(c.id); candidates.push({ ...c, via });
+    };
+    const ids = contacts.map((c) => c.customerId);
+    if (ids.length) {
+      const custs = await db.select({ id: customers.id, name: customers.name, parentCustomerId: customers.parentCustomerId })
+        .from(customers).where(and(inArray(customers.id, ids), eq(customers.active, true)));
+      for (const c of custs) push(c, "contacto");
+      const sedes = await db.select({ id: customers.id, name: customers.name, parentCustomerId: customers.parentCustomerId })
+        .from(customers).where(and(inArray(customers.parentCustomerId, ids), eq(customers.active, true))).orderBy(asc(customers.name));
+      for (const s of sedes) push(s, "sede");
+    }
+    // Pista: customers.phone (administración) con el mismo número normalizado. Se compara por los últimos 10 dígitos.
+    const tail = phone.replace(/\D/g, "").slice(-10);
+    if (tail.length === 10) {
+      const hints = await db.execute(drizzleSql`
+        SELECT id, name, parent_customer_id AS "parentCustomerId" FROM customers
+        WHERE active AND phone IS NOT NULL AND right(regexp_replace(phone, '\\D', '', 'g'), 10) = ${tail} ORDER BY name`);
+      for (const h of hints.rows as any[]) push({ id: Number(h.id), name: h.name, parentCustomerId: h.parentCustomerId == null ? null : Number(h.parentCustomerId) }, "pista");
+    }
+    return { contacts, candidates };
+  },
+
+  // ─── A-01: Números por asignar (wa_pending_numbers) ──────────────────────────
+  async createWaPending(data: {
+    phone: string; profileName?: string | null; messageText?: string | null; wamid?: string | null;
+    receivedAt?: Date | null; suggestions?: unknown; reason?: string | null;
+  }): Promise<WaPendingNumber> {
+    const [row] = await db.insert(waPendingNumbers).values({
+      phone: data.phone, profileName: data.profileName ?? null, messageText: data.messageText ?? null,
+      wamid: data.wamid ?? null, receivedAt: data.receivedAt ?? null, suggestions: data.suggestions ?? null, reason: data.reason ?? null,
+    }).onConflictDoNothing({ target: waPendingNumbers.wamid }).returning();
+    if (row) return row;
+    const [existing] = await db.select().from(waPendingNumbers).where(eq(waPendingNumbers.wamid, data.wamid!)).limit(1);
+    return existing;
+  },
+
+  async listWaPending(status?: string): Promise<WaPendingNumber[]> {
+    const q = db.select().from(waPendingNumbers);
+    const rows = status ? await q.where(eq(waPendingNumbers.status, status)) : await q;
+    return rows.sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0));
+  },
+
+  /** Asigna el teléfono a uno o varios clientes: crea los contactos y deja el mensaje para reprocesar. */
+  async assignWaPending(id: number, customerIds: number[], contactName: string | null): Promise<WaPendingNumber | undefined> {
+    const [row] = await db.select().from(waPendingNumbers).where(eq(waPendingNumbers.id, id)).limit(1);
+    if (!row) return undefined;
+    for (const cid of customerIds) {
+      await this.createCustomerContact({ customerId: cid, phone: row.phone, name: contactName ?? row.profileName ?? null, origin: "whatsapp" });
+    }
+    const [updated] = await db.update(waPendingNumbers)
+      .set({ status: "assigned", assignedCustomerIds: customerIds, contactName })
+      .where(eq(waPendingNumbers.id, id)).returning();
+    return updated;
+  },
+
+  async setWaPendingStatus(id: number, status: "ignored" | "processed" | "pending"): Promise<void> {
+    await db.update(waPendingNumbers).set({ status }).where(eq(waPendingNumbers.id, id));
+  },
+
+  /** A-01: al sumar líneas del bot a un borrador manual, dejar constancia del origen si no tenía. */
+  async setOrderSourceIfNull(orderId: number, source: string): Promise<void> {
+    await db.execute(drizzleSql`UPDATE orders SET source = ${source} WHERE id = ${orderId} AND source IS NULL`);
+  },
+
+  /** A-01: pedidos de una fecha con líneas en duda (para el aviso y el recordatorio de las 23:00). */
+  async getOrdersWithDudas(date: string): Promise<{ id: number; folio: string; customerName: string; orderDate: string; source: string | null; dudaCount: number; status: string }[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT o.id, o.folio, c.name AS "customerName", to_char(o.order_date, 'YYYY-MM-DD') AS "orderDate", o.source, o.status,
+             count(oi.id) FILTER (WHERE oi.parse_status = 'duda')::int AS "dudaCount"
+      FROM orders o JOIN customers c ON c.id = o.customer_id
+      LEFT JOIN order_items oi ON oi.order_id = o.id
+      WHERE o.order_date::date = ${date}::date AND o.status <> 'cancelled'
+      GROUP BY o.id, c.name HAVING count(oi.id) FILTER (WHERE oi.parse_status = 'duda') > 0
+      ORDER BY c.name`);
+    return (rows.rows as any[]).map((r) => ({
+      id: Number(r.id), folio: r.folio, customerName: r.customerName, orderDate: r.orderDate, source: r.source ?? null, dudaCount: Number(r.dudaCount), status: r.status,
+    }));
   },
 
   /** Al "Crear Pedido": completa order_id y las líneas finales. Solo si el log es de ese cliente. */

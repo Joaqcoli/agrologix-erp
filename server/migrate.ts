@@ -1493,5 +1493,53 @@ export async function runNcMigrations() {
   `);
   try { await db.execute(sql`CREATE INDEX IF NOT EXISTS order_intake_logs_customer_idx ON order_intake_logs(customer_id, created_at DESC)`); } catch {}
 
+  // ─── A-01 Pedidos de WhatsApp (2026-10-11) ──────────────────────────────────
+  // orders.source: origen del pedido (null | 'intake' | 'whatsapp'). external_id: wamid del mensaje.
+  await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS source TEXT`);
+  await db.execute(sql`ALTER TABLE order_intake_logs ADD COLUMN IF NOT EXISTS external_id TEXT`);
+  try { await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS order_intake_logs_external_idx ON order_intake_logs(external_id) WHERE external_id IS NOT NULL`); } catch {}
+  // Teléfonos de PEDIDO por cliente (customers.phone es el de administración y no se toca)
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS customer_contacts (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      phone TEXT NOT NULL,
+      name TEXT,
+      origin TEXT NOT NULL DEFAULT 'manual',
+      confirmed BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      UNIQUE (customer_id, phone)
+    )
+  `);
+  try { await db.execute(sql`CREATE INDEX IF NOT EXISTS customer_contacts_phone_idx ON customer_contacts(phone)`); } catch {}
+  // Números por asignar: mensajes de teléfonos desconocidos (o repetidos sin poder elegir)
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS wa_pending_numbers (
+      id SERIAL PRIMARY KEY,
+      phone TEXT NOT NULL,
+      profile_name TEXT,
+      message_text TEXT,
+      wamid TEXT UNIQUE,
+      received_at TIMESTAMP,
+      suggestions JSONB,
+      status TEXT NOT NULL DEFAULT 'pending',
+      assigned_customer_ids JSONB,
+      contact_name TEXT,
+      reason TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+  // Usuario "Bot pedidos" (rol operator, lista blanca mínima en routes.ts). Entra solo con BOT_API_TOKEN
+  // (Bearer), nunca por login: el hash es de una contraseña aleatoria que no se guarda en ningún lado.
+  try {
+    const bcrypt = (await import("bcryptjs")).default;
+    const randomHash = await bcrypt.hash(Math.random().toString(36) + Date.now().toString(36) + Math.random().toString(36), 10);
+    await db.execute(sql`
+      INSERT INTO users (name, email, password_hash, role, active)
+      SELECT 'Bot pedidos', 'bot@vegetalesargentinos.com', ${randomHash}, 'operator', TRUE
+      WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = 'bot@vegetalesargentinos.com')
+    `);
+  } catch (e) { console.error("bot user insert failed:", e); }
+
   console.log("NC migrations complete.");
 }

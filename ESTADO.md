@@ -5,6 +5,15 @@
 > Última actualización: 2026-10-11 (A-04 IA en Carga Pedido desplegado).
 
 ## Último trabajo (sep–oct 2026)
+- 11-oct **A-01 · soporte para el agente de WhatsApp** (commit "feat(bot): A-01…"). Tablas `customer_contacts`
+  (teléfonos de PEDIDO; `customers.phone` es administración y no se usa para identificar) y
+  `wa_pending_numbers` (Números por asignar); `orders.source`; `order_intake_logs.external_id`; usuario
+  "Bot pedidos" (operator, lista blanca mínima en `ROLE_API_WHITELIST`, entra con `Authorization: Bearer
+  BOT_API_TOKEN` → `botBearerAuth` antes de express-session). Endpoints: `GET /api/customers/by-phone`,
+  `GET /api/customers/names`, contactos CRUD, `/api/wa-pending*`, `GET /api/orders/dudas`, `/interpret` e
+  `/intake` con `source`. Pantallas: "Números por asignar" (`/wa-pendientes`), "Teléfonos de pedido" en la
+  ficha del cliente, chips WhatsApp / N dudas en Pedidos. **Falta en Render (ERP): `BOT_API_TOKEN` en el
+  Secret File** (valor en el `.env` local). El agente vive en `../asistente-vegex`.
 - 11-oct `b2f04ba` **A-04 · IA en Carga Pedido** (desplegado y verificado: tabla creada en prod a los ~2 min,
   endpoint responde 401 sin sesión). `POST /api/orders/interpret`
   (`server/interpret-order.ts`: Anthropic, `ANTHROPIC_MODEL` default `claude-sonnet-5-5`, structured outputs,
@@ -71,6 +80,9 @@
 - Cambiar contraseñas por defecto de admin y Juan; no hay "cambiar contraseña" en la UI.
 
 ## Verificaciones manuales (las hace Joaquín)
+- **A-01**: Clientes → editar uno → aparece "Teléfonos de pedido" (agregar, editar, borrar). Menú "Números por
+  asignar" abre vacío. Pedidos muestra chip "WhatsApp"/"N dudas" cuando el bot cargue algo. El rol operator ya
+  no tiene acceso total (solo el bot, por token).
 - **A-04**: en /intake pegar un pedido real de WhatsApp → "Analizar pedido" tiene que mostrar "Interpretado por IA"
   (si sale el banner amarillo "IA no disponible", falta `ANTHROPIC_API_KEY` en el Secret File de Render).
   Probar: una duda → elegir candidato o "Confirmar"; subir una foto de pedido; crear el pedido y ver que la
