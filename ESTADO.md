@@ -13,9 +13,15 @@
   ignorados, aviso multi-local, nota precargada, foto. Merge/replace, precios, stock: sin cambios.
   **Prueba offline (40 pedidos del grupo de WhatsApp, historial cortado antes del mensaje):** 75,1 % de líneas
   iguales (producto+unidad+cantidad), 13,8 % con producto bien y unidad/cantidad distinta, 25,9 % dudas,
-  mediana 5,4 s, USD 0,018 por pedido. Patrones que NO se arreglan con historial: (a) la variante la decide el
-  stock de la semana (Anco Coquena vs Comercial, Naranja Jugo vs Jugo Elegida, Palta Chile vs Brasil);
-  (b) el cliente escribe "atado"/"plantas"/"unidades" y el galpón carga KG pesados.
+  mediana 5,4 s, USD 0,018 por pedido.
+  **Ajuste de variantes (mismo día, segundo commit):** si el cliente no aclara la variante (anco, palta,
+  naranja…), va la que más se repite en sus últimos 5 pedidos con ese producto (empate → la más reciente) y la
+  línea queda **ok**; solo es duda si nunca compró ninguna variante. El modelo devuelve `dudaType` y el server
+  fuerza "ok" en las dudas de variante con historial. Misma prueba: dudas **25,9 % → 13,8 %**, iguales 76,9 %,
+  USD 0,022 por pedido (el historial ahora lleva las últimas 5 fechas por producto).
+  **Ojo con la métrica:** comparar contra el pedido final NO mide variantes ni unidades pesadas (la variante
+  final cambia según lo que se compra; "1 atado de verdeo" se carga como KG pesado). La métrica que vale es
+  `order_intake_logs`: propuesta (`proposal`) vs lo que se creó (`final`).
 - 08-oct `1385258` CC: sin tope de 500 pedidos al calcular pendientes.
 - 07-oct `09fda70` Carga de pedido: el servidor decide el precio; la vista previa rebusca al corregir producto.
 - 02-oct `ca8a6e1` Clientes: IVA desde una fecha (`customers.iva_since`).
@@ -25,8 +31,10 @@
 - 15-sep Compras: borrar el pago automático vinculado al eliminar una compra.
 
 ## En curso / próximo
-- A-04 recién desplegado: **verificar en producción** (ver "Verificaciones manuales"). Mejoras posibles si
-  Joaquín las pide: pasar el stock actual al modelo para elegir variante; regla por cliente "atado → KG".
+- A-04 recién desplegado: **verificar en producción** (ver "Verificaciones manuales"). Descartado: pasarle el
+  stock al modelo (no se trabaja con stock; la variante final cambia según lo que se compra).
+- **Automatizaciones (Asistente Vegex): desde el 11-oct se debaten e implementan en ESTA sesión.** Fichas en
+  `../asistente-vegex/AUTOMATIZACIONES.md` (solo se implementan fichas `decidida`); reglas en su `CLAUDE.md`.
 - **A-01 (días de entrega)**: últimos 90 días (sin históricos ni cancelados): Lun 150 · Mar 191 · Mié 100 ·
   Jue 59 · Vie 280 · Sáb 1 · Dom 0 pedidos.
 - Próximo sugerido: **Caja Paso 2 (MP automático)**, que sigue abierto desde julio.

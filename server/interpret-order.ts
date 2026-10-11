@@ -39,6 +39,8 @@ const ModelLine = z.object({
   unit: UnitEnum.nullable().describe("Unidad en MAYÚSCULAS o null si no se pudo decidir"),
   quantity: z.number().nullable().describe("Cantidad numérica (gramos ya pasados a KG) o null si no hay"),
   status: z.enum(["ok", "duda"]),
+  dudaType: z.enum(["ninguna", "producto", "variante", "unidad", "cantidad", "otra"])
+    .describe("Si es duda, de qué tipo: producto (no se identifica), variante (hay varias versiones del producto), unidad, cantidad u otra. 'ninguna' si es ok"),
   reason: z.string().describe("Por qué se eligió eso o por qué es duda. Vacío si es ok y obvio"),
   candidates: z.array(z.number().int()).describe("Hasta 3 IDs alternativos del catálogo (solo si hay duda)"),
 });
@@ -80,7 +82,7 @@ REGLAS
 2. Unidad escrita por el cliente ("1kg rúcula", "2 cajones", "3 atados", "4 u", "bolsa"/"saco", "maple", "bandeja") → se respeta tal cual, si el producto la tiene en "unidades". Si el producto no tiene esa unidad → status "duda" explicando cuál pidió.
    Sin unidad en el texto → la unidad que más usa ESTE cliente para ese producto (ver HISTORIAL). Si el cliente nunca lo compró → la "unidad habitual" global del catálogo y status "duda".
    Ojo: "1 cilantro", "2 albahaca" sin unidad NO es KG por defecto: mirá el historial del cliente (suele ser ATADO o UNIDAD).
-3. Variante ambigua (morrón sin color, papa, cebolla, tomate, manzana, lechuga, zapallo, etc.) → la variante que ese cliente compra más seguido o compró más recientemente. Sin historial → status "duda" con candidates.
+3. Variante sin aclarar (anco, palta, naranja, zanahoria, papa, cebolla, tomate, manzana, lechuga, morrón sin color, etc.): mirá en el HISTORIAL todas las variantes de ese producto que compró el cliente y sus fechas. Tomá los últimos 5 pedidos en los que compró alguna variante: gana la que más se repite; empate → la de fecha más reciente. Esa línea queda status "ok" (dudaType "ninguna"), no es duda: la variante final la ajusta el equipo según lo que se compra. Es "duda" (dudaType "variante", con candidates) SOLO si el cliente nunca compró ninguna variante de ese producto.
 4. Abreviaturas y apodos ("champi", "verdeo", "zuchini", "cebollón", "anco", "calabaza") → primero contra lo que ese cliente ya compra, después contra el catálogo.
 5. Cantidades: gramos → KG (250 gr = 0.25; 800g = 0.8). Fracciones y palabras: 1/2 = medio = 0.5; 1/4 = 0.25; 3/4 = 0.75; "1 1/2" = 1.5; coma decimal "1,5" = 1.5; "docena" = 12 UNIDAD. Sin cantidad ("un poco de verdeo", "algo de kale") → status "duda" y quantity null.
 6. Comentarios del cliente sobre cómo quiere el producto ("maduros no pasados", "PROPAL si es posible", "para jugo", "chicos") → van a notes (una línea por comentario, nombrando el producto). La línea del producto igual se carga como línea.
@@ -111,17 +113,17 @@ async function buildCatalogBlock(catalog: CatalogRow[], globalUnits: Map<number,
 
 function buildCustomerBlock(
   customerName: string,
-  history: { productId: number; unit: string; times: number; lastDate: string }[],
+  history: { productId: number; unit: string; times: number; lastDate: string; lastDates: string[] }[],
   catalogById: Map<number, CatalogRow>,
   text: string | undefined,
   todayISO: string,
 ): string {
   const hist = history
     .filter((h) => catalogById.has(h.productId))
-    .map((h) => `${catalogById.get(h.productId)!.name} (${h.productId}) | ${h.unit} | ${h.times} | ${h.lastDate}`);
+    .map((h) => `${catalogById.get(h.productId)!.name} (${h.productId}) | ${h.unit} | ${h.times} | ${(h.lastDates?.length ? h.lastDates : [h.lastDate]).join(", ")}`);
   const parts = [
     `CLIENTE: ${customerName}`,
-    `HISTORIAL DEL CLIENTE, últimos ${HISTORY_DAYS} días (producto (id) | unidad | veces | última compra):`,
+    `HISTORIAL DEL CLIENTE, últimos ${HISTORY_DAYS} días (producto (id) | unidad | veces | fechas de las últimas 5 compras, más reciente primero):`,
     hist.length ? hist.join("\n") : "(sin historial: cliente nuevo o sin compras recientes)",
     `FECHA DE HOY: ${todayISO}`,
   ];
@@ -219,6 +221,13 @@ function validateProposal(
       if (!candidates.length) candidates = fuzzyCandidates(l.rawLine, catalog);
       if (!reasons.length) reasons.push("Producto no identificado");
     }
+    // Regla de variantes (2026-10-11): si la única duda es la variante y el cliente YA compró el producto
+    // elegido, la línea queda "ok" (la variante final la ajusta el equipo según lo que se compra).
+    // Solo es duda si el cliente nunca pidió ese producto. Las dudas de unidad/cantidad/producto no se tocan.
+    if (status === "duda" && l.dudaType === "variante" && product && custUnit.has(product.id)
+        && unit && (!product.units.length || product.units.includes(unit)) && quantity != null) {
+      status = "ok";
+    }
     return {
       rawLine: l.rawLine,
       productId: product?.id ?? null,
@@ -259,7 +268,8 @@ export async function interpretOrder(opts: {
     storage.getActiveCatalogWithUnits(),
     storage.getGlobalMostUsedUnits(HISTORY_DAYS),
     storage.getProductUnitHistory(),
-    storage.getCustomerProductHistory(opts.customerId, { days: HISTORY_DAYS, before: opts.historyBefore }),
+    storage.getCustomerProductHistory(opts.customerId, { days: HISTORY_DAYS, before: opts.historyBefore }) as Promise<
+      { productId: number; unit: string; times: number; lastDate: string; lastDates: string[] }[]>,
   ]);
   // (tipos explícitos: el objeto `storage` degrada a any por una circularidad preexistente en shared/schema.ts)
   const globalUnits = new Map<number, string>(globalRows.map((r: { productId: number; unit: string }) => [r.productId, r.unit] as [number, string]));

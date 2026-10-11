@@ -4566,12 +4566,15 @@ export const storage = {
    * "ver" el pedido que se está tratando de adivinar. En producción no se pasa.
    */
   async getCustomerProductHistory(customerId: number, opts: { days?: number; before?: string } = {}):
-    Promise<{ productId: number; unit: string; times: number; lastDate: string }[]> {
+    Promise<{ productId: number; unit: string; times: number; lastDate: string; lastDates: string[] }[]> {
     const days = opts.days ?? 180;
     const before = opts.before && /^\d{4}-\d{2}-\d{2}$/.test(opts.before) ? opts.before : null;
+    // lastDates: las 5 fechas más recientes en que compró ese producto+unidad (para la regla de variantes:
+    // "la que más se repite en los últimos 5 pedidos con ese producto; empate → la más reciente").
     const rows = await db.execute(drizzleSql`
       SELECT oi.product_id AS "productId", oi.unit, count(*)::int AS times,
-             to_char(max(o.order_date), 'YYYY-MM-DD') AS "lastDate"
+             to_char(max(o.order_date), 'YYYY-MM-DD') AS "lastDate",
+             (array_agg(DISTINCT to_char(o.order_date, 'YYYY-MM-DD') ORDER BY to_char(o.order_date, 'YYYY-MM-DD') DESC))[1:5] AS "lastDates"
       FROM order_items oi
       JOIN orders o ON o.id = oi.order_id
       WHERE oi.product_id IS NOT NULL
@@ -4584,6 +4587,7 @@ export const storage = {
     `);
     return (rows.rows as any[]).map((r) => ({
       productId: Number(r.productId), unit: r.unit as string, times: Number(r.times), lastDate: r.lastDate as string,
+      lastDates: (r.lastDates as string[]) ?? [],
     }));
   },
 
