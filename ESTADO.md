@@ -5,7 +5,8 @@
 > Última actualización: 2026-10-11 (A-04 IA en Carga Pedido desplegado).
 
 ## Último trabajo (sep–oct 2026)
-- 11-oct **A-04 · IA en Carga Pedido** (commit en `git log`, "feat(intake): IA…"). `POST /api/orders/interpret`
+- 11-oct `b2f04ba` **A-04 · IA en Carga Pedido** (desplegado y verificado: tabla creada en prod a los ~2 min,
+  endpoint responde 401 sin sesión). `POST /api/orders/interpret`
   (`server/interpret-order.ts`: Anthropic, `ANTHROPIC_MODEL` default `claude-sonnet-5-5`, structured outputs,
   caché 1 h del catálogo, timeout 30 s + 1 reintento, reglas validadas en el server). Tabla nueva `order_intake_logs`.
   `intake.tsx`: IA con fallback al parser local (banner "IA no disponible"), dudas en amarillo + candidatos,
