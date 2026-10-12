@@ -1560,6 +1560,17 @@ export async function runNcMigrations() {
     )
   `);
   try { await db.execute(sql`CREATE INDEX IF NOT EXISTS wa_questions_open_idx ON wa_questions(status, expires_at)`); } catch {}
+  // A-12 (2026-10-12): alias por cliente ("Álvarez" = BONAFIDE (GORRITI)) para que el bot elija la sede
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS customer_aliases (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      alias TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'manual',
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      UNIQUE (customer_id, alias)
+    )
+  `);
   // A-12/A-05 (2026-10-12): memoria por cliente de expresiones vagas ("un poco de perejil" = 1 ATADO)
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS customer_product_memory (

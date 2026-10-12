@@ -8,7 +8,7 @@ import {
   mpMovementIdentifiers,
   creditNotes,
   cuentasFinancieras,
-  orderIntakeLogs, customerContacts, waPendingNumbers, waQuestions, customerProductMemory,
+  orderIntakeLogs, customerContacts, waPendingNumbers, waQuestions, customerProductMemory, customerAliases,
   type OrderIntakeLog, type CustomerContact, type WaPendingNumber, type WaQuestion,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type Order,
@@ -4612,6 +4612,27 @@ export const storage = {
     }));
   },
 
+  // ─── A-12: alias por cliente ("Álvarez" = BONAFIDE (GORRITI)) ────────────────
+  async getAliasesFor(customerIds: number[]): Promise<Map<number, string[]>> {
+    const m = new Map<number, string[]>();
+    if (!customerIds.length) return m;
+    const rows = await db.select().from(customerAliases).where(inArray(customerAliases.customerId, customerIds)).orderBy(asc(customerAliases.id));
+    for (const r of rows) { if (!m.has(r.customerId)) m.set(r.customerId, []); m.get(r.customerId)!.push(r.alias); }
+    return m;
+  },
+
+  async addCustomerAlias(customerId: number, alias: string, source = "manual"): Promise<{ id: number; alias: string } | null> {
+    const a = alias.replace(/\s+/g, " ").trim().slice(0, 80);
+    if (!a) return null;
+    const [row] = await db.insert(customerAliases).values({ customerId, alias: a, source })
+      .onConflictDoNothing({ target: [customerAliases.customerId, customerAliases.alias] }).returning();
+    return row ? { id: row.id, alias: row.alias } : null;
+  },
+
+  async deleteCustomerAlias(id: number): Promise<void> {
+    await db.delete(customerAliases).where(eq(customerAliases.id, id));
+  },
+
   // ─── A-12/A-05: memoria por cliente ("un poco de perejil" = 1 ATADO) ─────────
   async getCustomerMemory(customerId: number): Promise<{ productId: number; hint: string; quantity: number; unit: string }[]> {
     const rows = await db.select().from(customerProductMemory).where(eq(customerProductMemory.customerId, customerId)).orderBy(desc(customerProductMemory.updatedAt));
@@ -4685,7 +4706,7 @@ export const storage = {
    */
   async findCustomersByPhone(phone: string): Promise<{
     contacts: { contactId: number; customerId: number; customerName: string; contactName: string | null }[];
-    candidates: { id: number; name: string; parentCustomerId: number | null; via: "contacto" | "sede" | "pista"; botActivo: boolean }[];
+    candidates: { id: number; name: string; parentCustomerId: number | null; via: "contacto" | "sede" | "pista"; botActivo: boolean; aliases: string[] }[];
   }> {
     const rows = await db.execute(drizzleSql`
       SELECT cc.id AS "contactId", cc.customer_id AS "customerId", c.name AS "customerName", cc.name AS "contactName", c.parent_customer_id AS "parentId"
@@ -4694,10 +4715,10 @@ export const storage = {
     const contacts = (rows.rows as any[]).map((r) => ({
       contactId: Number(r.contactId), customerId: Number(r.customerId), customerName: r.customerName as string, contactName: (r.contactName as string) ?? null,
     }));
-    const candidates: { id: number; name: string; parentCustomerId: number | null; via: "contacto" | "sede" | "pista"; botActivo: boolean }[] = [];
+    const candidates: { id: number; name: string; parentCustomerId: number | null; via: "contacto" | "sede" | "pista"; botActivo: boolean; aliases: string[] }[] = [];
     const seen = new Set<number>();
     const push = (c: { id: number; name: string; parentCustomerId: number | null; botActivo: boolean }, via: "contacto" | "sede" | "pista") => {
-      if (seen.has(c.id)) return; seen.add(c.id); candidates.push({ ...c, via });
+      if (seen.has(c.id)) return; seen.add(c.id); candidates.push({ ...c, via, aliases: [] });
     };
     const sel = { id: customers.id, name: customers.name, parentCustomerId: customers.parentCustomerId, botActivo: customers.botActivo };
     const ids = contacts.map((c) => c.customerId);
@@ -4715,6 +4736,8 @@ export const storage = {
         WHERE active AND phone IS NOT NULL AND right(regexp_replace(phone, '\\D', '', 'g'), 10) = ${tail} ORDER BY name`);
       for (const h of hints.rows as any[]) push({ id: Number(h.id), name: h.name, parentCustomerId: h.parentCustomerId == null ? null : Number(h.parentCustomerId), botActivo: !!h.botActivo }, "pista");
     }
+    const aliases = await this.getAliasesFor(candidates.map((c) => c.id));
+    for (const c of candidates) c.aliases = aliases.get(c.id) ?? [];
     return { contacts, candidates };
   },
 
@@ -4874,6 +4897,7 @@ export const storage = {
       pct: number | null; ultimoPedido: string | null;
       detalle: { fecha: string; folio: string | null; raw: string; bot: string; erp: string; duda: boolean }[];
       contactos: { id: number; phone: string; name: string | null }[];
+      aliases: { id: number; alias: string }[];
     }[];
   }> {
     const tz = "America/Argentina/Buenos_Aires";
@@ -4932,6 +4956,7 @@ export const storage = {
     // Teléfonos de pedido de cada cliente de la lista
     const ids = Array.from(porCliente.keys());
     const contactos = ids.length ? (await db.select().from(customerContacts).where(inArray(customerContacts.customerId, ids)).orderBy(asc(customerContacts.id))) : [];
+    const aliasRows = ids.length ? (await db.select().from(customerAliases).where(inArray(customerAliases.customerId, ids)).orderBy(asc(customerAliases.id))) : [];
     // La lista muestra SOLO los clientes elegidos (Bot activo). Los que están en sombra suman al resumen
     // pero no aparecen hasta que se los agrega desde el desplegable (pedido de Joaquín, 12/10).
     const clientes = Array.from(porCliente.values()).filter((k) => k.botActivo).map((k) => ({
@@ -4939,6 +4964,7 @@ export const storage = {
       pct: k.comparables ? Math.round(1000 * (k.comparables - k.errores) / k.comparables) / 10 : null,
       detalle: k.detalle.reverse(),
       contactos: contactos.filter((c) => c.customerId === k.customerId).map((c) => ({ id: c.id, phone: c.phone, name: c.name })),
+      aliases: aliasRows.filter((a) => a.customerId === k.customerId).map((a) => ({ id: a.id, alias: a.alias })),
     })).sort((a, b) => Number(b.botActivo) - Number(a.botActivo) || (b.ultimoPedido ?? "").localeCompare(a.ultimoPedido ?? "") || a.cliente.localeCompare(b.cliente));
     return { resumen: { dias: diasResumen, pedidos: resumen.pedidos, renglones: resumen.renglones, pct: resumen.comparables ? Math.round(1000 * (resumen.comparables - resumen.errores) / resumen.comparables) / 10 : null }, clientes };
   },

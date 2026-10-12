@@ -16,7 +16,8 @@ import { formatArPhone } from "@shared/phone";
 
 type Det = { fecha: string; folio: string | null; raw: string; bot: string; erp: string; duda: boolean };
 type Contacto = { id: number; phone: string; name: string | null };
-type Row = { customerId: number; cliente: string; botActivo: boolean; pedidos: number; renglones: number; comparables: number; errores: number; dudas: number; pct: number | null; ultimoPedido: string | null; detalle: Det[]; contactos: Contacto[] };
+type Alias = { id: number; alias: string };
+type Row = { customerId: number; cliente: string; botActivo: boolean; pedidos: number; renglones: number; comparables: number; errores: number; dudas: number; pct: number | null; ultimoPedido: string | null; detalle: Det[]; contactos: Contacto[]; aliases: Alias[] };
 type Data = { resumen: { dias: number; pedidos: number; renglones: number; pct: number | null }; clientes: Row[] };
 
 // ── CSS (mismo lenguaje visual que Pedidos: diseno-caja/pedidos-rediseno.html) ──
@@ -239,6 +240,17 @@ function ClienteCard({ c, open, onOpen, onToggle, busy, onChanged }: { c: Row; o
     mutationFn: (id: number) => apiRequest("DELETE", `/api/customer-contacts/${id}`),
     onSuccess: () => onChanged(),
   });
+  // A-12: alias ("Álvarez" = este cliente) — memoria para que el bot elija la sede por el texto
+  const [alias, setAlias] = useState("");
+  const addAlias = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/customer-aliases", { customerId: c.customerId, alias, source: "manual" }),
+    onSuccess: () => { onChanged(); setAlias(""); toast({ title: "Alias guardado" }); },
+    onError: (e: any) => toast({ title: "No se pudo guardar", description: e.message, variant: "destructive" }),
+  });
+  const removeAlias = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/customer-aliases/${id}`),
+    onSuccess: () => onChanged(),
+  });
   const cls = pctClass(c.pct);
   return (
     <div className="bcx-card">
@@ -288,6 +300,21 @@ function ClienteCard({ c, open, onOpen, onToggle, busy, onChanged }: { c: Row; o
               <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="11 2345 6789" style={{ width: 140 }} data-testid={`input-phone-${c.customerId}`} />
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre / rol (Juan - cocina)" style={{ width: 210 }} />
               <button type="button" className="bcx-btn primary" disabled={!phone.trim() || add.isPending} onClick={() => add.mutate()} data-testid={`add-phone-${c.customerId}`}><Plus className="h-3.5 w-3.5" /> Agregar</button>
+            </span>
+          </div>
+
+          <p className="bcx-dtitle">Cómo lo nombran en los mensajes (alias)</p>
+          <div className="bcx-tels">
+            {c.aliases.length === 0 && <span style={{ fontSize: 13, color: "#8b8f88" }}>Sin alias. Se agregan solos cuando asignás un caso en Números por asignar, o acá.</span>}
+            {c.aliases.map((a) => (
+              <span key={a.id} className="bcx-tel">
+                <span>{a.alias}</span>
+                <button type="button" title="Quitar" onClick={() => removeAlias.mutate(a.id)}><X className="h-3.5 w-3.5" /></button>
+              </span>
+            ))}
+            <span className="bcx-addtel">
+              <input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder='Ej. "Álvarez"' style={{ width: 180 }} data-testid={`input-alias-${c.customerId}`} />
+              <button type="button" className="bcx-btn" disabled={!alias.trim() || addAlias.isPending} onClick={() => addAlias.mutate()}><Plus className="h-3.5 w-3.5" /> Agregar alias</button>
             </span>
           </div>
 

@@ -77,6 +77,7 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/customers/names",
     "/api/wa-pending",
     "/api/wa-questions",
+    "/api/customer-aliases",
     "/api/orders/interpret",
     "/api/orders/intake",
     "/api/orders/draft",
@@ -370,6 +371,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.delete("/api/customer-contacts/:id", requireAuth, async (req, res) => {
     await storage.deleteCustomerContact(Number(req.params.id));
+    return res.json({ ok: true });
+  });
+
+  // ─── A-12: alias por cliente ("Álvarez" = BONAFIDE (GORRITI)) ───────────────
+  app.post("/api/customer-aliases", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({ customerId: z.number(), alias: z.string().min(1).max(80), source: z.enum(["manual", "asignacion"]).optional() }).parse(req.body);
+      const row = await storage.addCustomerAlias(body.customerId, body.alias, body.source ?? "manual");
+      return res.status(201).json(row ?? { ok: true, existed: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  app.delete("/api/customer-aliases/:id", requireAuth, async (req, res) => {
+    await storage.deleteCustomerAlias(Number(req.params.id));
     return res.json({ ok: true });
   });
 

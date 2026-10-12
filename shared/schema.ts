@@ -288,6 +288,18 @@ export const customerProductMemory = pgTable("customer_product_memory", {
 });
 export type CustomerProductMemory = typeof customerProductMemory.$inferSelect;
 
+// ─── A-12: alias por cliente ("Álvarez" = BONAFIDE (GORRITI)) ─────────────────────────────
+// Los usa el clasificador del bot para elegir la sede por el texto. Se cargan al asignar un caso en
+// "Números por asignar" (el nombre que usó el cliente) o a mano desde "Bot por cliente".
+export const customerAliases = pgTable("customer_aliases", {
+  id: serial("id").primaryKey(),
+  customerId: integer("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  alias: text("alias").notNull(),
+  source: text("source").notNull().default("manual"), // 'manual' | 'asignacion'
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type CustomerAlias = typeof customerAliases.$inferSelect;
+
 // ─── Product Units (stock + cost per unit per product) ─────────────────────────
 export const productUnits = pgTable("product_units", {
   id: serial("id").primaryKey(),
