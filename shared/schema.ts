@@ -274,6 +274,20 @@ export const waQuestions = pgTable("wa_questions", {
 });
 export type WaQuestion = typeof waQuestions.$inferSelect;
 
+// ─── A-12/A-05: memoria por cliente de expresiones vagas ("un poco de perejil" = 1 ATADO) ─────────
+// Se escribe cuando una duda de cantidad se resuelve (respuesta del cliente o del equipo). La lee /interpret.
+export const customerProductMemory = pgTable("customer_product_memory", {
+  id: serial("id").primaryKey(),
+  customerId: integer("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+  hint: text("hint").notNull(), // el renglón tal como lo escribió el cliente, normalizado ("un poco de perejil")
+  quantity: numeric("quantity", { precision: 12, scale: 4 }).notNull(),
+  unit: text("unit").notNull(),
+  source: text("source").notNull().default("respuesta"), // 'respuesta' (cliente) | 'equipo' | 'manual'
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+});
+export type CustomerProductMemory = typeof customerProductMemory.$inferSelect;
+
 // ─── Product Units (stock + cost per unit per product) ─────────────────────────
 export const productUnits = pgTable("product_units", {
   id: serial("id").primaryKey(),

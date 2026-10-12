@@ -39,8 +39,8 @@ const ModelLine = z.object({
   unit: UnitEnum.nullable().describe("Unidad en MAYÚSCULAS o null si no se pudo decidir"),
   quantity: z.number().nullable().describe("Cantidad numérica (gramos ya pasados a KG) o null si no hay"),
   status: z.enum(["ok", "duda"]),
-  dudaType: z.enum(["ninguna", "producto", "variante", "unidad", "cantidad", "otra"])
-    .describe("Si es duda, de qué tipo: producto (no se identifica), variante (hay varias versiones del producto), unidad, cantidad u otra. 'ninguna' si es ok"),
+  dudaType: z.enum(["ninguna", "producto", "variante", "unidad", "cantidad", "cambio", "otra"])
+    .describe("Si es duda, de qué tipo: producto (no se identifica), variante (hay varias versiones del producto), unidad, cantidad, cambio (es una reposición o reclamo: 'de cambio', 'vinieron mal') u otra. 'ninguna' si es ok"),
   reason: z.string().describe("Por qué se eligió eso o por qué es duda. Vacío si es ok y obvio"),
   candidates: z.array(z.number().int()).describe("Hasta 3 IDs alternativos del catálogo (solo si hay duda)"),
 });
@@ -54,7 +54,7 @@ const ModelProposal = z.object({
 type ModelProposalT = z.infer<typeof ModelProposal>;
 
 // ─── Tipos que devuelve el endpoint ──────────────────────────────────────────
-export type DudaType = "ninguna" | "producto" | "variante" | "unidad" | "cantidad" | "otra";
+export type DudaType = "ninguna" | "producto" | "variante" | "unidad" | "cantidad" | "cambio" | "otra";
 export type InterpretedLine = {
   rawLine: string;
   productId: number | null;
@@ -86,8 +86,10 @@ REGLAS
    Ojo: "1 cilantro", "2 albahaca" sin unidad NO es KG por defecto: mirá el historial del cliente (suele ser ATADO o UNIDAD).
 3. Variante sin aclarar (anco, palta, naranja, zanahoria, papa, cebolla, tomate, manzana, lechuga, morrón sin color, etc.): mirá en el HISTORIAL todas las variantes de ese producto que compró el cliente y sus fechas. Tomá los últimos 5 pedidos en los que compró alguna variante: gana la que más se repite; empate → la de fecha más reciente. Esa línea queda status "ok" (dudaType "ninguna"), no es duda: la variante final la ajusta el equipo según lo que se compra. Es "duda" (dudaType "variante", con candidates) SOLO si el cliente nunca compró ninguna variante de ese producto.
 4. Abreviaturas y apodos ("champi", "verdeo", "zuchini", "cebollón", "anco", "calabaza") → primero contra lo que ese cliente ya compra, después contra el catálogo.
-5. Cantidades: gramos → KG (250 gr = 0.25; 800g = 0.8). Fracciones y palabras: 1/2 = medio = 0.5; 1/4 = 0.25; 3/4 = 0.75; "1 1/2" = 1.5; coma decimal "1,5" = 1.5; "docena" = 12 UNIDAD. Sin cantidad ("un poco de verdeo", "algo de kale") → status "duda" y quantity null.
+5. Cantidades: gramos → KG (250 gr = 0.25; 800g = 0.8). Fracciones y palabras: 1/2 = medio = 0.5; 1/4 = 0.25; 3/4 = 0.75; "1 1/2" = 1.5; coma decimal "1,5" = 1.5; "docena" = 12 UNIDAD.
+   Cantidad vaga ("un poco de verdeo", "algo de kale", "como siempre", "lo de siempre", "lo mismo", "perejil y verdeo" sin número): primero mirá la MEMORIA DEL CLIENTE (si hay una entrada parecida, usá esa cantidad y unidad → status "ok", reason "memoria: …"); si no, la "últ. cant." del HISTORIAL para ese producto (→ status "ok", reason "como siempre: última vez X"). Si el cliente nunca lo pidió → status "duda", dudaType "cantidad", quantity null.
 6. Comentarios del cliente sobre cómo quiere el producto ("maduros no pasados", "PROPAL si es posible", "para jugo", "chicos") → van a notes (una línea por comentario, nombrando el producto). La línea del producto igual se carga como línea.
+6b. Reposición o reclamo ("tengo un cebollón de cambio", "vinieron muy chiquitas", "me faltó una bolsa de papa", "la lechuga vino mal") → SÍ se carga como línea (cantidad la que diga; "un/una" = 1; unidad la habitual del cliente), con status "duda", dudaType "cambio" y reason "es cambio/reposición: ver si se cobra", y además una línea en notes explicando el reclamo. No es un pedido nuevo del producto: es mercadería que hay que reponer.
 7. Saludos, dirección, nombre del local, fecha o día de entrega, encabezados tipo "Pedido verdulería", firmas → ignoredLines. No son líneas.
 8. Si el texto trae pedidos para más de un local o sucursal ("Para Ituzaingó…", "Sucursal Belgrano:") → multiLocalWarning diciendo qué locales ves y qué líneas son de cada uno. Igual devolvé TODAS las líneas.
 9. Un renglón con dos productos ("tomate y lechuga 2kg") → dos líneas. No inventes líneas ni dupliques.
@@ -115,18 +117,24 @@ async function buildCatalogBlock(catalog: CatalogRow[], globalUnits: Map<number,
 
 function buildCustomerBlock(
   customerName: string,
-  history: { productId: number; unit: string; times: number; lastDate: string; lastDates: string[] }[],
+  history: { productId: number; unit: string; times: number; lastDate: string; lastDates: string[]; lastQuantity?: number | null }[],
+  memory: { productId: number; hint: string; quantity: number; unit: string }[],
   catalogById: Map<number, CatalogRow>,
   text: string | undefined,
   todayISO: string,
 ): string {
   const hist = history
     .filter((h) => catalogById.has(h.productId))
-    .map((h) => `${catalogById.get(h.productId)!.name} (${h.productId}) | ${h.unit} | ${h.times} | ${(h.lastDates?.length ? h.lastDates : [h.lastDate]).join(", ")}`);
+    .map((h) => `${catalogById.get(h.productId)!.name} (${h.productId}) | ${h.unit} | ${h.times} | ${(h.lastDates?.length ? h.lastDates : [h.lastDate]).join(", ")} | últ. cant. ${h.lastQuantity ?? "?"}`);
+  const mem = memory
+    .filter((m) => catalogById.has(m.productId))
+    .map((m) => `"${m.hint}" → ${catalogById.get(m.productId)!.name} (${m.productId}) ${m.quantity} ${m.unit}`);
   const parts = [
     `CLIENTE: ${customerName}`,
-    `HISTORIAL DEL CLIENTE, últimos ${HISTORY_DAYS} días (producto (id) | unidad | veces | fechas de las últimas 5 compras, más reciente primero):`,
+    `HISTORIAL DEL CLIENTE, últimos ${HISTORY_DAYS} días (producto (id) | unidad | veces | fechas de las últimas 5 compras, más reciente primero | cantidad de la última vez):`,
     hist.length ? hist.join("\n") : "(sin historial: cliente nuevo o sin compras recientes)",
+    `MEMORIA DEL CLIENTE (cómo se resolvieron antes sus expresiones vagas):`,
+    mem.length ? mem.join("\n") : "(sin memoria)",
     `FECHA DE HOY: ${todayISO}`,
   ];
   if (text && text.trim()) {
@@ -214,7 +222,7 @@ function validateProposal(
     }
     if (quantity == null || !Number.isFinite(quantity) || quantity <= 0) {
       quantity = null;
-      status = "duda"; dudaType = "cantidad";
+      status = "duda"; if (dudaType !== "cambio") dudaType = "cantidad";
       if (!reasons.length) reasons.push("Sin cantidad");
     } else {
       quantity = Math.round(quantity * 1000) / 1000;
@@ -231,6 +239,8 @@ function validateProposal(
         && unit && (!product.units.length || product.units.includes(unit)) && quantity != null) {
       status = "ok";
     }
+    // "cambio" (reposición/reclamo) siempre queda en duda para que el equipo decida si se cobra
+    if (l.dudaType === "cambio" && product) { status = "duda"; dudaType = "cambio"; if (!reasons.some((r) => /cambio|reposici/i.test(r))) reasons.unshift("Es cambio/reposición: ver si se cobra"); }
     if (status === "ok") dudaType = "ninguna";
     else if (dudaType === "ninguna") dudaType = "otra";
     return {
@@ -270,12 +280,13 @@ export async function interpretOrder(opts: {
   const customer = await storage.getCustomer(opts.customerId);
   if (!customer) throw new Error("Cliente no encontrado");
 
-  const [catalog, globalRows, lastUsedRows, history] = await Promise.all([
+  const [catalog, globalRows, lastUsedRows, history, memory] = await Promise.all([
     storage.getActiveCatalogWithUnits(),
     storage.getGlobalMostUsedUnits(HISTORY_DAYS),
     storage.getProductUnitHistory(),
     storage.getCustomerProductHistory(opts.customerId, { days: HISTORY_DAYS, before: opts.historyBefore }) as Promise<
-      { productId: number; unit: string; times: number; lastDate: string; lastDates: string[] }[]>,
+      { productId: number; unit: string; times: number; lastDate: string; lastDates: string[]; lastQuantity: number | null }[]>,
+    (opts.historyBefore ? Promise.resolve([]) : storage.getCustomerMemory(opts.customerId)) as Promise<{ productId: number; hint: string; quantity: number; unit: string }[]>,
   ]);
   // (tipos explícitos: el objeto `storage` degrada a any por una circularidad preexistente en shared/schema.ts)
   const globalUnits = new Map<number, string>(globalRows.map((r: { productId: number; unit: string }) => [r.productId, r.unit] as [number, string]));
@@ -284,7 +295,7 @@ export async function interpretOrder(opts: {
 
   const catalogBlock = await buildCatalogBlock(catalog, globalUnits, lastUsed);
   const todayISO = opts.todayISO ?? new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" });
-  const customerBlock = buildCustomerBlock(customer.name, history, catalogById, opts.text, todayISO);
+  const customerBlock = buildCustomerBlock(customer.name, history, memory, catalogById, opts.text, todayISO);
 
   const content: Anthropic.ContentBlockParam[] = [
     // Bloque estable → cacheado 1 h (el prefijo system + catálogo es idéntico para todos los pedidos)

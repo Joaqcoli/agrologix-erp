@@ -8,7 +8,7 @@ import {
   mpMovementIdentifiers,
   creditNotes,
   cuentasFinancieras,
-  orderIntakeLogs, customerContacts, waPendingNumbers, waQuestions,
+  orderIntakeLogs, customerContacts, waPendingNumbers, waQuestions, customerProductMemory,
   type OrderIntakeLog, type CustomerContact, type WaPendingNumber, type WaQuestion,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type Order,
@@ -1608,7 +1608,9 @@ export const storage = {
   },
 
   /** A-12: igual que addItemsToOrder pero devuelve los ids de los renglones insertados (mismo orden). */
-  async addItemsToOrderWithIds(orderId: number, items: Parameters<typeof storage.addItemsToOrder>[1]): Promise<number[]> {
+  async addItemsToOrderWithIds(orderId: number, items: {
+    productId: number | null; quantity: string; unit: string; pricePerUnit?: string | null; rawProductName?: string; parseStatus?: string;
+  }[]): Promise<number[]> {
     lastAddedItemIds = [];
     await this.addItemsToOrder(orderId, items);
     return lastAddedItemIds;
@@ -4583,15 +4585,17 @@ export const storage = {
    * "ver" el pedido que se está tratando de adivinar. En producción no se pasa.
    */
   async getCustomerProductHistory(customerId: number, opts: { days?: number; before?: string } = {}):
-    Promise<{ productId: number; unit: string; times: number; lastDate: string; lastDates: string[] }[]> {
+    Promise<{ productId: number; unit: string; times: number; lastDate: string; lastDates: string[]; lastQuantity: number | null }[]> {
     const days = opts.days ?? 180;
     const before = opts.before && /^\d{4}-\d{2}-\d{2}$/.test(opts.before) ? opts.before : null;
     // lastDates: las 5 fechas más recientes en que compró ese producto+unidad (para la regla de variantes:
     // "la que más se repite en los últimos 5 pedidos con ese producto; empate → la más reciente").
+    // lastQuantity: cantidad de la última vez (para "como siempre" / "un poco").
     const rows = await db.execute(drizzleSql`
       SELECT oi.product_id AS "productId", oi.unit, count(*)::int AS times,
              to_char(max(o.order_date), 'YYYY-MM-DD') AS "lastDate",
-             (array_agg(DISTINCT to_char(o.order_date, 'YYYY-MM-DD') ORDER BY to_char(o.order_date, 'YYYY-MM-DD') DESC))[1:5] AS "lastDates"
+             (array_agg(DISTINCT to_char(o.order_date, 'YYYY-MM-DD') ORDER BY to_char(o.order_date, 'YYYY-MM-DD') DESC))[1:5] AS "lastDates",
+             (array_agg(oi.quantity::float ORDER BY o.order_date DESC, oi.id DESC))[1] AS "lastQuantity"
       FROM order_items oi
       JOIN orders o ON o.id = oi.order_id
       WHERE oi.product_id IS NOT NULL
@@ -4604,8 +4608,38 @@ export const storage = {
     `);
     return (rows.rows as any[]).map((r) => ({
       productId: Number(r.productId), unit: r.unit as string, times: Number(r.times), lastDate: r.lastDate as string,
-      lastDates: (r.lastDates as string[]) ?? [],
+      lastDates: (r.lastDates as string[]) ?? [], lastQuantity: r.lastQuantity == null ? null : Number(r.lastQuantity),
     }));
+  },
+
+  // ─── A-12/A-05: memoria por cliente ("un poco de perejil" = 1 ATADO) ─────────
+  async getCustomerMemory(customerId: number): Promise<{ productId: number; hint: string; quantity: number; unit: string }[]> {
+    const rows = await db.select().from(customerProductMemory).where(eq(customerProductMemory.customerId, customerId)).orderBy(desc(customerProductMemory.updatedAt));
+    return rows.map((r) => ({ productId: r.productId, hint: r.hint, quantity: Number(r.quantity), unit: r.unit }));
+  },
+
+  async upsertCustomerMemory(data: { customerId: number; productId: number; hint: string; quantity: number; unit: string; source?: string }): Promise<void> {
+    const hint = data.hint.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().slice(0, 120);
+    if (!hint) return;
+    await db.insert(customerProductMemory)
+      .values({ customerId: data.customerId, productId: data.productId, hint, quantity: String(data.quantity), unit: data.unit, source: data.source ?? "respuesta" })
+      .onConflictDoUpdate({ target: [customerProductMemory.customerId, customerProductMemory.productId, customerProductMemory.hint], set: { quantity: String(data.quantity), unit: data.unit, source: data.source ?? "respuesta", updatedAt: new Date() } });
+  },
+
+  /** Última línea (cantidad y unidad) que el cliente pidió de un producto: para "como siempre". */
+  async getLastLineForCustomer(customerId: number, productId: number): Promise<{ quantity: number; unit: string; date: string } | null> {
+    const rows = await db.execute(drizzleSql`
+      SELECT oi.quantity::float AS quantity, oi.unit, to_char(o.order_date, 'YYYY-MM-DD') AS date
+      FROM order_items oi JOIN orders o ON o.id = oi.order_id
+      WHERE o.customer_id = ${customerId} AND oi.product_id = ${productId} AND o.status <> 'cancelled' AND oi.parse_status IS DISTINCT FROM 'duda'
+      ORDER BY o.order_date DESC, oi.id DESC LIMIT 1`);
+    const r = (rows.rows as any[])[0];
+    return r ? { quantity: Number(r.quantity), unit: r.unit, date: r.date } : null;
+  },
+
+  /** A-12: dejar en la nota del pedido lo que el cliente respondió y no se pudo aplicar. */
+  async appendOrderNote(orderId: number, note: string): Promise<void> {
+    await db.execute(drizzleSql`UPDATE orders SET notes = NULLIF(TRIM(coalesce(notes, '') || E'\n' || ${note}), '') WHERE id = ${orderId}`);
   },
 
   async createIntakeLog(data: {
@@ -4765,6 +4799,10 @@ export const storage = {
     answerText: string; answeredBy: string;
     changes: { itemId: number; productId?: number | null; unit?: string; quantity?: number; remove?: boolean }[];
     adds: { productId: number; unit: string; quantity: number; rawProductName?: string }[];
+    /** Texto para la nota del pedido (lo que respondió y no se pudo aplicar) */
+    note?: string | null;
+    /** Memoria por cliente a guardar ("un poco de perejil" = 1 ATADO) */
+    memorize?: { productId: number; hint: string; quantity: number; unit: string; source?: string }[];
   }): Promise<{ applied: boolean; note: string; detalle: string[] }> {
     const q = await this.getWaQuestion(id);
     if (!q) throw new Error("Pregunta no encontrada");
@@ -4807,6 +4845,10 @@ export const storage = {
         applied = true;
       }
       note = applied ? "Aplicado" : "No había nada aplicable";
+      if (opts.note?.trim()) { await this.appendOrderNote(order.id, opts.note.trim()); detalle.push("nota agregada al pedido"); }
+    }
+    for (const m of opts.memorize ?? []) {
+      try { await this.upsertCustomerMemory({ customerId: q.customerId, ...m }); detalle.push(`memoria: "${m.hint}" = ${m.quantity} ${m.unit}`); } catch (e) { console.error("memoria:", e); }
     }
     await db.update(waQuestions).set({ status: "answered", answerText: opts.answerText, answeredBy: opts.answeredBy, answeredAt: new Date(), applied, appliedNote: note }).where(eq(waQuestions.id, id));
     return { applied, note, detalle };

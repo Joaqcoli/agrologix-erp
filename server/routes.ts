@@ -81,6 +81,7 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/orders/intake",
     "/api/orders/draft",
     "/api/orders/dudas",
+    "/api/orders/last-line",
   ],
   // admin: sin entrada → acceso total.
 };
@@ -443,6 +444,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         answerText: z.string(), answeredBy: z.string(),
         changes: z.array(z.object({ itemId: z.number(), productId: z.number().nullable().optional(), unit: z.string().optional(), quantity: z.number().optional(), remove: z.boolean().optional() })).default([]),
         adds: z.array(z.object({ productId: z.number(), unit: z.string(), quantity: z.number(), rawProductName: z.string().optional() })).default([]),
+        note: z.string().max(1000).nullable().optional(),
+        memorize: z.array(z.object({ productId: z.number(), hint: z.string(), quantity: z.number(), unit: z.string(), source: z.string().optional() })).default([]),
       }).parse(req.body);
       return res.json(await storage.answerWaQuestion(Number(req.params.id), body));
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
@@ -819,6 +822,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const dias = Math.min(365, Math.max(1, Number(req.query.dias ?? 60) || 60));
       return res.json(await storage.getBotPorCliente({ dias, diasResumen: 7 }));
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // A-12: última cantidad/unidad que el cliente pidió de un producto ("como siempre")
+  app.get("/api/orders/last-line", requireAuth, async (req, res) => {
+    const customerId = Number(req.query.customerId), productId = Number(req.query.productId);
+    if (!customerId || !productId) return res.status(400).json({ error: "customerId y productId requeridos" });
+    return res.json(await storage.getLastLineForCustomer(customerId, productId));
   });
 
   // A-01: pedidos de una fecha con líneas en duda (aviso y recordatorio del bot; también lo ve admin)

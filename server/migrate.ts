@@ -1560,6 +1560,20 @@ export async function runNcMigrations() {
     )
   `);
   try { await db.execute(sql`CREATE INDEX IF NOT EXISTS wa_questions_open_idx ON wa_questions(status, expires_at)`); } catch {}
+  // A-12/A-05 (2026-10-12): memoria por cliente de expresiones vagas ("un poco de perejil" = 1 ATADO)
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS customer_product_memory (
+      id SERIAL PRIMARY KEY,
+      customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      hint TEXT NOT NULL,
+      quantity NUMERIC(12,4) NOT NULL,
+      unit TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'respuesta',
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      UNIQUE (customer_id, product_id, hint)
+    )
+  `);
   // Usuario "Bot pedidos" (rol operator, lista blanca mínima en routes.ts). Entra solo con BOT_API_TOKEN
   // (Bearer), nunca por login: el hash es de una contraseña aleatoria que no se guarda en ningún lado.
   try {
