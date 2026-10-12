@@ -148,7 +148,7 @@ export default function BotClientesPage() {
           <div className="bcx-pagehead">
             <div>
               <h1>Bot de WhatsApp</h1>
-              <p className="sub">Clientes con el bot prendido, sus teléfonos de pedido y cómo le está yendo</p>
+              <p className="sub">Clientes con el bot prendido, sus teléfonos de pedido y cómo le está yendo. Los que no están acá siguen en sombra.</p>
             </div>
             {/* Desplegable: elegir clientes para prender el bot */}
             <div className="bcx-combo" ref={comboRef}>
@@ -194,7 +194,7 @@ export default function BotClientesPage() {
                 <div className="bcx-rhead">
                   <span className="ic"><TrendingUp className="h-[18px] w-[18px]" /></span>
                   <span className="t">Últimos {data.resumen.dias} días</span>
-                  <span className="d">todos los clientes, con bot prendido o en sombra</span>
+                  <span className="d">todos los mensajes que leyó el bot, con bot prendido o en sombra</span>
                 </div>
                 <div className="bcx-metrics">
                   <div className="bcx-metric"><div className="lab">Pedidos leídos</div><div className="val bcx-num">{data.resumen.pedidos}</div><div className="sub">mensajes que el bot interpretó</div></div>

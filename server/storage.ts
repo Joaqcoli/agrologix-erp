@@ -4787,7 +4787,9 @@ export const storage = {
     // Teléfonos de pedido de cada cliente de la lista
     const ids = Array.from(porCliente.keys());
     const contactos = ids.length ? (await db.select().from(customerContacts).where(inArray(customerContacts.customerId, ids)).orderBy(asc(customerContacts.id))) : [];
-    const clientes = Array.from(porCliente.values()).map((k) => ({
+    // La lista muestra SOLO los clientes elegidos (Bot activo). Los que están en sombra suman al resumen
+    // pero no aparecen hasta que se los agrega desde el desplegable (pedido de Joaquín, 12/10).
+    const clientes = Array.from(porCliente.values()).filter((k) => k.botActivo).map((k) => ({
       ...k,
       pct: k.comparables ? Math.round(1000 * (k.comparables - k.errores) / k.comparables) / 10 : null,
       detalle: k.detalle.reverse(),
