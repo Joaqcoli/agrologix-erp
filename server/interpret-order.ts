@@ -54,6 +54,7 @@ const ModelProposal = z.object({
 type ModelProposalT = z.infer<typeof ModelProposal>;
 
 // ─── Tipos que devuelve el endpoint ──────────────────────────────────────────
+export type DudaType = "ninguna" | "producto" | "variante" | "unidad" | "cantidad" | "otra";
 export type InterpretedLine = {
   rawLine: string;
   productId: number | null;
@@ -61,6 +62,7 @@ export type InterpretedLine = {
   unit: string | null;
   quantity: number | null;
   status: "ok" | "duda";
+  dudaType: DudaType; // A-12: de qué tipo es la duda (decide si se le pregunta al cliente o al equipo)
   reason: string;
   candidates: { productId: number; name: string }[];
 };
@@ -182,23 +184,24 @@ function validateProposal(
     let unit: string | null = l.unit;
     let quantity = l.quantity;
     let status: "ok" | "duda" = l.status;
+    let dudaType: DudaType = (l.dudaType as DudaType) ?? "ninguna";
     const reasons: string[] = l.reason ? [l.reason] : [];
     let candidates = Array.from(new Set(l.candidates.filter((id) => byId.has(id) && id !== productId))).slice(0, 3);
 
     if (productId != null && !byId.has(productId)) {
       reasons.unshift(`El producto ${productId} no está en el catálogo activo`);
       productId = null;
-      status = "duda";
+      status = "duda"; dudaType = "producto";
     }
     if (unit) {
       const canon = canonicalizeUnit(unit);
-      if (!(ALL_CANONICAL_UNITS as string[]).includes(canon)) { reasons.unshift(`Unidad desconocida: ${unit}`); unit = null; status = "duda"; }
+      if (!(ALL_CANONICAL_UNITS as string[]).includes(canon)) { reasons.unshift(`Unidad desconocida: ${unit}`); unit = null; status = "duda"; dudaType = "unidad"; }
       else unit = canon;
     }
     const product = productId != null ? byId.get(productId)! : null;
     if (product && unit && product.units.length && !product.units.includes(unit)) {
       reasons.unshift(`${product.name} no tiene la unidad ${unit} cargada (tiene: ${product.units.join(", ")})`);
-      status = "duda";
+      status = "duda"; dudaType = "unidad";
     }
     if (product && !unit) {
       const cu = custUnit.get(product.id);
@@ -206,18 +209,18 @@ function validateProposal(
       else {
         unit = globalUnits.get(product.id) ?? product.units[0] ?? "KG";
         reasons.unshift(`Sin unidad en el texto y el cliente nunca compró ${product.name}: se usó la habitual (${unit})`);
-        status = "duda";
+        status = "duda"; dudaType = "unidad";
       }
     }
     if (quantity == null || !Number.isFinite(quantity) || quantity <= 0) {
       quantity = null;
-      status = "duda";
+      status = "duda"; dudaType = "cantidad";
       if (!reasons.length) reasons.push("Sin cantidad");
     } else {
       quantity = Math.round(quantity * 1000) / 1000;
     }
     if (!product) {
-      status = "duda";
+      status = "duda"; dudaType = "producto";
       if (!candidates.length) candidates = fuzzyCandidates(l.rawLine, catalog);
       if (!reasons.length) reasons.push("Producto no identificado");
     }
@@ -228,6 +231,8 @@ function validateProposal(
         && unit && (!product.units.length || product.units.includes(unit)) && quantity != null) {
       status = "ok";
     }
+    if (status === "ok") dudaType = "ninguna";
+    else if (dudaType === "ninguna") dudaType = "otra";
     return {
       rawLine: l.rawLine,
       productId: product?.id ?? null,
@@ -235,6 +240,7 @@ function validateProposal(
       unit,
       quantity,
       status,
+      dudaType,
       reason: reasons.join(". "),
       candidates: candidates.map((id) => ({ productId: id, name: byId.get(id)!.name })),
     };

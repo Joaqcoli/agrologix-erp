@@ -76,6 +76,7 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/customers/by-phone",
     "/api/customers/names",
     "/api/wa-pending",
+    "/api/wa-questions",
     "/api/orders/interpret",
     "/api/orders/intake",
     "/api/orders/draft",
@@ -412,6 +413,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/wa-pending/:id/processed", requireAuth, async (req, res) => {
     await storage.setWaPendingStatus(Number(req.params.id), "processed");
     return res.json({ ok: true });
+  });
+
+  // ─── A-12: preguntas abiertas del bot ────────────────────────────────────────
+  app.post("/api/wa-questions", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({
+        orderId: z.number(), customerId: z.number(), kind: z.enum(["cliente", "equipo"]),
+        toPhones: z.array(z.string()).min(1), questionText: z.string(), items: z.array(z.any()), expiresAt: z.string(), sentId: z.string().nullable().optional(),
+      }).parse(req.body);
+      const row = await storage.createWaQuestion({ ...body, expiresAt: new Date(body.expiresAt) });
+      return res.status(201).json(row);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.get("/api/wa-questions/open", requireAuth, async (req, res) => {
+    const phone = normalizeArPhone(String(req.query.phone ?? ""));
+    if (!phone) return res.status(400).json({ error: "phone requerido" });
+    return res.json((await storage.getOpenWaQuestionByPhone(phone)) ?? null);
+  });
+
+  app.post("/api/wa-questions/expire-due", requireAuth, async (_req, res) => {
+    return res.json({ expired: await storage.expireDueWaQuestions() });
+  });
+
+  app.post("/api/wa-questions/:id/answer", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({
+        answerText: z.string(), answeredBy: z.string(),
+        changes: z.array(z.object({ itemId: z.number(), productId: z.number().nullable().optional(), unit: z.string().optional(), quantity: z.number().optional(), remove: z.boolean().optional() })).default([]),
+        adds: z.array(z.object({ productId: z.number(), unit: z.string(), quantity: z.number(), rawProductName: z.string().optional() })).default([]),
+      }).parse(req.body);
+      return res.json(await storage.answerWaQuestion(Number(req.params.id), body));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  app.post("/api/wa-questions/:id/status", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({ status: z.enum(["unclear", "cancelled", "expired"]), answerText: z.string().nullable().optional(), answeredBy: z.string().nullable().optional() }).parse(req.body);
+      await storage.setWaQuestionStatus(Number(req.params.id), body.status, body.answerText, body.answeredBy);
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   app.get("/api/customers/:id", requireAuth, async (req, res) => {
@@ -874,8 +916,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // "cebolla morada", "manzana roja elegida" con el de "manzana roja").
       const items = body.items.map(({ pricePerUnit: _ignored, ...it }) => it);
       let order;
+      let itemIds: number[] = [];
       if (body.mode === "merge" && body.existingOrderId) {
-        await storage.addItemsToOrder(body.existingOrderId, items);
+        itemIds = await storage.addItemsToOrderWithIds(body.existingOrderId, items);
         order = { id: body.existingOrderId };
         if (body.source) await storage.setOrderSourceIfNull(body.existingOrderId, body.source);
       } else if (body.mode === "replace" && body.existingOrderId) {
@@ -893,6 +936,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           source: body.source ?? null,
           items,
         });
+        itemIds = (order as any).itemIds ?? [];
       }
 
       // A-04: cerrar el log de la IA con el pedido creado y las líneas finales (nunca rompe la creación)
@@ -901,7 +945,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         catch (e) { console.error("order_intake_logs finalize failed:", e); }
       }
 
-      return res.status(201).json({ orderId: order.id });
+      return res.status(201).json({ orderId: order.id, itemIds });
     } catch (e: any) {
       return res.status(400).json({ error: e.message });
     }

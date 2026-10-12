@@ -1538,6 +1538,28 @@ export async function runNcMigrations() {
   // Activación del bot por cliente (2026-10-12): SOMBRA general; si el cliente tiene bot_activo, el agente
   // actúa en ACTIVO para sus mensajes (crea el borrador y responde "pedido recibido").
   await db.execute(sql`ALTER TABLE customers ADD COLUMN IF NOT EXISTS bot_activo BOOLEAN NOT NULL DEFAULT FALSE`);
+  // A-12 (2026-10-12): preguntas abiertas del bot sobre dudas de un borrador (al cliente o al equipo)
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS wa_questions (
+      id SERIAL PRIMARY KEY,
+      order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      customer_id INTEGER NOT NULL REFERENCES customers(id),
+      kind TEXT NOT NULL,
+      to_phones JSONB NOT NULL,
+      question_text TEXT NOT NULL,
+      items JSONB NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      answer_text TEXT,
+      answered_by TEXT,
+      answered_at TIMESTAMP,
+      applied BOOLEAN,
+      applied_note TEXT,
+      expires_at TIMESTAMP NOT NULL,
+      sent_id TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+  try { await db.execute(sql`CREATE INDEX IF NOT EXISTS wa_questions_open_idx ON wa_questions(status, expires_at)`); } catch {}
   // Usuario "Bot pedidos" (rol operator, lista blanca mínima en routes.ts). Entra solo con BOT_API_TOKEN
   // (Bearer), nunca por login: el hash es de una contraseña aleatoria que no se guarda en ningún lado.
   try {

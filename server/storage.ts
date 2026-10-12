@@ -8,8 +8,8 @@ import {
   mpMovementIdentifiers,
   creditNotes,
   cuentasFinancieras,
-  orderIntakeLogs, customerContacts, waPendingNumbers,
-  type OrderIntakeLog, type CustomerContact, type WaPendingNumber,
+  orderIntakeLogs, customerContacts, waPendingNumbers, waQuestions,
+  type OrderIntakeLog, type CustomerContact, type WaPendingNumber, type WaQuestion,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
@@ -101,6 +101,9 @@ export function matchSocioByLeyenda(leyenda: string | null | undefined, socios: 
   }
   return null;
 }
+
+// A-12: ids de los últimos renglones insertados por addItemsToOrder (el bot los necesita para preguntar/corregir)
+let lastAddedItemIds: number[] = [];
 
 export const storage = {
   // ─── Auth ─────────────────────────────────────────────────────────────────
@@ -1593,14 +1596,22 @@ export const storage = {
     );
 
     if (itemsToInsert.length > 0) {
-      await db.insert(orderItems).values(itemsToInsert);
+      // A-12: los ids de los renglones (en el mismo orden que items) para que el bot pueda preguntar/corregir
+      const inserted = await db.insert(orderItems).values(itemsToInsert).returning({ id: orderItems.id });
       // Recalcular el total del pedido a partir de los subtotales (antes quedaba en 0)
       const total = itemsToInsert.reduce((s, it) => s + (parseFloat(String(it.subtotal ?? "0")) || 0), 0);
       await db.update(orders).set({ total: total.toFixed(2) }).where(eq(orders.id, order.id));
-      return { ...order, total: total.toFixed(2) };
+      return { ...order, total: total.toFixed(2), itemIds: inserted.map((r) => r.id) } as Order & { itemIds: number[] };
     }
 
     return order;
+  },
+
+  /** A-12: igual que addItemsToOrder pero devuelve los ids de los renglones insertados (mismo orden). */
+  async addItemsToOrderWithIds(orderId: number, items: Parameters<typeof storage.addItemsToOrder>[1]): Promise<number[]> {
+    lastAddedItemIds = [];
+    await this.addItemsToOrder(orderId, items);
+    return lastAddedItemIds;
   },
 
   async addItemsToOrder(orderId: number, items: {
@@ -1645,7 +1656,8 @@ export const storage = {
       })
     );
     if (itemsToInsert.length > 0) {
-      await db.insert(orderItems).values(itemsToInsert);
+      const inserted = await db.insert(orderItems).values(itemsToInsert).returning({ id: orderItems.id });
+      lastAddedItemIds = inserted.map((r) => r.id); // A-12: ids para el bot (ver addItemsToOrderWithIds)
       // Recalculate order total after inserting items
       const allItems = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
       const total = allItems.reduce((s, i) => s + Number(i.subtotal), 0);
@@ -4707,6 +4719,97 @@ export const storage = {
 
   async setWaPendingStatus(id: number, status: "ignored" | "processed" | "pending"): Promise<void> {
     await db.update(waPendingNumbers).set({ status }).where(eq(waPendingNumbers.id, id));
+  },
+
+  // ─── A-12: preguntas abiertas del bot (al cliente o al equipo) ────────────────
+  async createWaQuestion(data: { orderId: number; customerId: number; kind: "cliente" | "equipo"; toPhones: string[]; questionText: string; items: unknown; expiresAt: Date; sentId?: string | null }): Promise<WaQuestion> {
+    const [row] = await db.insert(waQuestions).values({ ...data, sentId: data.sentId ?? null }).returning();
+    return row;
+  },
+
+  /** La pregunta abierta más reciente dirigida a un teléfono (cliente o equipo). */
+  async getOpenWaQuestionByPhone(phone: string): Promise<WaQuestion | undefined> {
+    const rows = await db.execute(drizzleSql`
+      SELECT * FROM wa_questions WHERE status = 'open' AND expires_at > now() AND to_phones @> ${JSON.stringify([phone])}::jsonb
+      ORDER BY created_at DESC LIMIT 1`);
+    const r = (rows.rows as any[])[0];
+    if (!r) return undefined;
+    const [row] = await db.select().from(waQuestions).where(eq(waQuestions.id, Number(r.id))).limit(1);
+    return row;
+  },
+
+  async getWaQuestion(id: number): Promise<WaQuestion | undefined> {
+    const [row] = await db.select().from(waQuestions).where(eq(waQuestions.id, id)).limit(1);
+    return row;
+  },
+
+  /** Vence las preguntas abiertas cuyo plazo pasó (las dudas quedan para el equipo, como siempre). */
+  async expireDueWaQuestions(): Promise<number> {
+    const r = await db.execute(drizzleSql`UPDATE wa_questions SET status = 'expired' WHERE status = 'open' AND expires_at <= now() RETURNING id`);
+    return r.rows.length;
+  },
+
+  async setWaQuestionStatus(id: number, status: "unclear" | "cancelled" | "expired", answerText?: string | null, answeredBy?: string | null): Promise<void> {
+    await db.update(waQuestions).set({ status, answerText: answerText ?? null, answeredBy: answeredBy ?? null, answeredAt: new Date() }).where(eq(waQuestions.id, id));
+  },
+
+  /**
+   * Aplica la respuesta a los renglones del borrador. Reglas (decididas el 12/10):
+   * - Solo si el pedido sigue en borrador (draft). Aprobado → no se toca nada.
+   * - Solo renglones que siguen como los dejó el bot (producto/unidad/cantidad iguales a la propuesta y
+   *   parse_status = 'duda'); si alguien los editó a mano, no se tocan.
+   * - changes: [{ itemId, productId?, unit?, quantity?, remove?: true }] y adds: [{ productId, unit, quantity, rawProductName }]
+   *   (para dudas "sin cantidad" cuyo renglón no se había cargado).
+   */
+  async answerWaQuestion(id: number, opts: {
+    answerText: string; answeredBy: string;
+    changes: { itemId: number; productId?: number | null; unit?: string; quantity?: number; remove?: boolean }[];
+    adds: { productId: number; unit: string; quantity: number; rawProductName?: string }[];
+  }): Promise<{ applied: boolean; note: string; detalle: string[] }> {
+    const q = await this.getWaQuestion(id);
+    if (!q) throw new Error("Pregunta no encontrada");
+    if (q.status !== "open") return { applied: false, note: `La pregunta ya estaba ${q.status}`, detalle: [] };
+    const [order] = await db.select().from(orders).where(eq(orders.id, q.orderId)).limit(1);
+    const detalle: string[] = [];
+    let applied = false;
+    let note = "";
+    if (!order) note = "El pedido ya no existe";
+    else if (order.status !== "draft") note = `El pedido ${order.folio} ya está ${order.status === "approved" ? "aprobado" : order.status}: no se tocó`;
+    else {
+      const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
+      const byId = new Map(items.map((i) => [i.id, i]));
+      const propuestas = new Map<number, { productId: number | null; unit: string; quantity: number }>();
+      for (const it of (q.items as any[]) ?? []) {
+        if (it.itemId && it.propuesta) propuestas.set(Number(it.itemId), { productId: it.propuesta.productId ?? null, unit: it.propuesta.unit, quantity: Number(it.propuesta.quantity) });
+        for (const d of it.duplicados ?? []) if (d.itemId) propuestas.set(Number(d.itemId), { productId: d.productId ?? null, unit: d.unit, quantity: Number(d.quantity) });
+      }
+      const intacto = (itemId: number) => {
+        const it = byId.get(itemId); const p = propuestas.get(itemId);
+        if (!it || !p) return false;
+        return it.parseStatus === "duda" && (it.productId ?? null) === (p.productId ?? null) && it.unit === p.unit && Math.abs(Number(it.quantity) - p.quantity) < 0.0005;
+      };
+      for (const ch of opts.changes) {
+        if (!intacto(ch.itemId)) { detalle.push(`renglón ${ch.itemId}: ya fue editado a mano o no está en duda, no se tocó`); continue; }
+        if (ch.remove) { await this.deleteOrderItem(order.id, ch.itemId); detalle.push(`renglón ${ch.itemId}: eliminado`); applied = true; continue; }
+        const patch: { quantity?: string; unit?: string; productId?: number | null } = {};
+        if (ch.quantity != null) patch.quantity = String(ch.quantity);
+        if (ch.unit) patch.unit = ch.unit;
+        if (ch.productId !== undefined) patch.productId = ch.productId;
+        await this.updateOrderItem(order.id, ch.itemId, patch, order.customerId);
+        await db.update(orderItems).set({ parseStatus: "ok" }).where(eq(orderItems.id, ch.itemId));
+        detalle.push(`renglón ${ch.itemId}: ${JSON.stringify(patch)} → ok`);
+        applied = true;
+      }
+      for (const a of opts.adds) {
+        const r = await this.addOrderItem(order.id, { productId: a.productId, unit: a.unit, quantity: String(a.quantity) });
+        await db.update(orderItems).set({ parseStatus: "ok", rawProductName: a.rawProductName ?? null }).where(eq(orderItems.id, r.item.id));
+        detalle.push(`agregado ${a.productId} ${a.quantity} ${a.unit}`);
+        applied = true;
+      }
+      note = applied ? "Aplicado" : "No había nada aplicable";
+    }
+    await db.update(waQuestions).set({ status: "answered", answerText: opts.answerText, answeredBy: opts.answeredBy, answeredAt: new Date(), applied, appliedNote: note }).where(eq(waQuestions.id, id));
+    return { applied, note, detalle };
   },
 
   /** A-01: al sumar líneas del bot a un borrador manual, dejar constancia del origen si no tenía. */

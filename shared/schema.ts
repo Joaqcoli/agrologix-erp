@@ -251,6 +251,29 @@ export const waPendingNumbers = pgTable("wa_pending_numbers", {
 });
 export type WaPendingNumber = typeof waPendingNumbers.$inferSelect;
 
+// ─── A-12: preguntas abiertas del bot (al cliente o al equipo) sobre dudas de un borrador ─────
+export const waQuestions = pgTable("wa_questions", {
+  id: serial("id").primaryKey(),
+  orderId: integer("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+  customerId: integer("customer_id").notNull().references(() => customers.id),
+  kind: text("kind").notNull(), // 'cliente' | 'equipo'
+  toPhones: jsonb("to_phones").notNull(), // [ "+549…" ]: a quién se le preguntó (el que responda primero vale)
+  questionText: text("question_text").notNull(),
+  // [{ n, itemId|null, rawLine, tipo: 'duplicado'|'cantidad'|'unidad'|'producto'|'variante'|'otra',
+  //    propuesta: {productId, name, unit, quantity}, duplicados: [itemId...], opciones: [{n, productId, name, unit}] }]
+  items: jsonb("items").notNull(),
+  status: text("status").notNull().default("open"), // open | answered | unclear | expired | cancelled
+  answerText: text("answer_text"),
+  answeredBy: text("answered_by"),
+  answeredAt: timestamp("answered_at"),
+  applied: boolean("applied"),
+  appliedNote: text("applied_note"),
+  expiresAt: timestamp("expires_at").notNull(),
+  sentId: text("sent_id"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type WaQuestion = typeof waQuestions.$inferSelect;
+
 // ─── Product Units (stock + cost per unit per product) ─────────────────────────
 export const productUnits = pgTable("product_units", {
   id: serial("id").primaryKey(),
