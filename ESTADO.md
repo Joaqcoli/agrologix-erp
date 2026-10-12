@@ -16,6 +16,9 @@
   Vista **"Bot por cliente"** (`/bot-clientes`, `GET /api/bot-clientes`; reemplaza a "Sombra WhatsApp"): por cliente, pedidos y renglones leídos, renglones con error vs lo
   cargado, dudas, % acierto, interruptor "Bot activo" — el número para activar el bot por cliente (≥95 %).
   El agente vive en `../asistente-vegex` (Render, modo SOMBRA).
+  12-oct **A-12** (`d208163`): tabla `wa_questions` + endpoints `/api/wa-questions*` para que el bot
+  pregunte las dudas (al cliente o al equipo) y aplique la respuesta sobre el borrador; `/interpret`
+  devuelve `dudaType`, `/intake` devuelve `itemIds`. Vista "Bot por cliente" lista solo los clientes elegidos.
   12-oct: **`customers.bot_activo`** ("Bot activo" en la ficha y badge en la lista): el agente actúa en ACTIVO
   solo para esos clientes. Cliente PRUEBA (167) con el número de Joaquín.
 - 11-oct `b2f04ba` **A-04 · IA en Carga Pedido** (desplegado y verificado: tabla creada en prod a los ~2 min,
