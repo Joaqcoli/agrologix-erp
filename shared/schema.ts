@@ -300,6 +300,24 @@ export const customerAliases = pgTable("customer_aliases", {
 });
 export type CustomerAlias = typeof customerAliases.$inferSelect;
 
+// ─── A-01: bandeja de entrada — TODO mensaje de WhatsApp que recibió el agente y qué hizo con él ─────
+// Para auditar ("no hay rastro de los 5 maples de huevo"). Una fila por mensaje (wamid único).
+export const waInbox = pgTable("wa_inbox", {
+  id: serial("id").primaryKey(),
+  wamid: text("wamid").unique(),
+  phone: text("phone").notNull(),
+  profileName: text("profile_name"),
+  type: text("type"), // text | image | audio | ...
+  text: text("text"),
+  receivedAt: timestamp("received_at"),
+  kind: text("kind"), // pedido | agregado | modificacion | respuesta | otro | eco | ignorado | error
+  customerId: integer("customer_id"),
+  orderId: integer("order_id"),
+  acciones: jsonb("acciones"), // lo que hizo el agente, paso a paso
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type WaInbox = typeof waInbox.$inferSelect;
+
 // ─── Product Units (stock + cost per unit per product) ─────────────────────────
 export const productUnits = pgTable("product_units", {
   id: serial("id").primaryKey(),

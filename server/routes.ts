@@ -83,6 +83,9 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/orders/draft",
     "/api/orders/dudas",
     "/api/orders/last-line",
+    "/api/orders/draft-items",
+    "/api/orders/bot-item",
+    "/api/wa-inbox",
   ],
   // admin: sin entrada → acceso total.
 };
@@ -838,6 +841,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // A-01: bandeja de entrada del agente (auditoría de cada mensaje)
+  app.post("/api/wa-inbox", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({
+        wamid: z.string().nullable(), phone: z.string(), profileName: z.string().nullable().optional(), type: z.string().nullable().optional(),
+        text: z.string().nullable().optional(), receivedAt: z.string().nullable().optional(), kind: z.string().nullable().optional(),
+        customerId: z.number().nullable().optional(), orderId: z.number().nullable().optional(), acciones: z.array(z.string()).optional(),
+      }).parse(req.body);
+      await storage.upsertWaInbox({ ...body, receivedAt: body.receivedAt ? new Date(body.receivedAt) : null });
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  // A-01: renglones del borrador (para quitar/cambiar por mensaje) y edición por el bot
+  app.get("/api/orders/draft-items", requireAuth, async (req, res) => {
+    const orderId = Number(req.query.orderId);
+    if (!orderId) return res.status(400).json({ error: "orderId requerido" });
+    return res.json(await storage.getDraftItemsForBot(orderId));
+  });
+  app.post("/api/orders/bot-item", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({ orderId: z.number(), itemId: z.number(), action: z.enum(["remove", "set"]), quantity: z.number().optional(), unit: z.string().optional() }).parse(req.body);
+      return res.json(await storage.botEditItem(body.orderId, body.itemId, body.action, { quantity: body.quantity, unit: body.unit }));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   // A-12: última cantidad/unidad que el cliente pidió de un producto ("como siempre")
   app.get("/api/orders/last-line", requireAuth, async (req, res) => {
     const customerId = Number(req.query.customerId), productId = Number(req.query.productId);
@@ -871,7 +900,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         customerId: z.number(),
         text: z.string().max(20_000).optional(),
         imageBase64: z.string().optional(),
-        source: z.enum(["intake", "whatsapp", "simulacion"]).default("intake"), // A-01: el bot manda 'whatsapp'; la prueba offline, 'simulacion'
+        source: z.enum(["intake", "whatsapp", "simulacion", "respuesta"]).default("intake"), // A-01: el bot manda 'whatsapp'; la prueba offline, 'simulacion'
         externalId: z.string().max(200).optional(),               // A-01: wamid → idempotente
         meta: z.record(z.any()).optional(),                        // A-01: fecha/clasificación decididas por el agente (vista Sombra)
       }).parse(req.body);

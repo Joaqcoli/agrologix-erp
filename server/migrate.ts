@@ -1571,6 +1571,23 @@ export async function runNcMigrations() {
       UNIQUE (customer_id, alias)
     )
   `);
+  // A-01 (2026-10-12): bandeja de entrada — todo mensaje recibido por el agente y qué hizo
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS wa_inbox (
+      id SERIAL PRIMARY KEY,
+      wamid TEXT UNIQUE,
+      phone TEXT NOT NULL,
+      profile_name TEXT,
+      type TEXT,
+      text TEXT,
+      received_at TIMESTAMP,
+      kind TEXT,
+      customer_id INTEGER,
+      order_id INTEGER,
+      acciones JSONB,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
   // A-12/A-05 (2026-10-12): memoria por cliente de expresiones vagas ("un poco de perejil" = 1 ATADO)
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS customer_product_memory (

@@ -8,7 +8,7 @@ import {
   mpMovementIdentifiers,
   creditNotes,
   cuentasFinancieras,
-  orderIntakeLogs, customerContacts, waPendingNumbers, waQuestions, customerProductMemory, customerAliases,
+  orderIntakeLogs, customerContacts, waPendingNumbers, waQuestions, customerProductMemory, customerAliases, waInbox,
   type OrderIntakeLog, type CustomerContact, type WaPendingNumber, type WaQuestion,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type Order,
@@ -4612,6 +4612,38 @@ export const storage = {
     }));
   },
 
+  // ─── A-01: bandeja de entrada del agente ───────────────────────────────────────
+  async upsertWaInbox(data: { wamid: string | null; phone: string; profileName?: string | null; type?: string | null; text?: string | null; receivedAt?: Date | null; kind?: string | null; customerId?: number | null; orderId?: number | null; acciones?: unknown }): Promise<void> {
+    const values = { wamid: data.wamid, phone: data.phone, profileName: data.profileName ?? null, type: data.type ?? null, text: data.text ?? null, receivedAt: data.receivedAt ?? null, kind: data.kind ?? null, customerId: data.customerId ?? null, orderId: data.orderId ?? null, acciones: data.acciones ?? null };
+    if (data.wamid) {
+      await db.insert(waInbox).values(values).onConflictDoUpdate({ target: waInbox.wamid, set: { kind: values.kind, customerId: values.customerId, orderId: values.orderId, acciones: values.acciones } });
+    } else await db.insert(waInbox).values(values);
+  },
+
+  /** Renglones del borrador del día de un cliente (para que el bot pueda quitar/cambiar por mensaje). */
+  async getDraftItemsForBot(orderId: number): Promise<{ orderId: number; status: string; items: { id: number; productId: number | null; name: string | null; unit: string; quantity: number; parseStatus: string | null }[] } | null> {
+    const [o] = await db.select({ id: orders.id, status: orders.status }).from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!o) return null;
+    const rows = await db.execute(drizzleSql`SELECT oi.id, oi.product_id AS "productId", p.name, oi.unit, oi.quantity::float AS quantity, oi.parse_status AS "parseStatus" FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.order_id = ${orderId} ORDER BY oi.id`);
+    return { orderId: o.id, status: o.status, items: (rows.rows as any[]).map((r) => ({ id: Number(r.id), productId: r.productId == null ? null : Number(r.productId), name: r.name ?? null, unit: r.unit, quantity: Number(r.quantity), parseStatus: r.parseStatus ?? null })) };
+  },
+
+  /** Quitar o cambiar un renglón por pedido del cliente (solo borradores). */
+  async botEditItem(orderId: number, itemId: number, action: "remove" | "set", patch: { quantity?: number; unit?: string } = {}): Promise<{ ok: boolean; note: string }> {
+    const [o] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!o) return { ok: false, note: "El pedido no existe" };
+    if (o.status !== "draft") return { ok: false, note: `El pedido ${o.folio} ya está ${o.status === "approved" ? "aprobado" : o.status}` };
+    const [it] = await db.select().from(orderItems).where(and(eq(orderItems.id, itemId), eq(orderItems.orderId, orderId))).limit(1);
+    if (!it) return { ok: false, note: "El renglón no está en el pedido" };
+    if (action === "remove") { await this.deleteOrderItem(orderId, itemId); return { ok: true, note: "renglón eliminado" }; }
+    const p: { quantity?: string; unit?: string } = {};
+    if (patch.quantity != null) p.quantity = String(patch.quantity);
+    if (patch.unit) p.unit = patch.unit;
+    await this.updateOrderItem(orderId, itemId, p, o.customerId);
+    await db.update(orderItems).set({ parseStatus: "ok" }).where(eq(orderItems.id, itemId));
+    return { ok: true, note: `renglón actualizado ${JSON.stringify(p)}` };
+  },
+
   // ─── A-12: alias por cliente ("Álvarez" = BONAFIDE (GORRITI)) ────────────────
   async getAliasesFor(customerIds: number[]): Promise<Map<number, string[]>> {
     const m = new Map<number, string[]>();
@@ -4784,11 +4816,13 @@ export const storage = {
     return row;
   },
 
-  /** La pregunta abierta más reciente dirigida a un teléfono (cliente o equipo). */
+  /** La pregunta abierta más reciente dirigida a un teléfono (cliente o equipo); o una respondida hace < 15 min (corrección). */
   async getOpenWaQuestionByPhone(phone: string): Promise<WaQuestion | undefined> {
     const rows = await db.execute(drizzleSql`
-      SELECT * FROM wa_questions WHERE status = 'open' AND expires_at > now() AND to_phones @> ${JSON.stringify([phone])}::jsonb
-      ORDER BY created_at DESC LIMIT 1`);
+      SELECT * FROM wa_questions
+      WHERE to_phones @> ${JSON.stringify([phone])}::jsonb
+        AND ((status = 'open' AND expires_at > now()) OR (status = 'answered' AND answered_at > now() - interval '15 minutes'))
+      ORDER BY (status = 'open') DESC, created_at DESC LIMIT 1`);
     const r = (rows.rows as any[])[0];
     if (!r) return undefined;
     const [row] = await db.select().from(waQuestions).where(eq(waQuestions.id, Number(r.id))).limit(1);
@@ -4829,7 +4863,11 @@ export const storage = {
   }): Promise<{ applied: boolean; note: string; detalle: string[] }> {
     const q = await this.getWaQuestion(id);
     if (!q) throw new Error("Pregunta no encontrada");
-    if (q.status !== "open") return { applied: false, note: `La pregunta ya estaba ${q.status}`, detalle: [] };
+    // Reapertura: el cliente se corrige poco después de responder ("Dale!" y a los 2 min "no, 3 atados").
+    // Se admite hasta 15 min después de la respuesta anterior; en ese caso los renglones ya no están en
+    // duda, así que se tocan si siguen en el pedido (nadie los editó a mano en esos minutos).
+    const reabierta = q.status === "answered" && !!q.answeredAt && Date.now() - new Date(q.answeredAt).getTime() < 15 * 60_000;
+    if (q.status !== "open" && !reabierta) return { applied: false, note: `La pregunta ya estaba ${q.status}`, detalle: [] };
     const [order] = await db.select().from(orders).where(eq(orders.id, q.orderId)).limit(1);
     const detalle: string[] = [];
     let applied = false;
@@ -4847,8 +4885,10 @@ export const storage = {
       const intacto = (itemId: number) => {
         const it = byId.get(itemId); const p = propuestas.get(itemId);
         if (!it || !p) return false;
+        if (reabierta) return true; // ya se aplicó una respuesta: se corrige sobre lo aplicado
         return it.parseStatus === "duda" && (it.productId ?? null) === (p.productId ?? null) && it.unit === p.unit && Math.abs(Number(it.quantity) - p.quantity) < 0.0005;
       };
+      if (reabierta) detalle.push("corrección sobre una respuesta anterior");
       for (const ch of opts.changes) {
         if (!intacto(ch.itemId)) { detalle.push(`renglón ${ch.itemId}: ya fue editado a mano o no está en duda, no se tocó`); continue; }
         if (ch.remove) { await this.deleteOrderItem(order.id, ch.itemId); detalle.push(`renglón ${ch.itemId}: eliminado`); applied = true; continue; }
