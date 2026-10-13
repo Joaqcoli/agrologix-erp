@@ -1560,6 +1560,8 @@ export async function runNcMigrations() {
     )
   `);
   try { await db.execute(sql`CREATE INDEX IF NOT EXISTS wa_questions_open_idx ON wa_questions(status, expires_at)`); } catch {}
+  // 2026-10-13: cambiar la fecha de un borrador por pedido del equipo ("¿es para hoy?" → sí)
+  // (sin cambios de tabla; ver POST /api/orders/bot-date)
   // A-12 (2026-10-12): alias por cliente ("Álvarez" = BONAFIDE (GORRITI)) para que el bot elija la sede
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS customer_aliases (

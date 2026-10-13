@@ -4644,6 +4644,17 @@ export const storage = {
     return { orderId: o.id, status: o.status, items: (rows.rows as any[]).map((r) => ({ id: Number(r.id), productId: r.productId == null ? null : Number(r.productId), name: r.name ?? null, unit: r.unit, quantity: Number(r.quantity), parseStatus: r.parseStatus ?? null })) };
   },
 
+  /** Cambiar la fecha de entrega de un borrador (el equipo confirmó "es para hoy"). */
+  async botSetOrderDate(orderId: number, date: string): Promise<{ ok: boolean; note: string }> {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, note: "fecha inválida" };
+    const [o] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!o) return { ok: false, note: "El pedido no existe" };
+    if (o.status !== "draft") return { ok: false, note: `El pedido ${o.folio} ya está ${o.status}` };
+    // Misma hora interna que usa /intake (new Date('YYYY-MM-DD') = medianoche UTC) para que se vea bien en Pedidos
+    await db.update(orders).set({ orderDate: new Date(date) }).where(eq(orders.id, orderId));
+    return { ok: true, note: `fecha ${date}` };
+  },
+
   /** Quitar o cambiar un renglón por pedido del cliente (solo borradores). */
   async botEditItem(orderId: number, itemId: number, action: "remove" | "set", patch: { quantity?: number; unit?: string } = {}): Promise<{ ok: boolean; note: string }> {
     const [o] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);

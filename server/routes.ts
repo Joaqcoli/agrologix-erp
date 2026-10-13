@@ -86,6 +86,7 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/orders/last-line",
     "/api/orders/draft-items",
     "/api/orders/bot-item",
+    "/api/orders/bot-date",
     "/api/wa-inbox",
   ],
   // admin: sin entrada → acceso total.
@@ -882,6 +883,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const orderId = Number(req.query.orderId);
     if (!orderId) return res.status(400).json({ error: "orderId requerido" });
     return res.json(await storage.getDraftItemsForBot(orderId));
+  });
+  app.post("/api/orders/bot-date", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({ orderId: z.number(), date: z.string() }).parse(req.body);
+      return res.json(await storage.botSetOrderDate(body.orderId, body.date));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
   app.post("/api/orders/bot-item", requireAuth, async (req, res) => {
     try {
