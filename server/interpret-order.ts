@@ -120,6 +120,7 @@ function buildCustomerBlock(
   customerName: string,
   history: { productId: number; unit: string; times: number; lastDate: string; lastDates: string[]; lastQuantity?: number | null }[],
   memory: { productId: number; hint: string; quantity: number; unit: string }[],
+  rules: { scope: string; rule: string }[],
   catalogById: Map<number, CatalogRow>,
   text: string | undefined,
   todayISO: string,
@@ -136,6 +137,8 @@ function buildCustomerBlock(
     hist.length ? hist.join("\n") : "(sin historial: cliente nuevo o sin compras recientes)",
     `MEMORIA DEL CLIENTE (cómo se resolvieron antes sus expresiones vagas):`,
     mem.length ? mem.join("\n") : "(sin memoria)",
+    `REGLAS DEL EQUIPO (las escribió Joaquín/Fede; tienen prioridad sobre las reglas generales de arriba, nunca sobre el catálogo):`,
+    rules.length ? rules.map((r) => `- [${r.scope === "cliente" ? "este cliente" : "todos"}] ${r.rule}`).join("\n") : "(ninguna)",
     `FECHA DE HOY: ${todayISO}`,
   ];
   if (text && text.trim()) {
@@ -281,13 +284,14 @@ export async function interpretOrder(opts: {
   const customer = await storage.getCustomer(opts.customerId);
   if (!customer) throw new Error("Cliente no encontrado");
 
-  const [catalog, globalRows, lastUsedRows, history, memory] = await Promise.all([
+  const [catalog, globalRows, lastUsedRows, history, memory, rules] = await Promise.all([
     storage.getActiveCatalogWithUnits(),
     storage.getGlobalMostUsedUnits(HISTORY_DAYS),
     storage.getProductUnitHistory(),
     storage.getCustomerProductHistory(opts.customerId, { days: HISTORY_DAYS, before: opts.historyBefore }) as Promise<
       { productId: number; unit: string; times: number; lastDate: string; lastDates: string[]; lastQuantity: number | null }[]>,
     (opts.historyBefore ? Promise.resolve([]) : storage.getCustomerMemory(opts.customerId)) as Promise<{ productId: number; hint: string; quantity: number; unit: string }[]>,
+    (opts.historyBefore ? Promise.resolve([]) : storage.getBotRules(opts.customerId)) as Promise<{ scope: string; rule: string }[]>,
   ]);
   // (tipos explícitos: el objeto `storage` degrada a any por una circularidad preexistente en shared/schema.ts)
   const globalUnits = new Map<number, string>(globalRows.map((r: { productId: number; unit: string }) => [r.productId, r.unit] as [number, string]));
@@ -296,7 +300,7 @@ export async function interpretOrder(opts: {
 
   const catalogBlock = await buildCatalogBlock(catalog, globalUnits, lastUsed);
   const todayISO = opts.todayISO ?? new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" });
-  const customerBlock = buildCustomerBlock(customer.name, history, memory, catalogById, opts.text, todayISO);
+  const customerBlock = buildCustomerBlock(customer.name, history, memory, rules, catalogById, opts.text, todayISO);
 
   const content: Anthropic.ContentBlockParam[] = [
     // Bloque estable → cacheado 1 h (el prefijo system + catálogo es idéntico para todos los pedidos)

@@ -1588,6 +1588,18 @@ export async function runNcMigrations() {
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `);
+  // A-12 (2026-10-12): reglas que el equipo le enseña al bot (generales o por cliente)
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS bot_rules (
+      id SERIAL PRIMARY KEY,
+      scope TEXT NOT NULL DEFAULT 'general',
+      customer_id INTEGER REFERENCES customers(id) ON DELETE CASCADE,
+      rule TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'manual',
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
   // A-12/A-05 (2026-10-12): memoria por cliente de expresiones vagas ("un poco de perejil" = 1 ATADO)
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS customer_product_memory (

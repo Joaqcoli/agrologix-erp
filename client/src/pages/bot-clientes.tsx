@@ -18,6 +18,45 @@ type Det = { fecha: string; folio: string | null; raw: string; bot: string; erp:
 type Contacto = { id: number; phone: string; name: string | null };
 type Alias = { id: number; alias: string };
 type Row = { customerId: number; cliente: string; botActivo: boolean; pedidos: number; renglones: number; comparables: number; errores: number; dudas: number; pct: number | null; ultimoPedido: string | null; detalle: Det[]; contactos: Contacto[]; aliases: Alias[] };
+type Rule = { id: number; scope: string; customerId: number | null; rule: string; source: string };
+
+// A-12: reglas que le enseñaste al bot (generales o de un cliente)
+function RulesBlock({ customerId, title, hint }: { customerId: number | null; title: string; hint: string }) {
+  const { toast } = useToast();
+  const key = ["/api/bot-rules", customerId ?? "general"];
+  const { data: rules = [] } = useQuery<Rule[]>({ queryKey: key, queryFn: async () => {
+    const r = await fetch(customerId ? `/api/bot-rules?customerId=${customerId}` : "/api/bot-rules", { credentials: "include" });
+    if (!r.ok) throw new Error("No se pudieron cargar las reglas");
+    const all: Rule[] = await r.json();
+    return customerId ? all.filter((x) => x.scope === "cliente") : all;
+  } });
+  const [text, setText] = useState("");
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/bot-rules"] });
+  const add = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/bot-rules", { scope: customerId ? "cliente" : "general", customerId, rule: text, source: "manual" }),
+    onSuccess: () => { invalidate(); setText(""); toast({ title: "Regla guardada" }); },
+    onError: (e: any) => toast({ title: "No se pudo guardar", description: e.message, variant: "destructive" }),
+  });
+  const remove = useMutation({ mutationFn: (id: number) => apiRequest("DELETE", `/api/bot-rules/${id}`), onSuccess: () => invalidate() });
+  return (
+    <>
+      <p className="bcx-dtitle">{title}</p>
+      <div className="bcx-tels" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+        {rules.length === 0 && <span style={{ fontSize: 13, color: "#8b8f88" }}>{hint}</span>}
+        {rules.map((r) => (
+          <span key={r.id} className="bcx-tel" style={{ justifyContent: "space-between" }}>
+            <span>{r.rule}{r.source === "respuesta" && <span className="n" style={{ marginLeft: 8 }}>(de una respuesta por WhatsApp)</span>}</span>
+            <button type="button" title="Quitar" onClick={() => remove.mutate(r.id)}><X className="h-3.5 w-3.5" /></button>
+          </span>
+        ))}
+        <span className="bcx-addtel">
+          <input value={text} onChange={(e) => setText(e.target.value)} placeholder='Ej. "piezas de verdeo = atados"' style={{ width: 420, maxWidth: "100%" }} />
+          <button type="button" className="bcx-btn" disabled={text.trim().length < 3 || add.isPending} onClick={() => add.mutate()}><Plus className="h-3.5 w-3.5" /> Agregar regla</button>
+        </span>
+      </div>
+    </>
+  );
+}
 type Data = { resumen: { dias: number; pedidos: number; renglones: number; pct: number | null }; clientes: Row[] };
 
 // ── CSS (mismo lenguaje visual que Pedidos: diseno-caja/pedidos-rediseno.html) ──
@@ -218,6 +257,9 @@ export default function BotClientesPage() {
                   ))}
                 </div>
               )}
+              <div className="bcx-card" style={{ marginTop: 18, padding: "16px 20px" }}>
+                <RulesBlock customerId={null} title="Reglas generales del bot (valen para todos los clientes)" hint='Ej. "piezas de verdeo, kale o ciboulette = atados", "ristra de ajo = 1 cajón". Se agregan solas cuando respondés una consulta con una instrucción general, o acá.' />
+              </div>
               <p className="bcx-foot">Tabla: últimos 60 días. "Con error" = el bot leyó un producto, unidad o cantidad distintos de lo que quedó cargado. Un mismo teléfono puede estar en varios clientes (La Marquesa y Quinquela, por ejemplo). Horas de Argentina.</p>
             </>
           )}
@@ -317,6 +359,8 @@ function ClienteCard({ c, open, onOpen, onToggle, busy, onChanged }: { c: Row; o
               <button type="button" className="bcx-btn" disabled={!alias.trim() || addAlias.isPending} onClick={() => addAlias.mutate()}><Plus className="h-3.5 w-3.5" /> Agregar alias</button>
             </span>
           </div>
+
+          <RulesBlock customerId={c.customerId} title="Reglas para este cliente" hint='Lo que le enseñaste al bot sobre este cliente. Se agregan solas cuando respondés una consulta con una instrucción, o acá.' />
 
           <p className="bcx-dtitle">Renglones con error</p>
           {c.detalle.length === 0 ? (

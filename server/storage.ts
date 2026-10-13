@@ -8,7 +8,7 @@ import {
   mpMovementIdentifiers,
   creditNotes,
   cuentasFinancieras,
-  orderIntakeLogs, customerContacts, waPendingNumbers, waQuestions, customerProductMemory, customerAliases, waInbox,
+  orderIntakeLogs, customerContacts, waPendingNumbers, waQuestions, customerProductMemory, customerAliases, waInbox, botRules,
   type OrderIntakeLog, type CustomerContact, type WaPendingNumber, type WaQuestion,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type Order,
@@ -4612,6 +4612,22 @@ export const storage = {
     }));
   },
 
+  // ─── A-12: reglas del equipo para el bot ───────────────────────────────────────
+  async getBotRules(customerId?: number | null): Promise<{ id: number; scope: string; customerId: number | null; rule: string; source: string }[]> {
+    const rows = await db.select().from(botRules).where(eq(botRules.active, true)).orderBy(asc(botRules.id));
+    return rows.filter((r) => r.scope === "general" || (customerId != null && r.customerId === customerId))
+      .map((r) => ({ id: r.id, scope: r.scope, customerId: r.customerId ?? null, rule: r.rule, source: r.source }));
+  },
+  async addBotRule(data: { scope: "general" | "cliente"; customerId?: number | null; rule: string; source?: string }): Promise<{ id: number } | null> {
+    const rule = data.rule.replace(/\s+/g, " ").trim().slice(0, 500);
+    if (!rule) return null;
+    const [row] = await db.insert(botRules).values({ scope: data.scope, customerId: data.scope === "cliente" ? data.customerId ?? null : null, rule, source: data.source ?? "manual" }).returning({ id: botRules.id });
+    return row;
+  },
+  async deleteBotRule(id: number): Promise<void> {
+    await db.update(botRules).set({ active: false }).where(eq(botRules.id, id));
+  },
+
   // ─── A-01: bandeja de entrada del agente ───────────────────────────────────────
   async upsertWaInbox(data: { wamid: string | null; phone: string; profileName?: string | null; type?: string | null; text?: string | null; receivedAt?: Date | null; kind?: string | null; customerId?: number | null; orderId?: number | null; acciones?: unknown }): Promise<void> {
     const values = { wamid: data.wamid, phone: data.phone, profileName: data.profileName ?? null, type: data.type ?? null, text: data.text ?? null, receivedAt: data.receivedAt ?? null, kind: data.kind ?? null, customerId: data.customerId ?? null, orderId: data.orderId ?? null, acciones: data.acciones ?? null };
@@ -4860,6 +4876,8 @@ export const storage = {
     note?: string | null;
     /** Memoria por cliente a guardar ("un poco de perejil" = 1 ATADO) */
     memorize?: { productId: number; hint: string; quantity: number; unit: string; source?: string }[];
+    /** Reglas que el equipo enseñó en la respuesta */
+    rules?: { scope: "general" | "cliente"; rule: string }[];
   }): Promise<{ applied: boolean; note: string; detalle: string[] }> {
     const q = await this.getWaQuestion(id);
     if (!q) throw new Error("Pregunta no encontrada");
@@ -4912,6 +4930,9 @@ export const storage = {
     }
     for (const m of opts.memorize ?? []) {
       try { await this.upsertCustomerMemory({ customerId: q.customerId, ...m }); detalle.push(`memoria: "${m.hint}" = ${m.quantity} ${m.unit}`); } catch (e) { console.error("memoria:", e); }
+    }
+    for (const r of opts.rules ?? []) {
+      try { await this.addBotRule({ scope: r.scope, customerId: q.customerId, rule: r.rule, source: "respuesta" }); detalle.push(`regla ${r.scope}: "${r.rule}"`); } catch (e) { console.error("regla:", e); }
     }
     await db.update(waQuestions).set({ status: "answered", answerText: opts.answerText, answeredBy: opts.answeredBy, answeredAt: new Date(), applied, appliedNote: note }).where(eq(waQuestions.id, id));
     return { applied, note, detalle };

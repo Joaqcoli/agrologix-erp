@@ -78,6 +78,7 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/wa-pending",
     "/api/wa-questions",
     "/api/customer-aliases",
+    "/api/bot-rules",
     "/api/orders/interpret",
     "/api/orders/intake",
     "/api/orders/draft",
@@ -377,6 +378,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ ok: true });
   });
 
+  // ─── A-12: reglas del equipo para el bot ─────────────────────────────────────
+  app.get("/api/bot-rules", requireAuth, async (req, res) => {
+    const customerId = req.query.customerId ? Number(req.query.customerId) : null;
+    const all = await storage.getBotRules(customerId);
+    return res.json(customerId ? all : all.filter((r) => r.scope === "general"));
+  });
+  app.get("/api/bot-rules/all", requireAuth, async (_req, res) => {
+    const rows = await db.select().from((await import("@shared/schema")).botRules).orderBy(drizzleSql`id`);
+    return res.json(rows.filter((r: any) => r.active));
+  });
+  app.post("/api/bot-rules", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({ scope: z.enum(["general", "cliente"]), customerId: z.number().nullable().optional(), rule: z.string().min(3).max(500), source: z.string().optional() }).parse(req.body);
+      return res.status(201).json(await storage.addBotRule(body));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  app.delete("/api/bot-rules/:id", requireAuth, async (req, res) => {
+    await storage.deleteBotRule(Number(req.params.id));
+    return res.json({ ok: true });
+  });
+
   // ─── A-12: alias por cliente ("Álvarez" = BONAFIDE (GORRITI)) ───────────────
   app.post("/api/customer-aliases", requireAuth, async (req, res) => {
     try {
@@ -463,6 +485,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         adds: z.array(z.object({ productId: z.number(), unit: z.string(), quantity: z.number(), rawProductName: z.string().optional() })).default([]),
         note: z.string().max(1000).nullable().optional(),
         memorize: z.array(z.object({ productId: z.number(), hint: z.string(), quantity: z.number(), unit: z.string(), source: z.string().optional() })).default([]),
+        rules: z.array(z.object({ scope: z.enum(["general", "cliente"]), rule: z.string().min(3).max(500) })).default([]),
       }).parse(req.body);
       return res.json(await storage.answerWaQuestion(Number(req.params.id), body));
     } catch (e: any) { return res.status(400).json({ error: e.message }); }

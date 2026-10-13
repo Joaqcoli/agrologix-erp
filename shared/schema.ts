@@ -318,6 +318,20 @@ export const waInbox = pgTable("wa_inbox", {
 });
 export type WaInbox = typeof waInbox.$inferSelect;
 
+// ─── A-12: reglas que el equipo le enseña al bot (generales o por cliente) ────────────────────
+// Se cargan al responder una consulta del bot ("de ahora en más, 'piezas' es atado") o a mano desde
+// "Bot por cliente". Las lee /interpret (bloque REGLAS DEL EQUIPO).
+export const botRules = pgTable("bot_rules", {
+  id: serial("id").primaryKey(),
+  scope: text("scope").notNull().default("general"), // 'general' | 'cliente'
+  customerId: integer("customer_id").references(() => customers.id, { onDelete: "cascade" }),
+  rule: text("rule").notNull(),
+  source: text("source").notNull().default("manual"), // 'manual' | 'respuesta'
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type BotRule = typeof botRules.$inferSelect;
+
 // ─── Product Units (stock + cost per unit per product) ─────────────────────────
 export const productUnits = pgTable("product_units", {
   id: serial("id").primaryKey(),
