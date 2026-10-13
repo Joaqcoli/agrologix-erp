@@ -4810,7 +4810,10 @@ export const storage = {
       wamid: data.wamid ?? null, receivedAt: data.receivedAt ?? null, suggestions: data.suggestions ?? null, reason: data.reason ?? null,
     }).onConflictDoNothing({ target: waPendingNumbers.wamid }).returning();
     if (row) return row;
-    const [existing] = await db.select().from(waPendingNumbers).where(eq(waPendingNumbers.wamid, data.wamid!)).limit(1);
+    // Mismo mensaje reprocesado (asignación) que vuelve a quedar sin resolver: lo reabrimos como pendiente con el motivo nuevo
+    const [existing] = await db.update(waPendingNumbers)
+      .set({ status: "pending", reason: data.reason ?? null, suggestions: data.suggestions ?? null, assignedCustomerIds: null })
+      .where(eq(waPendingNumbers.wamid, data.wamid!)).returning();
     return existing;
   },
 
@@ -4835,6 +4838,24 @@ export const storage = {
 
   async setWaPendingStatus(id: number, status: "ignored" | "processed" | "pending"): Promise<void> {
     await db.update(waPendingNumbers).set({ status }).where(eq(waPendingNumbers.id, id));
+  },
+
+  /**
+   * Auto-asignación: si un número pendiente por "desconocido" ahora figura en customer_contacts (lo cargaron desde
+   * Bot por cliente o desde la ficha del cliente), pasa a "assigned" con todos los clientes que tienen ese teléfono,
+   * y el bot lo reprocesa en su próximo ciclo. Se esperan 2 minutos desde la última carga del teléfono por si se está
+   * cargando el mismo número para una segunda sede. Los "repetido" no se tocan: el número ya era conocido y el texto no alcanzó para elegir.
+   */
+  async autoAssignWaPending(): Promise<number> {
+    const r = await db.execute(drizzleSql`
+      UPDATE wa_pending_numbers p
+      SET status = 'assigned',
+          assigned_customer_ids = (SELECT jsonb_agg(DISTINCT cc.customer_id) FROM customer_contacts cc WHERE cc.phone = p.phone)
+      WHERE p.status = 'pending' AND (p.reason IS NULL OR p.reason = 'desconocido')
+        AND EXISTS (SELECT 1 FROM customer_contacts cc WHERE cc.phone = p.phone)
+        AND NOT EXISTS (SELECT 1 FROM customer_contacts cc WHERE cc.phone = p.phone AND cc.created_at > now() - interval '2 minutes')
+    `);
+    return Number((r as any).rowCount ?? 0);
   },
 
   // ─── A-12: preguntas abiertas del bot (al cliente o al equipo) ────────────────

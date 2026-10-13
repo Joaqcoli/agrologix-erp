@@ -16,6 +16,11 @@
   Vista **"Bot por cliente"** (`/bot-clientes`, `GET /api/bot-clientes`; reemplaza a "Sombra WhatsApp"): por cliente, pedidos y renglones leídos, renglones con error vs lo
   cargado, dudas, % acierto, interruptor "Bot activo" — el número para activar el bot por cliente (≥95 %).
   El agente vive en `../asistente-vegex` (Render, modo SOMBRA).
+  13-oct **auto-asignación de Números por asignar**: `GET /api/wa-pending` primero pasa a `assigned` los
+  pendientes por "desconocido" cuyo teléfono ya figura en `customer_contacts` (cargado desde Bot por cliente o la
+  ficha del cliente; 2 min de gracia por si se carga el mismo número en otra sede) y el bot los reprocesa en su
+  próximo ciclo (1 min). Si el reproceso vuelve a dejarlo sin resolver, el pendiente se reabre con el motivo nuevo
+  en vez de perderse. Los "repetido" (número conocido, texto ambiguo) siguen siendo manuales.
   12-oct **A-12** (`d208163`): tabla `wa_questions` + endpoints `/api/wa-questions*` para que el bot
   pregunte las dudas (al cliente o al equipo) y aplique la respuesta sobre el borrador; `/interpret`
   devuelve `dudaType`, `/intake` devuelve `itemIds`. Vista "Bot por cliente" lista solo los clientes elegidos.

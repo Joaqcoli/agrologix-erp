@@ -416,6 +416,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── A-01: Números por asignar ───────────────────────────────────────────────
   app.get("/api/wa-pending", requireAuth, async (req, res) => {
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    // Antes de listar, los pendientes cuyo teléfono ya se cargó en un cliente pasan solos a "assigned" (el bot los reprocesa)
+    try { await storage.autoAssignWaPending(); } catch (e: any) { console.error("[wa-pending] auto-asignar:", e.message); }
     return res.json(await storage.listWaPending(status));
   });
 
