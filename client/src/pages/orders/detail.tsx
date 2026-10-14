@@ -224,6 +224,7 @@ function ItemRow({
   onProductSelect,
   onBolsaToggle,
   onAliasSave,
+  onConfirmDuda,
 }: {
   calc: CalcItem;
   allProducts: Product[];
