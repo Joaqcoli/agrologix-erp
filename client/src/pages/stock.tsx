@@ -750,14 +750,16 @@ export default function StockPage() {
     onError: (e: any) => toast({ title: "Error al cargar stock", description: e.message, variant: "destructive" }),
   });
 
-  // Always hide zero-stock rows
+  // Sin búsqueda se ocultan los productos en cero. Con texto en el buscador aparecen también los que no tienen
+  // stock (marcados "Sin stock"), para poder abrirlos y ver las últimas compras y costos por proveedor.
   const filteredStock = useMemo(() => {
     const all = Array.isArray(stockData) ? stockData : [];
+    const q = search.trim().toLowerCase();
     return all.filter((pu) => {
-      const matchName = pu.product.name.toLowerCase().includes(search.toLowerCase());
+      const matchName = pu.product.name.toLowerCase().includes(q);
       const matchCat = categoryFilter === "all" || pu.product.category === categoryFilter;
       const hasStock = parseFloat(pu.stockQty as string) > 0;
-      return matchName && matchCat && hasStock;
+      return matchName && matchCat && (hasStock || q.length > 0);
     });
   }, [stockData, search, categoryFilter]);
 
@@ -1130,12 +1132,13 @@ export default function StockPage() {
                           const valorStock = stock * cost;
                           const isNegative = stock < 0;
                           const noCost = stock > 0 && cost === 0;
+                          const sinStock = stock === 0; // solo aparece cuando hay texto en el buscador
                           const wpu = parseFloat(pu.weightPerUnit as string ?? "0");
                           const isExpanded = expandedProductId === pu.product.id;
                           return (
                             <Fragment key={pu.id}>
                               <tr
-                                className={`border-b border-border transition-colors cursor-pointer ${isNegative ? "bg-destructive/5" : noCost ? "bg-yellow-50/30 dark:bg-yellow-900/10" : isExpanded ? "bg-muted/40" : "hover:bg-muted/30"}`}
+                                className={`border-b border-border transition-colors cursor-pointer ${isNegative ? "bg-destructive/5" : noCost ? "bg-yellow-50/30 dark:bg-yellow-900/10" : isExpanded ? "bg-muted/40" : sinStock ? "text-muted-foreground hover:bg-muted/30" : "hover:bg-muted/30"}`}
                                 onClick={() => setExpandedProductId(isExpanded ? null : pu.product.id)}
                                 data-testid={`row-stock-${pu.id}`}
                               >
@@ -1145,13 +1148,14 @@ export default function StockPage() {
                                     <span className="font-medium text-foreground">{pu.product.name}</span>
                                     {isNegative && <Badge variant="destructive" className="text-[9px] py-0 px-1">Negativo</Badge>}
                                     {noCost && <Badge variant="outline" className="text-[9px] py-0 px-1 text-yellow-600 border-yellow-500/40">Sin costo</Badge>}
+                                    {sinStock && <Badge variant="outline" className="text-[9px] py-0 px-1 text-muted-foreground">Sin stock</Badge>}
                                   </div>
                                 </td>
                                 <td className="py-2.5 px-4">
                                   <Badge variant="secondary" className="text-[10px]">{pu.unit}</Badge>
                                 </td>
-                                <td className={`py-2.5 px-4 text-right font-semibold whitespace-nowrap ${isNegative ? "text-destructive" : "text-foreground"}`}>
-                                  {fmtStock(stock)}
+                                <td className={`py-2.5 px-4 text-right font-semibold whitespace-nowrap ${isNegative ? "text-destructive" : sinStock ? "text-muted-foreground" : "text-foreground"}`}>
+                                  {sinStock ? "—" : fmtStock(stock)}
                                   {wpu > 0 && stock > 0 && (
                                     <span className="ml-1 text-xs font-normal text-muted-foreground">
                                       (~{(stock / wpu).toFixed(1)} cajones)
