@@ -134,6 +134,12 @@ const BCX_CSS = `
 .bcx-btn:hover{border-color:#cfcfc9;background:#f6f6f2;}
 .bcx-btn:disabled{opacity:.55;cursor:default;}
 .bcx-btn.primary{background:#6b8a2a;color:#fff;border:none;font-weight:600;}
+.bcx-btn.sel{background:#1e2420;color:#fff;border-color:#1e2420;}
+.bcx-btn.sel:hover{background:#2c3430;}
+.bcx-btn .n{font-size:11px;font-weight:600;padding:1px 7px;border-radius:10px;background:rgba(0,0,0,.08);}
+.bcx-btn.sel .n{background:rgba(255,255,255,.2);}
+.bcx-filtros{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0 10px;}
+.bcx-filtrohint{font-size:12px;color:#8b8f88;}
 .bcx-btn.primary:hover{background:#5f7d24;}
 .bcx-table{width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;border:1px solid #ecece8;border-radius:12px;overflow:hidden;}
 .bcx-table th{text-align:left;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9a9e96;padding:9px 12px;border-bottom:1px solid #ecece8;background:#fbfaf7;}
@@ -150,6 +156,7 @@ const pctClass = (p: number | null) => p == null ? "na" : p >= 95 ? "ok" : p >= 
 export default function BotClientesPage() {
   const { toast } = useToast();
   const [open, setOpen] = useState<number | null>(null);
+  const [filtro, setFiltro] = useState<"todos" | "sin_tel">("todos"); // "Sin teléfono": para ir cargando los números
   const [search, setSearch] = useState("");
   const [comboOpen, setComboOpen] = useState(false);
   const comboRef = useRef<HTMLDivElement>(null);
@@ -175,6 +182,8 @@ export default function BotClientesPage() {
   });
 
   const activeIds = useMemo(() => new Set((data?.clientes ?? []).filter((c) => c.botActivo).map((c) => c.customerId)), [data]);
+  const sinTel = useMemo(() => (data?.clientes ?? []).filter((c) => c.contactos.length === 0).length, [data]);
+  const visibles = useMemo(() => (data?.clientes ?? []).filter((c) => filtro === "todos" || c.contactos.length === 0), [data, filtro]);
   const options = useMemo(() => {
     const q = search.trim().toLowerCase();
     return customers.filter((c) => c.active && (!q || c.name.toLowerCase().includes(q))).sort((a, b) => a.name.localeCompare(b.name, "es")).slice(0, 12);
@@ -243,15 +252,28 @@ export default function BotClientesPage() {
                 </div>
               </div>
 
+              {data.clientes.length > 0 && (
+                <div className="bcx-filtros">
+                  <button type="button" className={`bcx-btn ${filtro === "todos" ? "sel" : ""}`} onClick={() => setFiltro("todos")} data-testid="filtro-todos">Todos <span className="n">{data.clientes.length}</span></button>
+                  <button type="button" className={`bcx-btn ${filtro === "sin_tel" ? "sel" : ""}`} onClick={() => setFiltro("sin_tel")} data-testid="filtro-sin-telefono"><Phone className="h-3.5 w-3.5" /> Sin teléfono <span className="n">{sinTel}</span></button>
+                  {filtro === "sin_tel" && <span className="bcx-filtrohint">Clientes con bot que todavía no tienen ningún teléfono de pedido cargado: sus mensajes caen en Números por asignar.</span>}
+                </div>
+              )}
               {data.clientes.length === 0 ? (
                 <div className="bcx-empty">
                   <div className="bcx-emptyic"><Bot className="h-5 w-5" /></div>
                   <div className="big">Ningún cliente con bot todavía</div>
                   <div>Buscá un cliente arriba para prenderle el bot.</div>
                 </div>
+              ) : visibles.length === 0 ? (
+                <div className="bcx-empty">
+                  <div className="bcx-emptyic"><Check className="h-5 w-5" /></div>
+                  <div className="big">Todos los clientes con bot tienen teléfono</div>
+                  <div>No queda ninguno por cargar.</div>
+                </div>
               ) : (
                 <div className="bcx-list">
-                  {data.clientes.map((c) => (
+                  {visibles.map((c) => (
                     <ClienteCard key={c.customerId} c={c} open={open === c.customerId} onOpen={() => setOpen(open === c.customerId ? null : c.customerId)}
                       onToggle={(v) => toggle.mutate({ id: c.customerId, botActivo: v })} busy={toggle.isPending} onChanged={invalidate} />
                   ))}
