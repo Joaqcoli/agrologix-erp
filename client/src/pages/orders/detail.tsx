@@ -242,8 +242,12 @@ function ItemRow({
   onProductSelect: (productId: number | null) => void;
   onBolsaToggle: (type: "bolsa" | "bolsa_propia") => void;
   onAliasSave: (alias: string | null) => void;
+  onConfirmDuda: () => void;
 }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  // A-01: línea cargada por el bot con duda (parse_status = 'duda'); se limpia al confirmarla o al editarla
+  const esDuda = (calc.item as any).parseStatus === "duda";
+  const textoCliente = ((calc.item as any).rawProductName ?? "").trim() || null;
   const [aliasOpen, setAliasOpen] = useState(false);
   const alias = (calc.item.aliasNombre ?? "").trim() || null;
   const [aliasInput, setAliasInput] = useState(alias ?? "");
@@ -266,6 +270,8 @@ function ItemRow({
     ? "bg-blue-50/30 dark:bg-blue-900/10 ring-1 ring-inset ring-blue-200/60 dark:ring-blue-800/50"
     : isDirty
     ? "bg-amber-50/60 dark:bg-amber-900/15"
+    : esDuda
+    ? "bg-yellow-100/70 dark:bg-yellow-900/25"
     : !calc.hasPrice
     ? "bg-yellow-50/30 dark:bg-yellow-900/10"
     : calc.isLowMargin
@@ -342,6 +348,14 @@ function ItemRow({
           {alias && !isEditing && (
             <span className="inline-flex items-center gap-0.5 text-[9px] py-0 px-1 rounded bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300 border border-violet-200 dark:border-violet-800">
               <Wand2 className="h-2.5 w-2.5" /> alias
+            </span>
+          )}
+          {esDuda && !isEditing && (
+            <span
+              className="inline-flex items-center gap-0.5 text-[9px] py-0 px-1 rounded bg-yellow-200 text-yellow-900 dark:bg-yellow-900/50 dark:text-yellow-200 border border-yellow-300 dark:border-yellow-700"
+              title={textoCliente ? `El cliente escribió: "${textoCliente}"` : "El bot no estuvo seguro de esta línea"}
+            >
+              <AlertTriangle className="h-2.5 w-2.5" /> duda{textoCliente ? `: "${textoCliente}"` : ""}
             </span>
           )}
           {/* Varita: alias de nombre para remito/factura (NO cambia producto/stock/costo) */}
@@ -537,7 +551,18 @@ function ItemRow({
             </button>
           </div>
         ) : (
-          <div className="flex items-center gap-0.5 justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className={`flex items-center gap-0.5 justify-center transition-opacity ${esDuda ? "" : "opacity-0 group-hover:opacity-100"}`}>
+            {esDuda && canEdit && (
+              <button
+                onClick={onConfirmDuda}
+                disabled={isSaving}
+                className="p-0.5 rounded bg-green-100 hover:bg-green-200 dark:bg-green-900/30 dark:hover:bg-green-900/50 text-green-700 dark:text-green-400 disabled:opacity-50"
+                title="Está bien así: marcar la duda como revisada"
+                data-testid={`button-confirm-duda-${calc.id}`}
+              >
+                <Check className="h-3.5 w-3.5" />
+              </button>
+            )}
             {canEdit && (
               <button
                 onClick={onStartEdit}
@@ -764,6 +789,17 @@ export default function OrderDetailPage({ id }: { id: number }) {
     onError: (e: any) => {
       toast({ title: "Error al eliminar", description: e.message, variant: "destructive" });
     },
+  });
+
+  // A-01: confirmar una línea en duda del bot ("está bien así")
+  const confirmDudaMutation = useMutation({
+    mutationFn: (itemId: number) => apiRequest("PATCH", `/api/orders/${id}/items/${itemId}`, { parseStatus: "ok" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      toast({ title: "Duda revisada" });
+    },
+    onError: (e: any) => toast({ title: "No se pudo confirmar la línea", description: e.message, variant: "destructive" }),
   });
 
   const deleteItemMutation = useMutation({
@@ -1661,6 +1697,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
                       onProductSelect={(productId) => handleProductSelect(c.id, productId)}
                       onBolsaToggle={(type) => handleBolsaToggle(c.id, c.bolsaType, type)}
                       onAliasSave={(aliasNombre) => aliasMutation.mutate({ itemId: c.id, aliasNombre })}
+                      onConfirmDuda={() => confirmDudaMutation.mutate(c.id)}
                     />
                   ))}
                   {addingItem && (

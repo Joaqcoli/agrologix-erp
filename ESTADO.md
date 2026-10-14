@@ -21,6 +21,10 @@
   ficha del cliente; 2 min de gracia por si se carga el mismo número en otra sede) y el bot los reprocesa en su
   próximo ciclo (1 min). Si el reproceso vuelve a dejarlo sin resolver, el pendiente se reabre con el motivo nuevo
   en vez de perderse. Los "repetido" (número conocido, texto ambiguo) siguen siendo manuales.
+  14-oct **dudas del bot en el detalle del pedido**: la línea con `parse_status = 'duda'` sale en amarillo con el
+  texto original del cliente y un check verde "está bien así" (`PATCH /api/orders/:id/items/:itemId` con
+  `parseStatus: "ok"`). Editar cantidad, unidad o producto de esa línea también la marca revisada. Así el
+  recordatorio de las 23:00 y el chip "N dudas" dejan de contar lo que Joaquín ya revisó.
   14-oct **candado de envíos al cliente** (regla de Joaquín: nunca más de un mensaje): tabla `wa_client_sends` y
   `POST /api/wa-sent` {clave, phone, orderId, kind} → el bot reserva la clave única ANTES de mandar; `ok:false` si ya
   existía o si al mismo teléfono se le escribió hace menos de 2 min. Atómico (UNIQUE), sobrevive reinicios.

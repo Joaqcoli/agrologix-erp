@@ -1070,6 +1070,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         bolsaType: z.string().nullable().optional(),
         isBonification: z.boolean().optional(),
         aliasNombre: z.string().nullable().optional(),
+        parseStatus: z.enum(["ok"]).optional(), // A-01: "confirmar" una línea que el bot dejó en duda
       });
       const patch = schema.parse(req.body);
 

@@ -1761,6 +1761,7 @@ export const storage = {
       bolsaType?: string | null;
       isBonification?: boolean;
       aliasNombre?: string | null;
+      parseStatus?: "ok";
     },
     customerId: number,
   ): Promise<{ item: OrderItem; orderTotal: string }> {
@@ -1893,6 +1894,8 @@ export const storage = {
         const a = patch.aliasNombre?.trim();
         updateData.aliasNombre = a ? a : null;
       }
+      // A-01: una línea que el bot dejó en duda queda revisada si la confirman o si le cambian cantidad/unidad/producto
+      if ((item as any).parseStatus === "duda" && (patch.parseStatus === "ok" || hasStructuralChange)) updateData.parseStatus = "ok";
 
       if (Object.keys(updateData).length > 0) {
         await tx.update(orderItems).set(updateData).where(eq(orderItems.id, itemId));
