@@ -23,8 +23,13 @@
   en vez de perderse. Los "repetido" (número conocido, texto ambiguo) siguen siendo manuales.
   14-oct **Stock**: al buscar por nombre aparecen también los productos en cero, con etiqueta "Sin stock" y la fila
   desplegable de últimas compras / costos por proveedor (solo presentación; sin texto en el buscador se siguen
-  ocultando). Quedan 4 productos activos que no aparecen ni buscando porque no tienen unidad base activa:
-  ACEITE OLIVA X2LT, ANANA, HINOJO, NARANJA JUGO (ver pendientes).
+  ocultando). Un producto en cero se muestra una sola vez aunque tenga varias unidades base activas (`65e7f91`).
+  Quedan 4 productos activos que no aparecen ni buscando porque no tienen unidad base activa:
+  ACEITE OLIVA X2LT, ANANA, HINOJO, NARANJA JUGO.
+  **Deuda de datos detectada (14/10):** 48 productos activos tienen 2 o 3 filas base activas (KG y UNIDAD, ATADO y
+  KG…) cuando la regla es una fila base por producto; algunos tienen stock en dos unidades a la vez (REMOLACHA
+  ATADO 14 + KG 7,3). Pide una limpieza por producto con Joaquín (qué unidad es la base, pasar el stock, desactivar
+  la otra). No se tocó.
   14-oct **Bot por cliente**: filtro "Todos / Sin teléfono" (con cantidades) para ir cargando los números de pedido.
   14-oct **dudas del bot en el detalle del pedido**: lista numerada "Dudas del bot" debajo de Notas; la fila va en
   amarillo con "duda N"; el check la confirma al instante (optimista). la línea con `parse_status = 'duda'` sale en amarillo y un check verde "está bien así" (`PATCH /api/orders/:id/items/:itemId` con
