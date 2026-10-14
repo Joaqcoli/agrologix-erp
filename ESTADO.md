@@ -21,6 +21,8 @@
   ficha del cliente; 2 min de gracia por si se carga el mismo número en otra sede) y el bot los reprocesa en su
   próximo ciclo (1 min). Si el reproceso vuelve a dejarlo sin resolver, el pendiente se reabre con el motivo nuevo
   en vez de perderse. Los "repetido" (número conocido, texto ambiguo) siguen siendo manuales.
+  14-oct **`GET /api/wa-questions/open?phone&all=1`**: todas las preguntas abiertas de un teléfono (el equipo tiene
+  varias a la vez y el agente elige cuál responde el mensaje).
   14-oct **Stock**: al buscar por nombre aparecen también los productos en cero, con etiqueta "Sin stock" y la fila
   desplegable de últimas compras / costos por proveedor (solo presentación; sin texto en el buscador se siguen
   ocultando). Un producto en cero se muestra una sola vez aunque tenga varias unidades base activas (`65e7f91`).

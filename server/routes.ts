@@ -474,6 +474,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/wa-questions/open", requireAuth, async (req, res) => {
     const phone = normalizeArPhone(String(req.query.phone ?? ""));
     if (!phone) return res.status(400).json({ error: "phone requerido" });
+    if (req.query.all === "1") return res.json(await storage.getOpenWaQuestionsByPhone(phone));
     return res.json((await storage.getOpenWaQuestionByPhone(phone)) ?? null);
   });
 

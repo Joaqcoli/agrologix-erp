@@ -4907,6 +4907,20 @@ export const storage = {
     return row;
   },
 
+  /** Todas las preguntas abiertas (o respondidas hace < 15 min) dirigidas a un teléfono, la más nueva primero.
+   *  El equipo suele tener varias abiertas a la vez y responde nombrando al cliente: el agente elige cuál. */
+  async getOpenWaQuestionsByPhone(phone: string): Promise<WaQuestion[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT id FROM wa_questions
+      WHERE to_phones @> ${JSON.stringify([phone])}::jsonb
+        AND ((status = 'open' AND expires_at > now()) OR (status = 'answered' AND answered_at > now() - interval '15 minutes'))
+      ORDER BY (status = 'open') DESC, created_at DESC LIMIT 20`);
+    const ids = (rows.rows as any[]).map((r) => Number(r.id));
+    if (!ids.length) return [];
+    const all = await db.select().from(waQuestions).where(inArray(waQuestions.id, ids));
+    return ids.map((id) => all.find((q) => q.id === id)!).filter(Boolean);
+  },
+
   async getWaQuestion(id: number): Promise<WaQuestion | undefined> {
     const [row] = await db.select().from(waQuestions).where(eq(waQuestions.id, id)).limit(1);
     return row;
