@@ -868,6 +868,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // A-01: bandeja de entrada del agente (auditoría de cada mensaje)
+  app.get("/api/wa-inbox/confirmada", requireAuth, async (req, res) => {
+    const phone = normalizeArPhone(String(req.query.phone ?? "")) ?? String(req.query.phone ?? "");
+    const orderId = Number(req.query.orderId);
+    if (!phone || !Number.isFinite(orderId)) return res.status(400).json({ error: "phone y orderId" });
+    return res.json(await storage.getLastClientConfirmation(phone, orderId));
+  });
+
   app.post("/api/wa-inbox", requireAuth, async (req, res) => {
     try {
       const body = z.object({

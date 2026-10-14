@@ -4636,6 +4636,17 @@ export const storage = {
     } else await db.insert(waInbox).values(values);
   },
 
+  /** Última confirmación ("pedido recibido" / "producto agregado") que el bot le mandó a este teléfono por este pedido. Candado anti-repetición. */
+  async getLastClientConfirmation(phone: string, orderId: number): Promise<{ at: string; kind: string } | null> {
+    const r = await db.execute(drizzleSql`
+      SELECT created_at AS at, acciones::text AS acc FROM wa_inbox
+      WHERE phone = ${phone} AND order_id = ${orderId} AND acciones::text LIKE '%respondido:%'
+      ORDER BY created_at DESC LIMIT 1`);
+    const row = (r.rows as any[])[0];
+    if (!row) return null;
+    return { at: new Date(row.at).toISOString(), kind: String(row.acc).includes("producto agregado") ? "agregado" : "pedido" };
+  },
+
   /** Renglones del borrador del día de un cliente (para que el bot pueda quitar/cambiar por mensaje). */
   async getDraftItemsForBot(orderId: number): Promise<{ orderId: number; status: string; items: { id: number; productId: number | null; name: string | null; unit: string; quantity: number; parseStatus: string | null }[] } | null> {
     const [o] = await db.select({ id: orders.id, status: orders.status }).from(orders).where(eq(orders.id, orderId)).limit(1);
