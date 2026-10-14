@@ -350,7 +350,7 @@ function ClienteCard({ c, open, onOpen, onToggle, busy, onChanged }: { c: Row; o
 
       {open && (
         <div className="bcx-detail">
-          <p className="bcx-dtitle">Teléfonos de pedido</p>
+          <p className="bcx-dtitle">Teléfonos de pedido <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, color: "#8b8f88" }}>· podés cargar varios: el bot reconoce cualquiera de ellos</span></p>
           <div className="bcx-tels">
             {c.contactos.map((t) => (
               <span key={t.id} className="bcx-tel">
@@ -361,7 +361,7 @@ function ClienteCard({ c, open, onOpen, onToggle, busy, onChanged }: { c: Row; o
               </span>
             ))}
             <span className="bcx-addtel">
-              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="11 2345 6789" style={{ width: 140 }} data-testid={`input-phone-${c.customerId}`} />
+              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder={c.contactos.length ? "Otro teléfono" : "11 2345 6789"} style={{ width: 140 }} data-testid={`input-phone-${c.customerId}`} />
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre / rol (Juan - cocina)" style={{ width: 210 }} />
               <button type="button" className="bcx-btn primary" disabled={!phone.trim() || add.isPending} onClick={() => add.mutate()} data-testid={`add-phone-${c.customerId}`}><Plus className="h-3.5 w-3.5" /> Agregar</button>
             </span>
