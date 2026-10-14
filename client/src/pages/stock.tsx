@@ -752,14 +752,27 @@ export default function StockPage() {
 
   // Sin búsqueda se ocultan los productos en cero. Con texto en el buscador aparecen también los que no tienen
   // stock (marcados "Sin stock"), para poder abrirlos y ver las últimas compras y costos por proveedor.
+  // Muchos productos tienen más de una unidad base activa (KG y UNIDAD, ATADO y KG…): para no repetirlos, un producto
+  // en cero se muestra una sola vez (unidad preferida KG > UNIDAD > ATADO > MAPLE) y nunca en cero si tiene stock en otra unidad.
   const filteredStock = useMemo(() => {
     const all = Array.isArray(stockData) ? stockData : [];
     const q = search.trim().toLowerCase();
+    const conStock = new Set(all.filter((pu) => parseFloat(pu.stockQty as string) > 0).map((pu) => pu.productId));
+    const PREF = ["KG", "UNIDAD", "ATADO", "MAPLE"];
+    const rank = (u: string) => { const i = PREF.indexOf(u); return i < 0 ? PREF.length : i; };
+    const elegidaEnCero = new Map<number, number>(); // productId → id de la fila que lo representa cuando está en cero
+    for (const pu of all) {
+      if (parseFloat(pu.stockQty as string) !== 0 || conStock.has(pu.productId)) continue;
+      const prev = elegidaEnCero.get(pu.productId);
+      const prevRow = prev == null ? null : all.find((x) => x.id === prev);
+      if (!prevRow || rank(pu.unit) < rank(prevRow.unit)) elegidaEnCero.set(pu.productId, pu.id);
+    }
     return all.filter((pu) => {
       const matchName = pu.product.name.toLowerCase().includes(q);
       const matchCat = categoryFilter === "all" || pu.product.category === categoryFilter;
-      const hasStock = parseFloat(pu.stockQty as string) > 0;
-      return matchName && matchCat && (hasStock || q.length > 0);
+      const stock = parseFloat(pu.stockQty as string);
+      if (stock !== 0) return matchName && matchCat; // con stock (o negativo): como siempre
+      return matchName && matchCat && q.length > 0 && elegidaEnCero.get(pu.productId) === pu.id;
     });
   }, [stockData, search, categoryFilter]);
 
