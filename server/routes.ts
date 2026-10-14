@@ -1018,6 +1018,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // del producto anterior (2026-10-07: "cebolla morada maquinada" con el precio de
       // "cebolla morada", "manzana roja elegida" con el de "manzana roja").
       const items = body.items.map(({ pricePerUnit: _ignored, ...it }) => it);
+      // Idempotencia por log de interpretación: si ese log ya se volcó a un pedido, no se cargan las líneas otra vez.
+      // (14/10: el bot procesó dos veces el mismo mensaje de Brick Towers y el borrador quedó con cada renglón duplicado.)
+      if (body.intakeLogId) {
+        const log = await storage.getIntakeLog(body.intakeLogId);
+        if (log?.orderId) {
+          console.warn(`[intake] log ${body.intakeLogId} ya volcado al pedido ${log.orderId}: no se cargan líneas de nuevo`);
+          return res.status(200).json({ orderId: log.orderId, itemIds: [], yaCargado: true });
+        }
+      }
       let order;
       let itemIds: number[] = [];
       if (body.mode === "merge" && body.existingOrderId) {

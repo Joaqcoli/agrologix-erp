@@ -21,6 +21,10 @@
   ficha del cliente; 2 min de gracia por si se carga el mismo número en otra sede) y el bot los reprocesa en su
   próximo ciclo (1 min). Si el reproceso vuelve a dejarlo sin resolver, el pendiente se reabre con el motivo nuevo
   en vez de perderse. Los "repetido" (número conocido, texto ambiguo) siguen siendo manuales.
+  14-oct **intake idempotente**: `POST /api/orders/intake` con un `intakeLogId` que ya tiene `order_id` responde
+  `{orderId, itemIds: [], yaCargado: true}` sin cargar líneas. Causa: el bot procesó dos veces el mismo mensaje de
+  Brick Towers Del Viso (ciclos de reproceso solapados, ya con mutex) y el borrador 67 del 14/10 quedó con cada
+  renglón duplicado; se borraron las 21 líneas repetidas a mano (ids 34206-34227).
   14-oct **`GET /api/wa-questions/open?phone&all=1`**: todas las preguntas abiertas de un teléfono (el equipo tiene
   varias a la vez y el agente elige cuál responde el mensaje).
   14-oct **Stock**: al buscar por nombre aparecen también los productos en cero, con etiqueta "Sin stock" y la fila

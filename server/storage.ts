@@ -4761,6 +4761,11 @@ export const storage = {
   },
 
   /** A-01: idempotencia ante reintentos del webhook (mismo wamid → misma propuesta). */
+  async getIntakeLog(id: number): Promise<OrderIntakeLog | undefined> {
+    const [row] = await db.select().from(orderIntakeLogs).where(eq(orderIntakeLogs.id, id)).limit(1);
+    return row;
+  },
+
   async getIntakeLogByExternalId(externalId: string): Promise<OrderIntakeLog | undefined> {
     const [row] = await db.select().from(orderIntakeLogs).where(eq(orderIntakeLogs.externalId, externalId)).limit(1);
     return row;
