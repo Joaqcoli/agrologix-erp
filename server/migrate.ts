@@ -1590,6 +1590,19 @@ export async function runNcMigrations() {
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     )
   `);
+  // A-01 (2026-10-14): candado de envíos al cliente — una fila por mensaje que el bot le manda a un cliente; la clave única
+  // se reserva ANTES de enviar, así un mismo aviso ("pedido recibido" de un pedido, respuesta a un wamid) sale una sola vez.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS wa_client_sends (
+      id SERIAL PRIMARY KEY,
+      clave TEXT NOT NULL UNIQUE,
+      phone TEXT NOT NULL,
+      order_id INTEGER,
+      kind TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+  `);
+  try { await db.execute(sql`CREATE INDEX IF NOT EXISTS wa_client_sends_phone_idx ON wa_client_sends(phone, created_at)`); } catch {}
   // A-12 (2026-10-12): reglas que el equipo le enseña al bot (generales o por cliente)
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS bot_rules (

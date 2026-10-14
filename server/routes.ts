@@ -88,6 +88,7 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/orders/bot-item",
     "/api/orders/bot-date",
     "/api/wa-inbox",
+    "/api/wa-sent",
   ],
   // admin: sin entrada → acceso total.
 };
@@ -868,6 +869,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // A-01: bandeja de entrada del agente (auditoría de cada mensaje)
+  // Candado de envíos al cliente: el bot reserva la clave antes de mandar; si no está ok, no manda.
+  app.post("/api/wa-sent", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({ clave: z.string().min(1), phone: z.string().min(1), orderId: z.number().nullable().optional(), kind: z.string().nullable().optional() }).parse(req.body);
+      const phone = normalizeArPhone(body.phone) ?? body.phone;
+      return res.json(await storage.reserveClientSend({ clave: body.clave, phone, orderId: body.orderId ?? null, kind: body.kind ?? null }));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   app.get("/api/wa-inbox/confirmada", requireAuth, async (req, res) => {
     const phone = normalizeArPhone(String(req.query.phone ?? "")) ?? String(req.query.phone ?? "");
     const orderId = Number(req.query.orderId);

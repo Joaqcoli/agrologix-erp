@@ -21,6 +21,9 @@
   ficha del cliente; 2 min de gracia por si se carga el mismo número en otra sede) y el bot los reprocesa en su
   próximo ciclo (1 min). Si el reproceso vuelve a dejarlo sin resolver, el pendiente se reabre con el motivo nuevo
   en vez de perderse. Los "repetido" (número conocido, texto ambiguo) siguen siendo manuales.
+  14-oct **candado de envíos al cliente** (regla de Joaquín: nunca más de un mensaje): tabla `wa_client_sends` y
+  `POST /api/wa-sent` {clave, phone, orderId, kind} → el bot reserva la clave única ANTES de mandar; `ok:false` si ya
+  existía o si al mismo teléfono se le escribió hace menos de 2 min. Atómico (UNIQUE), sobrevive reinicios.
   13-oct **candado anti-repetición**: `GET /api/wa-inbox/confirmada?phone&orderId` devuelve la última confirmación
   ("pedido recibido"/"producto agregado") que el bot le mandó a ese teléfono por ese pedido según `wa_inbox`; el agente
   lo consulta antes de escribirle al cliente. Motivo: a Colegio St. Matthews le llegaron 4 "pedido recibido" por un reproceso solapado.

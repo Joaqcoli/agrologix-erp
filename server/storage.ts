@@ -4636,6 +4636,22 @@ export const storage = {
     } else await db.insert(waInbox).values(values);
   },
 
+  /**
+   * Reserva un envío al cliente (candado anti-repetición, 14/10: "nunca más de un mensaje"). Atómico: la clave es única,
+   * así dos procesos no pueden reservar la misma. Además, nunca dos envíos al mismo teléfono con menos de 2 minutos.
+   */
+  async reserveClientSend(data: { clave: string; phone: string; orderId?: number | null; kind?: string | null }): Promise<{ ok: boolean; motivo: string | null }> {
+    const reciente = await db.execute(drizzleSql`
+      SELECT clave, created_at FROM wa_client_sends WHERE phone = ${data.phone} AND created_at > NOW() - INTERVAL '2 minutes' ORDER BY created_at DESC LIMIT 1`);
+    const r0 = (reciente.rows as any[])[0];
+    if (r0) return { ok: false, motivo: `ya se le escribió hace menos de 2 minutos (${r0.clave})` };
+    const ins = await db.execute(drizzleSql`
+      INSERT INTO wa_client_sends (clave, phone, order_id, kind) VALUES (${data.clave}, ${data.phone}, ${data.orderId ?? null}, ${data.kind ?? null})
+      ON CONFLICT (clave) DO NOTHING RETURNING id`);
+    if ((ins.rows as any[]).length) return { ok: true, motivo: null };
+    return { ok: false, motivo: `ya se envió antes (${data.clave})` };
+  },
+
   /** Última confirmación ("pedido recibido" / "producto agregado") que el bot le mandó a este teléfono por este pedido. Candado anti-repetición. */
   async getLastClientConfirmation(phone: string, orderId: number): Promise<{ at: string; kind: string } | null> {
     const r = await db.execute(drizzleSql`
