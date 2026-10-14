@@ -244,10 +244,12 @@ function ItemRow({
   onBolsaToggle: (type: "bolsa" | "bolsa_propia") => void;
   onAliasSave: (alias: string | null) => void;
   onConfirmDuda: () => void;
+  dudaN: number | null;
 }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  // A-01: línea cargada por el bot con duda (parse_status = 'duda'); se limpia al confirmarla o al editarla
-  const esDuda = (calc.item as any).parseStatus === "duda";
+  // A-01: línea cargada por el bot con duda (parse_status = 'duda'); se limpia al confirmarla o al editarla.
+  // El detalle ("qué escribió el cliente") va en la lista "Dudas del bot" arriba de la tabla; acá solo el número.
+  const esDuda = dudaN != null;
   const textoCliente = ((calc.item as any).rawProductName ?? "").trim() || null;
   const [aliasOpen, setAliasOpen] = useState(false);
   const alias = (calc.item.aliasNombre ?? "").trim() || null;
@@ -353,10 +355,10 @@ function ItemRow({
           )}
           {esDuda && !isEditing && (
             <span
-              className="inline-flex items-center gap-0.5 text-[9px] py-0 px-1 rounded bg-yellow-200 text-yellow-900 dark:bg-yellow-900/50 dark:text-yellow-200 border border-yellow-300 dark:border-yellow-700"
+              className="inline-flex items-center gap-0.5 text-[9px] font-semibold py-0 px-1 rounded bg-yellow-200 text-yellow-900 dark:bg-yellow-900/50 dark:text-yellow-200 border border-yellow-300 dark:border-yellow-700"
               title={textoCliente ? `El cliente escribió: "${textoCliente}"` : "El bot no estuvo seguro de esta línea"}
             >
-              <AlertTriangle className="h-2.5 w-2.5" /> duda{textoCliente ? `: "${textoCliente}"` : ""}
+              <AlertTriangle className="h-2.5 w-2.5" /> duda {dudaN}
             </span>
           )}
           {/* Varita: alias de nombre para remito/factura (NO cambia producto/stock/costo) */}
@@ -795,12 +797,22 @@ export default function OrderDetailPage({ id }: { id: number }) {
   // A-01: confirmar una línea en duda del bot ("está bien así")
   const confirmDudaMutation = useMutation({
     mutationFn: (itemId: number) => apiRequest("PATCH", `/api/orders/${id}/items/${itemId}`, { parseStatus: "ok" }),
+    onMutate: async (itemId) => {
+      // Optimista: la fila deja de estar en amarillo al instante
+      await queryClient.cancelQueries({ queryKey: ["/api/orders", id] });
+      const prev = queryClient.getQueryData<FullOrder>(["/api/orders", id]);
+      if (prev) queryClient.setQueryData<FullOrder>(["/api/orders", id], { ...prev, items: prev.items.map((it) => it.id === itemId ? { ...it, parseStatus: "ok" } as any : it) });
+      return { prev };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
-      toast({ title: "Duda revisada" });
+      toast({ title: "Duda revisada y guardada" });
     },
-    onError: (e: any) => toast({ title: "No se pudo confirmar la línea", description: e.message, variant: "destructive" }),
+    onError: (e: any, _itemId, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(["/api/orders", id], ctx.prev);
+      toast({ title: "No se pudo confirmar la línea", description: e.message, variant: "destructive" });
+    },
   });
 
   const deleteItemMutation = useMutation({
@@ -1395,6 +1407,8 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const unpricedCount = calcs.filter((c) => !c.hasPrice && !c.isBonification).length;
   const zeroCostItems = calcs.filter((c) => !c.isBonification && !c.bolsaType && c.item.productId != null && c.costPerUnit === 0);
   const hasAnyLowMargin = Array.isArray(calcs) && calcs.some((c) => c.isLowMargin);
+  // A-01: líneas que el bot dejó en duda, numeradas (la lista arriba y el "duda N" de cada fila usan el mismo orden)
+  const dudas = calcs.filter((c) => (c.item as any).parseStatus === "duda");
   const grandTotal = calcs.reduce((s, c) => s + c.subtotal, 0);
   const grandTotalConIva = calcs.reduce((s, c) => s + c.totalConIva, 0);
   const grandTotalCompra = calcs.reduce((s, c) => s + c.totalCompra, 0);
@@ -1645,6 +1659,27 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 <p className="text-sm text-foreground mt-1">{order.notes}</p>
               </div>
             )}
+            {/* A-01: dudas del bot (líneas en amarillo en la tabla). Se van al confirmar con el check o al editar la línea. */}
+            {dudas.length > 0 && (
+              <div className="col-span-2 sm:col-span-4 rounded-md border border-yellow-300 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-900/20 px-3 py-2">
+                <p className="text-xs font-semibold text-yellow-900 dark:text-yellow-200 uppercase tracking-wide flex items-center gap-1">
+                  <AlertTriangle className="h-3.5 w-3.5" /> {dudas.length === 1 ? "1 duda del bot" : `${dudas.length} dudas del bot`}
+                </p>
+                <ol className="mt-1 space-y-0.5 text-sm text-foreground">
+                  {dudas.map((c, i) => {
+                    const raw = ((c.item as any).rawProductName ?? "").trim();
+                    return (
+                      <li key={c.id} className="flex flex-wrap gap-x-2">
+                        <span className="font-semibold text-yellow-900 dark:text-yellow-200">{i + 1})</span>
+                        <span>{raw ? `"${raw}"` : "(sin texto del cliente)"}</span>
+                        <span className="text-muted-foreground">→ cargado como {fmtCantidad(c.qty)} {c.unit} {c.name}</span>
+                      </li>
+                    );
+                  })}
+                </ol>
+                <p className="text-[11px] text-muted-foreground mt-1">Si está bien, tocá el check verde de la línea. Si la corregís (cantidad, unidad o producto), queda revisada sola.</p>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -1699,6 +1734,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
                       onBolsaToggle={(type) => handleBolsaToggle(c.id, c.bolsaType, type)}
                       onAliasSave={(aliasNombre) => aliasMutation.mutate({ itemId: c.id, aliasNombre })}
                       onConfirmDuda={() => confirmDudaMutation.mutate(c.id)}
+                      dudaN={(() => { const i = dudas.findIndex((d) => d.id === c.id); return i >= 0 ? i + 1 : null; })()}
                     />
                   ))}
                   {addingItem && (
