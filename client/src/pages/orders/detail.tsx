@@ -1005,6 +1005,15 @@ export default function OrderDetailPage({ id }: { id: number }) {
   });
 
   const parentCustomerIdForQuery = (order?.customer as any)?.parentCustomerId ?? null;
+  // A-13: aviso de faltantes editable
+  const [avisoFaltantes, setAvisoFaltantes] = useState("");
+  useEffect(() => { setAvisoFaltantes(((order as any)?.avisoFaltantes ?? "") as string); }, [(order as any)?.avisoFaltantes]);
+  const avisoMutation = useMutation({
+    mutationFn: (texto: string) => apiRequest("PATCH", `/api/orders/${id}/aviso-faltantes`, { avisoFaltantes: texto }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/orders", id] }); toast({ title: "Aviso guardado" }); },
+    onError: (e: any) => toast({ title: "No se pudo guardar el aviso", description: e.message, variant: "destructive" }),
+  });
+
   const { data: parentCustomer } = useQuery<{ id: number; name: string; cuit?: string | null }>({
     queryKey: ["/api/customers", parentCustomerIdForQuery],
     queryFn: () => fetch(`/api/customers/${parentCustomerIdForQuery}`, { credentials: "include" }).then((r) => r.json()),
@@ -1656,8 +1665,33 @@ export default function OrderDetailPage({ id }: { id: number }) {
             )}
             {order.notes && (
               <div className="col-span-2 sm:col-span-4">
-                <p className="text-xs text-muted-foreground uppercase tracking-wide">Notas</p>
-                <p className="text-sm text-foreground mt-1">{order.notes}</p>
+                <p className="text-xs text-muted-foreground uppercase tracking-wide">{order.source === "whatsapp" ? "Notas · Bot" : "Notas"}</p>
+                <p className="text-sm text-foreground mt-1 whitespace-pre-line">{order.source === "whatsapp" ? `Bot: ${order.notes}` : order.notes}</p>
+              </div>
+            )}
+            {(order as any).galponNotes && (
+              <div className="col-span-2 sm:col-span-4">
+                <p className="text-xs text-muted-foreground uppercase tracking-wide">Notas · Galpón</p>
+                <p className="text-sm text-foreground mt-1 whitespace-pre-line">Encargado galpón: {(order as any).galponNotes}</p>
+              </div>
+            )}
+            {/* A-13: aviso de faltantes que va en el WhatsApp del remito. Editable hasta aprobar; vacío = sin aviso. */}
+            {(order as any).avisoFaltantes != null && (isDraft || (order as any).avisoFaltantes) && (
+              <div className="col-span-2 sm:col-span-4">
+                <p className="text-xs text-muted-foreground uppercase tracking-wide">Aviso al cliente (va con el remito)</p>
+                {isDraft ? (
+                  <textarea
+                    className="mt-1 w-full min-h-[44px] rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                    value={avisoFaltantes}
+                    onChange={(e) => setAvisoFaltantes(e.target.value)}
+                    onBlur={() => { if (avisoFaltantes.trim() !== ((order as any).avisoFaltantes ?? "").trim()) avisoMutation.mutate(avisoFaltantes.trim()); }}
+                    placeholder="Sin aviso de faltantes"
+                    data-testid="textarea-aviso-faltantes"
+                  />
+                ) : (
+                  <p className="text-sm text-foreground mt-1">{(order as any).avisoFaltantes}</p>
+                )}
+                {isDraft && <p className="text-[10px] text-muted-foreground mt-0.5">Lo calculó el galpón al confirmar (productos del pedido original que quedaron sin cargar). Se manda tal cual quede escrito; si lo borrás, el remito va sin aviso.</p>}
               </div>
             )}
             {/* A-01: dudas del bot (líneas en amarillo en la tabla). Se van al confirmar con el check o al editar la línea. */}

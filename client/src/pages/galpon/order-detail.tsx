@@ -66,7 +66,7 @@ function AliasWand({ alias, realName, canEdit, onSave }: {
   );
 }
 type GalponOrder = {
-  id: number; folio: string; remitoNum: number | null; orderDate: string; status: string; notes: string | null;
+  id: number; folio: string; remitoNum: number | null; orderDate: string; status: string; notes: string | null; galponNotes?: string | null; source?: string | null;
   galponConfirmed: boolean; customerName: string; address: string | null; city: string | null;
   phone: string | null; createdByName: string | null; items: Item[];
 };
@@ -112,6 +112,13 @@ export default function GalponOrderDetail({ id }: { id: number }) {
   const delMut = useMutation({
     mutationFn: (itemId: number) => apiRequest("DELETE", `/api/galpon/orders/${id}/items/${itemId}`),
     onSuccess: invalidate, onError: onErr,
+  });
+  // A-13: notas del encargado (se guardan al salir del campo)
+  const [galponNotes, setGalponNotes] = useState("");
+  useEffect(() => { if (order) setGalponNotes(order.galponNotes ?? ""); }, [order?.id, order?.galponNotes]);
+  const notesMut = useMutation({
+    mutationFn: (texto: string) => apiRequest("PATCH", `/api/galpon/orders/${id}/notes`, { galponNotes: texto.trim() || null }),
+    onSuccess: () => { invalidate(); toast({ title: "Nota guardada" }); }, onError: onErr,
   });
   const confirmMut = useMutation({
     mutationFn: () => apiRequest("POST", `/api/galpon/orders/${id}/confirm`, {}),
@@ -265,6 +272,21 @@ export default function GalponOrderDetail({ id }: { id: number }) {
             </Button>
           </div>
         )}
+
+        {/* A-13: notas del galpón (las ve administración con la etiqueta "Encargado galpón") */}
+        <Card>
+          <CardContent className="p-3 space-y-1">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Notas del galpón</p>
+            <textarea
+              className="w-full min-h-[64px] rounded-md border border-input bg-background px-3 py-2 text-sm"
+              placeholder="Ej. no había morrón amarillo, mandamos rojo. Se guarda al salir del campo."
+              value={galponNotes}
+              onChange={(e) => setGalponNotes(e.target.value)}
+              onBlur={() => { if ((order.galponNotes ?? "") !== galponNotes.trim()) notesMut.mutate(galponNotes); }}
+              data-testid="textarea-galpon-notes"
+            />
+          </CardContent>
+        </Card>
 
         {/* Acciones */}
         <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">

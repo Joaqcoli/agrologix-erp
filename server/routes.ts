@@ -1204,6 +1204,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // PATCH /api/orders/:id/remito-num — update remito number inline
+  // A-13: aviso de faltantes que va en el mensaje del remito (editable antes de aprobar; vacío = sin aviso)
+  app.patch("/api/orders/:id/aviso-faltantes", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({ avisoFaltantes: z.string().max(1000).nullable() }).parse(req.body);
+      await storage.setAvisoFaltantes(Number(req.params.id), body.avisoFaltantes ?? "");
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   app.patch("/api/orders/:id/remito-num", requireAuth, async (req, res) => {
     try {
       const id = Number(req.params.id);
@@ -2481,6 +2490,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const orderId = Number(req.params.id);
       const order = await galponAssertDraft(orderId, res);
       if (!order) return;
+      await storage.ensureOrderSnapshot(orderId); // A-13: el original queda guardado antes de la primera edición del galpón
       // SOLO cantidad/unidad/producto/alias — se ignora cualquier campo de precio/costo
       const patch: any = {};
       if (req.body.quantity !== undefined) patch.quantity = String(req.body.quantity);
@@ -2498,6 +2508,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const orderId = Number(req.params.id);
       const order = await galponAssertDraft(orderId, res);
       if (!order) return;
+      await storage.ensureOrderSnapshot(orderId);
       await storage.addOrderItem(orderId, {
         quantity: String(req.body.quantity),
         unit: String(req.body.unit),
@@ -2512,14 +2523,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const orderId = Number(req.params.id);
       const order = await galponAssertDraft(orderId, res);
       if (!order) return;
+      await storage.ensureOrderSnapshot(orderId);
       await storage.deleteOrderItem(orderId, Number(req.params.itemId));
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  // A-13: notas del encargado del galpón (campo propio, separado de las notas del bot)
+  app.patch("/api/galpon/orders/:id/notes", requireGalpon, async (req, res) => {
+    try {
+      const orderId = Number(req.params.id);
+      const body = z.object({ galponNotes: z.string().max(2000).nullable() }).parse(req.body);
+      await storage.setGalponNotes(orderId, body.galponNotes);
       return res.json({ ok: true });
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   app.post("/api/galpon/orders/:id/confirm", requireGalpon, async (req, res) => {
     try {
-      const result = await storage.confirmGalponOrder(Number(req.params.id), req.session.userId!);
+      const orderId = Number(req.params.id);
+      const result = await storage.confirmGalponOrder(orderId, req.session.userId!);
+      // A-13: aviso de faltantes para el cliente (productos del original que el galpón sacó o dejó en 0). Joaquín lo edita antes de aprobar.
+      try {
+        await storage.ensureOrderSnapshot(orderId, "al_confirmar"); // sin ediciones previas: original = actual (sin faltantes)
+        const faltantes = await storage.computeFaltantes(orderId);
+        await storage.setAvisoFaltantes(orderId, storage.textoAvisoFaltantes(faltantes));
+      } catch (e: any) { console.error("[galpon] aviso faltantes:", e.message); }
       return res.json(result);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });

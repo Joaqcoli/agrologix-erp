@@ -3340,6 +3340,7 @@ export const storage = {
   async getGalponOrder(id: number): Promise<any | undefined> {
     const ordRes: any = await db.execute(drizzleSql`
       SELECT o.id, o.folio, o.remito_num AS "remitoNum", o.order_date AS "orderDate", o.status, o.notes,
+             o.galpon_notes AS "galponNotes", o.source,
              o.galpon_confirmed AS "galponConfirmed",
              c.name AS "customerName", c.address, c.city, c.phone,
              u.name AS "createdByName"
@@ -3377,6 +3378,51 @@ export const storage = {
       RETURNING id, galpon_confirmed AS "galponConfirmed"
     `);
     return (res.rows ?? res)[0];
+  },
+
+  // ─── A-13: pedido original (antes del galpón), faltantes, notas del galpón ───
+  /** Guarda las líneas actuales como "original" si todavía no hay resguardo. Se llama antes de la primera edición del galpón. */
+  async ensureOrderSnapshot(orderId: number, reason = "antes_galpon"): Promise<boolean> {
+    const [existing] = await db.select({ id: orderSnapshots.id }).from(orderSnapshots).where(eq(orderSnapshots.orderId, orderId)).limit(1);
+    if (existing) return false;
+    const rows = await db.execute(drizzleSql`
+      SELECT oi.product_id AS "productId", COALESCE(p.name, oi.raw_product_name) AS name, oi.unit, oi.quantity::float AS quantity
+      FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.order_id = ${orderId} ORDER BY oi.id`);
+    const items = (rows.rows as any[]).map((r) => ({ productId: r.productId == null ? null : Number(r.productId), name: r.name ?? null, unit: r.unit, quantity: Number(r.quantity) }));
+    await db.insert(orderSnapshots).values({ orderId, items, reason }).onConflictDoNothing();
+    return true;
+  },
+  async getOrderSnapshot(orderId: number): Promise<{ items: { productId: number | null; name: string | null; unit: string; quantity: number }[]; createdAt: Date } | null> {
+    const [row] = await db.select().from(orderSnapshots).where(eq(orderSnapshots.orderId, orderId)).limit(1);
+    return row ? { items: row.items as any, createdAt: row.createdAt } : null;
+  },
+  /** Faltantes totales: productos del original que ya no están en el pedido o quedaron en 0 (parciales no cuentan). */
+  async computeFaltantes(orderId: number): Promise<string[]> {
+    const snap = await this.getOrderSnapshot(orderId);
+    if (!snap) return [];
+    const rows = await db.execute(drizzleSql`SELECT product_id AS "productId", quantity::float AS quantity FROM order_items WHERE order_id = ${orderId}`);
+    const actual = new Map<number, number>();
+    for (const r of rows.rows as any[]) if (r.productId != null) actual.set(Number(r.productId), (actual.get(Number(r.productId)) ?? 0) + Number(r.quantity));
+    const out: string[] = [];
+    const seen = new Set<number>();
+    for (const it of snap.items) {
+      if (it.productId == null || it.quantity <= 0 || seen.has(it.productId)) continue;
+      seen.add(it.productId);
+      if ((actual.get(it.productId) ?? 0) <= 0) out.push((it.name ?? "producto").toLowerCase());
+    }
+    return out;
+  },
+  /** "El morrón amarillo y la ciboulette están en faltante." */
+  textoAvisoFaltantes(nombres: string[]): string {
+    if (!nombres.length) return "";
+    const lista = nombres.length === 1 ? `El ${nombres[0]} está` : `${nombres.slice(0, -1).map((n, i) => (i === 0 ? "El " : "") + n).join(", ")} y ${nombres[nombres.length - 1]} están`;
+    return `${lista.charAt(0).toUpperCase()}${lista.slice(1)} en faltante.`;
+  },
+  async setAvisoFaltantes(orderId: number, texto: string | null): Promise<void> {
+    await db.update(orders).set({ avisoFaltantes: texto }).where(eq(orders.id, orderId));
+  },
+  async setGalponNotes(orderId: number, texto: string | null): Promise<void> {
+    await db.update(orders).set({ galponNotes: texto?.trim() ? texto.trim() : null }).where(eq(orders.id, orderId));
   },
 
   // ── Helper: peso por envase para CAJON/BOLSA/BANDEJA ─────────────────────────
