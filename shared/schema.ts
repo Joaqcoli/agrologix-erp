@@ -224,6 +224,9 @@ export const orderIntakeLogs = pgTable("order_intake_logs", {
   model: text("model"),
   inputTokens: integer("input_tokens"),
   outputTokens: integer("output_tokens"),
+  // A-15: tokens de caché por separado (antes iban sumados en input_tokens)
+  cacheReadTokens: integer("cache_read_tokens"),
+  cacheWriteTokens: integer("cache_write_tokens"),
   proposal: jsonb("proposal"),
   final: jsonb("final"),
   // A-01: id del mensaje de WhatsApp (wamid) → idempotencia ante reintentos del webhook
@@ -276,6 +279,9 @@ export const waOutbound = pgTable("wa_outbound", {
   status: text("status").notNull().default("pending"), // pending | sent | error
   ycloudId: text("ycloud_id"),
   error: text("error"),
+  // A-15: lo que cobró YCloud por el mensaje (viene en la respuesta del envío)
+  priceUsd: numeric("price_usd", { precision: 10, scale: 5 }),
+  pricingCategory: text("pricing_category"), // service | utility | marketing | authentication
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   sentAt: timestamp("sent_at"),
 });
@@ -298,6 +304,28 @@ export const invoiceQueue = pgTable("invoice_queue", {
   invoiceId: integer("invoice_id"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   resolvedAt: timestamp("resolved_at"),
+});
+/** A-15: uso de Claude fuera de la interpretación de pedidos (clasificador y respuestas del bot). */
+export const aiUsage = pgTable("ai_usage", {
+  id: serial("id").primaryKey(),
+  source: text("source").notNull(), // clasificar | sugerir_cliente | respuesta | elegir_pregunta | consulta
+  model: text("model"),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+  cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+  customerId: integer("customer_id"),
+  phone: text("phone"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+/** A-15: precios y tarifas editables (USD) con fecha de vigencia. */
+export const costRates = pgTable("cost_rates", {
+  key: text("key").primaryKey(),
+  label: text("label").notNull(),
+  value: numeric("value", { precision: 12, scale: 6 }).notNull(),
+  unit: text("unit").notNull(), // USD/MTok | USD/mensaje | USD/mes | USD | mensajes
+  validFrom: date("valid_from"),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 });
 /** Textos de los mensajes automáticos y su plantilla aprobada en Meta. */
 export const messageTemplates = pgTable("message_templates", {

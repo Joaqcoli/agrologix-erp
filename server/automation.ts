@@ -13,6 +13,7 @@ import { emitirFactura, clienteFacturado } from "./invoicing";
 import { remitoPdfBuffer, invoicePdfBuffer, argDate } from "./pdf-server";
 import * as ycloud from "./ycloud";
 import { buildBlackPotWorkbook } from "./blackpot-excel";
+import { saldoYCloud } from "./costos";
 
 const PRUEBA_ID = 167;
 const log = (m: string) => console.log(`[A-13] ${m}`);
@@ -130,7 +131,7 @@ async function enviarDocumento(p: {
     const row = await storage.createWaOutbound({ kind: p.kind, refId: p.refId, customerId: p.customerId, phone, templateName: t?.approvedName ?? null, fileName: p.fileName });
     try {
       if (!mediaId) mediaId = await ycloud.uploadMedia(p.buffer, p.fileName, p.mime ?? "application/pdf");
-      let r: { id: string; status: string };
+      let r: { id: string; status: string; totalPrice?: number; pricingCategory?: string };
       if (t?.approvedName) {
         const params = (PARAM_ORDER[p.templateKey] ?? []).map((k) => p.valores[k] ?? "");
         r = await ycloud.sendTemplate({ to: phone, name: t.approvedName, bodyParams: params, headerDocument: { mediaId, filename: p.fileName }, externalId: `${p.kind}-${p.refId}-${row.id}` });
@@ -138,7 +139,7 @@ async function enviarDocumento(p: {
         // Sin plantilla aprobada: documento con texto, entra solo si el cliente escribió en las últimas 24 h
         r = await ycloud.sendDocument({ to: phone, mediaId, filename: p.fileName, caption: texto, externalId: `${p.kind}-${p.refId}-${row.id}` });
       }
-      await storage.updateWaOutbound(row.id, { status: "sent", ycloudId: r.id, sentAt: new Date(), error: null });
+      await storage.updateWaOutbound(row.id, { status: "sent", ycloudId: r.id, sentAt: new Date(), error: null, priceUsd: r.totalPrice == null ? null : String(r.totalPrice), pricingCategory: r.pricingCategory ?? null });
       enviados++;
     } catch (e: any) {
       const msg = t?.approvedName ? e.message : `Sin plantilla aprobada y fuera de las 24 h: ${e.message}`;
@@ -305,11 +306,30 @@ export async function aprobarEnCola(queueId: number): Promise<Invoice> {
   return inv;
 }
 
+// ─── A-15: saldo de YCloud (aviso en pantalla y por WhatsApp a Joaquín si baja del umbral, una vez por día) ───
+export async function controlarSaldo(hoyISO: string): Promise<void> {
+  if (!ycloud.ycloudConfigured()) return;
+  const rates = await storage.costRatesMap();
+  const umbral = rates.alerta_saldo ?? 3;
+  const saldo = await saldoYCloud(true);
+  if (!saldo) return;
+  await storage.setSetting("ycloud_saldo", { amount: saldo.amount, currency: saldo.currency, at: new Date().toISOString() });
+  if (saldo.amount >= umbral) return;
+  const ultimo = (await storage.getSetting("alerta_saldo_ultima")) as string | undefined;
+  if (ultimo === hoyISO) return;
+  await storage.setSetting("alerta_saldo_ultima", hoyISO);
+  const tels = (process.env.AVISO_TELEFONOS ?? "+5491134381173").split(/[,\s]+/).filter(Boolean);
+  for (const to of tels) {
+    try { await ycloud.sendText(to, `Aviso del ERP: el saldo de YCloud (WhatsApp) quedó en USD ${saldo.amount.toFixed(2)}, por debajo de USD ${umbral}. Conviene recargarlo para que sigan saliendo remitos, facturas y respuestas del bot.`, `alerta-saldo-${hoyISO}-${to}`); }
+    catch (e: any) { log(`alerta de saldo a ${to}: ${e.message}`); }
+  }
+}
+
 // ─── Programador ───
 let corriendo = false;
 export function iniciarAutomatizacion(baseUrl: string): void {
   ensureMessageTemplates().catch((e) => log(`plantillas: ${e.message}`));
-  let ultimoPoll = 0;
+  let ultimoPoll = 0, ultimoSaldo = 0;
   setInterval(async () => {
     if (corriendo) return;
     corriendo = true;
@@ -324,6 +344,7 @@ export function iniciarAutomatizacion(baseUrl: string): void {
         }
       }
       if (Date.now() - ultimoPoll > 10 * 60_000) { ultimoPoll = Date.now(); await revisarPlantillas(); }
+      if (Date.now() - ultimoSaldo > 60 * 60_000) { ultimoSaldo = Date.now(); await controlarSaldo(ar.date); }
     } catch (e: any) { log(`tick: ${e.message}`); }
     finally { corriendo = false; }
   }, 60_000);

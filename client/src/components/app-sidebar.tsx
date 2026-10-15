@@ -57,6 +57,7 @@ const navItems = [
   { title: "Lista de Carga", url: "/load-list", icon: ClipboardList },
   { title: "Lista de Precios", url: "/price-list", icon: Tag },
   { title: "Mensajes automáticos", url: "/configuracion/mensajes", icon: MessageSquarePlus },
+  { title: "Costos de automatización", url: "/configuracion/costos", icon: Wallet },
 ];
 
 export function AppSidebar() {

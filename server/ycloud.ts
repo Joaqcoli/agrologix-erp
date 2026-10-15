@@ -63,7 +63,7 @@ export async function sendTemplate(p: {
   bodyParams?: string[];
   headerDocument?: { mediaId: string; filename: string };
   externalId?: string;
-}): Promise<{ id: string; status: string }> {
+}): Promise<{ id: string; status: string; totalPrice?: number; pricingCategory?: string; currency?: string }> {
   const components: any[] = [];
   if (p.headerDocument) {
     components.push({
@@ -90,7 +90,7 @@ export async function sendDocument(p: {
   filename: string;
   caption?: string;
   externalId?: string;
-}): Promise<{ id: string; status: string }> {
+}): Promise<{ id: string; status: string; totalPrice?: number; pricingCategory?: string; currency?: string }> {
   return post("/whatsapp/messages", {
     from: WA_NUMERO,
     to: p.to,
@@ -101,7 +101,7 @@ export async function sendDocument(p: {
 }
 
 /** Texto libre (solo dentro de la ventana de 24 h). */
-export async function sendText(to: string, body: string, externalId?: string): Promise<{ id: string; status: string }> {
+export async function sendText(to: string, body: string, externalId?: string): Promise<{ id: string; status: string; totalPrice?: number; pricingCategory?: string; currency?: string }> {
   return post("/whatsapp/messages", { from: WA_NUMERO, to, type: "text", text: { body }, externalId });
 }
 
@@ -142,4 +142,13 @@ export async function getTemplateStatus(name: string, language = "es_AR"): Promi
   const items: any[] = Array.isArray(list?.items) ? list.items : Array.isArray(list) ? list : [];
   const t = items.find((x) => x?.name === name && (x?.language === language || !x?.language));
   return t ? { status: t.status ?? "UNKNOWN", reason: t.reason ?? undefined } : null;
+}
+
+/** A-15: saldo del wallet de YCloud. */
+export async function getBalance(): Promise<{ amount: number; currency: string }> {
+  if (!ycloudConfigured()) throw new Error("YCloud no configurado");
+  const r = await fetch(`${BASE}/balance`, { headers: { "X-API-Key": process.env.YCLOUD_API_KEY! } });
+  const j: any = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(`YCloud /balance → ${r.status}: ${j?.error?.message ?? ""}`);
+  return { amount: Number(j?.amount ?? 0), currency: String(j?.currency ?? "USD") };
 }

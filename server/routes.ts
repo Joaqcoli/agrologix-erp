@@ -15,6 +15,7 @@ import { emitirFactura, diferenciaFacturada, emitirNotaCreditoDiferencia } from 
 import { enviarNotaCreditoAuto, enviarRemitoAuto, enviarFacturaAuto, facturarTrasAprobar, aprobarEnCola, ensureMessageTemplates, DEFAULT_TEMPLATES, textoMeta, publicarPlantilla, revisarPlantillas } from "./automation";
 import { ycloudConfigured } from "./ycloud";
 import { buildBlackPotWorkbook } from "./blackpot-excel";
+import { resumenCostos } from "./costos";
 import { syncMpReport } from "./mp-report-sync";
 import { interpretOrder, aiEnabled } from "./interpret-order";
 import { timingSafeEqual } from "crypto";
@@ -95,6 +96,8 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/wa-sent",
     "/api/settings",
     "/api/message-templates",
+    "/api/ai-usage",
+    "/api/wa-outbound",
   ],
   // admin: sin entrada → acceso total.
 };
@@ -420,6 +423,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.delete("/api/customer-aliases/:id", requireAuth, async (req, res) => {
     await storage.deleteCustomerAlias(Number(req.params.id));
     return res.json({ ok: true });
+  });
+
+  // ─── A-15: costos de automatización ───
+  app.post("/api/ai-usage", requireAuth, async (req, res) => {
+    try {
+      const b = z.object({ source: z.string(), model: z.string().nullable().optional(), inputTokens: z.number().int(), outputTokens: z.number().int(), cacheReadTokens: z.number().int().optional(), cacheWriteTokens: z.number().int().optional(), customerId: z.number().nullable().optional(), phone: z.string().nullable().optional() }).parse(req.body);
+      await storage.addAiUsage(b);
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  // El bot informa cada mensaje que manda (con lo que cobró YCloud) para la pantalla de costos
+  app.post("/api/wa-outbound", requireAuth, async (req, res) => {
+    try {
+      const b = z.object({ kind: z.string(), phone: z.string(), customerId: z.number().nullable().optional(), ycloudId: z.string().nullable().optional(), priceUsd: z.number().nullable().optional(), pricingCategory: z.string().nullable().optional(), templateName: z.string().nullable().optional() }).parse(req.body);
+      let customerId = b.customerId ?? null;
+      if (customerId == null) { const r = await storage.findCustomersByPhone(normalizeArPhone(b.phone) ?? b.phone); customerId = r.contacts[0]?.customerId ?? null; }
+      await storage.createWaOutbound({ kind: b.kind, refId: 0, customerId, phone: b.phone, status: "sent", ycloudId: b.ycloudId ?? null, priceUsd: b.priceUsd == null ? null : String(b.priceUsd), pricingCategory: b.pricingCategory ?? null, templateName: b.templateName ?? null, sentAt: new Date() });
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  app.get("/api/costos", requireAuth, async (req, res) => {
+    if (req.session.userRole !== "admin") return res.status(403).json({ error: "Solo administrador" });
+    try { return res.json(await resumenCostos(typeof req.query.mes === "string" ? req.query.mes : undefined)); }
+    catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+  app.get("/api/cost-rates", requireAuth, async (_req, res) => res.json(await storage.listCostRates()));
+  app.put("/api/cost-rates/:key", requireAuth, async (req, res) => {
+    if (req.session.userRole !== "admin") return res.status(403).json({ error: "Solo administrador" });
+    try {
+      const b = z.object({ value: z.number().min(0), validFrom: z.string().nullable().optional() }).parse(req.body);
+      await storage.setCostRate(req.params.key, b.value, b.validFrom ?? null);
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   // ─── A-13: interruptores generales (remitos automáticos, facturación automática, envío de facturas) ───
@@ -999,7 +1035,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           rawText: body.text?.trim() || null,
           hadImage: !!body.imageBase64,
           model: result.model,
-          inputTokens: result.usage.inputTokens + result.usage.cacheReadTokens + result.usage.cacheWriteTokens,
+          inputTokens: result.usage.inputTokens, // A-15: la caché va por separado (antes iba sumada acá)
+          cacheReadTokens: result.usage.cacheReadTokens, cacheWriteTokens: result.usage.cacheWriteTokens,
           outputTokens: result.usage.outputTokens,
           proposal: { lines: result.lines, ignoredLines: result.ignoredLines, notes: result.notes, multiLocalWarning: result.multiLocalWarning, usage: result.usage, meta: body.meta ?? undefined },
           externalId: body.externalId ?? null,

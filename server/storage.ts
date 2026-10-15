@@ -22,7 +22,7 @@ import {
   type BankCategory,
   type BankContact, type InsertBankContact,
   type MpMovementIdentifier,
-  appSettings, orderSnapshots, waOutbound, invoiceOrders, invoiceQueue, messageTemplates,
+  appSettings, orderSnapshots, waOutbound, invoiceOrders, invoiceQueue, messageTemplates, aiUsage, costRates,
 } from "@shared/schema";
 type MessageTemplateRow = typeof messageTemplates.$inferSelect;
 type WaOutboundRow = typeof waOutbound.$inferSelect;
@@ -4805,6 +4805,7 @@ export const storage = {
   async createIntakeLog(data: {
     userId: number | null; customerId: number; source: string; rawText: string | null; hadImage: boolean;
     model: string; inputTokens: number | null; outputTokens: number | null; proposal: unknown; externalId?: string | null;
+    cacheReadTokens?: number | null; cacheWriteTokens?: number | null;
   }): Promise<number> {
     const [row] = await db.insert(orderIntakeLogs).values(data).returning({ id: orderIntakeLogs.id });
     return row.id;
@@ -4863,12 +4864,50 @@ export const storage = {
     await db.update(messageTemplates).set({ ...data, updatedAt: new Date() }).where(eq(messageTemplates.key, key));
   },
 
+  // ─── A-15: costos ───
+  async addAiUsage(d: { source: string; model?: string | null; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; customerId?: number | null; phone?: string | null }): Promise<void> {
+    await db.insert(aiUsage).values({ source: d.source, model: d.model ?? null, inputTokens: d.inputTokens, outputTokens: d.outputTokens, cacheReadTokens: d.cacheReadTokens ?? 0, cacheWriteTokens: d.cacheWriteTokens ?? 0, customerId: d.customerId ?? null, phone: d.phone ?? null });
+  },
+  async listCostRates(): Promise<{ key: string; label: string; value: string; unit: string; validFrom: string | null; updatedAt: Date }[]> {
+    return db.select().from(costRates).orderBy(asc(costRates.key)) as any;
+  },
+  async setCostRate(key: string, value: number, validFrom: string | null): Promise<void> {
+    await db.update(costRates).set({ value: String(value), validFrom, updatedAt: new Date() }).where(eq(costRates.key, key));
+  },
+  async costRatesMap(): Promise<Record<string, number>> {
+    const rows = await this.listCostRates();
+    return Object.fromEntries(rows.map((r: any) => [r.key, parseFloat(String(r.value)) || 0]));
+  },
+  /** Datos crudos de un período (UTC) para la pantalla de costos. */
+  async costRawData(fromUTC: Date, toUTC: Date) {
+    const intake = (await db.execute(drizzleSql`
+      SELECT customer_id AS "customerId", source, count(*)::int AS n, count(order_id)::int AS "conPedido",
+             COALESCE(SUM(input_tokens),0)::bigint AS "in", COALESCE(SUM(output_tokens),0)::bigint AS "out",
+             COALESCE(SUM(cache_read_tokens),0)::bigint AS "cr", COALESCE(SUM(cache_write_tokens),0)::bigint AS "cw",
+             COALESCE(SUM(CASE WHEN cache_read_tokens IS NULL THEN 1 ELSE 0 END),0)::int AS "sinCache"
+      FROM order_intake_logs WHERE created_at >= ${fromUTC} AND created_at < ${toUTC} GROUP BY 1, 2`)).rows as any[];
+    const ai = (await db.execute(drizzleSql`
+      SELECT customer_id AS "customerId", phone, source, count(*)::int AS n,
+             COALESCE(SUM(input_tokens),0)::bigint AS "in", COALESCE(SUM(output_tokens),0)::bigint AS "out",
+             COALESCE(SUM(cache_read_tokens),0)::bigint AS "cr", COALESCE(SUM(cache_write_tokens),0)::bigint AS "cw"
+      FROM ai_usage WHERE created_at >= ${fromUTC} AND created_at < ${toUTC} GROUP BY 1, 2, 3`)).rows as any[];
+    const wa = (await db.execute(drizzleSql`
+      SELECT customer_id AS "customerId", phone, kind, COALESCE(pricing_category, CASE WHEN template_name IS NOT NULL THEN 'utility' ELSE 'service' END) AS categoria,
+             count(*)::int AS n, COALESCE(SUM(price_usd),0)::float AS "precio", COALESCE(SUM(CASE WHEN price_usd IS NULL THEN 1 ELSE 0 END),0)::int AS "sinPrecio"
+      FROM wa_outbound WHERE status = 'sent' AND created_at >= ${fromUTC} AND created_at < ${toUTC} GROUP BY 1, 2, 3, 4`)).rows as any[];
+    const pedidos = (await db.execute(drizzleSql`
+      SELECT count(*)::int AS n FROM orders WHERE created_at >= ${fromUTC} AND created_at < ${toUTC} AND source IN ('whatsapp','intake') AND status <> 'cancelled'`)).rows[0] as any;
+    const contactos = (await db.execute(drizzleSql`SELECT phone, customer_id AS "customerId" FROM customer_contacts`)).rows as any[];
+    const nombres = (await db.execute(drizzleSql`SELECT id, name FROM customers`)).rows as any[];
+    return { intake, ai, wa, pedidos: Number(pedidos?.n ?? 0), contactos, nombres };
+  },
+
   // ─── A-13: envíos salientes (wa_outbound) ───
-  async createWaOutbound(d: { kind: string; refId: number; customerId: number | null; phone: string; templateName?: string | null; fileName?: string | null; status?: string; error?: string | null }): Promise<{ id: number }> {
-    const [row] = await db.insert(waOutbound).values({ kind: d.kind, refId: d.refId, customerId: d.customerId, phone: d.phone, templateName: d.templateName ?? null, fileName: d.fileName ?? null, status: d.status ?? "pending", error: d.error ?? null }).returning({ id: waOutbound.id });
+  async createWaOutbound(d: { kind: string; refId: number; customerId: number | null; phone: string; templateName?: string | null; fileName?: string | null; status?: string; error?: string | null; ycloudId?: string | null; priceUsd?: string | null; pricingCategory?: string | null; sentAt?: Date | null }): Promise<{ id: number }> {
+    const [row] = await db.insert(waOutbound).values({ kind: d.kind, refId: d.refId, customerId: d.customerId, phone: d.phone, templateName: d.templateName ?? null, fileName: d.fileName ?? null, status: d.status ?? "pending", error: d.error ?? null, ycloudId: d.ycloudId ?? null, priceUsd: d.priceUsd ?? null, pricingCategory: d.pricingCategory ?? null, sentAt: d.sentAt ?? null }).returning({ id: waOutbound.id });
     return row;
   },
-  async updateWaOutbound(id: number, d: { status?: string; ycloudId?: string | null; sentAt?: Date | null; error?: string | null }): Promise<void> {
+  async updateWaOutbound(id: number, d: { status?: string; ycloudId?: string | null; sentAt?: Date | null; error?: string | null; priceUsd?: string | null; pricingCategory?: string | null }): Promise<void> {
     await db.update(waOutbound).set(d).where(eq(waOutbound.id, id));
   },
   async waOutboundYaEnviado(kind: string, refId: number, phone: string): Promise<boolean> {

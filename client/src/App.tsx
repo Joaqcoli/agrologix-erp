@@ -47,6 +47,7 @@ import PriceListPage from "@/pages/price-list";
 import InvoicesPage from "@/pages/invoices/index";
 import FacturasAEmitirPage from "@/pages/facturas-a-emitir";
 import MensajesAutomaticosPage from "@/pages/mensajes-automaticos";
+import CostosPage from "@/pages/costos";
 import CajaPage from "@/pages/caja/index";
 import BancosPage from "@/pages/bancos/index";
 import VendedorDashboard from "@/pages/vendedor/dashboard";
@@ -94,6 +95,7 @@ function Router() {
       <Route path="/bot-clientes" component={BotClientesPage} />
       <Route path="/facturas-a-emitir" component={FacturasAEmitirPage} />
       <Route path="/configuracion/mensajes" component={MensajesAutomaticosPage} />
+      <Route path="/configuracion/costos" component={CostosPage} />
       <Route path="/cuentas-corrientes" component={CuentasCorrientesPage} />
       <Route path="/cuentas-corrientes/:id">
         {(params) => {
