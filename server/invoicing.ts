@@ -118,7 +118,8 @@ export async function emitirFactura(input: EmitirFacturaInput): Promise<Invoice 
     orderId: first.id, customerId: billingCustomer.id, invoiceType, invoiceNumber: formattedNumber, pointOfSale: 4,
     cae: String(CAE), caeExpiry: String(CAEFchVto), total: String(r2(b.total).toFixed(2)), ivaAmount: String(r2(b.totalIVA).toFixed(2)),
     condicionIvaReceptorId: condicionIva, description: effectiveDescription, detailMode,
-  });
+    neto105: String(r2(b.neto105).toFixed(2)), iva105: String(r2(b.iva105).toFixed(2)), neto21: String(r2(b.neto21).toFixed(2)), iva21: String(r2(b.iva21).toFixed(2)),
+  } as any);
   await storage.linkInvoiceOrders(invoice.id, orders.map((o) => o.id));
   for (const o of orders) await storage.updateOrderInvoiceNumber(o.id, formattedNumber);
   return { ...invoice, orderIds: orders.map((o) => o.id) };
@@ -130,29 +131,43 @@ const r2 = (n: number) => parseFloat(n.toFixed(2));
  * Nota de crédito por DIFERENCIA: el pedido facturado se modificó y ahora vale menos. Se acredita solo la diferencia
  * por alícuota (nunca anular y refacturar). Devuelve null si no hay diferencia a favor del cliente.
  */
-export async function diferenciaFacturada(invoiceId: number): Promise<{ invoice: Invoice; buckets: IvaBuckets; diff: IvaBuckets; acreditado: number } | null> {
+export async function diferenciaFacturada(invoiceId: number): Promise<{ invoice: Invoice; buckets: IvaBuckets; diff: IvaBuckets; acreditado: number; exacta: boolean } | null> {
   const data = await storage.getInvoiceById(invoiceId);
   if (!data) return null;
   const { invoice } = data;
   const ivaIncluido = data.orders.some((o) => !!(o.customer as any)?.pricesIncludeIva);
   const actual = bucketsDe(data.orders.flatMap((o) => o.items), invoice.invoiceType, ivaIncluido);
-  // Lo ya acreditado por NC anteriores de esta factura
   const ncs = await storage.getCreditNotesByInvoiceId(invoiceId);
-  const acreditado = ncs.reduce((s, n) => s + (parseFloat(String(n.total)) || 0), 0);
-  // Facturado neto por alícuota: se reconstruye desde total/iva de la factura con la misma proporción que hoy
-  // (no se guardó el desglose por alícuota). Aproximación suficiente para la diferencia.
-  const facturadoTotal = parseFloat(String(invoice.total)) || 0;
-  const facturadoIva = parseFloat(String(invoice.ivaAmount)) || 0;
-  const facturadoNeto = facturadoTotal - facturadoIva;
-  const vigente = facturadoTotal - acreditado;
-  const diffTotal = r2(vigente - actual.total);
-  if (diffTotal < 1) return null; // nada a favor del cliente (o subió: haría falta nota de débito)
-  const share21 = actual.totalNeto > 0 ? actual.neto21 / actual.totalNeto : 0;
-  const diffNeto = facturadoNeto - acreditadoNeto(ncs) - actual.totalNeto;
-  const neto21 = Math.max(0, diffNeto * share21), neto105 = Math.max(0, diffNeto - neto21);
-  const iva21 = neto21 * 0.21, iva105 = neto105 * 0.105;
-  const diff: IvaBuckets = { neto105, iva105, neto21, iva21, totalNeto: neto105 + neto21, totalIVA: iva105 + iva21, total: neto105 + neto21 + iva105 + iva21 };
-  return { invoice, buckets: actual, diff, acreditado };
+  const acreditado = ncs.reduce((s: number, n: any) => s + (parseFloat(String(n.total)) || 0), 0);
+  const num = (v: any) => parseFloat(String(v ?? "")) || 0;
+  const inv: any = invoice;
+  const exacta = inv.neto105 != null; // desglose guardado al emitir (desde el 15/10)
+  let diff: IvaBuckets;
+  if (exacta) {
+    // Exacto: facturado por alícuota − acreditado por alícuota (NC con desglose) − vigente por alícuota
+    const acc = { neto105: 0, iva105: 0, neto21: 0, iva21: 0 };
+    for (const n of ncs as any[]) {
+      if (n.neto105 != null) { acc.neto105 += num(n.neto105); acc.iva105 += num(n.iva105); acc.neto21 += num(n.neto21); acc.iva21 += num(n.iva21); }
+      else { const nn = num(n.total) - num(n.ivaAmount); acc.neto105 += nn; acc.iva105 += num(n.ivaAmount); } // NC vieja sin desglose: se asume 10,5 %
+    }
+    const neto105 = Math.max(0, num(inv.neto105) - acc.neto105 - actual.neto105);
+    const neto21 = Math.max(0, num(inv.neto21) - acc.neto21 - actual.neto21);
+    const iva105 = Math.max(0, num(inv.iva105) - acc.iva105 - actual.iva105);
+    const iva21 = Math.max(0, num(inv.iva21) - acc.iva21 - actual.iva21);
+    diff = { neto105, iva105, neto21, iva21, totalNeto: neto105 + neto21, totalIVA: iva105 + iva21, total: neto105 + neto21 + iva105 + iva21 };
+  } else {
+    // Facturas anteriores al 15/10 (sin desglose guardado): diferencia repartida en proporción al pedido actual
+    const facturadoTotal = num(invoice.total), facturadoIva = num(invoice.ivaAmount);
+    const vigente = facturadoTotal - acreditado;
+    const diffTotal = r2(vigente - actual.total);
+    if (diffTotal < 1) return null;
+    const share21 = actual.totalNeto > 0 ? actual.neto21 / actual.totalNeto : 0;
+    const diffNeto = (facturadoTotal - facturadoIva) - acreditadoNeto(ncs) - actual.totalNeto;
+    const neto21 = Math.max(0, diffNeto * share21), neto105 = Math.max(0, diffNeto - neto21);
+    diff = { neto105, iva105: neto105 * 0.105, neto21, iva21: neto21 * 0.21, totalNeto: neto105 + neto21, totalIVA: neto105 * 0.105 + neto21 * 0.21, total: neto105 * 1.105 + neto21 * 1.21 };
+  }
+  if (r2(diff.total) < 1) return null; // nada a favor del cliente (o subió: haría falta nota de débito)
+  return { invoice, buckets: actual, diff, acreditado, exacta };
 }
 function acreditadoNeto(ncs: { total: any; ivaAmount: any }[]): number {
   return ncs.reduce((s, n) => s + ((parseFloat(String(n.total)) || 0) - (parseFloat(String(n.ivaAmount)) || 0)), 0);
@@ -189,5 +204,6 @@ export async function emitirNotaCreditoDiferencia(invoiceId: number, condicionIv
     invoiceId, customerId: invoice.customerId, creditNoteType: invoice.invoiceType, creditNoteNumber: formattedNumber, pointOfSale: 4,
     cae: String(CAE), caeExpiry: String(CAEFchVto), total: String(r2(diff.total).toFixed(2)), ivaAmount: String(r2(diff.totalIVA).toFixed(2)),
     condicionIvaReceptorId: condicion, description: `Diferencia por modificación del pedido del ${dd} (factura ${invoice.invoiceNumber})`,
-  });
+    neto105: String(r2(diff.neto105).toFixed(2)), iva105: String(r2(diff.iva105).toFixed(2)), neto21: String(r2(diff.neto21).toFixed(2)), iva21: String(r2(diff.iva21).toFixed(2)),
+  } as any);
 }

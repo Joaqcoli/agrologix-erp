@@ -4875,6 +4875,14 @@ export const storage = {
     const [row] = await db.select({ id: waOutbound.id }).from(waOutbound).where(and(eq(waOutbound.kind, kind), eq(waOutbound.refId, refId), eq(waOutbound.phone, phone), eq(waOutbound.status, "sent"))).limit(1);
     return !!row;
   },
+  /** Último envío por (ref, teléfono) para una lista de refs: para la columna de estado en la lista de Facturas. */
+  async listWaOutboundForRefs(kind: string, refIds: number[]): Promise<Record<number, { phone: string; status: string; error: string | null; sentAt: Date | null }[]>> {
+    if (!refIds.length) return {};
+    const rows = await db.select().from(waOutbound).where(and(eq(waOutbound.kind, kind), inArray(waOutbound.refId, refIds))).orderBy(asc(waOutbound.id));
+    const out: Record<number, Map<string, { phone: string; status: string; error: string | null; sentAt: Date | null }>> = {};
+    for (const r of rows) { (out[r.refId] ??= new Map()).set(r.phone, { phone: r.phone, status: r.status, error: r.error, sentAt: r.sentAt }); }
+    return Object.fromEntries(Object.entries(out).map(([k, m]) => [k, Array.from(m.values())]));
+  },
   async listWaOutbound(kind: string, refId: number): Promise<WaOutboundRow[]> {
     return db.select().from(waOutbound).where(and(eq(waOutbound.kind, kind), eq(waOutbound.refId, refId))).orderBy(desc(waOutbound.id));
   },
@@ -6362,6 +6370,10 @@ export const storage = {
         (inv as any).detailMode = detailMode;
       } catch { /* column not yet created by migration */ }
     }
+    // A-13: desglose por alícuota (para notas de crédito exactas)
+    if (rest.neto105 != null) {
+      try { await db.execute(drizzleSql`UPDATE invoices SET neto_105 = ${rest.neto105}, iva_105 = ${rest.iva105 ?? 0}, neto_21 = ${rest.neto21 ?? 0}, iva_21 = ${rest.iva21 ?? 0} WHERE id = ${inv.id}`); Object.assign(inv, { neto105: rest.neto105, iva105: rest.iva105, neto21: rest.neto21, iva21: rest.iva21 }); } catch {}
+    }
     return inv;
   },
 
@@ -6420,7 +6432,7 @@ export const storage = {
       const rows = await db.execute(drizzleSql`
         SELECT id, invoice_id AS "invoiceId", customer_id AS "customerId", credit_note_type AS "creditNoteType", credit_note_number AS "creditNoteNumber",
                point_of_sale AS "pointOfSale", cae, cae_expiry AS "caeExpiry", total, iva_amount AS "ivaAmount", condicion_iva_receptor_id AS "condicionIvaReceptorId",
-               description, created_at AS "createdAt" FROM credit_notes WHERE invoice_id = ${invoiceId} ORDER BY id`);
+               description, created_at AS "createdAt", neto_105 AS "neto105", iva_105 AS "iva105", neto_21 AS "neto21", iva_21 AS "iva21" FROM credit_notes WHERE invoice_id = ${invoiceId} ORDER BY id`);
       return rows.rows as CreditNote[];
     } catch { return []; }
   },
@@ -6441,6 +6453,10 @@ export const storage = {
       const cRows = await db.execute(drizzleSql`SELECT condicion_iva_receptor_id AS "condicionIvaReceptorId" FROM invoices WHERE id = ${id}`);
       inv.condicionIvaReceptorId = (cRows.rows[0] as any)?.condicionIvaReceptorId ?? null;
     } catch { inv.condicionIvaReceptorId = null; }
+    try {
+      const bRows = await db.execute(drizzleSql`SELECT neto_105 AS "neto105", iva_105 AS "iva105", neto_21 AS "neto21", iva_21 AS "iva21" FROM invoices WHERE id = ${id}`);
+      Object.assign(inv as any, bRows.rows[0] ?? {});
+    } catch { /* columnas nuevas */ }
     // Modo de presentación persistido al emitir (columna puede no existir aún)
     try {
       const dRows = await db.execute(drizzleSql`SELECT detail_mode AS "detailMode" FROM invoices WHERE id = ${id}`);
@@ -6473,11 +6489,12 @@ export const storage = {
     const rows = await db.execute(drizzleSql`
       INSERT INTO credit_notes
         (invoice_id, customer_id, credit_note_type, credit_note_number, point_of_sale,
-         cae, cae_expiry, total, iva_amount, condicion_iva_receptor_id, description)
+         cae, cae_expiry, total, iva_amount, condicion_iva_receptor_id, description, neto_105, iva_105, neto_21, iva_21)
       VALUES
         (${data.invoiceId}, ${data.customerId}, ${data.creditNoteType}, ${data.creditNoteNumber},
          ${data.pointOfSale ?? 4}, ${data.cae}, ${data.caeExpiry}, ${data.total}, ${data.ivaAmount},
-         ${data.condicionIvaReceptorId ?? null}, ${data.description ?? null})
+         ${data.condicionIvaReceptorId ?? null}, ${data.description ?? null},
+         ${(data as any).neto105 ?? null}, ${(data as any).iva105 ?? null}, ${(data as any).neto21 ?? null}, ${(data as any).iva21 ?? null})
       RETURNING id, invoice_id AS "invoiceId", customer_id AS "customerId",
                 credit_note_type AS "creditNoteType", credit_note_number AS "creditNoteNumber",
                 point_of_sale AS "pointOfSale", cae, cae_expiry AS "caeExpiry",

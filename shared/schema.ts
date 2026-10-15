@@ -629,6 +629,11 @@ export const invoices = pgTable("invoices", {
   // Modo de presentación elegido al emitir: 'agrupado' | 'completo'.
   // El PDF SIEMPRE se genera con este modo — la factura es una sola.
   detailMode: text("detail_mode"),
+  // A-13 (15/10): desglose por alícuota guardado al emitir, para notas de crédito exactas
+  neto105: numeric("neto_105", { precision: 12, scale: 2 }),
+  iva105: numeric("iva_105", { precision: 12, scale: 2 }),
+  neto21: numeric("neto_21", { precision: 12, scale: 2 }),
+  iva21: numeric("iva_21", { precision: 12, scale: 2 }),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 export type Invoice = typeof invoices.$inferSelect;
@@ -648,6 +653,10 @@ export const creditNotes = pgTable("credit_notes", {
   ivaAmount: numeric("iva_amount", { precision: 12, scale: 2 }).notNull(),
   condicionIvaReceptorId: integer("condicion_iva_receptor_id"),
   description: text("description"),
+  neto105: numeric("neto_105", { precision: 12, scale: 2 }),
+  iva105: numeric("iva_105", { precision: 12, scale: 2 }),
+  neto21: numeric("neto_21", { precision: 12, scale: 2 }),
+  iva21: numeric("iva_21", { precision: 12, scale: 2 }),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 export type CreditNote = typeof creditNotes.$inferSelect;

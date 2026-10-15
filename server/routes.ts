@@ -2599,7 +2599,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const orderId    = req.query.orderId    ? Number(req.query.orderId)    : undefined;
       const from = req.query.from as string | undefined;
       const to   = req.query.to   as string | undefined;
-      return res.json(await storage.getInvoices({ customerId, orderId, from, to }));
+      const list = await storage.getInvoices({ customerId, orderId, from, to });
+      // A-13: estado del envío por WhatsApp de cada factura (último estado por teléfono)
+      const envios = await storage.listWaOutboundForRefs("factura", list.map((i: any) => i.id));
+      return res.json(list.map((i: any) => ({ ...i, envios: envios[i.id] ?? [] })));
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 

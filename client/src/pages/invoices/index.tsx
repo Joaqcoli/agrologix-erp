@@ -31,7 +31,9 @@ const fmtWaPhone = (phone: string): string | null => {
   return "54" + d;
 };
 
+type Envio = { phone: string; status: string; error: string | null; sentAt: string | null };
 type InvoiceRow = {
+  envios?: Envio[];
   id: number;
   orderId: number;
   customerId: number;
@@ -58,6 +60,22 @@ const fmtDate = (d: string | Date) =>
   new Date(d).toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "numeric" });
 const fmtMoney = (v: string | number) =>
   `$${parseFloat(String(v)).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+// A-13: estado del envío por WhatsApp (igual que el del remito en el pedido): enviada ✓ hora / error / no enviada
+function EnvioEstado({ envios }: { envios: Envio[] }) {
+  if (!envios.length) return <span className="text-muted-foreground">No enviada</span>;
+  const hora = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", hour: "2-digit", minute: "2-digit" }) : "";
+  return (
+    <div className="space-y-0.5">
+      {envios.map((e) => (
+        <div key={e.phone} className={e.status === "sent" ? "text-green-700 dark:text-green-400" : e.status === "error" ? "text-destructive" : "text-muted-foreground"} title={e.error ?? e.phone}>
+          {e.status === "sent" ? `Enviada ✓ ${hora(e.sentAt)}` : e.status === "error" ? `Error: ${(e.error ?? "").slice(0, 60)}` : "Enviando…"}
+          {e.phone !== "-" && <span className="text-muted-foreground"> · {e.phone.replace(/^\+549/, "")}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function InvoicesPage() {
   const { toast } = useToast();
@@ -281,6 +299,7 @@ export default function InvoicesPage() {
                   <th className="px-4 py-3 text-right">Total</th>
                   <th className="px-4 py-3">CAE</th>
                   <th className="px-4 py-3">Remito</th>
+                  <th className="px-4 py-3">Envío WhatsApp</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
@@ -299,6 +318,7 @@ export default function InvoicesPage() {
                     <td className="px-4 py-3 text-right font-medium">{fmtMoney(inv.total)}</td>
                     <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{inv.cae}</td>
                     <td className="px-4 py-3 text-muted-foreground text-xs">{inv.orderRemitoNum ?? "—"}</td>
+                    <td className="px-4 py-3 text-xs"><EnvioEstado envios={inv.envios ?? []} /></td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
                         <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => handleDownloadPDF(inv)}
