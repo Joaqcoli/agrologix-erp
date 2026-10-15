@@ -118,7 +118,8 @@ export async function createTemplate(p: {
   if (p.headerDocumentExampleUrl) {
     components.push({ type: "HEADER", format: "DOCUMENT", example: { header_url: [p.headerDocumentExampleUrl] } });
   }
-  components.push({ type: "BODY", text: p.bodyText, example: { body_text: [p.bodyExample] } });
+  // Sin variables, Meta rechaza un example vacío: se omite
+  components.push(p.bodyExample.length ? { type: "BODY", text: p.bodyText, example: { body_text: [p.bodyExample] } } : { type: "BODY", text: p.bodyText });
   const json = await post("/whatsapp/templates", {
     wabaId: WABA_ID,
     name: p.name,

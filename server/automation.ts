@@ -24,7 +24,8 @@ export function ahoraAR(d = new Date()) {
   const dow: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   return { date: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")) % 24, minute: Number(get("minute")), dow: dow[get("weekday")] ?? 0 };
 }
-export const saludoHora = (d = new Date()) => (ahoraAR(d).hour < 13 ? "Buen día" : "Buenas tardes");
+/** Meta no permite que una plantilla empiece con una variable: el saludo va después de "Hola, " y en minúscula. */
+export const saludoHora = (d = new Date()) => (ahoraAR(d).hour < 13 ? "buen día" : "buenas tardes");
 function addDays(iso: string, n: number): string { const [y, m, d] = iso.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10); }
 function dowOf(iso: string): number { const [y, m, d] = iso.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d)).getUTCDay(); }
 /** Último día hábil (lunes a viernes) del mes de `iso`. Feriados no se tratan distinto (decisión 15/10). */
@@ -55,22 +56,22 @@ export async function destinatarios(customer: Customer, kind: "remito" | "factur
 
 // ─── Plantillas (message_templates) ───
 export const DEFAULT_TEMPLATES: { key: string; label: string; text: string; hasDocument: boolean }[] = [
-  { key: "remito", label: "Remito", text: "{saludo}, envío el remito de hoy. Gracias!", hasDocument: true },
-  { key: "remito_faltantes", label: "Remito con faltantes", text: "{saludo}, envío el remito de hoy. {faltantes} Gracias!", hasDocument: true },
+  { key: "remito", label: "Remito", text: "Hola, {saludo}! Envío el remito de hoy. Gracias!", hasDocument: true },
+  { key: "remito_faltantes", label: "Remito con faltantes", text: "Hola, {saludo}! Envío el remito de hoy. {faltantes} Gracias!", hasDocument: true },
   { key: "factura_diaria", label: "Factura diaria", text: "Buenas tardes, envío la factura correspondiente a la entrega de hoy. Gracias!", hasDocument: true },
   { key: "factura_semanal", label: "Factura semanal", text: "Buenas tardes, envío la factura correspondiente a la semana. Gracias!", hasDocument: true },
   { key: "factura_mensual", label: "Factura mensual", text: "Buenas tardes, envío la factura correspondiente al mes. Gracias!", hasDocument: true },
   { key: "factura_blackpot", label: "Factura (envío semanal Black Pot, una por archivo)", text: "Buenas tardes, envío la factura correspondiente a la entrega del {fecha}. Gracias!", hasDocument: true },
   { key: "excel_blackpot", label: "Excel semanal Black Pot", text: "Buenas tardes, envío el detalle de cuenta corriente de la semana. Gracias!", hasDocument: true },
   { key: "nota_credito", label: "Nota de crédito", text: "Buenas tardes, envío nota de crédito correspondiente al pedido del {fecha}. Gracias!", hasDocument: true },
-  { key: "pedido_recibido", label: "Pedido recibido (bot, texto libre)", text: "{saludo}, pedido recibido. Gracias!", hasDocument: false },
+  { key: "pedido_recibido", label: "Pedido recibido (bot, texto libre)", text: "Hola, {saludo}! Pedido recibido. Gracias!", hasDocument: false },
   { key: "aviso_dudas", label: "Aviso de dudas al equipo (bot)", text: "Hay {cantidad} líneas en duda en los pedidos para el {fecha}. Revisalas en el sistema antes de las 00:00.", hasDocument: false },
 ];
 const PARAM_ORDER: Record<string, string[]> = {
   remito: ["saludo"], remito_faltantes: ["saludo", "faltantes"], factura_diaria: [], factura_semanal: [], factura_mensual: [],
   factura_blackpot: ["fecha"], excel_blackpot: [], nota_credito: ["fecha"], pedido_recibido: ["saludo"], aviso_dudas: ["cantidad", "fecha"],
 };
-const EJEMPLOS: Record<string, string> = { saludo: "Buenas tardes", faltantes: "El morrón amarillo está en faltante.", fecha: "14/10/2026", cantidad: "3" };
+const EJEMPLOS: Record<string, string> = { saludo: "buenas tardes", faltantes: "El morrón amarillo está en faltante.", fecha: "14/10/2026", cantidad: "3" };
 
 export async function ensureMessageTemplates(): Promise<void> {
   for (const t of DEFAULT_TEMPLATES) await storage.ensureMessageTemplate(t);
