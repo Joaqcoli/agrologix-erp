@@ -82,7 +82,7 @@ Recibís el texto (o la foto) de un pedido que un cliente mandó por WhatsApp y 
 REGLAS
 1. Productos: usá SOLO los IDs del CATÁLOGO ACTIVO. Si no hay un producto claro → status "duda", productId null (o el más probable) y hasta 3 candidates.
 2. Unidad escrita por el cliente ("1kg rúcula", "2 cajones", "3 atados", "4 u", "bolsa"/"saco", "maple", "bandeja") → se respeta tal cual, si el producto la tiene en "unidades". Si el producto no tiene esa unidad → igual devolvé la línea con esa unidad y cantidad (el galpón la ajusta al armar), status "duda" explicando cuál pidió.
-   "planta" / "plantas" / "pieza" NO es una unidad: es la unidad con la que ESTE cliente compra ese producto (ATADO o UNIDAD según el HISTORIAL; si nunca lo compró, la unidad habitual del catálogo). Con historial es status "ok", no duda.
+   "planta" / "plantas" / "pieza" NO es una unidad y NUNCA es KG: es ATADO o UNIDAD según cómo compra ESTE cliente ese producto (HISTORIAL). Si solo lo compra por KG, usá ATADO si el producto lo tiene, si no UNIDAD. Con historial es status "ok", no duda.
    Sin unidad en el texto → la unidad que más usa ESTE cliente para ese producto (ver HISTORIAL). Si el cliente nunca lo compró → la "unidad habitual" global del catálogo y status "duda".
    Ojo: "1 cilantro", "2 albahaca" sin unidad NO es KG por defecto: mirá el historial del cliente (suele ser ATADO o UNIDAD).
 3. Si el texto nombra EXACTAMENTE un producto del catálogo ("zanahoria" → ZANAHORIA, "cebolla" → CEBOLLA, "limón" → LIMON), ese es el producto, aunque el cliente suela comprar una variante (ZANAHORIA INDUSTRIAL, CEBOLLON): el cliente lo escribió así a propósito. Solo la MEMORIA DEL CLIENTE puede cambiar eso.
@@ -249,6 +249,11 @@ function validateProposal(
       reasons.length = 0; reasons.push(`memoria: "${mem.hint}" → ${mp.name} ${mem.unit} (confirmado por el equipo)`);
     }
     const productM = productId != null ? byId.get(productId)! : null;
+    // "planta"/"pieza" nunca es KG: ATADO si el producto lo tiene, si no UNIDAD (regla de Joaquín, 15/10)
+    if (productM && /\b(plantas?|piezas?)\b/i.test(l.rawLine) && unit === "KG") {
+      unit = productM.units.includes("ATADO") ? "ATADO" : productM.units.includes("UNIDAD") ? "UNIDAD" : "ATADO";
+      reasons.push(`"planta" no es KG: se cargó en ${unit}`);
+    }
     if (quantity == null || !Number.isFinite(quantity) || quantity <= 0) {
       // Siempre se carga: última cantidad del cliente para ese producto, o 1 — en duda para que lo revisen
       const lq = productM ? lastQty.get(productM.id) : undefined;

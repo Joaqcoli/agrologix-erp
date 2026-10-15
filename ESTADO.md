@@ -21,6 +21,11 @@
   ficha del cliente; 2 min de gracia por si se carga el mismo número en otra sede) y el bot los reprocesa en su
   próximo ciclo (1 min). Si el reproceso vuelve a dejarlo sin resolver, el pendiente se reabre con el motivo nuevo
   en vez de perderse. Los "repetido" (número conocido, texto ambiguo) siguen siendo manuales.
+  15-oct **intérprete (reglas de Joaquín)**: siempre carga aunque haya duda (sin cantidad → última del cliente o 1; producto
+  no identificado → renglón con producto vacío, en duda); "planta"/"pieza" = ATADO o UNIDAD según el cliente, nunca KG;
+  los encabezados ignorados no generan notas; **memoria por cliente aprende de cada confirmación (check) y corrección**
+  de una línea en duda (`customer_product_memory`, source confirmacion/correccion) y manda sobre el modelo
+  (`claveRenglon`: mismo texto sin números ni unidades → mismo producto/unidad, status ok).
   15-oct **A-13 · remito automático, facturación según cliente, mensajes automáticos** (ficha en
   `../asistente-vegex/AUTOMATIZACIONES.md`). E1 `f8eaa12` ficha de cliente (checks Remito/Factura por teléfono y
   administración, modo diaria/semanal/mensual/diaria con envío semanal, facturar a, tipo y condición IVA, detalle,
