@@ -44,6 +44,16 @@ export const customers = pgTable("customers", {
   active: boolean("active").notNull().default(true),
   // A-01: "Bot activo": el agente de WhatsApp crea el borrador y responde para este cliente aunque el modo general sea SOMBRA
   botActivo: boolean("bot_activo").notNull().default(false),
+  // A-13 (15/10): a quién se envía qué (teléfono de administración) y cómo se factura
+  adminPhoneRemito: boolean("admin_phone_remito").notNull().default(false),
+  adminPhoneFactura: boolean("admin_phone_factura").notNull().default(false),
+  billingMode: text("billing_mode").notNull().default("ninguna"), // ninguna | diaria | semanal | mensual | diaria_envio_semanal
+  billTo: text("bill_to").notNull().default("cliente"), // cliente | padre
+  invoiceDetail: text("invoice_detail").notNull().default("agrupado"), // completo | agrupado
+  pricesIncludeIva: boolean("prices_include_iva").notNull().default(false), // los precios del remito ya incluyen IVA → neto = precio/(1+alícuota)
+  invoiceType: text("invoice_type"), // A | B (null = se decide por CUIT del facturado)
+  condicionIva: integer("condicion_iva"), // 1 RI, 4 Exento, 5 CF, 6 Monotributo (null = según tipo)
+  autoInvoiceApproved: boolean("auto_invoice_approved").notNull().default(false), // la primera factura automática la aprueba Joaquín
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 
@@ -174,6 +184,9 @@ export const orders = pgTable("orders", {
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   // A-01: origen del pedido. null = carga manual clásica · 'intake' = /intake con IA · 'whatsapp' = bot
   source: text("source"),
+  // A-13: notas del encargado del galpón y aviso de faltantes para el cliente (editable antes de aprobar; vacío = sin aviso)
+  galponNotes: text("galpon_notes"),
+  avisoFaltantes: text("aviso_faltantes"),
 });
 
 export const orderItems = pgTable("order_items", {
@@ -230,9 +243,75 @@ export const customerContacts = pgTable("customer_contacts", {
   name: text("name"), // "Juan - cocina"
   origin: text("origin").notNull().default("manual"), // 'manual' | 'whatsapp' (asignado desde Números por asignar) | 'historial'
   confirmed: boolean("confirmed").notNull().default(true),
+  // A-13: a este teléfono se le manda el remito / la factura (sin check no se envía nada)
+  sendRemito: boolean("send_remito").notNull().default(false),
+  sendFactura: boolean("send_factura").notNull().default(false),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 export type CustomerContact = typeof customerContacts.$inferSelect;
+
+// ─── A-13: configuración general, resguardo del pedido original, envíos salientes, facturación automática ───
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value"),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+});
+/** Líneas del pedido antes de la primera edición del galpón (para detectar faltantes). */
+export const orderSnapshots = pgTable("order_snapshots", {
+  id: serial("id").primaryKey(),
+  orderId: integer("order_id").notNull().unique(),
+  items: jsonb("items").notNull(), // [{productId, name, unit, quantity}]
+  reason: text("reason").notNull().default("antes_galpon"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+/** Cada envío por WhatsApp que hace el ERP (remito, factura, nota de crédito, excel). */
+export const waOutbound = pgTable("wa_outbound", {
+  id: serial("id").primaryKey(),
+  kind: text("kind").notNull(), // remito | factura | nota_credito | excel_blackpot
+  refId: integer("ref_id").notNull(), // order id / invoice id / credit note id
+  customerId: integer("customer_id"),
+  phone: text("phone").notNull(),
+  templateName: text("template_name"),
+  fileName: text("file_name"),
+  status: text("status").notNull().default("pending"), // pending | sent | error
+  ycloudId: text("ycloud_id"),
+  error: text("error"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  sentAt: timestamp("sent_at"),
+});
+/** Varios pedidos por factura (invoices.order_id queda como el primero, por compatibilidad). */
+export const invoiceOrders = pgTable("invoice_orders", {
+  id: serial("id").primaryKey(),
+  invoiceId: integer("invoice_id").notNull(),
+  orderId: integer("order_id").notNull(),
+});
+/** "Facturas a emitir": primera factura automática de cada cliente (la aprueba Joaquín) y errores de ARCA a reintentar. */
+export const invoiceQueue = pgTable("invoice_queue", {
+  id: serial("id").primaryKey(),
+  billingCustomerId: integer("billing_customer_id").notNull(),
+  orderIds: jsonb("order_ids").notNull(), // number[]
+  mode: text("mode").notNull(), // diaria | semanal | mensual | diaria_envio_semanal
+  total: numeric("total", { precision: 12, scale: 2 }),
+  reason: text("reason").notNull(), // primera_vez | error
+  error: text("error"),
+  status: text("status").notNull().default("pending"), // pending | done | dismissed
+  invoiceId: integer("invoice_id"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  resolvedAt: timestamp("resolved_at"),
+});
+/** Textos de los mensajes automáticos y su plantilla aprobada en Meta. */
+export const messageTemplates = pgTable("message_templates", {
+  key: text("key").primaryKey(), // remito | remito_faltantes | factura_diaria | factura_semanal | factura_mensual | factura_blackpot | excel_blackpot | nota_credito | pedido_recibido | aviso_dudas
+  label: text("label").notNull(),
+  text: text("text").notNull(), // texto con {saludo}, {faltantes}, {fecha}…
+  hasDocument: boolean("has_document").notNull().default(true),
+  approvedName: text("approved_name"), // plantilla aprobada en uso (null = sin plantilla: solo texto libre en 24 h)
+  pendingName: text("pending_name"),
+  pendingStatus: text("pending_status"), // PENDING | REJECTED | …
+  pendingReason: text("pending_reason"),
+  version: integer("version").notNull().default(0),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+});
 
 // ─── A-01: "Números por asignar" (mensajes de WhatsApp de un teléfono desconocido) ─────────
 export const waPendingNumbers = pgTable("wa_pending_numbers", {

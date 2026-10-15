@@ -237,6 +237,9 @@ export default function BotClientesPage() {
           {isLoading && <p className="text-sm text-muted-foreground">Calculando...</p>}
           {error && <p className="text-sm text-destructive">{(error as Error).message}</p>}
 
+          {/* A-13: interruptores generales. OFF = no pasa nada para ningún cliente (salvo PRUEBA). */}
+          <InterruptoresGenerales />
+
           {data && (
             <>
               <div className="bcx-resumen">
@@ -288,6 +291,37 @@ export default function BotClientesPage() {
         </div>
       </div>
     </Layout>
+  );
+}
+
+type Settings = { remitos_automaticos: boolean; facturacion_automatica: boolean; envio_facturas: boolean };
+function InterruptoresGenerales() {
+  const { toast } = useToast();
+  const { data } = useQuery<Settings>({ queryKey: ["/api/settings"] });
+  const save = useMutation({
+    mutationFn: (patch: Partial<Settings>) => apiRequest("PUT", "/api/settings", patch).then((r) => r.json()),
+    onSuccess: (s: Settings) => { queryClient.setQueryData(["/api/settings"], s); },
+    onError: (e: any) => { toast({ title: "No se pudo cambiar", description: e.message, variant: "destructive" }); queryClient.invalidateQueries({ queryKey: ["/api/settings"] }); },
+  });
+  const items: { key: keyof Settings; label: string; hint: string }[] = [
+    { key: "remitos_automaticos", label: "Remitos automáticos", hint: "Al aprobar un pedido, el remito PDF se manda por WhatsApp a los teléfonos con check Remito." },
+    { key: "facturacion_automatica", label: "Facturación automática", hint: "Corte 14:00 según el modo de cada cliente (diaria, semanal, mensual). La primera factura de cada cliente la aprobás vos en \"Facturas a emitir\"." },
+    { key: "envio_facturas", label: "Envío de facturas", hint: "Las facturas emitidas se mandan por WhatsApp a los teléfonos con check Factura." },
+  ];
+  return (
+    <div className="bcx-card" style={{ marginTop: 14, padding: "12px 20px" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "10px 28px", alignItems: "center" }}>
+        <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: ".05em", textTransform: "uppercase", color: "#9a9e96" }}>Automatizaciones</span>
+        {items.map((it) => (
+          <label key={it.key} title={it.hint} style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 500, cursor: "pointer" }}>
+            <Switch checked={!!data?.[it.key]} disabled={!data || save.isPending} onCheckedChange={(v) => save.mutate({ [it.key]: v })} data-testid={`switch-${it.key}`} />
+            <span>{it.label}</span>
+            <span className={`bcx-chip ${data?.[it.key] ? "on" : "off"}`}>{data?.[it.key] ? "ON" : "OFF"}</span>
+          </label>
+        ))}
+        <span style={{ fontSize: 12, color: "#8b8f88" }}>En OFF no se manda ni factura nada (salvo el cliente PRUEBA). Al prender, solo lo que se apruebe desde ese momento.</span>
+      </div>
+    </div>
   );
 }
 

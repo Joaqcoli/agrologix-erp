@@ -22,6 +22,7 @@ import {
   type BankCategory,
   type BankContact, type InsertBankContact,
   type MpMovementIdentifier,
+  appSettings, orderSnapshots, waOutbound, invoiceOrders, invoiceQueue, messageTemplates,
 } from "@shared/schema";
 import { eq, desc, asc, and, or, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
@@ -4784,7 +4785,21 @@ export const storage = {
     return row;
   },
 
-  async updateCustomerContact(id: number, data: { phone?: string; name?: string | null }): Promise<CustomerContact | undefined> {
+  // ─── A-13: configuración general (interruptores) ───
+  async getSetting<T = unknown>(key: string): Promise<T | undefined> {
+    const [row] = await db.select().from(appSettings).where(eq(appSettings.key, key)).limit(1);
+    return row ? (row.value as T) : undefined;
+  },
+  async getSettings(): Promise<Record<string, unknown>> {
+    const rows = await db.select().from(appSettings);
+    return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  },
+  async setSetting(key: string, value: unknown): Promise<void> {
+    await db.insert(appSettings).values({ key, value: value as any, updatedAt: new Date() })
+      .onConflictDoUpdate({ target: appSettings.key, set: { value: value as any, updatedAt: new Date() } });
+  },
+
+  async updateCustomerContact(id: number, data: { phone?: string; name?: string | null; sendRemito?: boolean; sendFactura?: boolean }): Promise<CustomerContact | undefined> {
     const [row] = await db.update(customerContacts).set(data).where(eq(customerContacts.id, id)).returning();
     return row;
   },

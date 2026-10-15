@@ -89,6 +89,7 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/orders/bot-date",
     "/api/wa-inbox",
     "/api/wa-sent",
+    "/api/settings",
   ],
   // admin: sin entrada → acceso total.
 };
@@ -361,8 +362,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.patch("/api/customer-contacts/:id", requireAuth, async (req, res) => {
     try {
-      const body = z.object({ phone: z.string().optional(), name: z.string().nullable().optional() }).parse(req.body);
-      const data: { phone?: string; name?: string | null } = {};
+      const body = z.object({ phone: z.string().optional(), name: z.string().nullable().optional(), sendRemito: z.boolean().optional(), sendFactura: z.boolean().optional() }).parse(req.body);
+      const data: { phone?: string; name?: string | null; sendRemito?: boolean; sendFactura?: boolean } = {};
+      if (body.sendRemito !== undefined) data.sendRemito = body.sendRemito;
+      if (body.sendFactura !== undefined) data.sendFactura = body.sendFactura;
       if (body.phone !== undefined) {
         const phone = normalizeArPhone(body.phone);
         if (!phone) return res.status(400).json({ error: "Teléfono inválido" });
@@ -412,6 +415,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.delete("/api/customer-aliases/:id", requireAuth, async (req, res) => {
     await storage.deleteCustomerAlias(Number(req.params.id));
     return res.json({ ok: true });
+  });
+
+  // ─── A-13: interruptores generales (remitos automáticos, facturación automática, envío de facturas) ───
+  const SETTING_KEYS = ["remitos_automaticos", "facturacion_automatica", "envio_facturas"] as const;
+  app.get("/api/settings", requireAuth, async (_req, res) => {
+    const all = await storage.getSettings();
+    return res.json(Object.fromEntries(SETTING_KEYS.map((k) => [k, all[k] === true])));
+  });
+  app.put("/api/settings", requireAuth, async (req, res) => {
+    if (req.session.userRole !== "admin") return res.status(403).json({ error: "Solo administrador" });
+    try {
+      const body = z.object({ remitos_automaticos: z.boolean().optional(), facturacion_automatica: z.boolean().optional(), envio_facturas: z.boolean().optional() }).parse(req.body);
+      for (const k of SETTING_KEYS) if (body[k] !== undefined) await storage.setSetting(k, body[k]);
+      const all = await storage.getSettings();
+      return res.json(Object.fromEntries(SETTING_KEYS.map((k) => [k, all[k] === true])));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   // ─── A-01: Números por asignar ───────────────────────────────────────────────

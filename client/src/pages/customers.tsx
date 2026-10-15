@@ -46,13 +46,19 @@ function CustomerContactsSection({ customerId }: { customerId: number }) {
     mutationFn: (id: number) => apiRequest("DELETE", `/api/customer-contacts/${id}`),
     onSuccess: () => invalidate(),
   });
+  // A-13: a qué teléfono se manda el remito / la factura
+  const flags = useMutation({
+    mutationFn: ({ id, ...data }: { id: number; sendRemito?: boolean; sendFactura?: boolean }) => apiRequest("PATCH", `/api/customer-contacts/${id}`, data),
+    onSuccess: () => invalidate(),
+    onError: (e: any) => toast({ title: "No se pudo guardar", description: e.message, variant: "destructive" }),
+  });
   return (
     <div className="sm:col-span-2 space-y-2 rounded-md border p-3">
       <div className="flex items-center gap-2">
         <MessageCircle className="h-4 w-4 text-green-700" />
         <Label className="font-semibold">Teléfonos de pedido (WhatsApp)</Label>
       </div>
-      <p className="text-[11px] text-muted-foreground">Quién manda los pedidos por WhatsApp. Puede haber varios (ej. "Juan - cocina"). El teléfono de arriba es el de administración y no se usa para identificar pedidos.</p>
+      <p className="text-[11px] text-muted-foreground">Quién manda los pedidos por WhatsApp. Puede haber varios (ej. "Juan - cocina"). El teléfono de arriba es el de administración y no se usa para identificar pedidos. Los checks Remito / Factura marcan a quién se le manda cada cosa: sin check no se envía.</p>
       {contacts.length === 0 && <p className="text-xs text-muted-foreground">Sin teléfonos de pedido cargados.</p>}
       {contacts.map((c) => (
         <div key={c.id} className="flex flex-wrap items-center gap-2 text-sm">
@@ -68,6 +74,12 @@ function CustomerContactsSection({ customerId }: { customerId: number }) {
               <span className="font-mono text-xs">{formatArPhone(c.phone)}</span>
               {c.name && <span className="text-xs text-muted-foreground">{c.name}</span>}
               {c.origin === "whatsapp" && <Badge variant="outline" className="text-[10px]">asignado desde WhatsApp</Badge>}
+              <label className="inline-flex items-center gap-1 text-[11px] cursor-pointer" title="Le llega el remito por WhatsApp al aprobar el pedido">
+                <input type="checkbox" checked={!!(c as any).sendRemito} onChange={(e) => flags.mutate({ id: c.id, sendRemito: e.target.checked })} data-testid={`check-remito-${c.id}`} /> Remito
+              </label>
+              <label className="inline-flex items-center gap-1 text-[11px] cursor-pointer" title="Le llega la factura por WhatsApp">
+                <input type="checkbox" checked={!!(c as any).sendFactura} onChange={(e) => flags.mutate({ id: c.id, sendFactura: e.target.checked })} data-testid={`check-factura-${c.id}`} /> Factura
+              </label>
               <button type="button" className="text-[11px] underline text-muted-foreground" onClick={() => { setEditingId(c.id); setEditPhone(c.phone); setEditName(c.name ?? ""); }}>editar</button>
               <button type="button" className="text-[11px] underline text-destructive" onClick={() => remove.mutate(c.id)}>borrar</button>
             </>
@@ -248,6 +260,8 @@ export default function CustomersPage() {
                         {c.blackPot && <span className="clx-b clx-b-grp">Black Pot</span>}
                         {c.bolsaFv && <span className="clx-b clx-b-bolsa">Bolsa FV</span>}
                         {(c as any).botActivo && <span className="clx-b clx-b-si"><MessageCircle className="h-[11px] w-[11px]" />Bot activo</span>}
+                        {(c as any).billingMode && (c as any).billingMode !== "ninguna" && <span className="clx-b clx-b-grupo">Factura {({ diaria: "diaria", semanal: "semanal", mensual: "mensual", diaria_envio_semanal: "diaria · envío semanal" } as Record<string, string>)[(c as any).billingMode] ?? (c as any).billingMode}</span>}
+                        {(c as any).pricesIncludeIva && <span className="clx-b clx-b-bolsa">Precios con IVA incl.</span>}
                         {c.city && <span className="clx-b clx-b-loc"><MapPin className="h-[11px] w-[11px]" />{c.city}</span>}
                       </div>
                       {c.phone && <div className="clx-ctel"><Phone className="h-[13px] w-[13px]" /><span>{c.phone}</span></div>}
@@ -312,6 +326,89 @@ export default function CustomersPage() {
                 <Input id="phone" value={form.phone ?? ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} data-testid="input-customer-phone" />
               </div>
               {editing && <CustomerContactsSection customerId={editing.id} />}
+              {/* A-13: envíos al teléfono de administración */}
+              <div className="sm:col-span-2 flex flex-wrap items-center gap-4 rounded-md border p-3">
+                <div className="flex-1 min-w-[200px]">
+                  <Label className="font-semibold">Envíos al teléfono de administración</Label>
+                  <p className="text-[11px] text-muted-foreground">Qué le llega por WhatsApp al número de arriba. Sin check no se envía.</p>
+                </div>
+                <label className="inline-flex items-center gap-1.5 text-sm cursor-pointer"><input type="checkbox" checked={!!(form as any).adminPhoneRemito} onChange={(e) => setForm({ ...form, adminPhoneRemito: e.target.checked } as any)} data-testid="check-admin-remito" /> Remito</label>
+                <label className="inline-flex items-center gap-1.5 text-sm cursor-pointer"><input type="checkbox" checked={!!(form as any).adminPhoneFactura} onChange={(e) => setForm({ ...form, adminPhoneFactura: e.target.checked } as any)} data-testid="check-admin-factura" /> Factura</label>
+              </div>
+              {/* A-13: facturación */}
+              <div className="sm:col-span-2 space-y-3 rounded-md border p-3">
+                <div>
+                  <Label className="font-semibold">Facturación automática</Label>
+                  <p className="text-[11px] text-muted-foreground">Cómo y a quién se factura este cliente cuando la facturación automática está prendida (Bot por cliente). La primera factura automática de cada cliente la aprobás vos en "Facturas a emitir".</p>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Modo de facturación</Label>
+                    <Select value={(form as any).billingMode ?? "ninguna"} onValueChange={(v) => setForm({ ...form, billingMode: v } as any)}>
+                      <SelectTrigger data-testid="select-billing-mode"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="ninguna">Sin factura</SelectItem>
+                        <SelectItem value="diaria">Diaria (una factura por pedido, 14:00)</SelectItem>
+                        <SelectItem value="semanal">Semanal (viernes 14:00, todos los pedidos juntos)</SelectItem>
+                        <SelectItem value="mensual">Mensual (último día hábil, 14:00)</SelectItem>
+                        <SelectItem value="diaria_envio_semanal">Diaria con envío semanal (Black Pot)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Facturar a</Label>
+                    <Select value={(form as any).billTo ?? "cliente"} onValueChange={(v) => setForm({ ...form, billTo: v } as any)} disabled={!form.parentCustomerId}>
+                      <SelectTrigger data-testid="select-bill-to"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="cliente">Este cliente</SelectItem>
+                        <SelectItem value="padre">Cliente padre{form.parentCustomerId ? ` (${getParentName(form.parentCustomerId)})` : ""}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {!form.parentCustomerId && <p className="text-[10px] text-muted-foreground">Sin cliente padre: se factura a este cliente.</p>}
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Tipo de factura</Label>
+                    <Select value={(form as any).invoiceType ?? "auto"} onValueChange={(v) => setForm({ ...form, invoiceType: v === "auto" ? null : v } as any)}>
+                      <SelectTrigger data-testid="select-invoice-type"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">Automático (A si el facturado tiene CUIT, si no B)</SelectItem>
+                        <SelectItem value="A">Factura A</SelectItem>
+                        <SelectItem value="B">Factura B</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Condición IVA del receptor</Label>
+                    <Select value={String((form as any).condicionIva ?? "auto")} onValueChange={(v) => setForm({ ...form, condicionIva: v === "auto" ? null : Number(v) } as any)}>
+                      <SelectTrigger data-testid="select-condicion-iva"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">Automático (RI para A, Consumidor Final para B)</SelectItem>
+                        <SelectItem value="1">Responsable Inscripto</SelectItem>
+                        <SelectItem value="4">Exento</SelectItem>
+                        <SelectItem value="5">Consumidor Final</SelectItem>
+                        <SelectItem value="6">Monotributo</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Detalle de factura</Label>
+                    <Select value={(form as any).invoiceDetail ?? "agrupado"} onValueChange={(v) => setForm({ ...form, invoiceDetail: v } as any)}>
+                      <SelectTrigger data-testid="select-invoice-detail"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="agrupado">Agrupada por alícuota (Frutas y verduras 10,5% / Huevos 21%)</SelectItem>
+                        <SelectItem value="completo">Detallada por producto</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-center justify-between rounded-md border border-border p-3 sm:col-span-2">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">Precios del remito incluyen IVA</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Sí: al facturar se desarma el total (neto = precio ÷ (1 + alícuota) por renglón) y la factura queda igual al remito. No: la factura suma el IVA sobre los precios del remito, como hoy.</p>
+                    </div>
+                    <Switch checked={!!(form as any).pricesIncludeIva} onCheckedChange={(v) => setForm({ ...form, pricesIncludeIva: v } as any)} data-testid="switch-prices-include-iva" />
+                  </div>
+                </div>
+              </div>
               <div className="sm:col-span-2 flex items-center justify-between rounded-md border p-3">
                 <div>
                   <Label className="font-semibold">Bot activo (WhatsApp)</Label>

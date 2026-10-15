@@ -1641,5 +1641,54 @@ export async function runNcMigrations() {
     `);
   } catch (e) { console.error("bot user insert failed:", e); }
 
+  // ─── A-13 (2026-10-15): remito automático, facturación según cliente, mensajes automáticos ───
+  for (const stmt of [
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS admin_phone_remito BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS admin_phone_factura BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS billing_mode TEXT NOT NULL DEFAULT 'ninguna'`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS bill_to TEXT NOT NULL DEFAULT 'cliente'`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS invoice_detail TEXT NOT NULL DEFAULT 'agrupado'`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS prices_include_iva BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS invoice_type TEXT`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS condicion_iva INTEGER`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS auto_invoice_approved BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE customer_contacts ADD COLUMN IF NOT EXISTS send_remito BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE customer_contacts ADD COLUMN IF NOT EXISTS send_factura BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS galpon_notes TEXT`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS aviso_faltantes TEXT`,
+    `CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMP NOT NULL DEFAULT NOW())`,
+    `CREATE TABLE IF NOT EXISTS order_snapshots (id SERIAL PRIMARY KEY, order_id INTEGER NOT NULL UNIQUE, items JSONB NOT NULL, reason TEXT NOT NULL DEFAULT 'antes_galpon', created_at TIMESTAMP NOT NULL DEFAULT NOW())`,
+    `CREATE TABLE IF NOT EXISTS wa_outbound (id SERIAL PRIMARY KEY, kind TEXT NOT NULL, ref_id INTEGER NOT NULL, customer_id INTEGER, phone TEXT NOT NULL, template_name TEXT, file_name TEXT, status TEXT NOT NULL DEFAULT 'pending', ycloud_id TEXT, error TEXT, created_at TIMESTAMP NOT NULL DEFAULT NOW(), sent_at TIMESTAMP)`,
+    `CREATE INDEX IF NOT EXISTS wa_outbound_ref_idx ON wa_outbound(kind, ref_id)`,
+    `CREATE TABLE IF NOT EXISTS invoice_orders (id SERIAL PRIMARY KEY, invoice_id INTEGER NOT NULL, order_id INTEGER NOT NULL)`,
+    `CREATE INDEX IF NOT EXISTS invoice_orders_invoice_idx ON invoice_orders(invoice_id)`,
+    `CREATE INDEX IF NOT EXISTS invoice_orders_order_idx ON invoice_orders(order_id)`,
+    `CREATE TABLE IF NOT EXISTS invoice_queue (id SERIAL PRIMARY KEY, billing_customer_id INTEGER NOT NULL, order_ids JSONB NOT NULL, mode TEXT NOT NULL, total NUMERIC(12,2), reason TEXT NOT NULL, error TEXT, status TEXT NOT NULL DEFAULT 'pending', invoice_id INTEGER, created_at TIMESTAMP NOT NULL DEFAULT NOW(), resolved_at TIMESTAMP)`,
+    `CREATE TABLE IF NOT EXISTS message_templates (key TEXT PRIMARY KEY, label TEXT NOT NULL, text TEXT NOT NULL, has_document BOOLEAN NOT NULL DEFAULT TRUE, approved_name TEXT, pending_name TEXT, pending_status TEXT, pending_reason TEXT, version INTEGER NOT NULL DEFAULT 0, updated_at TIMESTAMP NOT NULL DEFAULT NOW())`,
+    // Facturas existentes: cada una cubre su pedido
+    `INSERT INTO invoice_orders (invoice_id, order_id) SELECT i.id, i.order_id FROM invoices i WHERE NOT EXISTS (SELECT 1 FROM invoice_orders io WHERE io.invoice_id = i.id)`,
+    // Interruptores generales: arrancan en OFF
+    `INSERT INTO app_settings (key, value) VALUES ('remitos_automaticos', 'false'::jsonb), ('facturacion_automatica', 'false'::jsonb), ('envio_facturas', 'false'::jsonb) ON CONFLICT (key) DO NOTHING`,
+  ]) { try { await db.execute(sql.raw(stmt)); } catch (e) { console.error("A-13 migration failed:", stmt.slice(0, 60), e); } }
+  // Defaults por cliente, UNA sola vez (marcado en app_settings): modo de facturación según si tuvo factura en 60 días,
+  // facturar al padre si lo tiene, tipo/condición según la última factura del facturado.
+  try {
+    const done = await db.execute(sql`SELECT 1 FROM app_settings WHERE key = 'a13_defaults_aplicados'`);
+    if (done.rows.length === 0) {
+      await db.execute(sql`UPDATE customers SET bill_to = 'padre' WHERE parent_customer_id IS NOT NULL`);
+      await db.execute(sql`
+        UPDATE customers c SET billing_mode = CASE WHEN c.black_pot OR (c.parent_customer_id IS NOT NULL AND (SELECT black_pot FROM customers p WHERE p.id = c.parent_customer_id)) THEN 'diaria_envio_semanal' ELSE 'diaria' END
+        WHERE c.active AND EXISTS (
+          SELECT 1 FROM invoices i JOIN orders o ON o.id = i.order_id
+          WHERE (o.customer_id = c.id OR i.customer_id = c.id) AND i.created_at > NOW() - INTERVAL '60 days')`);
+      await db.execute(sql`
+        UPDATE customers c SET invoice_type = l.invoice_type, condicion_iva = l.condicion_iva_receptor_id, invoice_detail = COALESCE(l.detail_mode, 'agrupado')
+        FROM (SELECT DISTINCT ON (customer_id) customer_id, invoice_type, condicion_iva_receptor_id, detail_mode FROM invoices ORDER BY customer_id, created_at DESC) l
+        WHERE l.customer_id = c.id`);
+      await db.execute(sql`INSERT INTO app_settings (key, value) VALUES ('a13_defaults_aplicados', 'true'::jsonb)`);
+      console.log("A-13: defaults de facturación por cliente aplicados");
+    }
+  } catch (e) { console.error("A-13 defaults failed:", e); }
+
   console.log("NC migrations complete.");
 }
