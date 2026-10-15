@@ -4921,7 +4921,8 @@ export const storage = {
     const pend = await db.select().from(invoiceQueue).where(and(eq(invoiceQueue.billingCustomerId, d.billingCustomerId), eq(invoiceQueue.status, "pending")));
     const same = pend.find((q) => JSON.stringify([...(q.orderIds as number[])].sort()) === JSON.stringify([...d.orderIds].sort()));
     if (same) { await db.update(invoiceQueue).set({ error: d.error ?? same.error, reason: d.reason }).where(eq(invoiceQueue.id, same.id)); return; }
-    const tot = await db.execute(drizzleSql`SELECT COALESCE(SUM(total), 0) AS t FROM orders WHERE id = ANY(${d.orderIds}::int[])`);
+    const idsSql = drizzleSql.join(d.orderIds.map((id) => drizzleSql`${id}`), drizzleSql`, `);
+    const tot = await db.execute(drizzleSql`SELECT COALESCE(SUM(total), 0) AS t FROM orders WHERE id IN (${idsSql})`);
     await db.insert(invoiceQueue).values({ billingCustomerId: d.billingCustomerId, orderIds: d.orderIds, mode: d.mode, reason: d.reason, error: d.error ?? null, total: String((tot.rows[0] as any)?.t ?? 0) });
   },
   async listInvoiceQueue(): Promise<(InvoiceQueueRow & { billingCustomerName: string; orders: { id: number; folio: string; remitoNum: number | null; customerName: string; orderDate: string; total: string }[] })[]> {
@@ -4929,7 +4930,7 @@ export const storage = {
     const out = [];
     for (const r of rows) {
       const ids = (r.q.orderIds as number[]) ?? [];
-      const os = ids.length ? await db.execute(drizzleSql`SELECT o.id, o.folio, o.remito_num AS "remitoNum", c.name AS "customerName", to_char(o.order_date, 'YYYY-MM-DD') AS "orderDate", o.total FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = ANY(${ids}::int[]) ORDER BY o.order_date, o.id`) : { rows: [] };
+      const os = ids.length ? await db.execute(drizzleSql`SELECT o.id, o.folio, o.remito_num AS "remitoNum", c.name AS "customerName", to_char(o.order_date, 'YYYY-MM-DD') AS "orderDate", o.total FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id IN (${drizzleSql.join(ids.map((id) => drizzleSql`${id}`), drizzleSql`, `)}) ORDER BY o.order_date, o.id`) : { rows: [] };
       out.push({ ...r.q, billingCustomerName: r.name, orders: (os.rows as any[]).map((o) => ({ id: Number(o.id), folio: o.folio, remitoNum: o.remitoNum == null ? null : Number(o.remitoNum), customerName: o.customerName, orderDate: o.orderDate, total: String(o.total) })) });
     }
     return out;

@@ -169,7 +169,8 @@ const modoDe = (c: Customer): Modo => (((c as any).billingMode as Modo) ?? "ning
 
 /** Emite (o encola si es la primera vez / falla ARCA) y manda si corresponde. Devuelve la factura o null. */
 async function facturarPedidos(orderIds: number[], billing: Customer, modo: Modo, enviar: boolean): Promise<Invoice | null> {
-  if (!(billing as any).autoInvoiceApproved && !esPrueba(billing)) {
+  // La primera factura automática de CADA cliente (PRUEBA incluido) la aprueba Joaquín en "Facturas a emitir"
+  if (!(billing as any).autoInvoiceApproved) {
     await storage.enqueueInvoice({ billingCustomerId: billing.id, orderIds, mode: modo, reason: "primera_vez" });
     log(`primera factura automática de ${billing.name}: a "Facturas a emitir"`);
     return null;
