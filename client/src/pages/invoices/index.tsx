@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Download, Receipt, Search, RotateCcw } from "lucide-react";
+import { Download, Receipt, Search, RotateCcw, Send } from "lucide-react";
 import { generateInvoicePDF, generateRemitoPDF } from "@/lib/pdf";
 import { apiRequest } from "@/lib/queryClient";
 import type { Customer } from "@shared/schema";
@@ -106,6 +106,14 @@ export default function InvoicesPage() {
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     }
+  };
+
+  // A-13: envío automático por WhatsApp (documento + plantilla) a los teléfonos con check Factura
+  const enviarAuto = async (invoiceId: number) => {
+    try {
+      const r = await apiRequest("POST", `/api/invoices/${invoiceId}/send`, {}).then((x) => x.json());
+      toast(r.enviados ? { title: `Factura enviada a ${r.enviados} número(s)` } : { title: "No se pudo enviar", description: (r.errores ?? []).join(" · ") || r.omitido || "sin teléfonos con check Factura", variant: "destructive" });
+    } catch (e: any) { toast({ title: "No se pudo enviar", description: e.message, variant: "destructive" }); }
   };
 
   const handleDownloadNcPDF = async (inv: InvoiceRow) => {
@@ -307,6 +315,9 @@ export default function InvoicesPage() {
                           }}
                         >
                           <WhatsAppIcon className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" title="Enviar por WhatsApp automático (teléfonos con check Factura)" onClick={() => enviarAuto(inv.id)}>
+                          <Send className="h-3.5 w-3.5 mr-1" /> Enviar
                         </Button>
                         {inv.creditNoteId ? (
                           <Button

@@ -10,6 +10,7 @@ import { runMigrations, runNcMigrations } from "./migrate";
 import { seedDatabase } from "./seed";
 import { pool, connectionString } from "./db";
 import { syncMpReport } from "./mp-report-sync";
+import { iniciarAutomatizacion } from "./automation";
 
 const app = express();
 const httpServer = createServer(app);
@@ -136,6 +137,9 @@ app.use((req, res, next) => {
   httpServer.listen({ port, host: "0.0.0.0" }, () => {
     log(`serving on port ${port}`);
   });
+
+  // A-13: programador (corte 14:00, plantillas de Meta)
+  try { iniciarAutomatizacion(process.env.PUBLIC_URL ?? "https://sistema.vegetalesargentinos.com"); } catch (e: any) { log(`[A-13] no se pudo iniciar: ${e.message}`); }
 
   // Daily 3am Argentina (UTC-3 = 6am UTC) MP report sync — report is generated at 1am ART
   let _lastSyncDate = "";

@@ -11,6 +11,10 @@ import { canonicalizeUnit } from "@shared/units";
 import { ivaRateOf, hasIvaOn } from "@shared/iva";
 import { getHistoricalMonthStats } from "./historical-stats";
 import { getLastVoucher, createVoucher } from "./arca";
+import { emitirFactura, diferenciaFacturada, emitirNotaCreditoDiferencia } from "./invoicing";
+import { enviarNotaCreditoAuto, enviarRemitoAuto, enviarFacturaAuto, facturarTrasAprobar, aprobarEnCola, ensureMessageTemplates, DEFAULT_TEMPLATES, textoMeta, publicarPlantilla, revisarPlantillas } from "./automation";
+import { ycloudConfigured } from "./ycloud";
+import { buildBlackPotWorkbook } from "./blackpot-excel";
 import { syncMpReport } from "./mp-report-sync";
 import { interpretOrder, aiEnabled } from "./interpret-order";
 import { timingSafeEqual } from "crypto";
@@ -90,6 +94,7 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/wa-inbox",
     "/api/wa-sent",
     "/api/settings",
+    "/api/message-templates",
   ],
   // admin: sin entrada → acceso total.
 };
@@ -1186,7 +1191,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/orders/:id/approve", requireAuth, async (req, res) => {
     try {
       const decisions = req.body?.decisions as Record<number, "zero" | "rinde" | "prorate"> | undefined;
-      const order = await storage.approveOrder(Number(req.params.id), req.session.userId!, decisions);
+      const orderId = Number(req.params.id);
+      // A-13: si el galpón nunca confirmó, el aviso de faltantes se calcula acá (con el original guardado, si lo hay)
+      try {
+        const cur = await storage.getOrder(orderId);
+        if (cur && (cur as any).avisoFaltantes == null && (await storage.getOrderSnapshot(orderId))) {
+          await storage.setAvisoFaltantes(orderId, storage.textoAvisoFaltantes(await storage.computeFaltantes(orderId)));
+        }
+      } catch (e: any) { console.error("[A-13] aviso faltantes al aprobar:", e.message); }
+      const order = await storage.approveOrder(orderId, req.session.userId!, decisions);
+      // A-13: remito por WhatsApp + facturación diaria después de las 14:00 (fuera de la transacción; nunca rompe la aprobación)
+      enviarRemitoAuto(orderId).then((r) => { if (r.errores.length) console.error("[A-13] remito", orderId, r.errores.join(" | ")); }).catch((e) => console.error("[A-13] remito:", e.message));
+      facturarTrasAprobar(orderId).catch((e) => console.error("[A-13] facturar tras aprobar:", e.message));
       return res.json(order);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
@@ -1204,6 +1220,66 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // PATCH /api/orders/:id/remito-num — update remito number inline
+  // A-13: envíos por WhatsApp desde el ERP — estado y reenvío
+  app.get("/api/wa-outbound", requireAuth, async (req, res) => {
+    const kind = String(req.query.kind ?? ""); const refId = Number(req.query.refId);
+    if (!kind || !Number.isFinite(refId)) return res.status(400).json({ error: "kind y refId" });
+    return res.json(await storage.listWaOutbound(kind, refId));
+  });
+  app.post("/api/orders/:id/send-remito", requireAuth, async (req, res) => {
+    try { return res.json(await enviarRemitoAuto(Number(req.params.id), { force: true, manual: true })); }
+    catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  app.post("/api/invoices/:id/send", requireAuth, async (req, res) => {
+    try { return res.json(await enviarFacturaAuto(Number(req.params.id), undefined, { force: true, manual: true })); }
+    catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  app.post("/api/credit-notes/:id/send", requireAuth, async (req, res) => {
+    try { return res.json(await enviarNotaCreditoAuto(Number(req.params.id), { force: true })); }
+    catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  // Cola "Facturas a emitir"
+  app.get("/api/invoice-queue", requireAuth, async (_req, res) => res.json(await storage.listInvoiceQueue()));
+  app.post("/api/invoice-queue/:id/aprobar", requireAuth, async (req, res) => {
+    try { return res.json(await aprobarEnCola(Number(req.params.id))); }
+    catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  app.post("/api/invoice-queue/:id/descartar", requireAuth, async (req, res) => {
+    await storage.resolveInvoiceQueue(Number(req.params.id), "dismissed");
+    return res.json({ ok: true });
+  });
+  // Mensajes automáticos (textos + plantillas de Meta)
+  app.get("/api/message-templates", requireAuth, async (_req, res) => {
+    await ensureMessageTemplates();
+    const list = await storage.listMessageTemplates();
+    const order = DEFAULT_TEMPLATES.map((d) => d.key);
+    list.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
+    return res.json({ ycloud: ycloudConfigured(), templates: list.map((t) => ({ ...t, metaPreview: textoMeta(t.key, t.text).body })) });
+  });
+  app.put("/api/message-templates/:key", requireAuth, async (req, res) => {
+    if (req.session.userRole !== "admin") return res.status(403).json({ error: "Solo administrador" });
+    try {
+      const { text } = z.object({ text: z.string().min(5).max(1024) }).parse(req.body);
+      const t = await storage.getMessageTemplate(req.params.key);
+      if (!t) return res.status(404).json({ error: "Plantilla no encontrada" });
+      await storage.updateMessageTemplate(req.params.key, { text });
+      let publicado: { name: string; status: string } | null = null; let aviso: string | null = null;
+      if (ycloudConfigured()) {
+        try { publicado = await publicarPlantilla(req.params.key, `${req.protocol}://${req.get("host")}`); }
+        catch (e: any) { aviso = `Texto guardado, pero no se pudo mandar a aprobar a Meta: ${e.message}`; }
+      } else aviso = "Texto guardado. YCloud no está configurado en el ERP: no se mandó a aprobar a Meta.";
+      return res.json({ ok: true, publicado, aviso });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  app.post("/api/message-templates/:key/publicar", requireAuth, async (req, res) => {
+    try { return res.json(await publicarPlantilla(req.params.key, `${req.protocol}://${req.get("host")}`)); }
+    catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  app.post("/api/message-templates/revisar", requireAuth, async (_req, res) => {
+    try { await revisarPlantillas(); return res.json(await storage.listMessageTemplates()); }
+    catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   // A-13: aviso de faltantes que va en el mensaje del remito (editable antes de aprobar; vacío = sin aviso)
   app.patch("/api/orders/:id/aviso-faltantes", requireAuth, async (req, res) => {
     try {
@@ -1348,142 +1424,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/orders/export-blackpot-excel", requireAuth, async (req, res) => {
     try {
       const { orderIds } = z.object({ orderIds: z.array(z.number()).min(1) }).parse(req.body);
-      const MONTHS_ES = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
-
-      const wb = new ExcelJS.Workbook();
-      wb.creator = "AgroLogix ERP";
-
-      // Nombres de hoja únicos: si se repite un colegio (varios pedidos), agrega " 2", " 3"…
-      // (Excel limita el nombre de hoja a 31 caracteres, así que se recorta la base para que entre el sufijo.)
-      const usedSheetNames = new Set<string>();
-      const uniqueSheetName = (base: string): string => {
-        const b = base || "Hoja";
-        if (!usedSheetNames.has(b.toLowerCase())) { usedSheetNames.add(b.toLowerCase()); return b; }
-        let n = 2;
-        while (true) {
-          const suffix = ` ${n}`;
-          const cand = b.slice(0, 31 - suffix.length) + suffix;
-          if (!usedSheetNames.has(cand.toLowerCase())) { usedSheetNames.add(cand.toLowerCase()); return cand; }
-          n++;
-        }
-      };
-
-      for (const id of orderIds) {
-        const order = await storage.getOrder(id);
-        if (!order) continue;
-
-        const customer = order.customer;
-        const schoolName = customer.name;
-        const address = [customer.address, customer.city].filter(Boolean).join(", ");
-        const remitoStr = order.remitoNum != null ? String(order.remitoNum).padStart(6, "0") : "";
-        const d = new Date(order.orderDate);
-        const dateStr = `${d.getDate()}-${MONTHS_ES[d.getMonth()]}`;
-
-        const baseName = schoolName.replace(/[\\\/\?\*\[\]:]/g, "").slice(0, 31) || `Pedido-${id}`;
-        const sheetName = uniqueSheetName(baseName);
-        const ws = wb.addWorksheet(sheetName);
-
-        ws.columns = [
-          { width: 10 },  // A CANTIDAD
-          { width: 10 },  // B UNIDAD
-          { width: 32 },  // C PRODUCTO
-          { width: 14 },  // D PRECIO
-          { width: 14 },  // E TOTAL
-          { width: 16 },  // F TOTAL + IVA
-        ];
-
-        // Row 1 — school header
-        ws.mergeCells("A1:D1");
-        const r1 = ws.getRow(1);
-        r1.getCell("A").value = `COLEGIO ${schoolName}${address ? ` - ${address}` : ""}`;
-        r1.getCell("A").font = { name: "Arial", bold: true, size: 11 };
-        r1.getCell("A").alignment = { vertical: "middle" };
-        r1.getCell("E").value = remitoStr ? `rto: ${remitoStr}` : "";
-        r1.getCell("E").font = { name: "Arial", size: 10 };
-        r1.getCell("F").value = dateStr;
-        r1.getCell("F").font = { name: "Arial", size: 10 };
-        r1.height = 18;
-        r1.commit();
-
-        // Row 2 — invoice
-        ws.mergeCells("A2:D2");
-        const r2 = ws.getRow(2);
-        r2.getCell("A").value = "";
-        r2.getCell("E").value = "Factura Nro:";
-        r2.getCell("E").font = { name: "Arial", size: 10 };
-        r2.getCell("F").value = order.invoiceNumber ?? "";
-        r2.getCell("F").font = { name: "Arial", size: 10 };
-        r2.commit();
-
-        // Row 3 — column headers
-        const r3 = ws.getRow(3);
-        ["CANTIDAD","UNIDAD","PRODUCTO","PRECIO","TOTAL","TOTAL + IVA"].forEach((h, i) => {
-          const cell = r3.getCell(i + 1);
-          cell.value = h;
-          cell.font = { name: "Arial", bold: true, size: 10 };
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9D9D9" } };
-          cell.alignment = { horizontal: i >= 3 ? "right" : "left" };
-        });
-        r3.commit();
-
-        // Item rows — productos en ORDEN ALFABÉTICO (como se ven en el sistema),
-        // excluyendo las líneas de bolsa. (Antes iban en orden de carga y la celda
-        // PRODUCTO referenciaba una variable inexistente `productName`.)
-        const nombreProducto = (it: typeof order.items[number]) =>
-          String(it.product?.name ?? (it as any).rawProductName ?? "");
-        const itemsOrdenados = [...order.items]
-          .filter((it) => !(it as any).bolsaType)
-          .sort((a, b) => nombreProducto(a).localeCompare(nombreProducto(b), "es", { sensitivity: "base" }));
-
-        const startRow = 4;
-        let rowIdx = startRow;
-        for (const item of itemsOrdenados) {
-          const productName = nombreProducto(item);
-          const ivaRate = ivaRateOf(item.product);
-          const subtotal = parseFloat(String(item.subtotal ?? "0"));
-          const totalConIva = parseFloat((subtotal * (1 + ivaRate)).toFixed(2));
-
-          const row = ws.getRow(rowIdx);
-          row.getCell(1).value = parseFloat(String(item.quantity));
-          row.getCell(1).font = { name: "Arial", size: 10 };
-          row.getCell(2).value = item.unit as string;
-          row.getCell(2).font = { name: "Arial", size: 10 };
-          row.getCell(3).value = productName;
-          row.getCell(3).font = { name: "Arial", size: 10 };
-          row.getCell(4).value = parseFloat(String(item.pricePerUnit ?? "0"));
-          row.getCell(4).numFmt = '"$"#,##0.00';
-          row.getCell(4).font = { name: "Arial", size: 10 };
-          row.getCell(4).alignment = { horizontal: "right" };
-          row.getCell(5).value = subtotal;
-          row.getCell(5).numFmt = '"$"#,##0.00';
-          row.getCell(5).font = { name: "Arial", size: 10 };
-          row.getCell(5).alignment = { horizontal: "right" };
-          row.getCell(6).value = totalConIva;
-          row.getCell(6).numFmt = '"$"#,##0.00';
-          row.getCell(6).font = { name: "Arial", size: 10 };
-          row.getCell(6).alignment = { horizontal: "right" };
-          row.commit();
-          rowIdx++;
-        }
-
-        const endRow = rowIdx - 1;
-
-        // Total row
-        const tr = ws.getRow(rowIdx);
-        tr.getCell(3).value = "TOTAL";
-        tr.getCell(3).font = { name: "Arial", bold: true, size: 10 };
-        tr.getCell(5).value = endRow >= startRow ? { formula: `SUM(E${startRow}:E${endRow})` } : 0;
-        tr.getCell(5).numFmt = '"$"#,##0.00';
-        tr.getCell(5).font = { name: "Arial", bold: true, size: 10 };
-        tr.getCell(5).alignment = { horizontal: "right" };
-        tr.getCell(6).value = endRow >= startRow ? { formula: `SUM(F${startRow}:F${endRow})` } : 0;
-        tr.getCell(6).numFmt = '"$"#,##0.00';
-        tr.getCell(6).font = { name: "Arial", bold: true, size: 10 };
-        tr.getCell(6).alignment = { horizontal: "right" };
-        tr.commit();
-      }
-
-      const buf = Buffer.from(await wb.xlsx.writeBuffer());
+      const buf = await buildBlackPotWorkbook(orderIds);
       const today = new Date().toISOString().slice(0, 10);
       res.setHeader("Content-Disposition", `attachment; filename="BLACK_POT_${today}.xlsx"`);
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -2613,121 +2554,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.post("/api/invoices/create", requireAuth, async (req, res) => {
     try {
-      const { orderId, invoiceType, description, condicionIva, ivaIncluido, detailMode } = z.object({
-        orderId: z.number(),
+      const body = z.object({
+        orderId: z.number().optional(),
+        orderIds: z.array(z.number()).optional(), // A-13: varios pedidos en una factura
         invoiceType: z.enum(["A", "B", "C"]),
         description: z.string().optional(),
         /** 1=Resp.Inscripto 4=Exento 5=ConsumidorFinal 6=Monotributista 13=MonotributistaSocial */
         condicionIva: z.number().int().default(5),
         /** true = el subtotal del ítem ya incluye IVA → calcular neto dividiendo */
-        ivaIncluido: z.boolean().default(false),
+        ivaIncluido: z.boolean().optional(),
         /** Modo de presentación del PDF, elegido al emitir — se persiste y es el único modo válido */
         detailMode: z.enum(["completo", "agrupado"]).default("agrupado"),
       }).parse(req.body);
-
-      const order = await storage.getOrder(orderId);
-      if (!order) return res.status(404).json({ error: "Pedido no encontrado" });
-      if (order.status !== "approved") return res.status(400).json({ error: "El pedido debe estar aprobado" });
-
-      const customer = order.customer;
-      // If child client → bill to parent (they hold the CUIT)
-      const billingCustomer = customer.parentCustomerId
-        ? (await storage.getCustomer(customer.parentCustomerId) ?? customer)
-        : customer;
-      if (invoiceType === "A" && !billingCustomer.cuit) {
-        return res.status(400).json({ error: "El cliente (ni su cliente padre) tiene CUIT registrado" });
-      }
-      // Auto-prepend child name to description so the invoice identifies the source
-      const effectiveDescription = customer.parentCustomerId && customer.name !== billingCustomer.name
-        ? `${customer.name}${description ? ` — ${description}` : ""}`
-        : (description ?? null);
-
-      // Calculate IVA breakdown
-      let neto105 = 0, iva105 = 0, neto21 = 0, iva21 = 0;
-      for (const item of order.items) {
-        // Tasa del producto (products.iva_rate, única fuente). Bucket 21% si rate ≥ 0,2.
-        const rate = ivaRateOf(item.product);
-        const is21 = rate >= 0.2;
-        // Cantidad × precio VIGENTES al tocar el botón (lo mismo que muestra el
-        // remito/pedido), no el subtotal almacenado — inmune a subtotales viejos.
-        const sub = (parseFloat(item.quantity as string) || 0) * (parseFloat((item.pricePerUnit as string) ?? "0") || 0);
-        // Para Factura B el precio ya incluye IVA (no discriminado). Para A con ivaIncluido=true, ídem.
-        const netSub = (invoiceType === "B" || ivaIncluido) ? sub / (1 + rate) : sub;
-        if (is21) {
-          neto21 += netSub;
-          iva21  += netSub * rate;
-        } else {
-          neto105 += netSub;
-          iva105  += netSub * rate;
-        }
-      }
-      const totalNeto = neto105 + neto21;
-      const totalIVA  = iva105 + iva21;
-
-      if (!isFinite(totalNeto) || !isFinite(totalIVA)) {
-        throw new Error(`Total del pedido inválido: neto=${totalNeto}, iva=${totalIVA}. Verificar precios de los ítems.`);
-      }
-
-      // Map type → AFIP code
-      const cbteTipo = invoiceType === "A" ? 1 : invoiceType === "B" ? 6 : 11;
-
-      const lastVoucher = await getLastVoucher(cbteTipo);
-      const nextNumber = lastVoucher + 1;
-
-      const docTipo = invoiceType === "A" ? 80 : 99;
-      const docNro  = invoiceType === "A" ? parseInt((billingCustomer.cuit ?? "").replace(/\D/g, "")) : 0;
-
-      const now = new Date();
-      const cbteDate = parseInt(`${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`);
-
-      const iva: { Id: number; BaseImp: number; Importe: number }[] = [];
-      if (neto105 > 0) iva.push({ Id: 4, BaseImp: parseFloat(neto105.toFixed(2)), Importe: parseFloat(iva105.toFixed(2)) });
-      if (neto21  > 0) iva.push({ Id: 5, BaseImp: parseFloat(neto21.toFixed(2)),  Importe: parseFloat(iva21.toFixed(2))  });
-
-      const { CAE, CAEFchVto } = await createVoucher({
-        CantReg: 1,
-        PtoVta: 4,
-        CbteTipo: cbteTipo,
-        Concepto: 1,
-        DocTipo: docTipo,
-        DocNro: docNro,
-        CbteDesde: nextNumber,
-        CbteHasta: nextNumber,
-        CbteFch: cbteDate,
-        ImpTotal: parseFloat((totalNeto + totalIVA).toFixed(2)),
-        ImpTotConc: 0,
-        ImpNeto: parseFloat(totalNeto.toFixed(2)),
-        ImpOpEx: 0,
-        ImpIVA: parseFloat(totalIVA.toFixed(2)),
-        ImpTrib: 0,
-        MonId: "PES",
-        MonCotiz: 1,
-        CondicionIVAReceptorId: condicionIva,
-        Iva: iva,
-      });
-
-      const formattedNumber = `${invoiceType}-0004-${String(nextNumber).padStart(8, "0")}`;
-      const invoice = await storage.createInvoice({
-        orderId,
-        customerId: billingCustomer.id,
-        invoiceType,
-        invoiceNumber: formattedNumber,
-        pointOfSale: 4,
-        cae: String(CAE),
-        caeExpiry: String(CAEFchVto),
-        total: String((totalNeto + totalIVA).toFixed(2)),
-        ivaAmount: String(totalIVA.toFixed(2)),
-        condicionIvaReceptorId: condicionIva,
-        description: effectiveDescription,
-        detailMode,
-      });
-
-      await storage.updateOrderInvoiceNumber(orderId, formattedNumber);
-
+      const orderIds = body.orderIds?.length ? body.orderIds : body.orderId ? [body.orderId] : [];
+      if (!orderIds.length) return res.status(400).json({ error: "orderId requerido" });
+      const invoice = await emitirFactura({ orderIds, invoiceType: body.invoiceType, condicionIva: body.condicionIva, ivaIncluido: body.ivaIncluido, detailMode: body.detailMode, description: body.description });
       return res.json(invoice);
     } catch (e: any) {
-      return res.status(500).json({ error: e.message ?? "Error emitiendo factura" });
+      const msg = e.message ?? "Error emitiendo factura";
+      const code = /no encontrado/.test(msg) ? 404 : /aprobado|CUIT|ya tiene factura|se factura a/.test(msg) ? 400 : 500;
+      return res.status(code).json({ error: msg });
     }
+  });
+
+  // A-13: nota de crédito por diferencia (el pedido facturado se modificó y vale menos)
+  app.get("/api/invoices/:id/diferencia", requireAuth, async (req, res) => {
+    try {
+      const d = await diferenciaFacturada(Number(req.params.id));
+      return res.json(d ? { total: Number(d.diff.total.toFixed(2)), iva: Number(d.diff.totalIVA.toFixed(2)), acreditado: d.acreditado } : null);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+  app.post("/api/invoices/:id/credit-note-diff", requireAuth, async (req, res) => {
+    try {
+      const { condicionIva } = z.object({ condicionIva: z.number().int().optional() }).parse(req.body ?? {});
+      const nc = await emitirNotaCreditoDiferencia(Number(req.params.id), condicionIva);
+      enviarNotaCreditoAuto(nc.id).catch((e) => console.error("[A-13] envío NC:", e.message));
+      return res.json(nc);
+    } catch (e: any) { return res.status(400).json({ error: e.message ?? "Error emitiendo nota de crédito" }); }
   });
 
   app.get("/api/invoices", requireAuth, async (req, res) => {

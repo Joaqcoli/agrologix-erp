@@ -21,6 +21,20 @@
   ficha del cliente; 2 min de gracia por si se carga el mismo número en otra sede) y el bot los reprocesa en su
   próximo ciclo (1 min). Si el reproceso vuelve a dejarlo sin resolver, el pendiente se reabre con el motivo nuevo
   en vez de perderse. Los "repetido" (número conocido, texto ambiguo) siguen siendo manuales.
+  15-oct **A-13 · remito automático, facturación según cliente, mensajes automáticos** (ficha en
+  `../asistente-vegex/AUTOMATIZACIONES.md`). E1 `f8eaa12` ficha de cliente (checks Remito/Factura por teléfono y
+  administración, modo diaria/semanal/mensual/diaria con envío semanal, facturar a, tipo y condición IVA, detalle,
+  precios incluyen IVA) + interruptores generales (OFF) en Bot por cliente + tablas `app_settings`, `order_snapshots`,
+  `wa_outbound`, `invoice_orders`, `invoice_queue`, `message_templates`. E2 `3976cb9` resguardo del pedido original en
+  la primera edición del galpón, notas del galpón, aviso de faltantes editable. E3–E6: `shared/pdf.ts` (generadores
+  isomórficos; `client/src/lib/pdf.ts` re-exporta), `server/pdf-server.ts` (remito/factura/NC a Buffer, nombre
+  "Remito {Cliente} {dd.mm}"), `server/ycloud.ts` (media, plantillas con header DOCUMENT, envío), `server/invoicing.ts`
+  (`emitirFactura` con varios pedidos, facturar al padre, precios con IVA, fecha ARCA en hora Argentina; NC por
+  diferencia), `server/automation.ts` (remito al aprobar, corte 14:00 con app_settings, viernes semanal + Black Pot,
+  último día hábil mensual, cola "Facturas a emitir", envíos, plantillas), `server/blackpot-excel.ts`. Pantallas:
+  /facturas-a-emitir, /configuracion/mensajes; en el pedido: estado del remito por WhatsApp + reenviar, "Emitir nota de
+  crédito por $X". **Render: falta cargar `YCLOUD_API_KEY` en el .env del ERP** (sin eso, los envíos quedan en error
+  "YCloud no configurado"). `/ejemplo.pdf` es el documento de ejemplo para las plantillas.
   14-oct **intake idempotente**: `POST /api/orders/intake` con un `intakeLogId` que ya tiene `order_id` responde
   `{orderId, itemIds: [], yaCargado: true}` sin cargar líneas. Causa: el bot procesó dos veces el mismo mensaje de
   Brick Towers Del Viso (ciclos de reproceso solapados, ya con mutex) y el borrador 67 del 14/10 quedó con cada

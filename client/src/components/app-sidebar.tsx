@@ -48,6 +48,7 @@ const navItems = [
   { title: "Ajustes de Stock", url: "/ajustes-stock", icon: Scale },
   { title: "Pedidos", url: "/orders", icon: FileText },
   { title: "Facturas", url: "/invoices", icon: Receipt },
+  { title: "Facturas a emitir", url: "/facturas-a-emitir", icon: Receipt },
   { title: "Caja", url: "/caja", icon: Banknote },
   { title: "Bancos", url: "/bancos", icon: Landmark },
   { title: "Carga Pedido", url: "/intake", icon: MessageSquarePlus },
@@ -55,6 +56,7 @@ const navItems = [
   { title: "Bot por cliente", url: "/bot-clientes", icon: Eye },
   { title: "Lista de Carga", url: "/load-list", icon: ClipboardList },
   { title: "Lista de Precios", url: "/price-list", icon: Tag },
+  { title: "Mensajes automáticos", url: "/configuracion/mensajes", icon: MessageSquarePlus },
 ];
 
 export function AppSidebar() {

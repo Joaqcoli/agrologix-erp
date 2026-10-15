@@ -24,6 +24,9 @@ import {
   type MpMovementIdentifier,
   appSettings, orderSnapshots, waOutbound, invoiceOrders, invoiceQueue, messageTemplates,
 } from "@shared/schema";
+type MessageTemplateRow = typeof messageTemplates.$inferSelect;
+type WaOutboundRow = typeof waOutbound.$inferSelect;
+type InvoiceQueueRow = typeof invoiceQueue.$inferSelect;
 import { eq, desc, asc, and, or, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
 import { ivaRateOf, hasIvaOn } from "@shared/iva";
@@ -4845,6 +4848,100 @@ export const storage = {
       .onConflictDoUpdate({ target: appSettings.key, set: { value: value as any, updatedAt: new Date() } });
   },
 
+  // ─── A-13: plantillas de mensajes ───
+  async ensureMessageTemplate(t: { key: string; label: string; text: string; hasDocument: boolean }): Promise<void> {
+    await db.insert(messageTemplates).values({ key: t.key, label: t.label, text: t.text, hasDocument: t.hasDocument }).onConflictDoNothing();
+  },
+  async listMessageTemplates(): Promise<MessageTemplateRow[]> {
+    return db.select().from(messageTemplates).orderBy(asc(messageTemplates.key));
+  },
+  async getMessageTemplate(key: string): Promise<MessageTemplateRow | undefined> {
+    const [row] = await db.select().from(messageTemplates).where(eq(messageTemplates.key, key)).limit(1);
+    return row;
+  },
+  async updateMessageTemplate(key: string, data: Partial<{ text: string; version: number; approvedName: string | null; pendingName: string | null; pendingStatus: string | null; pendingReason: string | null }>): Promise<void> {
+    await db.update(messageTemplates).set({ ...data, updatedAt: new Date() }).where(eq(messageTemplates.key, key));
+  },
+
+  // ─── A-13: envíos salientes (wa_outbound) ───
+  async createWaOutbound(d: { kind: string; refId: number; customerId: number | null; phone: string; templateName?: string | null; fileName?: string | null; status?: string; error?: string | null }): Promise<{ id: number }> {
+    const [row] = await db.insert(waOutbound).values({ kind: d.kind, refId: d.refId, customerId: d.customerId, phone: d.phone, templateName: d.templateName ?? null, fileName: d.fileName ?? null, status: d.status ?? "pending", error: d.error ?? null }).returning({ id: waOutbound.id });
+    return row;
+  },
+  async updateWaOutbound(id: number, d: { status?: string; ycloudId?: string | null; sentAt?: Date | null; error?: string | null }): Promise<void> {
+    await db.update(waOutbound).set(d).where(eq(waOutbound.id, id));
+  },
+  async waOutboundYaEnviado(kind: string, refId: number, phone: string): Promise<boolean> {
+    const [row] = await db.select({ id: waOutbound.id }).from(waOutbound).where(and(eq(waOutbound.kind, kind), eq(waOutbound.refId, refId), eq(waOutbound.phone, phone), eq(waOutbound.status, "sent"))).limit(1);
+    return !!row;
+  },
+  async listWaOutbound(kind: string, refId: number): Promise<WaOutboundRow[]> {
+    return db.select().from(waOutbound).where(and(eq(waOutbound.kind, kind), eq(waOutbound.refId, refId))).orderBy(desc(waOutbound.id));
+  },
+
+  // ─── A-13: facturación automática ───
+  /** Pedidos aprobados, sin factura, con fecha ≤ hoy (hora Argentina), con su cliente. Excluye históricos importados. */
+  async getApprovedUninvoicedOrders(hastaISO: string): Promise<(Order & { customer: Customer })[]> {
+    const rows = await db.select({ o: orders, c: customers }).from(orders).innerJoin(customers, eq(customers.id, orders.customerId))
+      .where(and(eq(orders.status, "approved"), drizzleSql`${orders.invoiceNumber} IS NULL`, drizzleSql`${orders.orderDate}::date <= ${hastaISO}::date`, drizzleSql`COALESCE(${orders.notes}, '') NOT LIKE '%Facturación histórica importada%'`))
+      .orderBy(asc(orders.orderDate), asc(orders.id));
+    return rows.map((r) => ({ ...r.o, customer: r.c }));
+  },
+  async getCustomersByBillingMode(mode: string): Promise<Customer[]> {
+    return db.select().from(customers).where(and(eq(customers.active, true), drizzleSql`${customers.billingMode} = ${mode}`));
+  },
+  /** Facturas emitidas a un cliente facturado entre dos fechas (inclusive, hora Argentina), para el envío semanal. */
+  async getInvoicesForBilling(billingCustomerId: number, desdeISO: string, hastaISO: string): Promise<Invoice[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT id, order_id AS "orderId", customer_id AS "customerId", invoice_type AS "invoiceType", invoice_number AS "invoiceNumber", point_of_sale AS "pointOfSale",
+             cae, cae_expiry AS "caeExpiry", total, iva_amount AS "ivaAmount", description, created_at AS "createdAt"
+      FROM invoices WHERE customer_id = ${billingCustomerId}
+        AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Argentina/Buenos_Aires')::date BETWEEN ${desdeISO}::date AND ${hastaISO}::date
+      ORDER BY id`);
+    return rows.rows as Invoice[];
+  },
+  /** Pedidos (del facturado y sus sedes) aprobados entre dos fechas, para el Excel semanal. */
+  async getOrderIdsForBilling(billingCustomerId: number, desdeISO: string, hastaISO: string): Promise<number[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT o.id FROM orders o JOIN customers c ON c.id = o.customer_id
+      WHERE o.status = 'approved' AND o.order_date::date BETWEEN ${desdeISO}::date AND ${hastaISO}::date
+        AND (c.id = ${billingCustomerId} OR c.parent_customer_id = ${billingCustomerId})
+      ORDER BY c.name, o.order_date, o.id`);
+    return (rows.rows as any[]).map((r) => Number(r.id));
+  },
+  async getCreditNoteById(id: number): Promise<CreditNote | null> {
+    const rows = await db.execute(drizzleSql`
+      SELECT id, invoice_id AS "invoiceId", customer_id AS "customerId", credit_note_type AS "creditNoteType", credit_note_number AS "creditNoteNumber",
+             point_of_sale AS "pointOfSale", cae, cae_expiry AS "caeExpiry", total, iva_amount AS "ivaAmount", condicion_iva_receptor_id AS "condicionIvaReceptorId",
+             description, created_at AS "createdAt" FROM credit_notes WHERE id = ${id}`);
+    return (rows.rows[0] as CreditNote) ?? null;
+  },
+  async enqueueInvoice(d: { billingCustomerId: number; orderIds: number[]; mode: string; reason: "primera_vez" | "error"; error?: string | null }): Promise<void> {
+    // No duplicar: si ya hay un ítem pendiente para el mismo facturado con los mismos pedidos, se actualiza el error
+    const pend = await db.select().from(invoiceQueue).where(and(eq(invoiceQueue.billingCustomerId, d.billingCustomerId), eq(invoiceQueue.status, "pending")));
+    const same = pend.find((q) => JSON.stringify([...(q.orderIds as number[])].sort()) === JSON.stringify([...d.orderIds].sort()));
+    if (same) { await db.update(invoiceQueue).set({ error: d.error ?? same.error, reason: d.reason }).where(eq(invoiceQueue.id, same.id)); return; }
+    const tot = await db.execute(drizzleSql`SELECT COALESCE(SUM(total), 0) AS t FROM orders WHERE id = ANY(${d.orderIds}::int[])`);
+    await db.insert(invoiceQueue).values({ billingCustomerId: d.billingCustomerId, orderIds: d.orderIds, mode: d.mode, reason: d.reason, error: d.error ?? null, total: String((tot.rows[0] as any)?.t ?? 0) });
+  },
+  async listInvoiceQueue(): Promise<(InvoiceQueueRow & { billingCustomerName: string; orders: { id: number; folio: string; remitoNum: number | null; customerName: string; orderDate: string; total: string }[] })[]> {
+    const rows = await db.select({ q: invoiceQueue, name: customers.name }).from(invoiceQueue).innerJoin(customers, eq(customers.id, invoiceQueue.billingCustomerId)).where(eq(invoiceQueue.status, "pending")).orderBy(asc(invoiceQueue.id));
+    const out = [];
+    for (const r of rows) {
+      const ids = (r.q.orderIds as number[]) ?? [];
+      const os = ids.length ? await db.execute(drizzleSql`SELECT o.id, o.folio, o.remito_num AS "remitoNum", c.name AS "customerName", to_char(o.order_date, 'YYYY-MM-DD') AS "orderDate", o.total FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = ANY(${ids}::int[]) ORDER BY o.order_date, o.id`) : { rows: [] };
+      out.push({ ...r.q, billingCustomerName: r.name, orders: (os.rows as any[]).map((o) => ({ id: Number(o.id), folio: o.folio, remitoNum: o.remitoNum == null ? null : Number(o.remitoNum), customerName: o.customerName, orderDate: o.orderDate, total: String(o.total) })) });
+    }
+    return out;
+  },
+  async getInvoiceQueueItem(id: number): Promise<InvoiceQueueRow | undefined> {
+    const [row] = await db.select().from(invoiceQueue).where(eq(invoiceQueue.id, id)).limit(1);
+    return row;
+  },
+  async resolveInvoiceQueue(id: number, status: "done" | "dismissed", invoiceId?: number): Promise<void> {
+    await db.update(invoiceQueue).set({ status, invoiceId: invoiceId ?? null, resolvedAt: new Date() }).where(eq(invoiceQueue.id, id));
+  },
+
   async updateCustomerContact(id: number, data: { phone?: string; name?: string | null; sendRemito?: boolean; sendFactura?: boolean }): Promise<CustomerContact | undefined> {
     const [row] = await db.update(customerContacts).set(data).where(eq(customerContacts.id, id)).returning();
     return row;
@@ -6308,7 +6405,26 @@ export const storage = {
     }
   },
 
-  async getInvoiceById(id: number): Promise<{ invoice: Invoice; customer: Customer; order: Order & { items: (OrderItem & { product: Product | null })[] } } | null> {
+  // ─── A-13: varios pedidos por factura ───
+  async linkInvoiceOrders(invoiceId: number, orderIds: number[]): Promise<void> {
+    if (!orderIds.length) return;
+    await db.insert(invoiceOrders).values(orderIds.map((orderId) => ({ invoiceId, orderId })));
+  },
+  async getInvoiceOrderIds(invoiceId: number): Promise<number[]> {
+    const rows = await db.select({ orderId: invoiceOrders.orderId }).from(invoiceOrders).where(eq(invoiceOrders.invoiceId, invoiceId)).orderBy(asc(invoiceOrders.id));
+    return rows.map((r) => r.orderId);
+  },
+  async getCreditNotesByInvoiceId(invoiceId: number): Promise<CreditNote[]> {
+    try {
+      const rows = await db.execute(drizzleSql`
+        SELECT id, invoice_id AS "invoiceId", customer_id AS "customerId", credit_note_type AS "creditNoteType", credit_note_number AS "creditNoteNumber",
+               point_of_sale AS "pointOfSale", cae, cae_expiry AS "caeExpiry", total, iva_amount AS "ivaAmount", condicion_iva_receptor_id AS "condicionIvaReceptorId",
+               description, created_at AS "createdAt" FROM credit_notes WHERE invoice_id = ${invoiceId} ORDER BY id`);
+      return rows.rows as CreditNote[];
+    } catch { return []; }
+  },
+
+  async getInvoiceById(id: number): Promise<{ invoice: Invoice; customer: Customer; order: Order & { items: (OrderItem & { product: Product | null })[] }; orders: (Order & { customer: Customer; items: (OrderItem & { product: Product | null })[] })[] } | null> {
     // Raw SQL to avoid Drizzle including condicion_iva_receptor_id if not yet created
     const invRows = await db.execute(drizzleSql`
       SELECT id, order_id AS "orderId", customer_id AS "customerId",
@@ -6331,15 +6447,25 @@ export const storage = {
     } catch { (inv as any).detailMode = null; }
 
     const [customer] = await db.select().from(customers).where(eq(customers.id, inv.customerId));
-    const [order]    = await db.select().from(orders).where(eq(orders.id, inv.orderId));
-    const rawItems   = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
-    const items = await Promise.all(rawItems.map(async (item) => {
-      const product = item.productId
-        ? ((await db.select().from(products).where(eq(products.id, item.productId)).limit(1))[0] ?? null)
-        : null;
-      return { ...item, product: product as Product | null };
-    }));
-    return { invoice: inv, customer, order: { ...order, items } };
+    // A-13: todos los pedidos de la factura (invoice_orders); el primero es invoices.order_id
+    let ids = await this.getInvoiceOrderIds(id);
+    if (!ids.includes(inv.orderId)) ids = [inv.orderId, ...ids];
+    const full: (Order & { customer: Customer; items: (OrderItem & { product: Product | null })[] })[] = [];
+    for (const oid of ids) {
+      const [o] = await db.select().from(orders).where(eq(orders.id, oid));
+      if (!o) continue;
+      const [oc] = await db.select().from(customers).where(eq(customers.id, o.customerId));
+      const rawItems = await db.select().from(orderItems).where(eq(orderItems.orderId, o.id));
+      const items = await Promise.all(rawItems.map(async (item) => {
+        const product = item.productId ? ((await db.select().from(products).where(eq(products.id, item.productId)).limit(1))[0] ?? null) : null;
+        return { ...item, product: product as Product | null };
+      }));
+      full.push({ ...o, customer: oc, items });
+    }
+    const first = full[0];
+    // `order` = el primero con TODOS los renglones (para el PDF y la NC); `orders` = detalle por pedido
+    const order = { ...first, items: full.flatMap((o) => o.items) } as Order & { items: (OrderItem & { product: Product | null })[] };
+    return { invoice: inv, customer, order, orders: full };
   },
 
   async createCreditNote(data: InsertCreditNote): Promise<CreditNote> {

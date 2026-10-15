@@ -45,6 +45,8 @@ import SuppliersPage from "@/pages/suppliers/index";
 import SupplierCCPage from "@/pages/suppliers/cc";
 import PriceListPage from "@/pages/price-list";
 import InvoicesPage from "@/pages/invoices/index";
+import FacturasAEmitirPage from "@/pages/facturas-a-emitir";
+import MensajesAutomaticosPage from "@/pages/mensajes-automaticos";
 import CajaPage from "@/pages/caja/index";
 import BancosPage from "@/pages/bancos/index";
 import VendedorDashboard from "@/pages/vendedor/dashboard";
@@ -90,6 +92,8 @@ function Router() {
       <Route path="/intake" component={IntakePage} />
       <Route path="/wa-pendientes" component={WaPendingPage} />
       <Route path="/bot-clientes" component={BotClientesPage} />
+      <Route path="/facturas-a-emitir" component={FacturasAEmitirPage} />
+      <Route path="/configuracion/mensajes" component={MensajesAutomaticosPage} />
       <Route path="/cuentas-corrientes" component={CuentasCorrientesPage} />
       <Route path="/cuentas-corrientes/:id">
         {(params) => {

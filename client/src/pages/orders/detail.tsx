@@ -206,6 +206,59 @@ function ProductCombobox({
 }
 
 // ─── ItemRow ───────────────────────────────────────────────────────────────────
+// ─── A-13: estado del envío del remito por WhatsApp + reenvío ───
+type Outbound = { id: number; phone: string; status: string; error: string | null; sentAt: string | null; createdAt: string; fileName: string | null };
+function RemitoEnvioBlock({ orderId }: { orderId: number }) {
+  const { toast } = useToast();
+  const { data: envios = [] } = useQuery<Outbound[]>({ queryKey: ["/api/wa-outbound", "remito", orderId], queryFn: () => fetch(`/api/wa-outbound?kind=remito&refId=${orderId}`, { credentials: "include" }).then((r) => r.json()), refetchInterval: 15000 });
+  const reenviar = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/orders/${orderId}/send-remito`, {}).then((r) => r.json()),
+    onSuccess: (r: { enviados: number; errores: string[] }) => { queryClient.invalidateQueries({ queryKey: ["/api/wa-outbound", "remito", orderId] }); toast(r.enviados ? { title: `Remito enviado a ${r.enviados} número(s)` } : { title: "No se pudo enviar", description: r.errores.join(" · ") || "sin teléfonos con check Remito", variant: "destructive" }); },
+    onError: (e: any) => toast({ title: "No se pudo enviar", description: e.message, variant: "destructive" }),
+  });
+  const fmtHora = (iso: string | null) => iso ? new Date(iso).toLocaleTimeString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", hour: "2-digit", minute: "2-digit" }) : "";
+  const ultimos = new Map<string, Outbound>();
+  for (const e of [...envios].reverse()) ultimos.set(e.phone, e); // último estado por teléfono
+  const lista = Array.from(ultimos.values());
+  return (
+    <div className="col-span-2 sm:col-span-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border px-3 py-2">
+      <p className="text-xs text-muted-foreground uppercase tracking-wide">Remito por WhatsApp</p>
+      {lista.length === 0 && <span className="text-xs text-muted-foreground">Sin envíos todavía.</span>}
+      {lista.map((e) => (
+        <span key={e.id} className={`text-xs ${e.status === "sent" ? "text-green-700 dark:text-green-400" : e.status === "error" ? "text-destructive" : "text-muted-foreground"}`} title={e.error ?? undefined}>
+          {e.status === "sent" ? `Remito enviado ✓ ${fmtHora(e.sentAt)}` : e.status === "error" ? `Error: ${e.error ?? "no se pudo enviar"}` : "Enviando…"}
+          <span className="text-muted-foreground"> · {e.phone === "-" ? "" : e.phone}</span>
+        </span>
+      ))}
+      <Button size="sm" variant="outline" className="h-7 text-xs" disabled={reenviar.isPending} onClick={() => reenviar.mutate()} data-testid="button-resend-remito">
+        {reenviar.isPending ? "Enviando…" : lista.some((e) => e.status === "sent") ? "Reenviar remito corregido" : "Enviar remito por WhatsApp"}
+      </Button>
+    </div>
+  );
+}
+
+// ─── A-13: nota de crédito por diferencia (el pedido facturado se modificó y vale menos) ───
+function NcDiferenciaBlock({ orderId }: { orderId: number }) {
+  const { toast } = useToast();
+  const { data: invs = [] } = useQuery<{ id: number; invoiceNumber: string }[]>({ queryKey: ["/api/invoices", "order", orderId], queryFn: () => fetch(`/api/invoices?orderId=${orderId}`, { credentials: "include" }).then((r) => r.json()) });
+  const inv = invs[0];
+  const { data: diff } = useQuery<{ total: number; iva: number; acreditado: number } | null>({ queryKey: ["/api/invoices", inv?.id, "diferencia"], enabled: !!inv, queryFn: () => fetch(`/api/invoices/${inv!.id}/diferencia`, { credentials: "include" }).then((r) => r.json()) });
+  const emitir = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/invoices/${inv!.id}/credit-note-diff`, {}).then((r) => r.json()),
+    onSuccess: (nc: any) => { queryClient.invalidateQueries({ queryKey: ["/api/invoices"] }); toast({ title: `Nota de crédito ${nc.creditNoteNumber} emitida`, description: "Se envía sola a los teléfonos con check Factura." }); },
+    onError: (e: any) => toast({ title: "No se pudo emitir la nota de crédito", description: e.message, variant: "destructive" }),
+  });
+  if (!inv || !diff || !(diff.total > 0)) return null;
+  return (
+    <div className="col-span-2 sm:col-span-4 flex flex-wrap items-center gap-3 rounded-md border border-orange-300 bg-orange-50 dark:bg-orange-900/20 px-3 py-2">
+      <p className="text-sm text-foreground">El pedido se modificó después de facturar ({inv.invoiceNumber}): hoy vale <b>${fmtInt(diff.total)}</b> menos de lo facturado{diff.acreditado > 0 ? ` (ya acreditado $${fmtInt(diff.acreditado)})` : ""}.</p>
+      <Button size="sm" variant="outline" className="h-7 text-xs border-orange-400" disabled={emitir.isPending} onClick={() => emitir.mutate()} data-testid="button-nc-diferencia">
+        {emitir.isPending ? "Emitiendo…" : `Emitir nota de crédito por $${fmtInt(diff.total)}`}
+      </Button>
+    </div>
+  );
+}
+
 function ItemRow({
   calc,
   allProducts,
@@ -1270,7 +1323,10 @@ export default function OrderDetailPage({ id }: { id: number }) {
         remito.order.total = String(remito.order.items.reduce((s, i) => s + parseFloat(i.subtotal), 0));
       }
 
-      await generateRemitoPDF(remito, { hidePrecios });
+      // A-13: mismo nombre que el remito automático: "Remito {Cliente} {dd.mm}"
+      const dOrd = String(order.orderDate).slice(0, 10).split("-");
+      const nombreArchivo = `Remito ${order.customer.name} ${dOrd[2]}.${dOrd[1]}`.replace(/[\\/:*?"<>|]/g, "") + ".pdf";
+      await generateRemitoPDF(remito, { hidePrecios, fileName: nombreArchivo });
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     }
@@ -1694,6 +1750,9 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 {isDraft && <p className="text-[10px] text-muted-foreground mt-0.5">Lo calculó el galpón al confirmar (productos del pedido original que quedaron sin cargar). Se manda tal cual quede escrito; si lo borrás, el remito va sin aviso.</p>}
               </div>
             )}
+            {/* A-13: envío del remito por WhatsApp y nota de crédito por diferencia */}
+            {isApproved && <RemitoEnvioBlock orderId={id} />}
+            {isApproved && order.invoiceNumber && <NcDiferenciaBlock orderId={id} />}
             {/* A-01: dudas del bot (líneas en amarillo en la tabla). Se van al confirmar con el check o al editar la línea. */}
             {dudas.length > 0 && (
               <div className="col-span-2 sm:col-span-4 rounded-md border border-yellow-300 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-900/20 px-3 py-2">
