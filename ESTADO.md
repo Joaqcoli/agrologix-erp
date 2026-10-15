@@ -35,6 +35,13 @@
   /facturas-a-emitir, /configuracion/mensajes; en el pedido: estado del remito por WhatsApp + reenviar, "Emitir nota de
   crédito por $X". **Render: falta cargar `YCLOUD_API_KEY` en el .env del ERP** (sin eso, los envíos quedan en error
   "YCloud no configurado"). `/ejemplo.pdf` es el documento de ejemplo para las plantillas.
+  Prueba 15/10 con PRUEBA (167) desde la máquina local con la key de YCloud del bot: pedido 2590 aprobado → remito
+  "Remito PRUEBA 15.10.pdf" enviado al número de Joaquín (documento libre, dentro de 24 h) con aviso de faltantes;
+  factura 921 enviada como documento de prueba; PRUEBA en modo diaria → ítem #2 en "Facturas a emitir" (aprobarlo
+  emite una Factura B real a PRUEBA). 8 plantillas con documento creadas en Meta (`va_*_v1`), todas PENDING.
+  **Pendiente de Joaquín:** `YCLOUD_API_KEY` en Render (ERP); marcar los checks Remito/Factura por cliente (hoy solo
+  PRUEBA tiene); revisar modos de facturación asignados (33 clientes: 21 diaria, 12 diaria con envío semanal); prender
+  los interruptores cuando quiera. Nadie quedó con "precios incluyen IVA" en sí.
   14-oct **intake idempotente**: `POST /api/orders/intake` con un `intakeLogId` que ya tiene `order_id` responde
   `{orderId, itemIds: [], yaCargado: true}` sin cargar líneas. Causa: el bot procesó dos veces el mismo mensaje de
   Brick Towers Del Viso (ciclos de reproceso solapados, ya con mutex) y el borrador 67 del 14/10 quedó con cada
