@@ -1899,7 +1899,16 @@ export const storage = {
         updateData.aliasNombre = a ? a : null;
       }
       // A-01: una línea que el bot dejó en duda queda revisada si la confirman o si le cambian cantidad/unidad/producto
-      if ((item as any).parseStatus === "duda" && (patch.parseStatus === "ok" || hasStructuralChange)) updateData.parseStatus = "ok";
+      if ((item as any).parseStatus === "duda" && (patch.parseStatus === "ok" || hasStructuralChange)) {
+        updateData.parseStatus = "ok";
+        // A-13 (15/10): el bot aprende de la confirmación o corrección: ese renglón del cliente → este producto/unidad/cantidad
+        const raw = (item as any).rawProductName as string | null;
+        if (raw && newProductId) {
+          const qtyFinal = patch.quantity !== undefined ? parseFloat(patch.quantity) : Number(item.quantity);
+          this.upsertCustomerMemory({ customerId, productId: newProductId, hint: raw, quantity: qtyFinal, unit: newUnit, source: hasStructuralChange ? "correccion" : "confirmacion" })
+            .catch((e: any) => console.error("[memoria] no se pudo guardar:", e.message));
+        }
+      }
 
       if (Object.keys(updateData).length > 0) {
         await tx.update(orderItems).set(updateData).where(eq(orderItems.id, itemId));

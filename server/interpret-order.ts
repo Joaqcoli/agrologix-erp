@@ -81,14 +81,17 @@ Recibís el texto (o la foto) de un pedido que un cliente mandó por WhatsApp y 
 
 REGLAS
 1. Productos: usá SOLO los IDs del CATÁLOGO ACTIVO. Si no hay un producto claro → status "duda", productId null (o el más probable) y hasta 3 candidates.
-2. Unidad escrita por el cliente ("1kg rúcula", "2 cajones", "3 atados", "4 u", "bolsa"/"saco", "maple", "bandeja") → se respeta tal cual, si el producto la tiene en "unidades". Si el producto no tiene esa unidad → status "duda" explicando cuál pidió.
+2. Unidad escrita por el cliente ("1kg rúcula", "2 cajones", "3 atados", "4 u", "bolsa"/"saco", "maple", "bandeja") → se respeta tal cual, si el producto la tiene en "unidades". Si el producto no tiene esa unidad → igual devolvé la línea con esa unidad y cantidad (el galpón la ajusta al armar), status "duda" explicando cuál pidió.
+   "planta" / "plantas" / "pieza" NO es una unidad: es la unidad con la que ESTE cliente compra ese producto (ATADO o UNIDAD según el HISTORIAL; si nunca lo compró, la unidad habitual del catálogo). Con historial es status "ok", no duda.
    Sin unidad en el texto → la unidad que más usa ESTE cliente para ese producto (ver HISTORIAL). Si el cliente nunca lo compró → la "unidad habitual" global del catálogo y status "duda".
    Ojo: "1 cilantro", "2 albahaca" sin unidad NO es KG por defecto: mirá el historial del cliente (suele ser ATADO o UNIDAD).
 3. Si el texto nombra EXACTAMENTE un producto del catálogo ("zanahoria" → ZANAHORIA, "cebolla" → CEBOLLA, "limón" → LIMON), ese es el producto, aunque el cliente suela comprar una variante (ZANAHORIA INDUSTRIAL, CEBOLLON): el cliente lo escribió así a propósito. Solo la MEMORIA DEL CLIENTE puede cambiar eso.
    Variante sin aclarar cuando NO hay producto con ese nombre exacto (anco, palta, naranja, papa, tomate, manzana, lechuga, morrón sin color, etc.): mirá en el HISTORIAL todas las variantes de ese producto que compró el cliente y sus fechas. Tomá los últimos 5 pedidos en los que compró alguna variante: gana la que más se repite; empate → la de fecha más reciente. Esa línea queda status "ok" (dudaType "ninguna"), no es duda: la variante final la ajusta el equipo según lo que se compra. Es "duda" (dudaType "variante", con candidates) SOLO si el cliente nunca compró ninguna variante de ese producto.
 4. Abreviaturas y apodos ("champi", "verdeo", "zuchini", "cebollón", "anco", "calabaza") → primero contra lo que ese cliente ya compra, después contra el catálogo.
 5. Cantidades: gramos → KG (250 gr = 0.25; 800g = 0.8). Fracciones y palabras: 1/2 = medio = 0.5; 1/4 = 0.25; 3/4 = 0.75; "1 1/2" = 1.5; coma decimal "1,5" = 1.5; "docena" = 12 UNIDAD.
-   Cantidad vaga ("un poco de verdeo", "algo de kale", "como siempre", "lo de siempre", "lo mismo", "perejil y verdeo" sin número): primero mirá la MEMORIA DEL CLIENTE (si hay una entrada parecida, usá esa cantidad y unidad → status "ok", reason "memoria: …"); si no, la "últ. cant." del HISTORIAL para ese producto (→ status "ok", reason "como siempre: última vez X"). Si el cliente nunca lo pidió → status "duda", dudaType "cantidad", quantity null.
+   Cantidad vaga ("un poco de verdeo", "algo de kale", "como siempre", "lo de siempre", "lo mismo", "perejil y verdeo" sin número): primero mirá la MEMORIA DEL CLIENTE (si hay una entrada parecida, usá esa cantidad y unidad → status "ok", reason "memoria: …"); si no, la "últ. cant." del HISTORIAL para ese producto (→ status "ok", reason "como siempre: última vez X"). Si el cliente nunca lo pidió → status "duda", dudaType "cantidad", quantity 1.
+   SIEMPRE se carga el producto, aunque haya duda: una línea con duda es mejor que un producto olvidado. Nunca dejes un producto sin línea por tener dudas.
+5b. MEMORIA DEL CLIENTE: son renglones que el equipo ya confirmó o corrigió. Si un renglón nuevo dice lo mismo (mismo producto y misma forma de escribirlo, aunque cambie el número), cargalo igual que la memoria (producto y unidad; la cantidad del renglón nuevo) con status "ok" y reason "memoria". No vuelvas a marcar como duda algo que ya está en la memoria.
 6. Comentarios del cliente sobre cómo quiere el producto ("maduros no pasados", "PROPAL si es posible", "para jugo", "chicos") → van a notes (una línea por comentario, nombrando el producto). La línea del producto igual se carga como línea.
 6b. Reposición o reclamo ("tengo un cebollón de cambio", "vinieron muy chiquitas", "me faltó una bolsa de papa", "la lechuga vino mal") → SÍ se carga como línea (cantidad la que diga; "un/una" = 1; unidad la habitual del cliente), con status "duda", dudaType "cambio" y reason "es cambio/reposición: ver si se cobra", y además una línea en notes explicando el reclamo. No es un pedido nuevo del producto: es mercadería que hay que reponer.
 7. Saludos, dirección, nombre del local, fecha o día de entrega, encabezados tipo "Pedido verdulería", firmas → ignoredLines. No son líneas.
@@ -103,7 +106,7 @@ GLOSARIO (cómo habla el cliente → catálogo; el historial del cliente manda s
 - "calabaza" / "anco" = ZAPALLO ANCO (la variante Coquena/Comercial/Brasil según el cliente; si nunca compró ninguna → duda).
 - "papa blanca" = PAPA LAVADA (salvo que el cliente compre PAPA BLANCA CORDOBA). "papa" a secas = la papa que ese cliente compra.
 - "repollo morado" = REPOLLO COLORADO. "zapallitos verdes" = ZAPALLITO REDONDO. "manzana verde" = MANZANA GRANNY. "verdeo" = CEBOLLA DE VERDEO.
-- "plantas" de lechuga/acelga = UNIDAD. "cabezas" de ajo = UNIDAD. "docena" = 12 UNIDAD.`;
+- "planta"/"plantas"/"pieza" = la unidad con la que ese cliente compra ese producto (ATADO o UNIDAD, ver HISTORIAL). "cabezas" de ajo = UNIDAD. "docena" = 12 UNIDAD.`;
 
 // ─── Contexto ────────────────────────────────────────────────────────────────
 type CatalogRow = { id: number; name: string; category: string | null; units: string[] };
@@ -135,7 +138,7 @@ function buildCustomerBlock(
     `CLIENTE: ${customerName}`,
     `HISTORIAL DEL CLIENTE, últimos ${HISTORY_DAYS} días (producto (id) | unidad | veces | fechas de las últimas 5 compras, más reciente primero | cantidad de la última vez):`,
     hist.length ? hist.join("\n") : "(sin historial: cliente nuevo o sin compras recientes)",
-    `MEMORIA DEL CLIENTE (cómo se resolvieron antes sus expresiones vagas):`,
+    `MEMORIA DEL CLIENTE (renglones que el equipo ya confirmó o corrigió: "texto del cliente" → producto cantidad unidad; cargá igual, status "ok"):`,
     mem.length ? mem.join("\n") : "(sin memoria)",
     `REGLAS DEL EQUIPO (las escribió Joaquín/Fede; tienen prioridad sobre las reglas generales de arriba, nunca sobre el catálogo):`,
     rules.length ? rules.map((r) => `- [${r.scope === "cliente" ? "este cliente" : "todos"}] ${r.rule}`).join("\n") : "(ninguna)",
@@ -180,16 +183,28 @@ function fuzzyCandidates(rawLine: string, catalog: CatalogRow[]): number[] {
   return scored.slice(0, 3).map((x) => x.id);
 }
 
+/** Clave de comparación de un renglón: sin acentos, números, unidades ni puntuación ("Espinaca 4kg" → "espinaca"). */
+export function claveRenglon(s: string): string {
+  return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/\d+([.,/]\d+)?/g, " ").replace(/\b(kg|kgs|kilo|kilos|gr|grs|g|u|un|und|unid|unidad|unidades|atado|atados|planta|plantas|pieza|piezas|cajon|cajones|bolsa|bolsas|maple|maples|bandeja|bandejas|de|del|la|el|los|las|x)\b/g, " ")
+    .replace(/[^a-z\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function validateProposal(
   raw: ModelProposalT,
   catalog: CatalogRow[],
-  history: { productId: number; unit: string; times: number }[],
+  history: { productId: number; unit: string; times: number; lastQuantity?: number | null }[],
   globalUnits: Map<number, string>,
+  memory: { productId: number; hint: string; quantity: number; unit: string }[] = [],
 ): Pick<InterpretResult, "lines" | "ignoredLines" | "notes" | "multiLocalWarning"> {
   const byId = new Map<number, CatalogRow>(catalog.map((p) => [p.id, p] as [number, CatalogRow]));
   // unidad más usada por el cliente por producto (history ya viene ordenado por veces desc)
   const custUnit = new Map<number, string>();
-  for (const h of history) if (!custUnit.has(h.productId)) custUnit.set(h.productId, h.unit);
+  const lastQty = new Map<number, number>();
+  for (const h of history) { if (!custUnit.has(h.productId)) custUnit.set(h.productId, h.unit); if (h.lastQuantity != null && !lastQty.has(h.productId)) lastQty.set(h.productId, Number(h.lastQuantity)); }
+  // memoria por clave de renglón ("espinaca" → ESPINACA KG, confirmado por el equipo)
+  const memByKey = new Map<string, { productId: number; quantity: number; unit: string; hint: string }>();
+  for (const m of memory) { const k = claveRenglon(m.hint); if (k && byId.has(m.productId) && !memByKey.has(k)) memByKey.set(k, m); }
 
   const lines: InterpretedLine[] = raw.lines.map((l) => {
     let productId = l.productId;
@@ -224,10 +239,22 @@ function validateProposal(
         status = "duda"; dudaType = "unidad";
       }
     }
+    // A-13 (15/10): la MEMORIA manda — el equipo ya confirmó cómo se carga este renglón
+    const mem = memByKey.get(claveRenglon(l.rawLine));
+    if (mem) {
+      const mp = byId.get(mem.productId)!;
+      productId = mem.productId; unit = mem.unit;
+      if (quantity == null || !Number.isFinite(quantity) || quantity <= 0) quantity = mem.quantity;
+      status = "ok"; dudaType = "ninguna"; candidates = [];
+      reasons.length = 0; reasons.push(`memoria: "${mem.hint}" → ${mp.name} ${mem.unit} (confirmado por el equipo)`);
+    }
+    const productM = productId != null ? byId.get(productId)! : null;
     if (quantity == null || !Number.isFinite(quantity) || quantity <= 0) {
-      quantity = null;
+      // Siempre se carga: última cantidad del cliente para ese producto, o 1 — en duda para que lo revisen
+      const lq = productM ? lastQty.get(productM.id) : undefined;
+      quantity = lq && lq > 0 ? lq : 1;
       status = "duda"; if (dudaType !== "cambio") dudaType = "cantidad";
-      if (!reasons.length) reasons.push("Sin cantidad");
+      reasons.unshift(lq ? `Sin cantidad: se cargó la última vez (${lq})` : "Sin cantidad: se cargó 1");
     } else {
       quantity = Math.round(quantity * 1000) / 1000;
     }
@@ -327,7 +354,7 @@ export async function interpretOrder(opts: {
   const parsed = response.parsed_output;
   if (!parsed) throw new Error("El modelo no devolvió el JSON esperado");
 
-  const validated = validateProposal(parsed, catalog, history, globalUnits);
+  const validated = validateProposal(parsed, catalog, history, globalUnits, memory);
   return {
     ...validated,
     model,
