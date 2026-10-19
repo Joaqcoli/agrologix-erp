@@ -117,7 +117,9 @@ export default function OrdersPage() {
   const { toast } = useToast();
   const d0 = new Date();
   const today = `${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,"0")}-${String(d0.getDate()).padStart(2,"0")}`;
-  const [date, setDate] = useState(today);
+  // La fecha elegida se recuerda mientras dure la pestaña: al volver de un pedido se vuelve al mismo día, no a hoy (Joaquín, 19/10)
+  const [date, setDateState] = useState(() => { try { return sessionStorage.getItem("pedidos.fecha") || today; } catch { return today; } });
+  const setDate = (d: string) => { setDateState(d); try { sessionStorage.setItem("pedidos.fecha", d); } catch {} };
   const [exporting, setExporting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<OrderSummary | null>(null);
 
