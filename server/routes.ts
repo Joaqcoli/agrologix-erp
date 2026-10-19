@@ -2356,20 +2356,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/price-list", requireAuth, async (req, res) => {
     try {
       const data = insertPriceListItemSchema.parse(req.body);
-      return res.status(201).json(await storage.createPriceListItem(data));
+      return res.status(201).json(await storage.createPriceListItem(data, req.session.userId));
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   app.patch("/api/price-list/:id", requireAuth, async (req, res) => {
     try {
       const data = insertPriceListItemSchema.partial().parse(req.body);
-      return res.json(await storage.updatePriceListItem(Number(req.params.id), data));
+      return res.json(await storage.updatePriceListItem(Number(req.params.id), data, req.session.userId));
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   app.delete("/api/price-list/:id", requireAuth, async (req, res) => {
     try {
-      await storage.deletePriceListItem(Number(req.params.id));
+      await storage.deletePriceListItem(Number(req.params.id), req.session.userId);
       return res.json({ ok: true });
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });

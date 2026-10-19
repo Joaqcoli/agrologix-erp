@@ -1693,6 +1693,7 @@ export async function runNcMigrations() {
       ('render_bot', 'Render: servidor del bot', 7, 'USD/mes', '2026-10-01'),
       ('alerta_saldo', 'Aviso si el saldo de YCloud baja de', 3, 'USD', '2026-10-01')
       ON CONFLICT (key) DO NOTHING`,
+    `CREATE TABLE IF NOT EXISTS price_list_history (id SERIAL PRIMARY KEY, item_id INTEGER, product_name TEXT, action TEXT NOT NULL, before JSONB, after JSONB, user_id INTEGER, created_at TIMESTAMP NOT NULL DEFAULT NOW())`,
     `CREATE TABLE IF NOT EXISTS message_templates (key TEXT PRIMARY KEY, label TEXT NOT NULL, text TEXT NOT NULL, has_document BOOLEAN NOT NULL DEFAULT TRUE, approved_name TEXT, pending_name TEXT, pending_status TEXT, pending_reason TEXT, version INTEGER NOT NULL DEFAULT 0, updated_at TIMESTAMP NOT NULL DEFAULT NOW())`,
     // Facturas existentes: cada una cubre su pedido
     `INSERT INTO invoice_orders (invoice_id, order_id) SELECT i.id, i.order_id FROM invoices i WHERE NOT EXISTS (SELECT 1 FROM invoice_orders io WHERE io.invoice_id = i.id)`,

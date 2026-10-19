@@ -22,7 +22,7 @@ import {
   type BankCategory,
   type BankContact, type InsertBankContact,
   type MpMovementIdentifier,
-  appSettings, orderSnapshots, waOutbound, invoiceOrders, invoiceQueue, messageTemplates, aiUsage, costRates,
+  appSettings, orderSnapshots, waOutbound, invoiceOrders, invoiceQueue, messageTemplates, aiUsage, costRates, priceListHistory,
 } from "@shared/schema";
 type MessageTemplateRow = typeof messageTemplates.$inferSelect;
 type WaOutboundRow = typeof waOutbound.$inferSelect;
@@ -5047,6 +5047,12 @@ export const storage = {
       for (const c of custs) push(c, "contacto");
       const sedes = await db.select(sel).from(customers).where(and(inArray(customers.parentCustomerId, ids), eq(customers.active, true))).orderBy(asc(customers.name));
       for (const s of sedes) push(s, "sede");
+      // Hermanas (19/10): el teléfono de una sede puede mandar el pedido de otra sede del mismo padre ("St Catherine" desde el teléfono de Master)
+      const padres = Array.from(new Set(custs.map((c) => c.parentCustomerId).filter((x): x is number => x != null)));
+      if (padres.length) {
+        const hermanas = await db.select(sel).from(customers).where(and(inArray(customers.parentCustomerId, padres), eq(customers.active, true))).orderBy(asc(customers.name));
+        for (const h of hermanas) push(h, "sede");
+      }
     }
     // Pista: customers.phone (administración) con el mismo número normalizado. Se compara por los últimos 10 dígitos.
     const tail = phone.replace(/\D/g, "").slice(-10);
@@ -6383,17 +6389,25 @@ export const storage = {
       .orderBy(asc(priceListItems.category), asc(priceListItems.sortOrder), asc(priceListItems.productName));
   },
 
-  async createPriceListItem(data: InsertPriceListItem): Promise<PriceListItem> {
+  async logPriceListChange(d: { itemId: number | null; productName: string | null; action: "create" | "update" | "delete"; before?: unknown; after?: unknown; userId?: number | null }): Promise<void> {
+    try { await db.insert(priceListHistory).values({ itemId: d.itemId, productName: d.productName, action: d.action, before: (d.before ?? null) as any, after: (d.after ?? null) as any, userId: d.userId ?? null }); } catch (e: any) { console.error("[lista de precios] historial:", e.message); }
+  },
+  async createPriceListItem(data: InsertPriceListItem, userId?: number | null): Promise<PriceListItem> {
     const [item] = await db.insert(priceListItems).values(data).returning();
+    await this.logPriceListChange({ itemId: item.id, productName: item.productName, action: "create", after: item, userId });
     return item;
   },
 
-  async updatePriceListItem(id: number, data: Partial<InsertPriceListItem>): Promise<PriceListItem> {
+  async updatePriceListItem(id: number, data: Partial<InsertPriceListItem>, userId?: number | null): Promise<PriceListItem> {
+    const [before] = await db.select().from(priceListItems).where(eq(priceListItems.id, id)).limit(1);
     const [item] = await db.update(priceListItems).set(data).where(eq(priceListItems.id, id)).returning();
+    await this.logPriceListChange({ itemId: id, productName: item?.productName ?? before?.productName ?? null, action: "update", before, after: item, userId });
     return item;
   },
 
-  async deletePriceListItem(id: number): Promise<void> {
+  async deletePriceListItem(id: number, userId?: number | null): Promise<void> {
+    const [before] = await db.select().from(priceListItems).where(eq(priceListItems.id, id)).limit(1);
+    if (before) await this.logPriceListChange({ itemId: id, productName: before.productName, action: "delete", before, userId });
     await db.update(priceListItems).set({ active: false }).where(eq(priceListItems.id, id));
   },
 

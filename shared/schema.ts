@@ -609,6 +609,17 @@ export type InsertPayment = z.infer<typeof insertPaymentSchema>;
 export type InsertWithholding = z.infer<typeof insertWithholdingSchema>;
 
 // ─── Lista de Precios ────────────────────────────────────────────────────────
+/** Historial de cambios de la Lista de Precios (19/10): antes no había y no se pudo volver atrás un día de cambios. */
+export const priceListHistory = pgTable("price_list_history", {
+  id: serial("id").primaryKey(),
+  itemId: integer("item_id"),
+  productName: text("product_name"),
+  action: text("action").notNull(), // create | update | delete
+  before: jsonb("before"),
+  after: jsonb("after"),
+  userId: integer("user_id"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
 export const priceListItems = pgTable("price_list_items", {
   id: serial("id").primaryKey(),
   category: text("category").notNull(),
