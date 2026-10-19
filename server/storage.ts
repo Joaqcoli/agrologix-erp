@@ -4744,6 +4744,17 @@ export const storage = {
     return { ok: true, note: `fecha ${date}` };
   },
 
+  /** "Pasar pedido" (Joaquín, 19/10): mover la fecha de entrega de un pedido en borrador o aprobado (no facturado). */
+  async updateOrderDate(orderId: number, date: string): Promise<{ ok: boolean; note: string }> {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, note: "Fecha inválida" };
+    const [o] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!o) return { ok: false, note: "El pedido no existe" };
+    if (o.invoiceNumber) return { ok: false, note: `El pedido ${o.folio} ya está facturado (${o.invoiceNumber}): no se puede cambiar la fecha` };
+    if (o.status === "cancelled") return { ok: false, note: "El pedido está cancelado" };
+    await db.update(orders).set({ orderDate: new Date(date) }).where(eq(orders.id, orderId));
+    return { ok: true, note: `Pedido ${o.folio} pasado al ${date.split("-").reverse().join("/")}` };
+  },
+
   /** Quitar o cambiar un renglón por pedido del cliente (solo borradores). */
   async botEditItem(orderId: number, itemId: number, action: "remove" | "set", patch: { quantity?: number; unit?: string } = {}): Promise<{ ok: boolean; note: string }> {
     const [o] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);

@@ -1326,6 +1326,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
+  // "Pasar pedido": cambiar la fecha de entrega desde el detalle del pedido
+  app.patch("/api/orders/:id/order-date", requireAuth, async (req, res) => {
+    try {
+      const { date } = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).parse(req.body);
+      const r = await storage.updateOrderDate(Number(req.params.id), date);
+      if (!r.ok) return res.status(400).json({ error: r.note });
+      return res.json(r);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   app.patch("/api/orders/:id/remito-num", requireAuth, async (req, res) => {
     try {
       const id = Number(req.params.id);

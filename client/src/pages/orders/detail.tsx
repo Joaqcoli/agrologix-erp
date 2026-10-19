@@ -206,6 +206,35 @@ function ProductCombobox({
 }
 
 // ─── ItemRow ───────────────────────────────────────────────────────────────────
+// ─── "Pasar pedido": elegir otra fecha de entrega y confirmar ───
+function PasarPedidoBlock({ orderId, fechaActual }: { orderId: number; fechaActual: string }) {
+  const { toast } = useToast();
+  const [abierto, setAbierto] = useState(false);
+  const [fecha, setFecha] = useState(fechaActual);
+  useEffect(() => setFecha(fechaActual), [fechaActual]);
+  const mover = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/orders/${orderId}/order-date`, { date: fecha }).then((r) => r.json()),
+    onSuccess: (r: { note: string }) => { setAbierto(false); queryClient.invalidateQueries({ queryKey: ["/api/orders", orderId] }); queryClient.invalidateQueries({ queryKey: ["/api/orders"] }); queryClient.invalidateQueries({ queryKey: ["/api/load-list"] }); toast({ title: r.note }); },
+    onError: (e: any) => toast({ title: "No se pudo pasar el pedido", description: e.message, variant: "destructive" }),
+  });
+  const lindo = (iso: string) => iso.split("-").reverse().join("/");
+  return (
+    <div className="col-span-2 sm:col-span-4 flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2">
+      <p className="text-xs text-muted-foreground uppercase tracking-wide">Fecha de entrega</p>
+      <span className="text-sm font-medium">{lindo(fechaActual)}</span>
+      {!abierto ? (
+        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAbierto(true)} data-testid="button-pasar-pedido"><Calendar className="h-3.5 w-3.5 mr-1" /> Pasar pedido</Button>
+      ) : (
+        <>
+          <input type="date" className="h-7 rounded-md border border-input bg-background px-2 text-xs" value={fecha} onChange={(e) => setFecha(e.target.value)} data-testid="input-pasar-fecha" />
+          <Button size="sm" className="h-7 text-xs" disabled={!fecha || fecha === fechaActual || mover.isPending} onClick={() => mover.mutate()} data-testid="button-confirmar-pasar">{mover.isPending ? "Pasando…" : `Confirmar: pasar al ${fecha ? lindo(fecha) : "…"}`}</Button>
+          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setAbierto(false); setFecha(fechaActual); }}>Cancelar</Button>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── A-13: estado del envío del remito por WhatsApp + reenvío ───
 type Outbound = { id: number; phone: string; status: string; error: string | null; sentAt: string | null; createdAt: string; fileName: string | null };
 function RemitoEnvioBlock({ orderId }: { orderId: number }) {
@@ -1750,6 +1779,8 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 {isDraft && <p className="text-[10px] text-muted-foreground mt-0.5">Lo calculó el galpón al confirmar (productos del pedido original que quedaron sin cargar). Se manda tal cual quede escrito; si lo borrás, el remito va sin aviso.</p>}
               </div>
             )}
+            {/* Pasar pedido a otra fecha (Joaquín, 19/10) */}
+            {!order.invoiceNumber && <PasarPedidoBlock orderId={id} fechaActual={String(order.orderDate).slice(0, 10)} />}
             {/* A-13: envío del remito por WhatsApp y nota de crédito por diferencia */}
             {isApproved && <RemitoEnvioBlock orderId={id} />}
             {isApproved && order.invoiceNumber && <NcDiferenciaBlock orderId={id} />}
