@@ -21,6 +21,11 @@
   ficha del cliente; 2 min de gracia por si se carga el mismo número en otra sede) y el bot los reprocesa en su
   próximo ciclo (1 min). Si el reproceso vuelve a dejarlo sin resolver, el pendiente se reabre con el motivo nuevo
   en vez de perderse. Los "repetido" (número conocido, texto ambiguo) siguen siendo manuales.
+  19-oct **Lista de Precios**: `price_list_history` guarda cada alta/cambio/baja (antes/después, usuario). Motivo: Joaquín
+  pidió volver atrás los cambios de un día y no había forma (la tabla no tenía historial ni updated_at).
+  19-oct **bot**: sedes hermanas como candidatas (`findCustomersByPhone`), el pedido es del dueño del teléfono si el texto
+  no nombra el local; el reproceso respeta el cliente asignado. Caso Master/St Catherine's dividido a mano (2653).
+  La API de Anthropic rechazó llamadas a las 10:39 y 11:04 por saldo de créditos agotado ("credit balance too low").
   15-oct **intérprete (reglas de Joaquín)**: siempre carga aunque haya duda (sin cantidad → última del cliente o 1; producto
   no identificado → renglón con producto vacío, en duda); "planta"/"pieza" = ATADO o UNIDAD según el cliente, nunca KG;
   los encabezados ignorados no generan notas; **memoria por cliente aprende de cada confirmación (check) y corrección**
