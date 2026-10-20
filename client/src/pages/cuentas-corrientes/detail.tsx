@@ -1646,7 +1646,7 @@ export default function CCCustomerDetailPage({
           folio: remitoFolio,
           issuedAt: order.orderDate,
           order: {
-            folio: order.folio, orderDate: order.orderDate, notes: order.notes,
+            folio: order.folio, orderDate: order.orderDate, notes: order.notes, source: (order as any).source ?? null,
             customer: {
               name: order.customer.name, hasIva: hasIvaOn(order.customer, order.orderDate),
               rfc: order.customer.rfc ?? null, address: order.customer.address ?? null,
