@@ -133,7 +133,7 @@ export default function GalponOrderDetail({ id }: { id: number }) {
       order: {
         folio: order.folio,
         orderDate: order.orderDate,
-        notes: order.notes,
+        notes: order.notes, source: order.source ?? null,
         customer: { name: order.customerName, address: order.address, city: order.city, phone: order.phone },
         items: order.items.map((it) => ({
           product: it.productName ? ({ name: it.productName } as any) : null,

@@ -455,6 +455,9 @@ export type ArmadoOrder = {
   customerName: string;
   createdByName?: string | null;
   items: { quantity: string; unit: string; productName: string | null }[];
+  /** Notas del bot (qué asumió) y del encargado: se imprimen en la hoja de armado, no en el remito (20/10). */
+  notes?: string | null;
+  galponNotes?: string | null;
 };
 
 export function generateArmadoPDF(orders: ArmadoOrder[], dateLabel: string) {
@@ -473,8 +476,13 @@ export function generateArmadoPDF(orders: ArmadoOrder[], dateLabel: string) {
 
   const bottom = pageH - margin;
   for (const ord of orders) {
-    // Alto COMPLETO del pedido (separador + header + encabezados + ítems + espacio)
-    const fullBlockH = 5 + 5 + 5.5 + ord.items.length * lineH + 5;
+    // Notas (bot y galpón) en líneas cortas para la hoja
+    doc.setFont("helvetica", "italic"); doc.setFontSize(8);
+    const notasLineas: string[] = [];
+    if (ord.notes?.trim()) notasLineas.push(...(doc.splitTextToSize(`Notas: ${ord.notes.trim().replace(/\s*\n\s*/g, " · ")}`, pageW - margin * 2) as string[]));
+    if (ord.galponNotes?.trim()) notasLineas.push(...(doc.splitTextToSize(`Galpón: ${ord.galponNotes.trim().replace(/\s*\n\s*/g, " · ")}`, pageW - margin * 2) as string[]));
+    // Alto COMPLETO del pedido (separador + header + encabezados + ítems + notas + espacio)
+    const fullBlockH = 5 + 5 + 5.5 + ord.items.length * lineH + (notasLineas.length ? notasLineas.length * 3.8 + 2 : 0) + 5;
     const fitsOnEmptyPage = fullBlockH <= bottom - margin;
     // Si el pedido NO entra completo en lo que queda de la hoja, y sí entra en una hoja
     // vacía → arrancar en hoja nueva. Así nunca se parte un mismo pedido entre dos hojas.
@@ -509,6 +517,11 @@ export function generateArmadoPDF(orders: ArmadoOrder[], dateLabel: string) {
       doc.text(it.unit ?? "", margin + 18, y);
       doc.text(it.productName ?? "—", margin + 32, y);
       y += lineH;
+    }
+    if (notasLineas.length) {
+      doc.setFont("helvetica", "italic"); doc.setFontSize(8); doc.setTextColor(90);
+      for (const ln of notasLineas) { if (y > pageH - margin) { doc.addPage(); y = margin; } doc.text(ln, margin, y); y += 3.8; }
+      doc.setTextColor(0); y += 2;
     }
     y += 5;
   }

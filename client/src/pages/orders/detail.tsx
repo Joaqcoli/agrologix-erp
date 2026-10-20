@@ -1318,6 +1318,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
           folio: order.folio,
           orderDate: order.orderDate,
           notes: order.notes,
+          source: (order as any).source ?? null,
           customer: {
             name: order.customer.name,
             hasIva: hasIvaOn(order.customer, order.orderDate),

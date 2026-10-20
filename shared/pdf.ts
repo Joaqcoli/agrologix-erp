@@ -26,6 +26,8 @@ export type RemitoData = {
     folio: string;
     orderDate: string | Date;
     notes?: string | null;
+    /** 'whatsapp' | 'intake' = notas del bot/IA (internas): no se imprimen en el remito del cliente (Joaquín, 20/10). */
+    source?: string | null;
     customer: {
       name: string;
       hasIva?: boolean;
@@ -446,7 +448,8 @@ export async function generateRemitoPDF(
   // ────────────────────────────────────────────────────────────────────────────
   // NOTES (if any)
   // ────────────────────────────────────────────────────────────────────────────
-  if (data.order.notes) {
+  const notasInternas = data.order.source === "whatsapp" || data.order.source === "intake";
+  if (data.order.notes && !notasInternas) {
     y += 3;
     doc.setFont("helvetica", "italic");
     doc.setFontSize(8);

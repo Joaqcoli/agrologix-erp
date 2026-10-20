@@ -118,6 +118,7 @@ export async function remitoPdfBuffer(
       folio: order.folio,
       orderDate: order.orderDate,
       notes: order.notes,
+      source: (order as any).source ?? null,
       customer: {
         name: customer.name,
         hasIva: hasIvaOn(customer, order.orderDate),
