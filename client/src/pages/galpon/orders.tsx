@@ -56,7 +56,7 @@ export default function GalponOrders() {
         }))
         .filter((d) => d.items.length > 0); // pedidos que quedan solo con bolsa no se imprimen
       if (armado.length === 0) return; // nada para armar (todo era bolsa)
-      generateArmadoPDF(armado, dateLabel);
+      generateArmadoPDF(armado, dateLabel, { print: true }); // directo a imprimir, sin descargar
     } finally { setPrinting(false); }
   };
 

@@ -144,7 +144,7 @@ export default function GalponOrderDetail({ id }: { id: number }) {
         })),
         total: "0",
       },
-    }, { hidePrecios: true });
+    }, { hidePrecios: true, output: "print" }); // directo a imprimir, sin descargar
   };
 
   if (isLoading || !order) {

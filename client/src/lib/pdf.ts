@@ -11,6 +11,7 @@ export {
   type InvoicePdfData,
   type PdfOutputOpts,
 } from "@shared/pdf";
+import { printDoc } from "@shared/pdf";
 
 // ── Bolsa FV PDF (unchanged) ─────────────────────────────────────────────────
 
@@ -460,7 +461,7 @@ export type ArmadoOrder = {
   galponNotes?: string | null;
 };
 
-export function generateArmadoPDF(orders: ArmadoOrder[], dateLabel: string) {
+export function generateArmadoPDF(orders: ArmadoOrder[], dateLabel: string, opts?: { print?: boolean }) {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const pageW = 210, pageH = 297, margin = 12;
   const lineH = 5;
@@ -526,5 +527,6 @@ export function generateArmadoPDF(orders: ArmadoOrder[], dateLabel: string) {
     y += 5;
   }
 
+  if (opts?.print) { printDoc(doc); return; }
   doc.save(`armado-${dateLabel}.pdf`);
 }

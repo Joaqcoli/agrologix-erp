@@ -12,7 +12,7 @@ import { ivaRateOf } from "@shared/iva";
 /** Opciones comunes de salida (navegador o servidor). */
 export type PdfOutputOpts = {
   /** "download" (default): doc.save() en el navegador. "buffer": devuelve los bytes (Node). */
-  output?: "download" | "buffer";
+  output?: "download" | "buffer" | "print"; // "print": abre el diálogo de impresión del navegador sin descargar (galpón, 20/10)
   /** Logo ya cargado como data URL (PNG o JPEG). Si se pasa (aunque sea null) NO se hace fetch. */
   logoDataUrl?: string | null;
   /** Nombre del archivo al descargar (solo output "download"). Default: el histórico. */
@@ -158,8 +158,26 @@ function finishDoc(doc: jsPDF, defaultFileName: string, opts?: PdfOutputOpts): U
     const ab = doc.output("arraybuffer");
     return typeof Buffer !== "undefined" ? Buffer.from(ab) : new Uint8Array(ab);
   }
+  if (opts?.output === "print") { printDoc(doc); return undefined; }
   doc.save(opts?.fileName ?? defaultFileName);
   return undefined;
+}
+
+/** Imprimir directo: el PDF se abre en un iframe oculto y se dispara el diálogo de impresión; no se descarga ningún archivo. */
+export function printDoc(doc: jsPDF): void {
+  if (typeof document === "undefined") return;
+  doc.autoPrint();
+  const url = doc.output("bloburl") as unknown as string;
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+  iframe.src = url;
+  document.body.appendChild(iframe);
+  const limpiar = () => { setTimeout(() => { try { document.body.removeChild(iframe); URL.revokeObjectURL(url); } catch {} }, 60_000); };
+  iframe.onload = () => {
+    try { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); }
+    catch { window.open(url, "_blank"); } // si el navegador no deja imprimir desde el iframe, se abre en otra pestaña (con autoPrint)
+    limpiar();
+  };
 }
 
 // Fecha dd/mm/aaaa en hora Argentina. El navegador de la empresa ya está en esa zona;
