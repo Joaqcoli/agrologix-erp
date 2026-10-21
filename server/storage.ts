@@ -4725,6 +4725,26 @@ export const storage = {
     return { at: new Date(row.at).toISOString(), kind: String(row.acc).includes("producto agregado") ? "agregado" : "pedido" };
   },
 
+  /** Borradores abiertos de un cliente (fecha ≥ hoy, hora Argentina) con sus renglones: contexto para el clasificador del bot (21/10). */
+  async getOpenDraftsForBot(customerId: number, hoyISO: string): Promise<{ id: number; folio: string; remitoNum: number | null; date: string; createdAt: Date; items: { name: string | null; quantity: number; unit: string }[] }[]> {
+    const os = await db.execute(drizzleSql`
+      SELECT id, folio, remito_num AS "remitoNum", to_char(order_date, 'YYYY-MM-DD') AS date, created_at AS "createdAt"
+      FROM orders WHERE customer_id = ${customerId} AND status = 'draft' AND order_date::date >= ${hoyISO}::date ORDER BY order_date, id`);
+    const out = [];
+    for (const o of os.rows as any[]) {
+      const its = await db.execute(drizzleSql`SELECT COALESCE(p.name, oi.raw_product_name) AS name, oi.quantity::float AS quantity, oi.unit FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.order_id = ${o.id} ORDER BY oi.id`);
+      out.push({ id: Number(o.id), folio: o.folio, remitoNum: o.remitoNum == null ? null : Number(o.remitoNum), date: o.date, createdAt: o.createdAt, items: (its.rows as any[]).map((r) => ({ name: r.name ?? null, quantity: Number(r.quantity), unit: r.unit })) });
+    }
+    return out;
+  },
+  /** Últimos mensajes de un teléfono (para que el bot entienda el contexto: "agrego 3 papas" se refiere al pedido de recién). */
+  async getRecentInboxForPhone(phone: string, horas = 6): Promise<{ id: number; receivedAt: Date | null; kind: string | null; orderId: number | null; text: string | null }[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT id, received_at AS "receivedAt", kind, order_id AS "orderId", text FROM wa_inbox
+      WHERE phone = ${phone} AND created_at > NOW() - (${horas} || ' hours')::interval ORDER BY received_at DESC NULLS LAST, id DESC LIMIT 8`);
+    return (rows.rows as any[]).map((r) => ({ id: Number(r.id), receivedAt: r.receivedAt, kind: r.kind ?? null, orderId: r.orderId == null ? null : Number(r.orderId), text: r.text ?? null }));
+  },
+
   /** Renglones del borrador del día de un cliente (para que el bot pueda quitar/cambiar por mensaje). */
   async getDraftItemsForBot(orderId: number): Promise<{ orderId: number; status: string; items: { id: number; productId: number | null; name: string | null; unit: string; quantity: number; parseStatus: string | null }[] } | null> {
     const [o] = await db.select({ id: orders.id, status: orders.status }).from(orders).where(eq(orders.id, orderId)).limit(1);

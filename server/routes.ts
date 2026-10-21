@@ -87,6 +87,7 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/orders/interpret",
     "/api/orders/intake",
     "/api/orders/draft",
+    "/api/orders/open-drafts",
     "/api/orders/dudas",
     "/api/orders/last-line",
     "/api/orders/draft-items",
@@ -992,6 +993,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Check if a draft order exists for customer+date (for intake merge flow)
+  // Contexto para el bot (21/10): borradores abiertos del cliente y últimos mensajes del teléfono
+  app.get("/api/orders/open-drafts", requireAuth, async (req, res) => {
+    const customerId = Number(req.query.customerId); const hoy = String(req.query.hoy ?? "");
+    if (!Number.isFinite(customerId) || !/^\d{4}-\d{2}-\d{2}$/.test(hoy)) return res.status(400).json({ error: "customerId y hoy (YYYY-MM-DD)" });
+    return res.json(await storage.getOpenDraftsForBot(customerId, hoy));
+  });
+  app.get("/api/wa-inbox/recientes", requireAuth, async (req, res) => {
+    const phone = normalizeArPhone(String(req.query.phone ?? "")) ?? String(req.query.phone ?? "");
+    if (!phone) return res.status(400).json({ error: "phone" });
+    return res.json(await storage.getRecentInboxForPhone(phone, Number(req.query.horas ?? 6)));
+  });
+
   app.get("/api/orders/draft", requireAuth, async (req, res) => {
     const { customerId, date } = req.query;
     if (!customerId || !date) return res.status(400).json({ error: "customerId and date required" });
