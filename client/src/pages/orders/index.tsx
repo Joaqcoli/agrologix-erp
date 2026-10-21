@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Layout } from "@/components/layout";
@@ -119,14 +119,19 @@ export default function OrdersPage() {
   const today = `${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,"0")}-${String(d0.getDate()).padStart(2,"0")}`;
   // La fecha elegida se recuerda SOLO al volver de un pedido (el detalle deja una marca al salir, válida 5 segundos).
   // Si se llega a Pedidos desde otro módulo, arranca en hoy (Joaquín, 21/10).
+  // Nota: la marca se lee en un useEffect (no en el inicializador) porque React monta la lista ANTES de ejecutar la
+  // limpieza del detalle que deja la marca; en el inicializador todavía no estaba (por eso no funcionaba el 19 y el 21/10).
   const [date, setDateState] = useState(() => {
+    try { if (sessionStorage.getItem("pedidos.volverDeDetalle")) return sessionStorage.getItem("pedidos.fecha") || today; } catch {}
+    return today;
+  });
+  useEffect(() => {
     try {
       const marca = Number(sessionStorage.getItem("pedidos.volverDeDetalle") ?? 0);
       sessionStorage.removeItem("pedidos.volverDeDetalle");
-      if (marca && Date.now() - marca < 5000) return sessionStorage.getItem("pedidos.fecha") || today;
+      if (marca && Date.now() - marca < 10000) { const f = sessionStorage.getItem("pedidos.fecha"); if (f) setDateState(f); }
     } catch {}
-    return today;
-  });
+  }, []);
   const setDate = (d: string) => { setDateState(d); try { sessionStorage.setItem("pedidos.fecha", d); } catch {} };
   const [exporting, setExporting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<OrderSummary | null>(null);

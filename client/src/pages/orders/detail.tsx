@@ -1433,7 +1433,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
       <Layout title="Pedido no encontrado">
         <div className="p-6 text-center text-muted-foreground">
           <p>El pedido no existe.</p>
-          <Button variant="outline" className="mt-4" onClick={() => setLocation("/orders")}>
+          <Button variant="outline" className="mt-4" onClick={() => { try { sessionStorage.setItem("pedidos.volverDeDetalle", String(Date.now())); } catch {} setLocation("/orders"); }}>
             <ArrowLeft className="mr-2 h-4 w-4" /> Volver
           </Button>
         </div>
@@ -1526,7 +1526,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
       <div className="p-6 max-w-5xl mx-auto space-y-5">
         {/* Header */}
         <div className="flex items-start gap-3">
-          <Button variant="ghost" size="icon" onClick={() => setLocation("/orders")}>
+          <Button variant="ghost" size="icon" onClick={() => { try { sessionStorage.setItem("pedidos.volverDeDetalle", String(Date.now())); } catch {} setLocation("/orders"); }}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex-1">
