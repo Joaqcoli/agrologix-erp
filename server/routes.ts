@@ -88,6 +88,7 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/orders/intake",
     "/api/orders/draft",
     "/api/orders/open-drafts",
+    "/api/bot/",
     "/api/orders/dudas",
     "/api/orders/last-line",
     "/api/orders/draft-items",
@@ -437,10 +438,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // El bot informa cada mensaje que manda (con lo que cobró YCloud) para la pantalla de costos
   app.post("/api/wa-outbound", requireAuth, async (req, res) => {
     try {
-      const b = z.object({ kind: z.string(), phone: z.string(), customerId: z.number().nullable().optional(), ycloudId: z.string().nullable().optional(), priceUsd: z.number().nullable().optional(), pricingCategory: z.string().nullable().optional(), templateName: z.string().nullable().optional() }).parse(req.body);
+      const b = z.object({ kind: z.string(), phone: z.string(), customerId: z.number().nullable().optional(), ycloudId: z.string().nullable().optional(), priceUsd: z.number().nullable().optional(), pricingCategory: z.string().nullable().optional(), templateName: z.string().nullable().optional(), text: z.string().nullable().optional() }).parse(req.body);
       let customerId = b.customerId ?? null;
       if (customerId == null) { const r = await storage.findCustomersByPhone(normalizeArPhone(b.phone) ?? b.phone); customerId = r.contacts[0]?.customerId ?? null; }
-      await storage.createWaOutbound({ kind: b.kind, refId: 0, customerId, phone: b.phone, status: "sent", ycloudId: b.ycloudId ?? null, priceUsd: b.priceUsd == null ? null : String(b.priceUsd), pricingCategory: b.pricingCategory ?? null, templateName: b.templateName ?? null, sentAt: new Date() });
+      await storage.createWaOutbound({ kind: b.kind, refId: 0, customerId, phone: b.phone, status: "sent", ycloudId: b.ycloudId ?? null, priceUsd: b.priceUsd == null ? null : String(b.priceUsd), pricingCategory: b.pricingCategory ?? null, templateName: b.templateName ?? null, sentAt: new Date(), text: b.text ?? null });
       return res.json({ ok: true });
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
@@ -998,6 +999,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const customerId = Number(req.query.customerId); const hoy = String(req.query.hoy ?? "");
     if (!Number.isFinite(customerId) || !/^\d{4}-\d{2}-\d{2}$/.test(hoy)) return res.status(400).json({ error: "customerId y hoy (YYYY-MM-DD)" });
     return res.json(await storage.getOpenDraftsForBot(customerId, hoy));
+  });
+  app.get("/api/bot/precios", requireAuth, async (req, res) => {
+    const customerId = Number(req.query.customerId);
+    if (!Number.isFinite(customerId)) return res.status(400).json({ error: "customerId" });
+    return res.json(await storage.getPricesForBot(customerId));
   });
   app.get("/api/wa-inbox/recientes", requireAuth, async (req, res) => {
     const phone = normalizeArPhone(String(req.query.phone ?? "")) ?? String(req.query.phone ?? "");

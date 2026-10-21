@@ -282,6 +282,7 @@ export const waOutbound = pgTable("wa_outbound", {
   // A-15: lo que cobró YCloud por el mensaje (viene en la respuesta del envío)
   priceUsd: numeric("price_usd", { precision: 10, scale: 5 }),
   pricingCategory: text("pricing_category"), // service | utility | marketing | authentication
+  text: text("text"), // lo que se le dijo al cliente (para que el bot vea la conversación completa)
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   sentAt: timestamp("sent_at"),
 });

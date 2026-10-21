@@ -1676,6 +1676,7 @@ export async function runNcMigrations() {
     `ALTER TABLE order_intake_logs ADD COLUMN IF NOT EXISTS cache_write_tokens INTEGER`,
     `ALTER TABLE wa_outbound ADD COLUMN IF NOT EXISTS price_usd NUMERIC(10,5)`,
     `ALTER TABLE wa_outbound ADD COLUMN IF NOT EXISTS pricing_category TEXT`,
+    `ALTER TABLE wa_outbound ADD COLUMN IF NOT EXISTS text TEXT`,
     `CREATE TABLE IF NOT EXISTS ai_usage (id SERIAL PRIMARY KEY, source TEXT NOT NULL, model TEXT, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0, customer_id INTEGER, phone TEXT, created_at TIMESTAMP NOT NULL DEFAULT NOW())`,
     `CREATE INDEX IF NOT EXISTS ai_usage_created_idx ON ai_usage(created_at)`,
     `CREATE TABLE IF NOT EXISTS cost_rates (key TEXT PRIMARY KEY, label TEXT NOT NULL, value NUMERIC(12,6) NOT NULL, unit TEXT NOT NULL, valid_from DATE, updated_at TIMESTAMP NOT NULL DEFAULT NOW())`,

@@ -4703,10 +4703,8 @@ export const storage = {
    * así dos procesos no pueden reservar la misma. Además, nunca dos envíos al mismo teléfono con menos de 2 minutos.
    */
   async reserveClientSend(data: { clave: string; phone: string; orderId?: number | null; kind?: string | null }): Promise<{ ok: boolean; motivo: string | null }> {
-    const reciente = await db.execute(drizzleSql`
-      SELECT clave, created_at FROM wa_client_sends WHERE phone = ${data.phone} AND created_at > NOW() - INTERVAL '2 minutes' ORDER BY created_at DESC LIMIT 1`);
-    const r0 = (reciente.rows as any[])[0];
-    if (r0) return { ok: false, motivo: `ya se le escribió hace menos de 2 minutos (${r0.clave})` };
+    // (21/10) Se quitó la regla "nunca dos mensajes en 2 minutos": bloqueaba la respuesta legítima al segundo mensaje de una charla.
+    // La clave única alcanza para que un mismo aviso nunca salga dos veces.
     const ins = await db.execute(drizzleSql`
       INSERT INTO wa_client_sends (clave, phone, order_id, kind) VALUES (${data.clave}, ${data.phone}, ${data.orderId ?? null}, ${data.kind ?? null})
       ON CONFLICT (clave) DO NOTHING RETURNING id`);
@@ -4737,12 +4735,33 @@ export const storage = {
     }
     return out;
   },
-  /** Últimos mensajes de un teléfono (para que el bot entienda el contexto: "agrego 3 papas" se refiere al pedido de recién). */
-  async getRecentInboxForPhone(phone: string, horas = 6): Promise<{ id: number; receivedAt: Date | null; kind: string | null; orderId: number | null; text: string | null }[]> {
-    const rows = await db.execute(drizzleSql`
+  /** Conversación reciente de un teléfono: lo que mandó el cliente (wa_inbox) y lo que le respondió el bot (wa_outbound con texto),
+   *  en orden cronológico. Para que el bot entienda el contexto ("Y el cabutia" después de "¿cuánto está la calabaza?"). */
+  async getRecentInboxForPhone(phone: string, horas = 6): Promise<{ id: number; dir: "in" | "out"; receivedAt: Date | null; kind: string | null; orderId: number | null; text: string | null }[]> {
+    const inn = await db.execute(drizzleSql`
       SELECT id, received_at AS "receivedAt", kind, order_id AS "orderId", text FROM wa_inbox
-      WHERE phone = ${phone} AND created_at > NOW() - (${horas} || ' hours')::interval ORDER BY received_at DESC NULLS LAST, id DESC LIMIT 8`);
-    return (rows.rows as any[]).map((r) => ({ id: Number(r.id), receivedAt: r.receivedAt, kind: r.kind ?? null, orderId: r.orderId == null ? null : Number(r.orderId), text: r.text ?? null }));
+      WHERE phone = ${phone} AND created_at > NOW() - (${horas} || ' hours')::interval ORDER BY received_at DESC NULLS LAST, id DESC LIMIT 12`);
+    const out = await db.execute(drizzleSql`
+      SELECT id, COALESCE(sent_at, created_at) AS "receivedAt", kind, ref_id AS "orderId", text FROM wa_outbound
+      WHERE phone = ${phone} AND status = 'sent' AND text IS NOT NULL AND created_at > NOW() - (${horas} || ' hours')::interval ORDER BY created_at DESC LIMIT 12`);
+    const all = [
+      ...(inn.rows as any[]).map((r) => ({ id: Number(r.id), dir: "in" as const, receivedAt: r.receivedAt, kind: r.kind ?? null, orderId: r.orderId == null ? null : Number(r.orderId), text: r.text ?? null })),
+      ...(out.rows as any[]).map((r) => ({ id: Number(r.id), dir: "out" as const, receivedAt: r.receivedAt, kind: r.kind ?? null, orderId: r.orderId ? Number(r.orderId) : null, text: r.text ?? null })),
+    ];
+    all.sort((a, b) => (a.receivedAt ? new Date(a.receivedAt).getTime() : 0) - (b.receivedAt ? new Date(b.receivedAt).getTime() : 0));
+    return all.slice(-16);
+  },
+  /** Precios que ve el bot para contestar consultas: últimos precios cobrados a este cliente (y su grupo) por producto y unidad, y la Lista de Precios. */
+  async getPricesForBot(customerId: number): Promise<{ ultimos: { productId: number; name: string; unit: string; price: number; date: string }[]; lista: { name: string; category: string; cajon: number; kg: number }[] }> {
+    const peerIds = await this._getGroupPeerIds(customerId);
+    const ids = drizzleSql.join([customerId, ...peerIds].map((id) => drizzleSql`${id}`), drizzleSql`, `);
+    const u = await db.execute(drizzleSql`
+      SELECT DISTINCT ON (oi.product_id, oi.unit) oi.product_id AS "productId", p.name, oi.unit, oi.price_per_unit::float AS price, to_char(o.order_date, 'YYYY-MM-DD') AS date
+      FROM order_items oi JOIN orders o ON o.id = oi.order_id JOIN products p ON p.id = oi.product_id
+      WHERE o.customer_id IN (${ids}) AND o.status = 'approved' AND oi.price_per_unit IS NOT NULL AND oi.price_per_unit > 0 AND o.order_date > NOW() - INTERVAL '120 days'
+      ORDER BY oi.product_id, oi.unit, o.order_date DESC, oi.id DESC`);
+    const l = await db.execute(drizzleSql`SELECT product_name AS name, category, price_per_cajon::float AS cajon, price_per_kg::float AS kg FROM price_list_items WHERE active ORDER BY category, sort_order, id`);
+    return { ultimos: (u.rows as any[]).map((r) => ({ productId: Number(r.productId), name: r.name, unit: r.unit, price: Number(r.price), date: r.date })), lista: (l.rows as any[]).map((r) => ({ name: r.name, category: r.category, cajon: Number(r.cajon), kg: Number(r.kg) })) };
   },
 
   /** Renglones del borrador del día de un cliente (para que el bot pueda quitar/cambiar por mensaje). */
@@ -4943,8 +4962,8 @@ export const storage = {
   },
 
   // ─── A-13: envíos salientes (wa_outbound) ───
-  async createWaOutbound(d: { kind: string; refId: number; customerId: number | null; phone: string; templateName?: string | null; fileName?: string | null; status?: string; error?: string | null; ycloudId?: string | null; priceUsd?: string | null; pricingCategory?: string | null; sentAt?: Date | null }): Promise<{ id: number }> {
-    const [row] = await db.insert(waOutbound).values({ kind: d.kind, refId: d.refId, customerId: d.customerId, phone: d.phone, templateName: d.templateName ?? null, fileName: d.fileName ?? null, status: d.status ?? "pending", error: d.error ?? null, ycloudId: d.ycloudId ?? null, priceUsd: d.priceUsd ?? null, pricingCategory: d.pricingCategory ?? null, sentAt: d.sentAt ?? null }).returning({ id: waOutbound.id });
+  async createWaOutbound(d: { kind: string; refId: number; customerId: number | null; phone: string; templateName?: string | null; fileName?: string | null; status?: string; error?: string | null; ycloudId?: string | null; priceUsd?: string | null; pricingCategory?: string | null; sentAt?: Date | null; text?: string | null }): Promise<{ id: number }> {
+    const [row] = await db.insert(waOutbound).values({ kind: d.kind, refId: d.refId, customerId: d.customerId, phone: d.phone, templateName: d.templateName ?? null, fileName: d.fileName ?? null, status: d.status ?? "pending", error: d.error ?? null, ycloudId: d.ycloudId ?? null, priceUsd: d.priceUsd ?? null, pricingCategory: d.pricingCategory ?? null, sentAt: d.sentAt ?? null, text: d.text ?? null }).returning({ id: waOutbound.id });
     return row;
   },
   async updateWaOutbound(id: number, d: { status?: string; ycloudId?: string | null; sentAt?: Date | null; error?: string | null; priceUsd?: string | null; pricingCategory?: string | null }): Promise<void> {
