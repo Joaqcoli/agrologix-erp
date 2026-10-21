@@ -1087,6 +1087,9 @@ export default function OrderDetailPage({ id }: { id: number }) {
   });
 
   const parentCustomerIdForQuery = (order?.customer as any)?.parentCustomerId ?? null;
+  // Al salir del detalle (botón volver o atrás del navegador) se deja una marca para que la lista vuelva al mismo día
+  useEffect(() => () => { try { sessionStorage.setItem("pedidos.volverDeDetalle", String(Date.now())); } catch {} }, []);
+
   // A-13: aviso de faltantes editable
   const [avisoFaltantes, setAvisoFaltantes] = useState("");
   useEffect(() => { setAvisoFaltantes(((order as any)?.avisoFaltantes ?? "") as string); }, [(order as any)?.avisoFaltantes]);

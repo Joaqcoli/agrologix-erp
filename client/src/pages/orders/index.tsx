@@ -117,8 +117,16 @@ export default function OrdersPage() {
   const { toast } = useToast();
   const d0 = new Date();
   const today = `${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,"0")}-${String(d0.getDate()).padStart(2,"0")}`;
-  // La fecha elegida se recuerda mientras dure la pestaña: al volver de un pedido se vuelve al mismo día, no a hoy (Joaquín, 19/10)
-  const [date, setDateState] = useState(() => { try { return sessionStorage.getItem("pedidos.fecha") || today; } catch { return today; } });
+  // La fecha elegida se recuerda SOLO al volver de un pedido (el detalle deja una marca al salir, válida 5 segundos).
+  // Si se llega a Pedidos desde otro módulo, arranca en hoy (Joaquín, 21/10).
+  const [date, setDateState] = useState(() => {
+    try {
+      const marca = Number(sessionStorage.getItem("pedidos.volverDeDetalle") ?? 0);
+      sessionStorage.removeItem("pedidos.volverDeDetalle");
+      if (marca && Date.now() - marca < 5000) return sessionStorage.getItem("pedidos.fecha") || today;
+    } catch {}
+    return today;
+  });
   const setDate = (d: string) => { setDateState(d); try { sessionStorage.setItem("pedidos.fecha", d); } catch {} };
   const [exporting, setExporting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<OrderSummary | null>(null);
