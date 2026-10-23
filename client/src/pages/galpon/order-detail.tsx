@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { generateRemitoPDF } from "@/lib/pdf";
+import { generateRemitoPDF, generateArmadoPDF } from "@/lib/pdf";
 import { ArrowLeft, Trash2, Plus, CheckCircle2, Printer, Wand2, X } from "lucide-react";
 
 const UNITS = ["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"];
@@ -125,6 +125,17 @@ export default function GalponOrderDetail({ id }: { id: number }) {
     onSuccess: () => { invalidate(); toast({ title: "Pedido confirmado" }); }, onError: onErr,
   });
 
+  // Hoja de armado de ESTE pedido solo (23/10): mismo formato que "Imprimir todos", directo a la impresora
+  const printArmado = () => {
+    if (!order) return;
+    const isBolsa = (it: any) => it.bolsaType === "bolsa" || it.bolsaType === "bolsa_propia";
+    const [y, m, d] = String(order.orderDate).slice(0, 10).split("-");
+    generateArmadoPDF([{
+      folio: order.remitoNum != null ? `Remito N° ${order.remitoNum}` : order.folio, customerName: order.customerName, createdByName: order.createdByName,
+      notes: order.notes ?? null, galponNotes: order.galponNotes ?? null,
+      items: order.items.filter((it: any) => !isBolsa(it)).map((it) => ({ quantity: it.quantity, unit: it.unit, productName: it.productName ?? null })),
+    }], `${d}/${m}/${y}`, { print: true });
+  };
   const printRemito = () => {
     if (!order) return;
     generateRemitoPDF({
@@ -295,6 +306,9 @@ export default function GalponOrderDetail({ id }: { id: number }) {
               <CheckCircle2 className="h-4 w-4 mr-2" /> Confirmar pedido
             </Button>
           )}
+          <Button variant="outline" onClick={printArmado} data-testid="button-print-armado">
+            <Printer className="h-4 w-4 mr-2" /> Imprimir para armado
+          </Button>
           {order.galponConfirmed && (
             <Button variant="outline" onClick={printRemito}>
               <Printer className="h-4 w-4 mr-2" /> Imprimir remito
