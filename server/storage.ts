@@ -4969,6 +4969,20 @@ export const storage = {
   async updateWaOutbound(id: number, d: { status?: string; ycloudId?: string | null; sentAt?: Date | null; error?: string | null; priceUsd?: string | null; pricingCategory?: string | null }): Promise<void> {
     await db.update(waOutbound).set(d).where(eq(waOutbound.id, id));
   },
+  /** Estado de entrega informado por Meta (webhook whatsapp.message.updated vía el bot). */
+  async setWaOutboundDelivery(ycloudId: string, status: string, error: string | null): Promise<number> {
+    const r = await db.update(waOutbound).set({ deliveryStatus: status, deliveryError: error }).where(eq(waOutbound.ycloudId, ycloudId)).returning({ id: waOutbound.id });
+    return r.length;
+  },
+  async waEstadoEntregas(): Promise<{ ultimoFallo: { at: Date; phone: string; error: string | null } | null; fallos24h: number; entregados24h: number; enviados24h: number }> {
+    const r = (await db.execute(drizzleSql`
+      SELECT count(*) FILTER (WHERE delivery_status = 'failed')::int AS fallos,
+             count(*) FILTER (WHERE delivery_status IN ('delivered','read'))::int AS entregados,
+             count(*)::int AS enviados
+      FROM wa_outbound WHERE status = 'sent' AND created_at > NOW() - INTERVAL '24 hours'`)).rows[0] as any;
+    const f = (await db.execute(drizzleSql`SELECT created_at AS at, phone, delivery_error AS error FROM wa_outbound WHERE delivery_status = 'failed' ORDER BY id DESC LIMIT 1`)).rows[0] as any;
+    return { ultimoFallo: f ? { at: f.at, phone: f.phone, error: f.error ?? null } : null, fallos24h: Number(r?.fallos ?? 0), entregados24h: Number(r?.entregados ?? 0), enviados24h: Number(r?.enviados ?? 0) };
+  },
   async waOutboundYaEnviado(kind: string, refId: number, phone: string): Promise<boolean> {
     const [row] = await db.select({ id: waOutbound.id }).from(waOutbound).where(and(eq(waOutbound.kind, kind), eq(waOutbound.refId, refId), eq(waOutbound.phone, phone), eq(waOutbound.status, "sent"))).limit(1);
     return !!row;

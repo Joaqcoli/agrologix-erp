@@ -238,6 +238,7 @@ export default function BotClientesPage() {
           {error && <p className="text-sm text-destructive">{(error as Error).message}</p>}
 
           {/* A-13: interruptores generales. OFF = no pasa nada para ningún cliente (salvo PRUEBA). */}
+          <EstadoEntregas />
           <InterruptoresGenerales />
 
           {data && (
@@ -291,6 +292,27 @@ export default function BotClientesPage() {
         </div>
       </div>
     </Layout>
+  );
+}
+
+// 26/10: si Meta rechaza los envíos (ej. cuenta bloqueada), que se vea acá y no haya que adivinar
+function EstadoEntregas() {
+  const { data } = useQuery<{ ultimoFallo: { at: string; phone: string; error: string | null } | null; fallos24h: number; entregados24h: number; enviados24h: number }>({ queryKey: ["/api/wa-estado"], refetchInterval: 60_000 });
+  if (!data) return null;
+  const grave = data.fallos24h > 0 && data.fallos24h >= data.entregados24h;
+  if (!grave && !data.fallos24h) return null;
+  const hora = data.ultimoFallo ? new Date(data.ultimoFallo.at).toLocaleString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+  return (
+    <div className="bcx-card" style={{ marginTop: 14, padding: "12px 20px", borderColor: grave ? "#e0a0a0" : "#e8d8a0", background: grave ? "#fff5f5" : "#fffbe8" }}>
+      <div style={{ fontSize: 13.5, fontWeight: 600, color: grave ? "#b42318" : "#8a6d0b" }}>
+        {grave ? "Los mensajes de WhatsApp NO están llegando a los clientes" : "Algunos mensajes de WhatsApp no llegaron"}
+      </div>
+      <div style={{ fontSize: 12.5, color: "#4a4f47", marginTop: 4 }}>
+        Últimas 24 h: {data.enviados24h} enviados, {data.entregados24h} entregados, {data.fallos24h} fallidos.
+        {data.ultimoFallo && <> Último fallo {hora}: <b>{data.ultimoFallo.error ?? "sin detalle"}</b>.</>}
+        {grave && <> Revisar la cuenta en Meta Business Manager (WhatsApp Manager → Calidad de la cuenta) o en YCloud. El bot sigue cargando los pedidos, pero no puede contestar.</>}
+      </div>
+    </div>
   );
 }
 

@@ -445,6 +445,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json({ ok: true });
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
+  // El bot informa el estado de entrega que manda Meta (delivered / read / failed + motivo)
+  app.post("/api/wa-outbound/estado", requireAuth, async (req, res) => {
+    try {
+      const b = z.object({ ycloudId: z.string(), status: z.string(), errorCode: z.union([z.string(), z.number()]).nullable().optional(), errorMessage: z.string().nullable().optional() }).parse(req.body);
+      const error = b.status === "failed" ? `${b.errorCode ?? ""} ${b.errorMessage ?? ""}`.trim() || "falló" : null;
+      const n = await storage.setWaOutboundDelivery(b.ycloudId, b.status, error);
+      return res.json({ ok: true, actualizados: n });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  app.get("/api/wa-estado", requireAuth, async (_req, res) => res.json(await storage.waEstadoEntregas()));
   app.get("/api/costos", requireAuth, async (req, res) => {
     if (req.session.userRole !== "admin") return res.status(403).json({ error: "Solo administrador" });
     try { return res.json(await resumenCostos(typeof req.query.mes === "string" ? req.query.mes : undefined)); }

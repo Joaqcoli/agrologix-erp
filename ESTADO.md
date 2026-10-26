@@ -21,6 +21,11 @@
   ficha del cliente; 2 min de gracia por si se carga el mismo número en otra sede) y el bot los reprocesa en su
   próximo ciclo (1 min). Si el reproceso vuelve a dejarlo sin resolver, el pendiente se reabre con el motivo nuevo
   en vez de perderse. Los "repetido" (número conocido, texto ambiguo) siguen siendo manuales.
+  26-oct **Meta bloqueó la cuenta de WhatsApp** (error 131031 "Business account has been locked" en todos los envíos
+  desde el 25/10 20:24; hasta el 24/10 todo entregado). El bot carga pedidos pero ninguna respuesta llega. Para verlo
+  sin adivinar: `wa_outbound.delivery_status/delivery_error` (lo informa el bot desde el webhook
+  `whatsapp.message.updated`, **evento que Joaquín tiene que habilitar en YCloud** en el endpoint del bot), `GET /api/wa-estado`
+  y cartel rojo en Bot por cliente.
   19-oct **Lista de Precios**: `price_list_history` guarda cada alta/cambio/baja (antes/después, usuario). Motivo: Joaquín
   pidió volver atrás los cambios de un día y no había forma (la tabla no tenía historial ni updated_at).
   19-oct **bot**: sedes hermanas como candidatas (`findCustomersByPhone`), el pedido es del dueño del teléfono si el texto

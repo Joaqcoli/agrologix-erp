@@ -283,6 +283,9 @@ export const waOutbound = pgTable("wa_outbound", {
   priceUsd: numeric("price_usd", { precision: 10, scale: 5 }),
   pricingCategory: text("pricing_category"), // service | utility | marketing | authentication
   text: text("text"), // lo que se le dijo al cliente (para que el bot vea la conversación completa)
+  // 26/10: estado real de entrega que informa Meta vía YCloud (delivered | read | failed) y el motivo si falló
+  deliveryStatus: text("delivery_status"),
+  deliveryError: text("delivery_error"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   sentAt: timestamp("sent_at"),
 });
