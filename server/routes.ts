@@ -89,6 +89,7 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/orders/draft",
     "/api/orders/open-drafts",
     "/api/bot/",
+    "/api/diag/",
     "/api/orders/dudas",
     "/api/orders/last-line",
     "/api/orders/draft-items",
@@ -429,7 +430,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Diagnóstico (26/10, migración de base): latencia desde Render a la base actual y, si está definida, a DATABASE_URL_PRUEBA
   app.get("/api/diag/latencia", requireAuth, async (req, res) => {
-    if (req.session.userRole !== "admin") return res.status(403).json({ error: "Solo administrador" });
+    if (req.session.userRole !== "admin" && req.session.userRole !== "operator") return res.status(403).json({ error: "Solo administrador" });
     const { Client } = await import("pg");
     const medir = async (url: string) => {
       const c = new Client({ connectionString: url, ssl: /supabase|neon/.test(url) ? { rejectUnauthorized: false } : undefined });

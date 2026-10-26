@@ -2,7 +2,8 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "@shared/schema";
 
-export const connectionString = process.env.SUPABASE_URL || process.env.DATABASE_URL;
+// 26/10 (migración de base): manda DATABASE_URL (variable de entorno de Render, editable por API); SUPABASE_URL del Secret File queda de respaldo.
+export const connectionString = process.env.DATABASE_URL || process.env.SUPABASE_URL;
 
 if (!connectionString) {
   console.warn("ADVERTENCIA: No hay URL de DB configurada. El servidor arranca pero las queries van a fallar.");
