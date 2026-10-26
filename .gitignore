@@ -14,3 +14,5 @@ Extracto_*.csv
 
 # Permisos locales de Claude Code (tienen connection strings) — nunca commitear
 .claude/settings.local.json
+.env.*
+!.env.example
