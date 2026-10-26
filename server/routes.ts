@@ -427,6 +427,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ ok: true });
   });
 
+  // Diagnóstico (26/10, migración de base): latencia desde Render a la base actual y, si está definida, a DATABASE_URL_PRUEBA
+  app.get("/api/diag/latencia", requireAuth, async (req, res) => {
+    if (req.session.userRole !== "admin") return res.status(403).json({ error: "Solo administrador" });
+    const { Client } = await import("pg");
+    const medir = async (url: string) => {
+      const c = new Client({ connectionString: url, ssl: /supabase|neon/.test(url) ? { rejectUnauthorized: false } : undefined });
+      const t0 = Date.now(); await c.connect(); const conexion = Date.now() - t0;
+      const tiempos: number[] = [];
+      for (let i = 0; i < 5; i++) { const t = Date.now(); await c.query("select 1"); tiempos.push(Date.now() - t); }
+      await c.end();
+      return { conexionMs: conexion, consultaMs: tiempos, promedioMs: Math.round(tiempos.reduce((a, b) => a + b, 0) / tiempos.length), host: new URL(url).hostname };
+    };
+    try {
+      const actual = await medir(process.env.SUPABASE_URL || process.env.DATABASE_URL || "");
+      const prueba = process.env.DATABASE_URL_PRUEBA ? await medir(process.env.DATABASE_URL_PRUEBA).catch((e: any) => ({ error: e.message })) : null;
+      return res.json({ region: process.env.RENDER_REGION ?? null, actual, prueba });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // ─── A-15: costos de automatización ───
   app.post("/api/ai-usage", requireAuth, async (req, res) => {
     try {
