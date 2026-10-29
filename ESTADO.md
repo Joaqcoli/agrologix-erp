@@ -52,7 +52,7 @@
   26-oct **Meta bloqueó la cuenta de WhatsApp** (error 131031 "Business account has been locked" en todos los envíos
   desde el 25/10 20:24; hasta el 24/10 todo entregado). El bot carga pedidos pero ninguna respuesta llega. Para verlo
   sin adivinar: `wa_outbound.delivery_status/delivery_error` (lo informa el bot desde el webhook
-  `whatsapp.message.updated`, **evento que Joaquín tiene que habilitar en YCloud** en el endpoint del bot), `GET /api/wa-estado`
+  `whatsapp.message.updated`, habilitado por API en el endpoint del bot el 29/10 13:25), `GET /api/wa-estado`
   y cartel rojo en Bot por cliente.
   19-oct **Lista de Precios**: `price_list_history` guarda cada alta/cambio/baja (antes/después, usuario). Motivo: Joaquín
   pidió volver atrás los cambios de un día y no había forma (la tabla no tenía historial ni updated_at).
@@ -183,8 +183,8 @@
 
 ## Verificaciones manuales (las hace Joaquín)
 - (29-oct rendimiento) Aprobar un pedido real grande desde la pantalla y confirmar que tarda ~1 s y que el remito por
-  WhatsApp llega igual (cuando Meta destrabe la cuenta). Habilitar en YCloud el evento `whatsapp.message.updated` en el
-  webhook del bot y subir la documentación que pide Meta (cuenta bloqueada desde el 25/10).
+  WhatsApp llega igual (cuando Meta destrabe la cuenta). Subir a YCloud la documentación que pide Meta (cuenta bloqueada
+  desde el 25/10). El evento `whatsapp.message.updated` ya está suscripto en el webhook del bot (29/10, por API).
 - **A-01**: Clientes → editar uno → aparece "Teléfonos de pedido" (agregar, editar, borrar). Menú "Números por
   asignar" abre vacío. Pedidos muestra chip "WhatsApp"/"N dudas" cuando el bot cargue algo. El rol operator ya
   no tiene acceso total (solo el bot, por token).
