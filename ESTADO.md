@@ -21,6 +21,21 @@
   ficha del cliente; 2 min de gracia por si se carga el mismo número en otra sede) y el bot los reprocesa en su
   próximo ciclo (1 min). Si el reproceso vuelve a dejarlo sin resolver, el pendiente se reabre con el motivo nuevo
   en vez de perderse. Los "repetido" (número conocido, texto ambiguo) siguen siendo manuales.
+  29-oct **MIGRACIÓN DE LA BASE A SUPABASE US-WEST-1 (Oregón), misma región que Render.** Proyecto nuevo
+  `agrologix-erp-oregon` (ref `kvvjutzqwhhkddszdizs`, org "Vegetales Argentinos", plan Free, Postgres 17). Corte 29/10:
+  backup final 09:04:05, restauración 09:07, `DATABASE_URL` en Render cambiada y redeploy 09:14–09:18, producción
+  sirviendo desde Oregón a las 09:18 (hora Argentina). Verificación: 61/61 tablas con mismo conteo y máximo de id,
+  últimas filas iguales; login, pedidos, aprobar PRUEBA y sync MP probados en producción. Latencia por consulta desde
+  Render: 175 ms → 20 ms. Aprobar pedido de PRUEBA: 0,85 s; editar línea: 0,5 s.
+  **Proyecto viejo** (ref `inbqbzdrqzrggtnybwtt`, sa-east-1) **pausado el 29/10 09:24, se conserva hasta el 12/11**; Supabase
+  permite reanudarlo desde el panel. **Vuelta atrás**: reanudar el viejo (pausando otro proyecto Free si hace falta),
+  poner en Render la variable `DATABASE_URL` con la URL vieja (guardada en `.env.migracion` local y en `.env` local como
+  `DATABASE_URL_VIEJA_SAO_PAULO`; nunca acá) y redeploy. `server/db.ts` ahora prioriza `DATABASE_URL` sobre `SUPABASE_URL`
+  (el Secret File `.env` de Render todavía tiene la `SUPABASE_URL` vieja: ya no se usa). Durante el corte se pausó el
+  proyecto "Telma" (08:41–09:28) por el límite de 2 proyectos Free; volvió sano. Herramientas de la migración en el
+  scratchpad de la sesión (ddl/copiar/verificar/supa/render/ensayo); tokens de Supabase y Render solo en `.env.migracion`.
+  Pendiente de rendimiento: la lectura del pedido justo después de aprobar tarda ~11 s porque el PDF del remito y la
+  subida a YCloud corren en el mismo proceso (instancia Free, 0,1 CPU): mover a hilo aparte y logo pre-reducido.
   26-oct **Meta bloqueó la cuenta de WhatsApp** (error 131031 "Business account has been locked" en todos los envíos
   desde el 25/10 20:24; hasta el 24/10 todo entregado). El bot carga pedidos pero ninguna respuesta llega. Para verlo
   sin adivinar: `wa_outbound.delivery_status/delivery_error` (lo informa el bot desde el webhook
