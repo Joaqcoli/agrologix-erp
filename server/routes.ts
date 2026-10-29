@@ -1208,7 +1208,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
+      const tEdit = Date.now();
       const result = await storage.updateOrderItem(orderId, itemId, patch, order.customerId);
+      console.log(`[tiempos] editar línea ${itemId} del pedido ${orderId}: ${Date.now() - tEdit} ms`);
       return res.json(result);
     } catch (e: any) {
       return res.status(400).json({ error: e.message });
@@ -1292,10 +1294,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           await storage.setAvisoFaltantes(orderId, storage.textoAvisoFaltantes(await storage.computeFaltantes(orderId)));
         }
       } catch (e: any) { console.error("[A-13] aviso faltantes al aprobar:", e.message); }
+      const tApprove = Date.now();
       const order = await storage.approveOrder(orderId, req.session.userId!, decisions);
-      // A-13: remito por WhatsApp + facturación diaria después de las 14:00 (fuera de la transacción; nunca rompe la aprobación)
-      enviarRemitoAuto(orderId).then((r) => { if (r.errores.length) console.error("[A-13] remito", orderId, r.errores.join(" | ")); }).catch((e) => console.error("[A-13] remito:", e.message));
-      facturarTrasAprobar(orderId).catch((e) => console.error("[A-13] facturar tras aprobar:", e.message));
+      console.log(`[tiempos] aprobar pedido ${orderId}: ${Date.now() - tApprove} ms`);
+      // A-13: remito por WhatsApp + facturación. Fuera del camino crítico (29/10): arranca 2 s después de responder, así la
+      // recarga de la pantalla no compite con el PDF ni con la subida a YCloud. Nunca rompe la aprobación.
+      setTimeout(() => {
+        enviarRemitoAuto(orderId).then((r) => { if (r.errores.length) console.error("[A-13] remito", orderId, r.errores.join(" | ")); }).catch((e) => console.error("[A-13] remito:", e.message));
+        facturarTrasAprobar(orderId).catch((e) => console.error("[A-13] facturar tras aprobar:", e.message));
+      }, 2000);
       return res.json(order);
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });

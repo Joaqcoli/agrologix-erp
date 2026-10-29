@@ -6,7 +6,39 @@ import fs from "fs";
 import path from "path";
 import { storage } from "./storage";
 import { hasIvaOn } from "@shared/iva";
+import { Worker } from "worker_threads";
 import { generateRemitoPDF, generateInvoicePDF, type RemitoData, type InvoicePdfData } from "@shared/pdf";
+import type { PdfJob } from "./pdf-worker";
+
+/** Genera el PDF en un hilo aparte (dist/pdf-worker.cjs). Si el bundle del worker no existe (desarrollo con tsx)
+ *  o el hilo falla, genera en el hilo principal como antes. */
+async function generarPdf(job: PdfJob): Promise<Uint8Array> {
+  const candidates = [
+    path.resolve(process.cwd(), "dist/pdf-worker.cjs"),
+    ...(typeof __dirname !== "undefined" ? [path.resolve(__dirname, "pdf-worker.cjs")] : []),
+  ];
+  const workerPath = candidates.find((p) => fs.existsSync(p));
+  if (workerPath) {
+    const t0 = Date.now();
+    try {
+      const out = await new Promise<Uint8Array>((resolve, reject) => {
+        const w = new Worker(workerPath, { workerData: job, execArgv: [] }); // execArgv vacío: no hereda loaders de desarrollo (tsx)
+        w.once("message", (m: Uint8Array) => resolve(m));
+        w.once("error", reject);
+        w.once("exit", (code) => { if (code !== 0) reject(new Error(`pdf-worker terminó con código ${code}`)); });
+      });
+      console.log(`[tiempos] PDF ${job.kind} en hilo aparte: ${Date.now() - t0} ms`);
+      return out;
+    } catch (e: any) {
+      console.error("[pdf] hilo aparte falló, genero en el principal:", e.message);
+    }
+  }
+  const bytes = job.kind === "remito"
+    ? await generateRemitoPDF(job.data, { hidePrecios: job.hidePrecios, output: "buffer", logoDataUrl: job.logoDataUrl ?? undefined })
+    : await generateInvoicePDF(job.detail, job.detailMode, { isNotaCredito: job.isNotaCredito, output: "buffer", logoDataUrl: job.logoDataUrl ?? undefined });
+  if (!bytes) throw new Error("El generador de PDF no devolvió bytes");
+  return bytes;
+}
 
 const AR_TZ = "America/Argentina/Buenos_Aires";
 
@@ -41,6 +73,10 @@ let logoCache: string | null | undefined;
 function loadLogoDataUrl(): string | null {
   if (logoCache !== undefined) return logoCache;
   const candidates = [
+    // 29/10: logo pre-reducido en JPEG (520 px): jsPDF lo incrusta en ms; el PNG de 1920×1080 tardaba ~1,5 s de CPU por PDF
+    path.resolve(process.cwd(), "dist/public/logo-small.jpg"),
+    path.resolve(process.cwd(), "client/public/logo-small.jpg"),
+    ...(typeof __dirname !== "undefined" ? [path.resolve(__dirname, "public/logo-small.jpg")] : []),
     path.resolve(process.cwd(), "dist/public/logo.png"),
     path.resolve(process.cwd(), "client/public/logo.png"),
     ...(typeof __dirname !== "undefined" ? [path.resolve(__dirname, "public/logo.png")] : []),
@@ -49,7 +85,7 @@ function loadLogoDataUrl(): string | null {
   for (const p of candidates) {
     try {
       if (fs.existsSync(p)) {
-        logoCache = `data:image/png;base64,${fs.readFileSync(p).toString("base64")}`;
+        logoCache = `data:image/${p.endsWith(".jpg") ? "jpeg" : "png"};base64,${fs.readFileSync(p).toString("base64")}`;
         break;
       }
     } catch { /* probar el siguiente */ }
@@ -153,11 +189,7 @@ export async function remitoPdfBuffer(
     remito.order.total = String(remito.order.items.reduce((s, i) => s + parseFloat(i.subtotal), 0));
   }
 
-  const bytes = await generateRemitoPDF(remito, {
-    hidePrecios: opts?.hidePrecios ?? false,
-    output: "buffer",
-    logoDataUrl: loadLogoDataUrl(),
-  });
+  const bytes = await generarPdf({ kind: "remito", data: remito, hidePrecios: opts?.hidePrecios ?? false, logoDataUrl: loadLogoDataUrl() });
   const { dd, mm } = orderDay(order.orderDate);
   return { buffer: toBuffer(bytes), fileName: safeFileName(`Remito ${customer.name} ${dd}.${mm}`) + ".pdf" };
 }
@@ -180,11 +212,7 @@ export async function invoicePdfBuffer(
     opts?.detailMode ?? ((invoice.detailMode === "completo" ? "completo" : "agrupado") as "completo" | "agrupado");
   const isNotaCredito = opts?.isNotaCredito ?? false;
 
-  const bytes = await generateInvoicePDF(detail as unknown as InvoicePdfData, detailMode, {
-    isNotaCredito,
-    output: "buffer",
-    logoDataUrl: loadLogoDataUrl(),
-  });
+  const bytes = await generarPdf({ kind: "invoice", detail: detail as unknown as InvoicePdfData, detailMode, isNotaCredito, logoDataUrl: loadLogoDataUrl() });
   const { dd, mm } = argDate(new Date(invoice.createdAt));
   const prefix = isNotaCredito ? "Nota de credito" : "Factura";
   return { buffer: toBuffer(bytes), fileName: safeFileName(`${prefix} ${customer.name} ${dd}.${mm}`) + ".pdf" };

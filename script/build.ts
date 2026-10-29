@@ -46,6 +46,12 @@ async function buildAll() {
   ];
   const externals = allDeps.filter((dep) => !allowlist.includes(dep));
 
+  // Hilo aparte de PDFs (server/pdf-worker.ts → dist/pdf-worker.cjs); lo carga server/pdf-server.ts con worker_threads
+  await esbuild({
+    entryPoints: ["server/pdf-worker.ts"], platform: "node", bundle: true, format: "cjs", outfile: "dist/pdf-worker.cjs",
+    define: { "process.env.NODE_ENV": '"production"' }, minify: true, external: externals, logLevel: "info",
+  });
+
   await esbuild({
     entryPoints: ["server/index.ts"],
     platform: "node",
