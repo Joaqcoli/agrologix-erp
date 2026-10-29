@@ -1185,7 +1185,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const orderId = Number(req.params.id);
       const itemId = Number(req.params.itemId);
-      const order = await storage.getOrder(orderId);
+      const order = await storage.getOrder(orderId, { sinCostos: true }); // acá solo se usan cliente y customerId
       if (!order) return res.status(404).json({ error: "Order not found" });
 
       const schema = z.object({

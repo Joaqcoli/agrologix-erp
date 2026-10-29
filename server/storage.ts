@@ -107,7 +107,147 @@ export function matchSocioByLeyenda(leyenda: string | null | undefined, socios: 
 }
 
 // A-12: ids de los últimos renglones insertados por addItemsToOrder (el bot los necesita para preguntar/corregir)
+/** Contexto de costos en memoria (ver _costContext). */
+type CostCtx = {
+  pus: Map<number, any[]>;                                                      // product_units por producto, orden por id
+  ultimaCompraEnvase: Map<string, { unit: string; weightPerPackage: string | null }>; // "productId:ENVASE" → última compra en ese envase
+  ultimoPesoCompra: Map<number, string>;                                        // productId → weight_per_package de la última compra con peso > 0
+};
+const PKG_BOLSA = ['bolsa', 'bolsa_propia'];
+
 let lastAddedItemIds: number[] = [];
+
+// Costo vigente por unidad, consulta a consulta. Función de módulo (no método) para poder pasarla como
+// fallback a _costFromCtx sin referenciar `this` (eso rompe la inferencia de tipos de `storage`).
+async function costForUnitDb(productId: number, unit: string, tx: any = db, ignoreStock = false): Promise<string> {
+  const canonical = dbEnumToCanonical(unit);
+  const isPackageUnit = ['CAJON', 'BOLSA', 'BANDEJA'].includes(canonical);
+
+  // 1) Coincidencia exacta — SOLO para unidades base (no CAJON/BOLSA/BANDEJA)
+  // Las unidades de envase siempre derivan del row base para evitar rows CAJON del modelo antiguo
+  if (!isPackageUnit) {
+    const [exactPu] = await tx.select().from(productUnits)
+      .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, canonical)))
+      .limit(1);
+    if (exactPu && parseFloat(exactPu.avgCost as string) > 0) {
+      if (ignoreStock || parseFloat(exactPu.stockQty as string) > 0) return exactPu.avgCost as string;
+      // Hay costo histórico pero sin stock — intentar derivar de otra fila base con stock
+    }
+    // 1b) Fallback cross-unit: buscar otra fila base con stock para derivar el costo
+    // Cubre: KG order con ATADO/UNIDAD stock (cost_kg = altCost/wpu)
+    //        MAPLE/UNIDAD order cuando la otra es la que tiene stock (huevos)
+    if (!ignoreStock) {
+      const [altBase] = await tx.select().from(productUnits)
+        .where(and(
+          eq(productUnits.productId, productId),
+          drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+          drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
+          drizzleSql`${productUnits.unit} != ${canonical}`,
+          drizzleSql`${productUnits.stockQty}::numeric > 0`,
+          drizzleSql`${productUnits.avgCost}::numeric > 0`,
+        ))
+        .orderBy(drizzleSql`${productUnits.stockQty}::numeric DESC`)
+        .limit(1);
+      if (altBase) {
+        const altCost = parseFloat(altBase.avgCost as string);
+        const altWpu = parseFloat(altBase.weightPerUnit as string ?? "0");
+        // MAPLE ↔ UNIDAD: misma unidad conceptual (huevos, 1 MAPLE = 1 UNIDAD = 1 docena)
+        if (['MAPLE','UNIDAD'].includes(canonical) && ['MAPLE','UNIDAD'].includes(altBase.unit)) {
+          return altBase.avgCost as string;
+        }
+        // KG order: altBase es ATADO o UNIDAD con wpu = KG por unidad → cost_per_KG = altCost / wpu
+        if (canonical === 'KG' && altWpu > 0) {
+          return (altCost / altWpu).toFixed(4);
+        }
+      }
+    }
+    return "0"; // hay costo histórico pero sin stock (o no hay fallback viable)
+  }
+
+  // 2) Unidad de envase: derivar de fila base × weight_per_package
+  // CRÍTICO: solo buscar filas base que NO sean unidades de envase (excluye rows CAJON mal marcados)
+  // Ordenar por stockQty DESC para preferir filas con stock real sobre filas históricas vacías
+  if (isPackageUnit) {
+    // La última compra de ese envase dice qué trae adentro (KG, ATADO, MAPLE...). La fila base
+    // del costo tiene que ser ESA unidad: un cajón de remolacha trae atados, uno de champignon
+    // trae kg. Antes se tomaba "la fila con más stock" y podía mezclar unidades.
+    const [lastPkgPi] = await tx.select({ unit: purchaseItems.unit })
+      .from(purchaseItems)
+      .where(and(eq(purchaseItems.productId, productId), eq(purchaseItems.purchaseUnit, canonical as any)))
+      .orderBy(desc(purchaseItems.id))
+      .limit(1);
+    const baseConds = [
+      eq(productUnits.productId, productId),
+      drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
+      drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
+    ];
+    let [baseRow] = lastPkgPi
+      ? await tx.select().from(productUnits)
+          .where(and(...baseConds, eq(productUnits.unit, dbEnumToCanonical(lastPkgPi.unit as string))))
+          .limit(1)
+      : [undefined];
+    if (!baseRow) {
+      [baseRow] = await tx.select().from(productUnits)
+        .where(and(...baseConds))
+        .orderBy(drizzleSql`${productUnits.stockQty}::numeric DESC, ${productUnits.avgCost}::numeric DESC`)
+        .limit(1);
+    }
+    if (baseRow && parseFloat(baseRow.avgCost as string) > 0) {
+      if (ignoreStock || parseFloat(baseRow.stockQty as string) > 0) {
+        const [recentPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
+          .from(purchaseItems)
+          .where(and(
+            eq(purchaseItems.productId, productId),
+            eq(purchaseItems.purchaseUnit, canonical as any),
+          ))
+          .orderBy(desc(purchaseItems.id))
+          .limit(1);
+        let wpu = recentPi?.weightPerPackage ? parseFloat(recentPi.weightPerPackage as string) : 0;
+        // Factor explícito por envase: para envases que se VENDEN pero no se COMPRAN
+        // (ej. rúcula por BANDEJA = 12 atados). La fila product_units del propio envase con
+        // weight_per_unit > 0 manda antes que el factor genérico de la fila base (que sería el del cajón).
+        if (wpu === 0) {
+          const [pkgRow] = await tx.select({ weightPerUnit: productUnits.weightPerUnit })
+            .from(productUnits)
+            .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, canonical)))
+            .limit(1);
+          wpu = parseFloat(pkgRow?.weightPerUnit as string ?? "0");
+        }
+        if (wpu === 0) wpu = parseFloat(baseRow.weightPerUnit as string ?? "0");
+        // Fallback para datos viejos sin purchaseUnit: cualquier compra con weightPerPackage > 0
+        if (wpu === 0) {
+          const [anyPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
+            .from(purchaseItems)
+            .where(and(
+              eq(purchaseItems.productId, productId),
+              drizzleSql`${purchaseItems.weightPerPackage}::numeric > 0`,
+            ))
+            .orderBy(desc(purchaseItems.id))
+            .limit(1);
+          wpu = parseFloat(anyPi?.weightPerPackage as string ?? "0");
+        }
+        // Huevos: 1 CAJON = 12 MAPLES siempre (constante universal)
+        if (wpu === 0 && baseRow.unit === "MAPLE") wpu = 12;
+        if (wpu > 0) return (parseFloat(baseRow.avgCost as string) * wpu).toFixed(4);
+      }
+      return "0"; // base tiene costo pero sin stock
+    }
+  }
+
+  // 3 & 4: solo cuando ignoreStock=true (ej. rinde de producto nunca comprado)
+  if (ignoreStock) {
+    const [p] = await tx.select().from(products).where(eq(products.id, productId)).limit(1);
+    if (p?.averageCost && parseFloat(p.averageCost as string) > 0) return p.averageCost as string;
+    const [lastPi] = await tx.select({ costPerUnit: purchaseItems.costPerUnit })
+      .from(purchaseItems)
+      .where(eq(purchaseItems.productId, productId))
+      .orderBy(desc(purchaseItems.id))
+      .limit(1);
+    if (lastPi?.costPerUnit && parseFloat(lastPi.costPerUnit as string) > 0) return lastPi.costPerUnit as string;
+  }
+
+  return "0";
+}
 
 export const storage = {
   // ─── Auth ─────────────────────────────────────────────────────────────────
@@ -563,134 +703,78 @@ export const storage = {
     return warnings;
   },
 
-  async _getCostForUnit(productId: number, unit: string, tx: any = db, ignoreStock = false): Promise<string> {
+  // ─── 29/10: contexto de costos en memoria ──────────────────────────────────────────────────
+  // Misma lógica que _getCostForUnit (y que la conversión de envases de approveOrder) pero sobre filas
+  // pre-cargadas: 3 consultas por pedido en vez de 1–3 por línea. Las filas de product_units son objetos
+  // vivos: approveOrder les descuenta stock en memoria para que la línea siguiente vea el mismo estado que
+  // veía con las consultas una por una. No hay (product_id, unit) duplicados en product_units (verificado
+  // 29/10); el desempate por id replica el orden físico de la consulta sin ORDER BY.
+  async _costContext(productIds: (number | null | undefined)[], tx: any = db): Promise<CostCtx> {
+    const ids = Array.from(new Set(productIds.filter((x): x is number => typeof x === "number")));
+    const ctx: CostCtx = { pus: new Map(), ultimaCompraEnvase: new Map(), ultimoPesoCompra: new Map() };
+    if (ids.length === 0) return ctx;
+    const puRows: any[] = await tx.select().from(productUnits).where(inArray(productUnits.productId, ids)).orderBy(asc(productUnits.id));
+    for (const r of puRows) { const arr = ctx.pus.get(r.productId) ?? []; arr.push(r); ctx.pus.set(r.productId, arr); }
+    const idsSql = drizzleSql.join(ids.map((i) => drizzleSql`${i}`), drizzleSql`, `);
+    // Última compra por (producto, envase): qué unidad trae adentro y cuánto pesa (recentPi / lastPkgPi)
+    const a: any = await tx.execute(drizzleSql`SELECT DISTINCT ON (product_id, purchase_unit) product_id, purchase_unit, unit, weight_per_package FROM purchase_items WHERE product_id IN (${idsSql}) AND purchase_unit IS NOT NULL ORDER BY product_id, purchase_unit, id DESC`);
+    for (const r of (a.rows ?? a)) ctx.ultimaCompraEnvase.set(`${r.product_id}:${r.purchase_unit}`, { unit: r.unit, weightPerPackage: r.weight_per_package });
+    // Última compra con peso > 0 (anyPi), para datos viejos sin purchase_unit
+    const b: any = await tx.execute(drizzleSql`SELECT DISTINCT ON (product_id) product_id, weight_per_package FROM purchase_items WHERE product_id IN (${idsSql}) AND weight_per_package::numeric > 0 ORDER BY product_id, id DESC`);
+    for (const r of (b.rows ?? b)) ctx.ultimoPesoCompra.set(Number(r.product_id), r.weight_per_package);
+    return ctx;
+  },
+
+  /** Igual que _getCostForUnit pero sobre el contexto en memoria. Los pasos 3 y 4 (solo ignoreStock=true:
+   *  producto sin filas con costo) no dependen del stock, así que se delegan a la versión con consultas. */
+  // `fallback` (pasos 3 y 4) lo pasa el que llama: referenciar this._getCostForUnit acá rompe la inferencia de tipos de `storage`.
+  async _costFromCtx(ctx: CostCtx, productId: number, unit: string, ignoreStock = false, fallback?: any /* (productId, unit) => Promise<string>; tipado any: con tipo función TS degrada la inferencia de `storage` */): Promise<string> {
     const canonical = dbEnumToCanonical(unit);
-    const isPackageUnit = ['CAJON', 'BOLSA', 'BANDEJA'].includes(canonical);
-
-    // 1) Coincidencia exacta — SOLO para unidades base (no CAJON/BOLSA/BANDEJA)
-    // Las unidades de envase siempre derivan del row base para evitar rows CAJON del modelo antiguo
+    const PKG = ['CAJON', 'BOLSA', 'BANDEJA'];
+    const isPackageUnit = PKG.includes(canonical);
+    const rows = ctx.pus.get(productId) ?? [];
+    const stock = (r: any) => parseFloat(r.stockQty as string);
+    const cost = (r: any) => parseFloat(r.avgCost as string);
     if (!isPackageUnit) {
-      const [exactPu] = await tx.select().from(productUnits)
-        .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, canonical)))
-        .limit(1);
-      if (exactPu && parseFloat(exactPu.avgCost as string) > 0) {
-        if (ignoreStock || parseFloat(exactPu.stockQty as string) > 0) return exactPu.avgCost as string;
-        // Hay costo histórico pero sin stock — intentar derivar de otra fila base con stock
+      const exactPu = rows.find((r) => r.unit === canonical);
+      if (exactPu && cost(exactPu) > 0) {
+        if (ignoreStock || stock(exactPu) > 0) return exactPu.avgCost as string;
       }
-      // 1b) Fallback cross-unit: buscar otra fila base con stock para derivar el costo
-      // Cubre: KG order con ATADO/UNIDAD stock (cost_kg = altCost/wpu)
-      //        MAPLE/UNIDAD order cuando la otra es la que tiene stock (huevos)
       if (!ignoreStock) {
-        const [altBase] = await tx.select().from(productUnits)
-          .where(and(
-            eq(productUnits.productId, productId),
-            drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
-            drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
-            drizzleSql`${productUnits.unit} != ${canonical}`,
-            drizzleSql`${productUnits.stockQty}::numeric > 0`,
-            drizzleSql`${productUnits.avgCost}::numeric > 0`,
-          ))
-          .orderBy(drizzleSql`${productUnits.stockQty}::numeric DESC`)
-          .limit(1);
+        const altBase = rows
+          .filter((r) => r.baseUnit != null && !PKG.includes(r.unit) && r.unit !== canonical && stock(r) > 0 && cost(r) > 0)
+          .sort((x, y) => (stock(y) - stock(x)) || (x.id - y.id))[0];
         if (altBase) {
-          const altCost = parseFloat(altBase.avgCost as string);
+          const altCost = cost(altBase);
           const altWpu = parseFloat(altBase.weightPerUnit as string ?? "0");
-          // MAPLE ↔ UNIDAD: misma unidad conceptual (huevos, 1 MAPLE = 1 UNIDAD = 1 docena)
-          if (['MAPLE','UNIDAD'].includes(canonical) && ['MAPLE','UNIDAD'].includes(altBase.unit)) {
-            return altBase.avgCost as string;
-          }
-          // KG order: altBase es ATADO o UNIDAD con wpu = KG por unidad → cost_per_KG = altCost / wpu
-          if (canonical === 'KG' && altWpu > 0) {
-            return (altCost / altWpu).toFixed(4);
-          }
+          if (['MAPLE', 'UNIDAD'].includes(canonical) && ['MAPLE', 'UNIDAD'].includes(altBase.unit)) return altBase.avgCost as string;
+          if (canonical === 'KG' && altWpu > 0) return (altCost / altWpu).toFixed(4);
         }
       }
-      return "0"; // hay costo histórico pero sin stock (o no hay fallback viable)
+      return "0";
     }
-
-    // 2) Unidad de envase: derivar de fila base × weight_per_package
-    // CRÍTICO: solo buscar filas base que NO sean unidades de envase (excluye rows CAJON mal marcados)
-    // Ordenar por stockQty DESC para preferir filas con stock real sobre filas históricas vacías
-    if (isPackageUnit) {
-      // La última compra de ese envase dice qué trae adentro (KG, ATADO, MAPLE...). La fila base
-      // del costo tiene que ser ESA unidad: un cajón de remolacha trae atados, uno de champignon
-      // trae kg. Antes se tomaba "la fila con más stock" y podía mezclar unidades.
-      const [lastPkgPi] = await tx.select({ unit: purchaseItems.unit })
-        .from(purchaseItems)
-        .where(and(eq(purchaseItems.productId, productId), eq(purchaseItems.purchaseUnit, canonical as any)))
-        .orderBy(desc(purchaseItems.id))
-        .limit(1);
-      const baseConds = [
-        eq(productUnits.productId, productId),
-        drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
-        drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
-      ];
-      let [baseRow] = lastPkgPi
-        ? await tx.select().from(productUnits)
-            .where(and(...baseConds, eq(productUnits.unit, dbEnumToCanonical(lastPkgPi.unit as string))))
-            .limit(1)
-        : [undefined];
-      if (!baseRow) {
-        [baseRow] = await tx.select().from(productUnits)
-          .where(and(...baseConds))
-          .orderBy(drizzleSql`${productUnits.stockQty}::numeric DESC, ${productUnits.avgCost}::numeric DESC`)
-          .limit(1);
+    const lastPkgPi = ctx.ultimaCompraEnvase.get(`${productId}:${canonical}`);
+    const baseRows = rows.filter((r) => r.baseUnit != null && !PKG.includes(r.unit));
+    let baseRow = lastPkgPi ? baseRows.find((r) => r.unit === dbEnumToCanonical(lastPkgPi.unit)) : undefined;
+    if (!baseRow) baseRow = [...baseRows].sort((x, y) => (stock(y) - stock(x)) || (cost(y) - cost(x)) || (x.id - y.id))[0];
+    if (baseRow && cost(baseRow) > 0) {
+      if (ignoreStock || stock(baseRow) > 0) {
+        let wpu = lastPkgPi?.weightPerPackage ? parseFloat(lastPkgPi.weightPerPackage) : 0;
+        if (wpu === 0) { const pkgRow = rows.find((r) => r.unit === canonical); wpu = parseFloat(pkgRow?.weightPerUnit as string ?? "0"); }
+        if (wpu === 0) wpu = parseFloat(baseRow.weightPerUnit as string ?? "0");
+        if (wpu === 0) wpu = parseFloat(ctx.ultimoPesoCompra.get(productId) ?? "0");
+        if (wpu === 0 && baseRow.unit === "MAPLE") wpu = 12;
+        if (wpu > 0) return (cost(baseRow) * wpu).toFixed(4);
       }
-      if (baseRow && parseFloat(baseRow.avgCost as string) > 0) {
-        if (ignoreStock || parseFloat(baseRow.stockQty as string) > 0) {
-          const [recentPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
-            .from(purchaseItems)
-            .where(and(
-              eq(purchaseItems.productId, productId),
-              eq(purchaseItems.purchaseUnit, canonical as any),
-            ))
-            .orderBy(desc(purchaseItems.id))
-            .limit(1);
-          let wpu = recentPi?.weightPerPackage ? parseFloat(recentPi.weightPerPackage as string) : 0;
-          // Factor explícito por envase: para envases que se VENDEN pero no se COMPRAN
-          // (ej. rúcula por BANDEJA = 12 atados). La fila product_units del propio envase con
-          // weight_per_unit > 0 manda antes que el factor genérico de la fila base (que sería el del cajón).
-          if (wpu === 0) {
-            const [pkgRow] = await tx.select({ weightPerUnit: productUnits.weightPerUnit })
-              .from(productUnits)
-              .where(and(eq(productUnits.productId, productId), eq(productUnits.unit, canonical)))
-              .limit(1);
-            wpu = parseFloat(pkgRow?.weightPerUnit as string ?? "0");
-          }
-          if (wpu === 0) wpu = parseFloat(baseRow.weightPerUnit as string ?? "0");
-          // Fallback para datos viejos sin purchaseUnit: cualquier compra con weightPerPackage > 0
-          if (wpu === 0) {
-            const [anyPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
-              .from(purchaseItems)
-              .where(and(
-                eq(purchaseItems.productId, productId),
-                drizzleSql`${purchaseItems.weightPerPackage}::numeric > 0`,
-              ))
-              .orderBy(desc(purchaseItems.id))
-              .limit(1);
-            wpu = parseFloat(anyPi?.weightPerPackage as string ?? "0");
-          }
-          // Huevos: 1 CAJON = 12 MAPLES siempre (constante universal)
-          if (wpu === 0 && baseRow.unit === "MAPLE") wpu = 12;
-          if (wpu > 0) return (parseFloat(baseRow.avgCost as string) * wpu).toFixed(4);
-        }
-        return "0"; // base tiene costo pero sin stock
-      }
+      return "0";
     }
-
-    // 3 & 4: solo cuando ignoreStock=true (ej. rinde de producto nunca comprado)
-    if (ignoreStock) {
-      const [p] = await tx.select().from(products).where(eq(products.id, productId)).limit(1);
-      if (p?.averageCost && parseFloat(p.averageCost as string) > 0) return p.averageCost as string;
-      const [lastPi] = await tx.select({ costPerUnit: purchaseItems.costPerUnit })
-        .from(purchaseItems)
-        .where(eq(purchaseItems.productId, productId))
-        .orderBy(desc(purchaseItems.id))
-        .limit(1);
-      if (lastPi?.costPerUnit && parseFloat(lastPi.costPerUnit as string) > 0) return lastPi.costPerUnit as string;
-    }
-
+    if (ignoreStock && fallback) return fallback(productId, unit);
     return "0";
+  },
+
+  /** Costo vigente por unidad con consultas a la base (ver costForUnitDb). */
+  async _getCostForUnit(productId: number, unit: string, tx: any = db, ignoreStock = false): Promise<string> {
+    return costForUnitDb(productId, unit, tx, ignoreStock);
   },
 
   async getLastPriceByUnit(productId: number, customerId: number, unit: string): Promise<string | null> {
@@ -1502,19 +1586,22 @@ export const storage = {
     return result;
   },
 
-  async getOrder(id: number): Promise<(Order & { customer: Customer; items: (OrderItem & { product: Product })[] }) | undefined> {
+  async getOrder(id: number, opts?: { sinCostos?: boolean }): Promise<(Order & { customer: Customer; items: (OrderItem & { product: Product })[] }) | undefined> {
     // 29/10: 2 consultas (pedido+cliente, líneas+producto) en vez de una por línea. En borradores, el costo vigente por
     // línea se sigue calculando (en paralelo) porque depende del stock actual.
     const [row] = await db.select({ o: orders, c: customers }).from(orders).innerJoin(customers, eq(customers.id, orders.customerId)).where(eq(orders.id, id)).limit(1);
     if (!row) return undefined;
     const o = row.o, customer = row.c;
     const rows = await db.select({ item: orderItems, product: products }).from(orderItems).leftJoin(products, eq(products.id, orderItems.productId)).where(eq(orderItems.orderId, id)).orderBy(asc(orderItems.id));
+    // Borrador: costo vigente por línea (depende del stock actual) con el contexto en memoria: 3 consultas por pedido,
+    // no 1–3 por línea. sinCostos=true cuando el que llama no usa costPerUnit (aprobar, editar línea).
+    const ctx = o.status === 'draft' && !opts?.sinCostos ? await this._costContext(rows.map((r) => r.item.productId)) : null;
     const itemsWithProducts = await Promise.all(
       rows.map(async ({ item, product }) => {
         // Bolsa FV: siempre costo $0. Pedido borrador: costo según stock actual (evita costos históricos stale).
         let costPerUnit = item.costPerUnit;
         if ((item as any).bolsaType && (item as any).bolsaType !== 'sin_stock') costPerUnit = "0";
-        else if (o.status === 'draft' && item.productId) costPerUnit = await this._getCostForUnit(item.productId, item.unit as string);
+        else if (ctx && item.productId) costPerUnit = await this._costFromCtx(ctx, item.productId, item.unit as string);
         return { ...item, costPerUnit, product: (product ?? null) as unknown as Product };
       })
     );
@@ -2252,7 +2339,7 @@ export const storage = {
   },
 
   async approveOrder(id: number, userId: number, decisions?: Record<number, "zero" | "rinde" | "prorate">): Promise<Order> {
-    const order = await this.getOrder(id);
+    const order = await this.getOrder(id, { sinCostos: true }); // el costo se recalcula acá por línea; el de getOrder no se usa
     if (!order) throw new Error("Order not found");
     if (order.status !== "draft") throw new Error("Order is not in draft status");
 
@@ -2273,231 +2360,147 @@ export const storage = {
     }
 
     return db.transaction(async (tx) => {
-      // Stock OUT — atomic per-item deduction with floor-at-zero safety
+      // 29/10: misma lógica línea por línea que antes, pero (1) las lecturas van en lote al principio
+      // (productos bloqueados FOR UPDATE, product_units, compras) y (2) las escrituras van en lote al final.
+      // El estado que ve cada línea (stock ya descontado por una línea anterior del mismo producto) se
+      // mantiene en memoria, igual que lo veía la transacción consulta por consulta.
+      const PKG = ['CAJON', 'BOLSA', 'BANDEJA'];
+      const productIds = Array.from(new Set(order.items.filter((i) => i.productId && !PKG_BOLSA.includes((i as any).bolsaType)).map((i) => i.productId as number)));
+      const prodMap = new Map<number, any>();
+      if (productIds.length > 0) {
+        const locked: any[] = await tx.select().from(products).where(inArray(products.id, productIds)).for('update');
+        for (const p of locked) prodMap.set(p.id, p);
+      }
+      const ctx = await this._costContext(productIds, tx);
+      const stockOf = (r: any) => parseFloat(r.stockQty as string);
+
+      const fallbackRinde: (pid: number, u: string) => Promise<string> = (pid, u) => costForUnitDb(pid, u, tx, true);
+      const itemUpdates: { id: number; cost: string; margin: string | null }[] = [];
+      const movimientos: any[] = [];
+      const puFinal = new Map<number, string>();      // product_units.id → stock_qty final
+      const prodFinal = new Map<number, string>();    // products.id → current_stock final
+      const precios: any[] = [];                       // price_history (propio + pares), en orden
+
       for (const item of order.items) {
         if (!item.productId) continue;
         // Bolsa FV items: no stock deduction, cost stays 0
-        if (['bolsa', 'bolsa_propia'].includes((item as any).bolsaType)) continue;
+        if (PKG_BOLSA.includes((item as any).bolsaType)) continue;
 
         const qty = parseFloat(item.quantity as string);
         const oiCanonical = dbEnumToCanonical(item.unit as string);
 
-        // Lock the product row
-        const [product] = await tx.select().from(products)
-          .where(eq(products.id, item.productId))
-          .for('update')
-          .limit(1);
+        const product = prodMap.get(item.productId);
         if (!product) continue;
+        const rows: any[] = ctx.pus.get(item.productId) ?? [];
 
-        // ── Buscar fila de unidad base (modelo nuevo) ──────────────────────────
-        // Prioridad: (1) tiene stock, (2) exact match, (3) más stock.
-        // Esto evita que MAPLE(stock=0) gane sobre UNIDAD(stock=36) cuando el pedido es MAPLE.
-        const [baseUnitPu] = await tx.select().from(productUnits)
-          .where(and(
-            eq(productUnits.productId, item.productId),
-            drizzleSql`${productUnits.baseUnit} IS NOT NULL`,
-            drizzleSql`${productUnits.unit} NOT IN ('CAJON','BOLSA','BANDEJA')`,
-          ))
-          .orderBy(
-            drizzleSql`CASE WHEN ${productUnits.stockQty}::numeric > 0 THEN 0 ELSE 1 END`,
-            drizzleSql`CASE WHEN ${productUnits.unit} = ${oiCanonical} THEN 0 ELSE 1 END`,
-            drizzleSql`${productUnits.stockQty}::numeric DESC`,
-          )
-          .limit(1);
+        // Fila de unidad base (modelo nuevo). Prioridad: (1) tiene stock, (2) exact match, (3) más stock.
+        const baseUnitPu = rows
+          .filter((r) => r.baseUnit != null && !PKG.includes(r.unit))
+          .sort((x, y) => ((stockOf(x) > 0 ? 0 : 1) - (stockOf(y) > 0 ? 0 : 1)) || ((x.unit === oiCanonical ? 0 : 1) - (y.unit === oiCanonical ? 0 : 1)) || (stockOf(y) - stockOf(x)) || (x.id - y.id))[0];
 
-        // Determinar cantidad a descontar en unidad base
         let deductQty = qty;
-        // wpuForBase: cuántas unidades base entran en 1 unidad de pedido (1 si el pedido ya está en unidad base).
-        // Sirve para convertir el costo por unidad de pedido → costo por unidad base, porque las cantidades
-        // de los movimientos de rinde/prorrateo se guardan en unidad base.
         let wpuForBase = 1;
-        let puToUpdate: typeof baseUnitPu | null = baseUnitPu ?? null;
+        let puToUpdate: any = baseUnitPu ?? null;
 
         if (baseUnitPu) {
-          // Modelo nuevo: puede haber conversión de envase → unidad base
-          if (oiCanonical !== baseUnitPu.unit && ['CAJON', 'BOLSA', 'BANDEJA'].includes(oiCanonical)) {
-            // Buscar el peso por envase específico para este tipo (CAJON vs BANDEJA vs BOLSA)
-            // para evitar usar el promedio confuso de todos los tipos de envase
-            const [recentPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
-              .from(purchaseItems)
-              .where(and(
-                eq(purchaseItems.productId, item.productId as number),
-                eq(purchaseItems.purchaseUnit, oiCanonical as any),
-              ))
-              .orderBy(desc(purchaseItems.id))
-              .limit(1);
-            let wpu = recentPi?.weightPerPackage ? parseFloat(recentPi.weightPerPackage as string) : 0;
-            // Factor explícito por envase (envases que se venden pero no se compran, ej. rúcula por BANDEJA)
-            if (wpu === 0) {
-              const [pkgRow] = await tx.select({ weightPerUnit: productUnits.weightPerUnit })
-                .from(productUnits)
-                .where(and(eq(productUnits.productId, item.productId as number), eq(productUnits.unit, oiCanonical)))
-                .limit(1);
-              wpu = parseFloat(pkgRow?.weightPerUnit as string ?? "0");
-            }
+          if (oiCanonical !== baseUnitPu.unit && PKG.includes(oiCanonical)) {
+            const recentPi = ctx.ultimaCompraEnvase.get(`${item.productId}:${oiCanonical}`);
+            let wpu = recentPi?.weightPerPackage ? parseFloat(recentPi.weightPerPackage) : 0;
+            if (wpu === 0) { const pkgRow = rows.find((r) => r.unit === oiCanonical); wpu = parseFloat(pkgRow?.weightPerUnit as string ?? "0"); }
             if (wpu === 0) wpu = parseFloat(baseUnitPu.weightPerUnit as string ?? "0");
-            if (wpu === 0) {
-              const [anyPi] = await tx.select({ weightPerPackage: purchaseItems.weightPerPackage })
-                .from(purchaseItems)
-                .where(and(
-                  eq(purchaseItems.productId, item.productId as number),
-                  drizzleSql`${purchaseItems.weightPerPackage}::numeric > 0`,
-                ))
-                .orderBy(desc(purchaseItems.id))
-                .limit(1);
-              wpu = parseFloat(anyPi?.weightPerPackage as string ?? "0");
-            }
-            // Huevos: 1 CAJON = 12 MAPLES siempre (constante universal)
+            if (wpu === 0) wpu = parseFloat(ctx.ultimoPesoCompra.get(item.productId) ?? "0");
             if (wpu === 0 && baseUnitPu.unit === "MAPLE") wpu = 12;
             wpuForBase = wpu > 0 ? wpu : 1;
             deductQty = qty * wpuForBase;
           }
         } else {
-          // Modelo antiguo: buscar por unidad canónica directa
-          const [oldPu] = await tx.select().from(productUnits)
-            .where(and(eq(productUnits.productId, item.productId), eq(productUnits.unit, oiCanonical)))
-            .limit(1);
-          puToUpdate = oldPu ?? null;
+          puToUpdate = rows.find((r) => r.unit === oiCanonical) ?? null;
         }
 
         const currentStock = parseFloat(product.currentStock as string);
-        const availableQtyBase = puToUpdate ? parseFloat(puToUpdate.stockQty as string) : currentStock;
-        const rawNewStock = currentStock - deductQty;
-        const isOverflow = rawNewStock < 0;
-        const finalStock = isOverflow ? 0 : rawNewStock;
+        const availableQtyBase = puToUpdate ? stockOf(puToUpdate) : currentStock;
 
-        // Re-fetch costo actual al momento de aprobación ($0 si no hay stock)
-        const freshCostStr = await this._getCostForUnit(item.productId, oiCanonical, tx);
+        const freshCostStr = await this._costFromCtx(ctx, item.productId, oiCanonical);
         const freshCost = parseFloat(freshCostStr);
-        const baseCostStr = freshCostStr; // no fallback a item.costPerUnit histórico
+        const baseCostStr = freshCostStr;
 
-        // ── Decisión del usuario para stock insuficiente ────────────────────────
         const decision = decisions?.[item.id];
-
         if (decision === "zero") {
-          // Sin efecto en stock, costo $0
-          await tx.update(orderItems)
-            .set({ costPerUnit: "0", margin: "1.0000" })
-            .where(eq(orderItems.id, item.id));
-          // No hay stock movement ni deducción de stock
+          itemUpdates.push({ id: item.id, cost: "0", margin: "1.0000" });
           continue;
         }
 
-        // effectiveCostStr: costo por unidad de PEDIDO → guardado en order_items.cost_per_unit y usado para el margen.
-        // movementCostStr: costo por la MISMA unidad en que va la quantity del movimiento de stock.
-        //   - Flujo normal: quantity en unidad de pedido → costo por unidad de pedido (= effectiveCostStr).
-        //   - Rinde/prorrateo: quantity en unidad BASE → costo por unidad base (= effectiveCostStr ÷ wpuForBase),
-        //     porque deductFromStock/excessQty están en unidad base. Sin esta división, un pedido en CAJON
-        //     multiplicaría kg_base × costo_por_cajón (rinde inflado).
         let effectiveCostStr: string;
         let movementCostStr: string;
         let deductFromStock: number;
         let outQty: string;
 
         if (decision === "rinde") {
-          // Para rinde: usar costo histórico aunque no haya stock (la mercadería "apareció")
-          effectiveCostStr = await this._getCostForUnit(item.productId, oiCanonical, tx, true);
+          effectiveCostStr = await this._costFromCtx(ctx, item.productId, oiCanonical, true, fallbackRinde);
           movementCostStr = (parseFloat(effectiveCostStr) / wpuForBase).toFixed(4);
           deductFromStock = Math.max(0, availableQtyBase);
           outQty = (deductFromStock).toFixed(4);
-
           const excessQty = deductQty - deductFromStock;
           if (excessQty > 0) {
-            // Movimiento de Rinde: representa la mercadería que "apareció" para cubrir el faltante.
-            // quantity en unidad base → unitCost por unidad base.
-            await tx.insert(stockMovements).values({
-              productId: item.productId,
-              movementType: "in",
-              quantity: excessQty.toFixed(4),
-              unitCost: movementCostStr,
-              referenceId: id,
-              referenceType: "order",
-              notes: `Rinde — Pedido ${order.folio}`,
-              createdBy: userId,
-            });
+            movimientos.push({ productId: item.productId, movementType: "in", quantity: excessQty.toFixed(4), unitCost: movementCostStr, referenceId: id, referenceType: "order", notes: `Rinde — Pedido ${order.folio}`, createdBy: userId });
           }
         } else if (decision === "prorate") {
-          // Prorratear el costo del stock disponible entre toda la cantidad pedida.
-          // freshCost es por unidad de pedido; lo paso a unidad base para operar con cantidades base.
           const baseFreshCost = freshCost / wpuForBase;
-          const proratedCost = deductQty > 0 && freshCost > 0
-            ? (availableQtyBase * freshCost) / deductQty
-            : 0;
-          effectiveCostStr = proratedCost.toFixed(4); // por unidad de pedido (order_items + margen)
-          movementCostStr = baseFreshCost.toFixed(4); // por unidad base (la quantity OUT va en base)
+          const proratedCost = deductQty > 0 && freshCost > 0 ? (availableQtyBase * freshCost) / deductQty : 0;
+          effectiveCostStr = proratedCost.toFixed(4);
+          movementCostStr = baseFreshCost.toFixed(4);
           deductFromStock = Math.max(0, availableQtyBase);
           outQty = (deductFromStock).toFixed(4);
         } else {
-          // Flujo normal (sin decisión = stock suficiente): el MOVIMIENTO se loguea en unidad
-          // BASE (kg) igual que rinde/prorate, para que el ledger sea consistente.
-          // effectiveCostStr (order_items + margen) sigue por unidad de PEDIDO — NO cambia.
-          effectiveCostStr = baseCostStr;                          // por unidad de pedido (margen/order_items)
-          movementCostStr = (parseFloat(baseCostStr) / wpuForBase).toFixed(4); // costo por unidad base (acompaña outQty base)
+          effectiveCostStr = baseCostStr;
+          movementCostStr = (parseFloat(baseCostStr) / wpuForBase).toFixed(4);
           deductFromStock = deductQty;
-          outQty = deductQty.toFixed(4);                           // kg base (antes: item.quantity en bultos)
+          outQty = deductQty.toFixed(4);
         }
 
         const movementNotes = (decision === "rinde" || decision === "prorate")
           ? `Stock insuficiente (${decision}) — Pedido ${order.folio}`
           : `Pedido ${order.folio}`;
 
-        // Actualizar costPerUnit en order_items
         const price = parseFloat(item.pricePerUnit as string ?? "0");
         const newMargin = price > 0 && parseFloat(effectiveCostStr) > 0
           ? ((price - parseFloat(effectiveCostStr)) / price).toFixed(4)
           : null;
-        const itemUpdate: Record<string, any> = { costPerUnit: effectiveCostStr };
-        if (newMargin !== null) itemUpdate.margin = newMargin;
-        await tx.update(orderItems).set(itemUpdate).where(eq(orderItems.id, item.id));
+        itemUpdates.push({ id: item.id, cost: effectiveCostStr, margin: newMargin });
 
-        // Stock OUT movement — unitCost en la misma unidad que outQty (ver movementCostStr arriba)
         if (parseFloat(outQty) > 0) {
-          await tx.insert(stockMovements).values({
-            productId: item.productId,
-            movementType: "out",
-            quantity: outQty,
-            unitCost: movementCostStr,
-            referenceId: id,
-            referenceType: "order",
-            notes: movementNotes,
-            createdBy: userId,
-          });
+          movimientos.push({ productId: item.productId, movementType: "out", quantity: outQty, unitCost: movementCostStr, referenceId: id, referenceType: "order", notes: movementNotes, createdBy: userId });
         }
 
-        // Deduct from product_units — floor at 0; avgCost NUNCA se zeroa
+        // Descuento en product_units (piso 0) y products.current_stock (piso 0), reflejado en memoria
         if (puToUpdate) {
-          const rawPuStock = parseFloat(puToUpdate.stockQty as string) - deductFromStock;
-          await tx.update(productUnits)
-            .set({ stockQty: Math.max(0, rawPuStock).toFixed(4) })
-            .where(eq(productUnits.id, puToUpdate.id));
+          const nuevoPu = Math.max(0, stockOf(puToUpdate) - deductFromStock).toFixed(4);
+          puToUpdate.stockQty = nuevoPu;
+          puFinal.set(puToUpdate.id, nuevoPu);
         }
+        const nuevoProd = Math.max(0, currentStock - deductFromStock).toFixed(4);
+        product.currentStock = nuevoProd;
+        prodFinal.set(item.productId, nuevoProd);
 
-        // Update products.currentStock — floor at 0; averageCost NUNCA se zeroa
-        await tx.update(products)
-          .set({ currentStock: Math.max(0, currentStock - deductFromStock).toFixed(4) })
-          .where(eq(products.id, item.productId));
-
-        // Save final price to price_history
-        await tx.insert(priceHistory).values({
-          customerId: order.customerId,
-          productId: item.productId,
-          pricePerUnit: item.pricePerUnit as string,
-          unit: item.unit as string,
-          orderId: id,
-        });
-        // Replicate price to group peers
-        if (groupPeerIds.length > 0) {
-          await tx.insert(priceHistory).values(
-            groupPeerIds.map((peerId) => ({
-              customerId: peerId,
-              productId: item.productId as number,
-              pricePerUnit: item.pricePerUnit as string,
-              unit: item.unit as string,
-              orderId: id,
-            }))
-          );
-        }
+        precios.push({ customerId: order.customerId, productId: item.productId, pricePerUnit: item.pricePerUnit as string, unit: item.unit as string, orderId: id });
+        for (const peerId of groupPeerIds) precios.push({ customerId: peerId, productId: item.productId as number, pricePerUnit: item.pricePerUnit as string, unit: item.unit as string, orderId: id });
       }
+
+      // ── Escrituras en lote (una sentencia por tabla) ──
+      if (itemUpdates.length > 0) {
+        const vals = drizzleSql.join(itemUpdates.map((u) => drizzleSql`(${u.id}::int, ${u.cost}::numeric, ${u.margin}::numeric)`), drizzleSql`, `);
+        await tx.execute(drizzleSql`UPDATE order_items AS oi SET cost_per_unit = v.cost, margin = COALESCE(v.margin, oi.margin) FROM (VALUES ${vals}) AS v(id, cost, margin) WHERE oi.id = v.id`);
+      }
+      if (movimientos.length > 0) await tx.insert(stockMovements).values(movimientos);
+      if (puFinal.size > 0) {
+        const vals = drizzleSql.join(Array.from(puFinal, ([pid, q]) => drizzleSql`(${pid}::int, ${q}::numeric)`), drizzleSql`, `);
+        await tx.execute(drizzleSql`UPDATE product_units AS pu SET stock_qty = v.q FROM (VALUES ${vals}) AS v(id, q) WHERE pu.id = v.id`);
+      }
+      if (prodFinal.size > 0) {
+        const vals = drizzleSql.join(Array.from(prodFinal, ([pid, q]) => drizzleSql`(${pid}::int, ${q}::numeric)`), drizzleSql`, `);
+        await tx.execute(drizzleSql`UPDATE products AS p SET current_stock = v.q FROM (VALUES ${vals}) AS v(id, q) WHERE p.id = v.id`);
+      }
+      if (precios.length > 0) await tx.insert(priceHistory).values(precios);
 
       // Sync prices to all open (draft) orders from group peers
       if (groupPeerIds.length > 0 && priceMap.size > 0) {
