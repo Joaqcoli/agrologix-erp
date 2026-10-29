@@ -2,7 +2,7 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-10-11 (A-04 IA en Carga Pedido desplegado).
+> Última actualización: 2026-10-29 (cierre de rendimiento: aprobar 30 líneas 8 s → 1 s).
 
 ## Último trabajo (sep–oct 2026)
 - 11-oct **A-01 · soporte para el agente de WhatsApp** (commit "feat(bot): A-01…"). Tablas `customer_contacts`
@@ -31,11 +31,24 @@
   permite reanudarlo desde el panel. **Vuelta atrás**: reanudar el viejo (pausando otro proyecto Free si hace falta),
   poner en Render la variable `DATABASE_URL` con la URL vieja (guardada en `.env.migracion` local y en `.env` local como
   `DATABASE_URL_VIEJA_SAO_PAULO`; nunca acá) y redeploy. `server/db.ts` ahora prioriza `DATABASE_URL` sobre `SUPABASE_URL`
-  (el Secret File `.env` de Render todavía tiene la `SUPABASE_URL` vieja: ya no se usa). Durante el corte se pausó el
+  (el Secret File `.env` de Render quedó limpio el 29/10: sin URL de base; respaldo en `.env.secretfile-render.bak` local). Durante el corte se pausó el
   proyecto "Telma" (08:41–09:28) por el límite de 2 proyectos Free; volvió sano. Herramientas de la migración en el
   scratchpad de la sesión (ddl/copiar/verificar/supa/render/ensayo); tokens de Supabase y Render solo en `.env.migracion`.
-  Pendiente de rendimiento: la lectura del pedido justo después de aprobar tarda ~11 s porque el PDF del remito y la
-  subida a YCloud corren en el mismo proceso (instancia Free, 0,1 CPU): mover a hilo aparte y logo pre-reducido.
+  29-oct **CIERRE DE RENDIMIENTO** (`65f047a`, `d412b99`, `0191a85`; detalle y tabla completa en
+  `docs/AUDITORIA-RENDIMIENTO-2026-10-29.md`). Medido en producción con un pedido de PRUEBA de 30 líneas reales:
+  **aprobar 8,0 s → 0,97 s** (servidor 6,1 s → 0,55 s), lista de pedidos después de aprobar 11,9 s → 0,45 s, editar
+  línea 1,2 s → 0,5 s, abrir pedido de 40 líneas 0,6–1,0 s → 0,3 s. Qué cambió: (3) remito/factura PDF en un worker
+  thread (`server/pdf-worker.ts` → `dist/pdf-worker.cjs`, con caída al hilo principal si no existe) + logo
+  `logo-small.jpg` 520 px + envío del remito 2 s después de responder; (4) `getOrder` en 2 consultas con JOIN;
+  (5) la pantalla del pedido recarga solo el pedido al editar líneas (aprobar/borrar siguen recargando la lista);
+  (6) `approveOrder` con lecturas en lote (`_costContext`: product_units + últimas compras en 3 consultas,
+  `_costFromCtx` = misma lógica que `_getCostForUnit`, ahora función de módulo `costForUnitDb`), stock descontado en
+  memoria y una sentencia por tabla al final. **Prueba comparativa antes del deploy del paso 6**: 20 pedidos reales
+  clonados y aprobados con la versión vieja y la nueva en dos copias locales de producción (decisiones zero/rinde/
+  prorate incluidas): 9 tablas idénticas al centavo. Render ya está en **Starter** (lo cambió Joaquín desde el panel;
+  la API no permite Free→pago) y no hay arranques en frío en el log. Secret File `.env` de Render sin la URL de São
+  Paulo. Queda: borrar un pedido aprobado tarda 5 s (mismo patrón, no estaba pedido). Log `[tiempos]` en Render para
+  aprobar, editar línea y PDF.
   26-oct **Meta bloqueó la cuenta de WhatsApp** (error 131031 "Business account has been locked" en todos los envíos
   desde el 25/10 20:24; hasta el 24/10 todo entregado). El bot carga pedidos pero ninguna respuesta llega. Para verlo
   sin adivinar: `wa_outbound.delivery_status/delivery_error` (lo informa el bot desde el webhook
@@ -169,6 +182,9 @@
 - Cambiar contraseñas por defecto de admin y Juan; no hay "cambiar contraseña" en la UI.
 
 ## Verificaciones manuales (las hace Joaquín)
+- (29-oct rendimiento) Aprobar un pedido real grande desde la pantalla y confirmar que tarda ~1 s y que el remito por
+  WhatsApp llega igual (cuando Meta destrabe la cuenta). Habilitar en YCloud el evento `whatsapp.message.updated` en el
+  webhook del bot y subir la documentación que pide Meta (cuenta bloqueada desde el 25/10).
 - **A-01**: Clientes → editar uno → aparece "Teléfonos de pedido" (agregar, editar, borrar). Menú "Números por
   asignar" abre vacío. Pedidos muestra chip "WhatsApp"/"N dudas" cuando el bot cargue algo. El rol operator ya
   no tiene acceso total (solo el bot, por token).
