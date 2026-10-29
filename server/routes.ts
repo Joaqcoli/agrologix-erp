@@ -447,6 +447,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // Diagnóstico: nombres (nunca valores) de las variables de entorno presentes, para saber qué vive en el Secret File
+  app.get("/api/diag/env", requireAuth, async (req, res) => {
+    if (req.session.userRole !== "admin" && req.session.userRole !== "operator") return res.status(403).json({ error: "Solo administrador" });
+    const keys = Object.keys(process.env).filter((k) => !/^(PATH|HOME|PWD|SHLVL|_|npm_.*|NODE_.*|RENDER.*|HOSTNAME|LANG|TERM|OLDPWD|PORT|IS_PULL_REQUEST)$/.test(k)).sort();
+    return res.json({ keys, supabaseUrlHost: process.env.SUPABASE_URL ? new URL(process.env.SUPABASE_URL).hostname : null, databaseUrlHost: process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL).hostname : null });
+  });
+
   // ─── A-15: costos de automatización ───
   app.post("/api/ai-usage", requireAuth, async (req, res) => {
     try {
