@@ -728,8 +728,6 @@ function AddItemRow({
     mutationFn: (data: any) => apiRequest("POST", `/api/orders/${orderId}/items`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders", orderId] });
-      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/load-list"] });
       toast({ title: "Línea agregada" });
       onDone();
     },
@@ -889,7 +887,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
       toast({ title: "Duda revisada y guardada" });
     },
     onError: (e: any, _itemId, ctx) => {
@@ -902,8 +899,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
     mutationFn: (itemId: number) => apiRequest("DELETE", `/api/orders/${id}/items/${itemId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/load-list"] });
       toast({ title: "Línea eliminada" });
     },
     onError: (e: any) => toast({ title: "Error al eliminar línea", description: e.message, variant: "destructive" }),
@@ -963,8 +958,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/load-list"] });
     },
   });
 
@@ -973,7 +966,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
       apiRequest("PATCH", `/api/orders/${id}/items/${itemId}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -998,7 +990,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
     onSuccess: () => { toast({ title: "Alias guardado" }); },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
     },
   });
 
@@ -1007,7 +998,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
       apiRequest("PATCH", `/api/orders/${id}/remito-num`, { remitoNum }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
       setEditingRemitoNum(false);
       toast({ title: "Remito actualizado" });
     },
@@ -1020,7 +1010,6 @@ export default function OrderDetailPage({ id }: { id: number }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       toast({ title: "Pedido aprobado", description: "Se generó el remito y se descontó el stock." });
     },
     onError: (e: any) => toast({ title: "Error al aprobar", description: e.message, variant: "destructive" }),

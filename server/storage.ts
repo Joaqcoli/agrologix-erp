@@ -1503,23 +1503,18 @@ export const storage = {
   },
 
   async getOrder(id: number): Promise<(Order & { customer: Customer; items: (OrderItem & { product: Product })[] }) | undefined> {
-    const [o] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);
-    if (!o) return undefined;
-    const [customer] = await db.select().from(customers).where(eq(customers.id, o.customerId)).limit(1);
-    const items = await db.select().from(orderItems).where(eq(orderItems.orderId, id));
+    // 29/10: 2 consultas (pedido+cliente, líneas+producto) en vez de una por línea. En borradores, el costo vigente por
+    // línea se sigue calculando (en paralelo) porque depende del stock actual.
+    const [row] = await db.select({ o: orders, c: customers }).from(orders).innerJoin(customers, eq(customers.id, orders.customerId)).where(eq(orders.id, id)).limit(1);
+    if (!row) return undefined;
+    const o = row.o, customer = row.c;
+    const rows = await db.select({ item: orderItems, product: products }).from(orderItems).leftJoin(products, eq(products.id, orderItems.productId)).where(eq(orderItems.orderId, id)).orderBy(asc(orderItems.id));
     const itemsWithProducts = await Promise.all(
-      items.map(async (item) => {
-        const product = item.productId
-          ? ((await db.select().from(products).where(eq(products.id, item.productId)).limit(1))[0] ?? null)
-          : null;
-        // Bolsa FV: siempre costo $0.
-        // Pedido borrador: recalcular costo según stock actual (evita costos históricos stale).
+      rows.map(async ({ item, product }) => {
+        // Bolsa FV: siempre costo $0. Pedido borrador: costo según stock actual (evita costos históricos stale).
         let costPerUnit = item.costPerUnit;
-        if ((item as any).bolsaType && (item as any).bolsaType !== 'sin_stock') {
-          costPerUnit = "0";
-        } else if (o.status === 'draft' && item.productId) {
-          costPerUnit = await this._getCostForUnit(item.productId, item.unit as string);
-        }
+        if ((item as any).bolsaType && (item as any).bolsaType !== 'sin_stock') costPerUnit = "0";
+        else if (o.status === 'draft' && item.productId) costPerUnit = await this._getCostForUnit(item.productId, item.unit as string);
         return { ...item, costPerUnit, product: (product ?? null) as unknown as Product };
       })
     );
