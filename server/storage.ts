@@ -88,9 +88,10 @@ const VENDEDOR_HIST: Record<string, Record<string, { facturacion: number; comisi
   },
 };
 
-// Match leyenda del extracto Galicia → socio, por PRIMER nombre del socio dentro de la leyenda.
-// Normaliza acentos (la leyenda dice "JOAQUIN" sin tilde; el socio es "Joaquín Coli").
-// Ej: "FEDERICO EMANUEL VIDUHEIRO | ..." → socio cuyo primer nombre normalizado es "FEDERICO".
+// Match leyenda del extracto Galicia → socio: el PRIMER nombre y el APELLIDO (última palabra) del socio tienen que
+// aparecer como palabras enteras en la leyenda, en cualquier orden. Normaliza acentos ("JOAQUIN" vs "Joaquín").
+// Ej: "JOAQUIN ALBERTO COLI | 20415442654 | VARIOS" → Joaquín Coli. 30/10: antes bastaba el primer nombre, y
+// cualquier proveedor llamado Federico se tomaba como retiro; "VIDUHEIRO SERGIO DAN" (proveedor) no matchea.
 function _normName(s: string): string {
   return String(s ?? "").toUpperCase()
     .replace(/[ÁÀÄÂÃ]/g, "A").replace(/[ÉÈËÊ]/g, "E").replace(/[ÍÌÏÎ]/g, "I")
@@ -99,9 +100,11 @@ function _normName(s: string): string {
 export function matchSocioByLeyenda(leyenda: string | null | undefined, socios: { id: number; nombre: string }[]): number | null {
   const L = _normName(leyenda ?? "");
   if (!L) return null;
+  const palabras = new Set(L.split(/[^A-Z]+/).filter(Boolean));
   for (const s of socios) {
-    const first = _normName(s.nombre).split(/\s+/)[0] ?? "";
-    if (first.length >= 3 && L.includes(first)) return s.id;
+    const partes = _normName(s.nombre).split(/[^A-Z]+/).filter(Boolean);
+    const first = partes[0] ?? "", last = partes[partes.length - 1] ?? "";
+    if (first.length >= 3 && last.length >= 3 && palabras.has(first) && palabras.has(last)) return s.id;
   }
   return null;
 }
@@ -6952,8 +6955,9 @@ export const storage = {
     porCategoria: { category: string; n: number; total: number }[];
     cruceCheques: any;   // resultado del cruce ECHEQ↔cheque emitido (auto al cargar)
   }> {
-    const { parseGaliciaExtracto, classifyGaliciaMovement, tratamientoCobro, GALICIA_NEW_CATEGORIES } =
+    const { parseGaliciaExtracto, classifyGaliciaMovement, tratamientoCobro, GALICIA_NEW_CATEGORIES, galiciaClave } =
       await import("./galicia-parser");
+    const { createHash } = await import("crypto");
     const movs = parseGaliciaExtracto(buffer);
 
     const run = async (exec: any) => {
@@ -6977,8 +6981,33 @@ export const storage = {
       let insertadosGalicia = 0, duplicados = 0, reconciliadosCaja = 0, sinCategoria = 0, cobrosPendientes = 0, yaContabilizados = 0, retirosEfectivo = 0;
       const porCat: Record<string, { n: number; total: number }> = {};
 
+      // Lo que ya está cargado en las fechas del archivo (30/10): cada CSV trae días para atrás, así que se cuenta
+      // cuántas veces está cada movimiento (galiciaClave, sin saldo) y solo se agrega lo que falta.
+      const fechasArchivo = movs.map((m) => m.fecha).sort();
+      const yaCargado = new Map<string, number>();   // clave → cuántas quedan por "consumir" con el archivo
+      const totalClave = new Map<string, number>();  // clave → cuántas hay en total (para numerar las nuevas)
+      if (fechasArchivo.length > 0) {
+        const existentes = (await exec.execute(drizzleSql`
+          SELECT fecha, debito, credito, comprobante, descripcion, concepto FROM galicia_movements
+          WHERE fecha >= ${fechasArchivo[0]} AND fecha <= ${fechasArchivo[fechasArchivo.length - 1]}`)).rows as any[];
+        for (const r of existentes) {
+          const k = galiciaClave(r);
+          yaCargado.set(k, (yaCargado.get(k) ?? 0) + 1);
+          totalClave.set(k, (totalClave.get(k) ?? 0) + 1);
+        }
+      }
+
       for (const m of movs) {
-        const category = classifyGaliciaMovement(m, rules);
+        const clave = galiciaClave(m);
+        const pendientes = yaCargado.get(clave) ?? 0;
+        if (pendientes > 0) { yaCargado.set(clave, pendientes - 1); duplicados++; continue; } // ya estaba cargado
+        const orden = (totalClave.get(clave) ?? 0) + 1;
+        totalClave.set(clave, orden);
+        m.id = `galicia:${m.fecha}:${m.comprobante && m.comprobante !== "-" ? m.comprobante : "-"}:${m.monto.toFixed(2)}:${m.direccion === "egreso" ? "E" : "I"}:${createHash("sha1").update(clave).digest("hex").slice(0, 8)}:${orden}`;
+
+        // Salida de plata a la cuenta de un socio (leyenda con su nombre y apellido) = Retiro, sea cual sea el concepto
+        const socioRetiro = m.direccion === "egreso" ? matchSocioByLeyenda(m.leyendas, socios) : null;
+        const category = socioRetiro != null ? "Retiro" : classifyGaliciaMovement(m, rules);
         const { yaContabilizado, asignacionCc } = tratamientoCobro(category);
         if (!category) sinCategoria++;
         if (asignacionCc === "pendiente") cobrosPendientes++;
@@ -6994,7 +7023,7 @@ export const storage = {
           ON CONFLICT (id) DO NOTHING
         `);
         const inserted = (ins as any).rowCount ?? 0;
-        if (inserted > 0) insertadosGalicia++; else { duplicados++; continue; } // ya existía → no re-reconciliar
+        if (inserted > 0) insertadosGalicia++; else { duplicados++; continue; } // segunda barrera: id ya existía
 
         // 2) reconciliar a caja_movements SOLO si tiene categoría (igual que MP)
         if (category) {
@@ -7024,7 +7053,7 @@ export const storage = {
           //    Idempotente: solo corre en movimientos nuevos (los duplicados hacen continue arriba) +
           //    ON CONFLICT (movimiento_ref) DO NOTHING como segunda barrera.
           if (category === "Retiro") {
-            const socioId = matchSocioByLeyenda(m.leyendas, socios);
+            const socioId = socioRetiro ?? matchSocioByLeyenda(m.leyendas, socios);
             if (socioId != null) {
               await exec.execute(drizzleSql`
                 INSERT INTO retiros (socio_id, monto, fecha, origen, movimiento_ref, notas)

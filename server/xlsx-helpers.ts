@@ -19,6 +19,14 @@ export function parseXlsxDate(val: any): string {
   // DD/MM/YYYY
   const dm = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if (dm) return `${dm[3]}-${String(dm[2]).padStart(2, "0")}-${String(dm[1]).padStart(2, "0")}`;
+  // DD/MM/YY
+  const dy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})(?!\d)/);
+  if (dy) return `20${dy[3]}-${String(dy[2]).padStart(2, "0")}-${String(dy[1]).padStart(2, "0")}`;
+  // Fecha larga en inglés ("Mon Aug 24 2026 00:00:00 GMT-0300"): se toma el día escrito, sin pasar por zonas
+  // horarias. Antes caía en slice(0, 10) y se guardaba "Mon Aug 24" sin año (79 movimientos de Galicia, ago-2026).
+  const MESES: Record<string, string> = { JAN: "01", FEB: "02", MAR: "03", APR: "04", MAY: "05", JUN: "06", JUL: "07", AUG: "08", SEP: "09", OCT: "10", NOV: "11", DEC: "12" };
+  const lg = s.match(/^(?:[A-Za-z]{3},?\s+)?([A-Za-z]{3})\s+(\d{1,2}),?\s+(\d{4})/);
+  if (lg && MESES[lg[1].toUpperCase()]) return `${lg[3]}-${MESES[lg[1].toUpperCase()]}-${lg[2].padStart(2, "0")}`;
   return s.slice(0, 10);
 }
 

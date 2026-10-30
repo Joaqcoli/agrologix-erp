@@ -4,7 +4,7 @@
 import { normHeader, parseXlsxDate, parseNumAr, readSheet } from "./xlsx-helpers";
 
 export type GaliciaParsedMovement = {
-  id: string;                 // clave de dedup
+  id: string;                 // id de la fila (lo define importGaliciaExtracto con galiciaClave + orden)
   fecha: string;              // YYYY-MM-DD
   descripcion: string;
   debito: number | null;      // egreso (salió plata)
@@ -22,6 +22,27 @@ export type GaliciaParsedMovement = {
 /** Quita acentos y pasa a mayúsculas (para matchear conceptos/leyendas). */
 function up(s: string): string {
   return String(s ?? "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+}
+
+/**
+ * Clave de "mismo movimiento" (30/10/2026). Cada CSV que se baja trae días que ya se cargaron, y el mismo
+ * movimiento puede venir con otro SALDO (cambia según el día en que se bajó el archivo) y con el concepto en otro
+ * formato ("907232 - TRF INMED PROVEED" / "Trf Inmed Proveed"). Por eso la clave NO usa el saldo:
+ *   fecha + sentido + monto + número de comprobante, o la descripción cuando no hay comprobante
+ *   (impuestos, DEBIN: la descripción viene igual en los dos formatos).
+ * Dos movimientos reales idénticos el mismo día (ej. dos comisiones iguales) se respetan contando cuántas
+ * veces aparece la clave (ver importGaliciaExtracto).
+ */
+export function galiciaClave(m: { fecha: string; debito?: number | string | null; credito?: number | string | null; comprobante?: string | null; descripcion?: string | null; concepto?: string | null }): string {
+  const deb = Math.abs(Number(m.debito ?? 0)) || 0;
+  const cred = Math.abs(Number(m.credito ?? 0)) || 0;
+  const dir = deb > 0 ? "E" : "I";
+  const monto = (deb > 0 ? deb : cred).toFixed(2);
+  const compRaw = String(m.comprobante ?? "").trim();
+  const comp = compRaw === "-" ? "" : compRaw.replace(/^0+/, "");
+  if (comp) return `${m.fecha}|${dir}|${monto}|C${comp}`;
+  const texto = up(m.descripcion || m.concepto || "").replace(/^\s*\d+\s*-\s*/, "").replace(/[^A-Z0-9]/g, "");
+  return `${m.fecha}|${dir}|${monto}|D${texto}`;
 }
 
 /**
@@ -72,15 +93,16 @@ export function parseGaliciaExtracto(buffer: Buffer): GaliciaParsedMovement[] {
     const credito = credRaw ? parseNumAr(credRaw) : 0;
     if (debito === 0 && credito === 0) continue;       // fila sin monto = ignorar
 
+    // Fecha sin año o ilegible en una fila con monto → error claro (antes se guardaba "Mon Aug 24" y Caja no la veía)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) throw new Error(`No pude leer la fecha "${get(iFecha)}" del extracto. Bajalo de nuevo como CSV desde Galicia.`);
+
     const esEgreso = debito > 0;
     const monto = esEgreso ? Math.abs(debito) : Math.abs(credito);
     const comprobante = get(iComprob);
     const saldo = iSaldo >= 0 && get(iSaldo) ? parseNumAr(get(iSaldo)) : null;
     const leyendas = iLeyendas.map(i => get(i)).filter(Boolean).join(" | ");
 
-    // Clave de dedup: fecha + comprobante + monto + saldo (el saldo es el running balance,
-    // casi único por línea; el comprobante puede repetirse/venir vacío).
-    const id = `galicia:${fecha}:${comprobante || "-"}:${monto.toFixed(2)}:${saldo ?? "x"}`;
+    const id = ""; // lo asigna importGaliciaExtracto (clave sin saldo + orden)
 
     out.push({
       id, fecha,
