@@ -12,8 +12,10 @@
   agrega solo lo que falta. Toda salida cuya leyenda nombra a un socio (nombre y apellido) es Retiro y crea su fila en
   Retiros de socios (Caja), con cualquier concepto. La fecha larga ("Mon Aug 24 2026") ya no se guarda sin año: el
   import falla con mensaje claro. Prueba con los 7 CSV de jun–oct en copia local: resubirlos agrega 0; cargarlos en
-  orden desde cero deja los 933 movimientos reales sin repetidos. Datos: las 2 transferencias a Joaquín de agosto
-  (07/08 y 14/08, estaban como "Préstamo") pasaron a Retiro (respaldo JSON en el scratchpad de la sesión).
+  orden desde cero deja los 933 movimientos reales sin repetidos. Las 2 transferencias a Joaquín de agosto (07/08 y
+  14/08) quedan como "Préstamo": Joaquín confirmó que agosto suyo está bien (se cambiaron por error y se revirtieron
+  el mismo día). Revisión 30/10: todas las transferencias de Galicia a Federico de ago–oct están en Retiros de
+  socios; Joaquín no tiene transferencias por Galicia en sep–oct. Galicia cargado hasta el 27/10.
   **Pendiente con OK de Joaquín**: borrar 6 retiros duplicados de Federico ($900.000: 07/07, 13/07, 24/08 sin año,
   05/10 ×2, 19/10); el script está probado en copia y el borrado en producción quedó frenado por el permiso automático.
   **Pendiente aparte**: duplicados viejos de otras categorías (pago a proveedor 15 filas $23,2 M, alquiler, banco
