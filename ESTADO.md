@@ -16,8 +16,9 @@
   14/08) quedan como "Préstamo": Joaquín confirmó que agosto suyo está bien (se cambiaron por error y se revirtieron
   el mismo día). Revisión 30/10: todas las transferencias de Galicia a Federico de ago–oct están en Retiros de
   socios; Joaquín no tiene transferencias por Galicia en sep–oct. Galicia cargado hasta el 27/10.
-  **Pendiente con OK de Joaquín**: borrar 6 retiros duplicados de Federico ($900.000: 07/07, 13/07, 24/08 sin año,
-  05/10 ×2, 19/10); el script está probado en copia y el borrado en producción quedó frenado por el permiso automático.
+  30/10: con OK de Joaquín se borraron los 3 retiros duplicados de Federico de octubre (05/10 $300.000 y $200.000,
+  19/10 $100.000; respaldo JSON en el scratchpad). Octubre Federico por Galicia queda en $1.100.000 (7 retiros).
+  Quedan los duplicados de julio (07/07, 13/07) y el de 24/08 sin año (este no suma en Caja): no se pidieron.
   **Pendiente aparte**: duplicados viejos de otras categorías (pago a proveedor 15 filas $23,2 M, alquiler, banco
   propio, seguros, sin categoría) y 79 movimientos del 21–26/08 guardados sin año que Caja no muestra.
 - 11-oct **A-01 · soporte para el agente de WhatsApp** (commit "feat(bot): A-01…"). Tablas `customer_contacts`
