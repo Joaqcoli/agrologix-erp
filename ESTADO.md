@@ -2,9 +2,22 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-10-29 (cierre de rendimiento: aprobar 30 líneas 8 s → 1 s).
+> Última actualización: 2026-10-30 (Galicia: extractos sin duplicar y retiros de socios).
 
 ## Último trabajo (sep–oct 2026)
+  30-oct **GALICIA: cada extracto agrega solo lo nuevo + toda transferencia a un socio es Retiro** (`4c918b8`).
+  Causa: la clave de "movimiento ya cargado" incluía el saldo, que cambia según el día en que se baja el CSV; como cada
+  CSV trae días para atrás, los movimientos de los días superpuestos entraban dos veces. Ahora `galiciaClave` = fecha +
+  sentido + monto + comprobante (o descripción si no hay comprobante) y el import cuenta cuántas veces está cada uno y
+  agrega solo lo que falta. Toda salida cuya leyenda nombra a un socio (nombre y apellido) es Retiro y crea su fila en
+  Retiros de socios (Caja), con cualquier concepto. La fecha larga ("Mon Aug 24 2026") ya no se guarda sin año: el
+  import falla con mensaje claro. Prueba con los 7 CSV de jun–oct en copia local: resubirlos agrega 0; cargarlos en
+  orden desde cero deja los 933 movimientos reales sin repetidos. Datos: las 2 transferencias a Joaquín de agosto
+  (07/08 y 14/08, estaban como "Préstamo") pasaron a Retiro (respaldo JSON en el scratchpad de la sesión).
+  **Pendiente con OK de Joaquín**: borrar 6 retiros duplicados de Federico ($900.000: 07/07, 13/07, 24/08 sin año,
+  05/10 ×2, 19/10); el script está probado en copia y el borrado en producción quedó frenado por el permiso automático.
+  **Pendiente aparte**: duplicados viejos de otras categorías (pago a proveedor 15 filas $23,2 M, alquiler, banco
+  propio, seguros, sin categoría) y 79 movimientos del 21–26/08 guardados sin año que Caja no muestra.
 - 11-oct **A-01 · soporte para el agente de WhatsApp** (commit "feat(bot): A-01…"). Tablas `customer_contacts`
   (teléfonos de PEDIDO; `customers.phone` es administración y no se usa para identificar) y
   `wa_pending_numbers` (Números por asignar); `orders.source`; `order_intake_logs.external_id`; usuario
