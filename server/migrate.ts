@@ -23,6 +23,13 @@ export async function runMigrations() {
     EXCEPTION WHEN others THEN null; END $$;
   `);
 
+  // 01/11/2026: "administrativo" = igual que admin, sin Dashboard ni Resumen del día en Pedidos
+  await db.execute(sql`
+    DO $$ BEGIN
+      ALTER TYPE role ADD VALUE IF NOT EXISTS 'administrativo';
+    EXCEPTION WHEN others THEN null; END $$;
+  `);
+
   await db.execute(sql`
     DO $$ BEGIN
       CREATE TYPE movement_type AS ENUM ('in', 'out');

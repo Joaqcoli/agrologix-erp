@@ -18,6 +18,7 @@ import { Link } from "wouter";
 import { Plus, FileText, Calendar, ChevronRight, CheckCircle2, Clock, XCircle, TrendingUp, Download, Users, Trash2 } from "lucide-react";
 import type { Order } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/lib/auth";
 
 type OrderSummary = Order & {
   customerName: string;
@@ -115,6 +116,8 @@ const PDX_CSS = `
 
 export default function OrdersPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const verResumen = user?.role !== "administrativo"; // el administrativo ve solo los pedidos
   const d0 = new Date();
   const today = `${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,"0")}-${String(d0.getDate()).padStart(2,"0")}`;
   // La fecha elegida se recuerda SOLO al volver de un pedido (el detalle deja una marca al salir, válida 5 segundos).
@@ -229,7 +232,7 @@ export default function OrdersPage() {
           </div>
 
           {/* Resumen del Día (mismos números que hoy) */}
-          {!isLoading && dayOrders.length > 0 && (
+          {verResumen && !isLoading && dayOrders.length > 0 && (
             <div className="pdx-resumen">
               <div className="pdx-rhead">
                 <span className="ic"><TrendingUp className="h-[18px] w-[18px]" /></span>

@@ -64,6 +64,7 @@ function RootPage() {
   const { user } = useAuth();
   if (user?.role === "vendedor") return <Redirect to="/vendedor/dashboard" />;
   if (user?.role === "galpon") return <Redirect to="/galpon/stock" />;
+  if (user?.role === "administrativo") return <Redirect to="/orders" />; // sin Dashboard
   return <DashboardPage />;
 }
 

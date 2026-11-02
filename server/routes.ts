@@ -49,7 +49,7 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 
 function requireVendedor(req: Request, res: Response, next: NextFunction) {
   if (!req.session.userId) return res.status(401).json({ error: "Not authenticated" });
-  if (req.session.userRole !== "vendedor" && req.session.userRole !== "admin") {
+  if (req.session.userRole !== "vendedor" && !esAdmin(req.session.userRole)) {
     return res.status(403).json({ error: "Forbidden" });
   }
   next();
@@ -59,7 +59,7 @@ function requireVendedor(req: Request, res: Response, next: NextFunction) {
 // NUNCA deben devolver precios de venta, costos de venta ni márgenes.
 function requireGalpon(req: Request, res: Response, next: NextFunction) {
   if (!req.session.userId) return res.status(401).json({ error: "Not authenticated" });
-  if (req.session.userRole !== "galpon" && req.session.userRole !== "admin") {
+  if (req.session.userRole !== "galpon" && !esAdmin(req.session.userRole)) {
     return res.status(403).json({ error: "Forbidden" });
   }
   next();
@@ -102,8 +102,26 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/ai-usage",
     "/api/wa-outbound",
   ],
-  // admin: sin entrada → acceso total.
+  // admin y administrativo: sin entrada → acceso total (administrativo con las exclusiones de ROLE_API_DENY).
 };
+
+// 01/11/2026: rol "administrativo" (empleado administrativo) = admin sin Dashboard. Se le niegan los datos que
+// SOLO usa el Dashboard. /api/dashboard/stats NO va acá: Caja lo usa para el mes.
+export const ROLE_API_DENY: Record<string, string[]> = {
+  administrativo: [
+    "/api/dashboard/monthly-trend",
+    "/api/dashboard/historical",
+    "/api/dashboard/rinde-detail",
+    "/api/dashboard/merma-detail",
+    "/api/dashboard/bolsa-fv",
+    "/api/commissions/",
+  ],
+};
+
+/** Admin o administrativo: mismos permisos (el administrativo no ve Dashboard; ver ROLE_API_DENY). */
+export function esAdmin(role: string | undefined): boolean {
+  return role === "admin" || role === "administrativo";
+}
 
 // ─── A-01: auth por token de servicio para el bot (sin cookie) ─────────────────
 // Corre ANTES de express-session (server/index.ts). Si el header Authorization trae el BOT_API_TOKEN,
@@ -140,6 +158,7 @@ const activeCache = new Map<number, { active: boolean; at: number }>();
 // Pura y testeable: decide si un rol puede llamar a un path de /api/*.
 export function isApiAllowedForRole(role: string | undefined, path: string): boolean {
   if (!role || !path.startsWith("/api/")) return true;
+  if (ROLE_API_DENY[role]?.some((prefix) => path.startsWith(prefix))) return false;
   const allowed = ROLE_API_WHITELIST[role];
   if (!allowed) return true; // rol sin lista blanca (admin) → acceso total
   return allowed.some((prefix) => path.startsWith(prefix));
@@ -430,7 +449,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Diagnóstico (26/10, migración de base): latencia desde Render a la base actual y, si está definida, a DATABASE_URL_PRUEBA
   app.get("/api/diag/latencia", requireAuth, async (req, res) => {
-    if (req.session.userRole !== "admin" && req.session.userRole !== "operator") return res.status(403).json({ error: "Solo administrador" });
+    if (!esAdmin(req.session.userRole) && req.session.userRole !== "operator") return res.status(403).json({ error: "Solo administrador" });
     const { Client } = await import("pg");
     const medir = async (url: string) => {
       const c = new Client({ connectionString: url, ssl: /supabase|neon/.test(url) ? { rejectUnauthorized: false } : undefined });
@@ -449,7 +468,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Diagnóstico: nombres (nunca valores) de las variables de entorno presentes, para saber qué vive en el Secret File
   app.get("/api/diag/env", requireAuth, async (req, res) => {
-    if (req.session.userRole !== "admin" && req.session.userRole !== "operator") return res.status(403).json({ error: "Solo administrador" });
+    if (!esAdmin(req.session.userRole) && req.session.userRole !== "operator") return res.status(403).json({ error: "Solo administrador" });
     const keys = Object.keys(process.env).filter((k) => !/^(PATH|HOME|PWD|SHLVL|_|npm_.*|NODE_.*|RENDER.*|HOSTNAME|LANG|TERM|OLDPWD|PORT|IS_PULL_REQUEST)$/.test(k)).sort();
     return res.json({ keys, supabaseUrlHost: process.env.SUPABASE_URL ? new URL(process.env.SUPABASE_URL).hostname : null, databaseUrlHost: process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL).hostname : null });
   });
@@ -483,13 +502,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.get("/api/wa-estado", requireAuth, async (_req, res) => res.json(await storage.waEstadoEntregas()));
   app.get("/api/costos", requireAuth, async (req, res) => {
-    if (req.session.userRole !== "admin") return res.status(403).json({ error: "Solo administrador" });
+    if (!esAdmin(req.session.userRole)) return res.status(403).json({ error: "Solo administrador" });
     try { return res.json(await resumenCostos(typeof req.query.mes === "string" ? req.query.mes : undefined)); }
     catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
   app.get("/api/cost-rates", requireAuth, async (_req, res) => res.json(await storage.listCostRates()));
   app.put("/api/cost-rates/:key", requireAuth, async (req, res) => {
-    if (req.session.userRole !== "admin") return res.status(403).json({ error: "Solo administrador" });
+    if (!esAdmin(req.session.userRole)) return res.status(403).json({ error: "Solo administrador" });
     try {
       const b = z.object({ value: z.number().min(0), validFrom: z.string().nullable().optional() }).parse(req.body);
       await storage.setCostRate(req.params.key, b.value, b.validFrom ?? null);
@@ -504,7 +523,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json(Object.fromEntries(SETTING_KEYS.map((k) => [k, all[k] === true])));
   });
   app.put("/api/settings", requireAuth, async (req, res) => {
-    if (req.session.userRole !== "admin") return res.status(403).json({ error: "Solo administrador" });
+    if (!esAdmin(req.session.userRole)) return res.status(403).json({ error: "Solo administrador" });
     try {
       const body = z.object({ remitos_automaticos: z.boolean().optional(), facturacion_automatica: z.boolean().optional(), envio_facturas: z.boolean().optional() }).parse(req.body);
       for (const k of SETTING_KEYS) if (body[k] !== undefined) await storage.setSetting(k, body[k]);
@@ -1357,7 +1376,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return res.json({ ycloud: ycloudConfigured(), templates: list.map((t) => ({ ...t, metaPreview: textoMeta(t.key, t.text).body })) });
   });
   app.put("/api/message-templates/:key", requireAuth, async (req, res) => {
-    if (req.session.userRole !== "admin") return res.status(403).json({ error: "Solo administrador" });
+    if (!esAdmin(req.session.userRole)) return res.status(403).json({ error: "Solo administrador" });
     try {
       const { text } = z.object({ text: z.string().min(5).max(1024) }).parse(req.body);
       const t = await storage.getMessageTemplate(req.params.key);
@@ -2388,7 +2407,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!user) return res.status(401).json({ error: "User not found" });
       const order = await storage.getOrder(Number(req.params.id));
       if (!order) return res.status(404).json({ error: "Not found" });
-      if (order.customer.salespersonName !== user.name && req.session.userRole !== "admin") {
+      if (order.customer.salespersonName !== user.name && !esAdmin(req.session.userRole)) {
         return res.status(403).json({ error: "Forbidden" });
       }
       // Strip cost fields from items
@@ -2460,7 +2479,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!user) return res.status(401).json({ error: "User not found" });
       const customer = await storage.getCustomer(Number(req.params.id));
       if (!customer) return res.status(404).json({ error: "Not found" });
-      if (customer.salespersonName !== user.name && req.session.userRole !== "admin") {
+      if (customer.salespersonName !== user.name && !esAdmin(req.session.userRole)) {
         return res.status(403).json({ error: "Forbidden" });
       }
       const data = insertCustomerSchema.partial().parse(req.body);

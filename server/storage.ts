@@ -273,7 +273,7 @@ export const storage = {
     return db.select().from(users).orderBy(asc(users.name));
   },
 
-  async createUser(data: { name: string; email: string; password: string; role: "admin" | "operator" | "vendedor" | "galpon" }): Promise<User> {
+  async createUser(data: { name: string; email: string; password: string; role: "admin" | "operator" | "vendedor" | "galpon" | "administrativo" }): Promise<User> {
     const passwordHash = await bcrypt.hash(data.password, 10);
     const [user] = await db.insert(users).values({
       name: data.name,

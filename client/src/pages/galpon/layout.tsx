@@ -24,7 +24,7 @@ export function GalponLayout({ children, title }: { children: ReactNode; title?:
   }
 
   if (!user) return <Redirect to="/login" />;
-  if (user.role !== "galpon" && user.role !== "admin") return <Redirect to="/" />;
+  if (user.role !== "galpon" && user.role !== "admin" && user.role !== "administrativo") return <Redirect to="/" />;
 
   const initials = user.name.split(" ").map((n: string) => n[0]).slice(0, 2).join("").toUpperCase();
 

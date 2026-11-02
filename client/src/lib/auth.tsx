@@ -5,7 +5,7 @@ export type AuthUser = {
   id: number;
   name: string;
   email: string;
-  role: "admin" | "operator" | "vendedor" | "galpon";
+  role: "admin" | "operator" | "vendedor" | "galpon" | "administrativo";
   active: boolean;
   createdAt: string;
 };

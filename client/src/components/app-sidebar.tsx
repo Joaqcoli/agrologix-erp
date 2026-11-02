@@ -87,7 +87,7 @@ export function AppSidebar() {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navItems.map((item) => {
+              {navItems.filter((item) => !(user?.role === "administrativo" && item.url === "/")).map((item) => {
                 const isActive = location === item.url || (item.url !== "/" && location.startsWith(item.url));
                 return (
                   <SidebarMenuItem key={item.title}>
@@ -120,7 +120,7 @@ export function AppSidebar() {
           <div className="flex flex-col flex-1 min-w-0">
             <span className="text-sm font-medium text-sidebar-foreground truncate leading-tight">{user?.name}</span>
             <Badge variant="secondary" className="w-fit text-[10px] px-1.5 py-0 mt-0.5">
-              {user?.role === "admin" ? "Admin" : "Operador"}
+              {user?.role === "admin" ? "Admin" : user?.role === "administrativo" ? "Administrativo" : "Operador"}
             </Badge>
           </div>
           <Button
