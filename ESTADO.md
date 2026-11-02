@@ -5,7 +5,7 @@
 > Última actualización: 2026-11-02 (administrativo sin Retiros de socios en Caja).
 
 ## Último trabajo (sep–oct 2026)
-  02-nov **Administrativo sin "Retiros de socios" en Caja** (commit en este push): la sección no se muestra para el rol
+  02-nov **Administrativo sin "Retiros de socios" en Caja** (`390831c`): la sección no se muestra para el rol
   administrativo y el servidor le niega `/api/caja/retiros` (`ROLE_API_DENY`). El resto de Caja queda igual: los
   movimientos con categoría Retiro siguen apareciendo en la lista de movimientos (no se pidió ocultarlos).
   02-nov **Diagnóstico costo de stock** (solo lectura, `docs/AUDITORIA-COSTO-STOCK-2026-11-02.md`): el sistema usa
