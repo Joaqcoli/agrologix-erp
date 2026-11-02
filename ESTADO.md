@@ -2,9 +2,12 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-02 (diagnóstico: cómo se calcula el costo del stock).
+> Última actualización: 2026-11-02 (administrativo sin Retiros de socios en Caja).
 
 ## Último trabajo (sep–oct 2026)
+  02-nov **Administrativo sin "Retiros de socios" en Caja** (commit en este push): la sección no se muestra para el rol
+  administrativo y el servidor le niega `/api/caja/retiros` (`ROLE_API_DENY`). El resto de Caja queda igual: los
+  movimientos con categoría Retiro siguen apareciendo en la lista de movimientos (no se pidió ocultarlos).
   02-nov **Diagnóstico costo de stock** (solo lectura, `docs/AUDITORIA-COSTO-STOCK-2026-11-02.md`): el sistema usa
   promedio ponderado móvil desde el 15/06; FIFO no se usa. Ejemplo real con MORRON ROJO 22–30/10: costo total de lo
   vendido $1.076.877 con promedio vs $1.077.188 con FIFO simulado (0,03 %); día por día la diferencia llega a ±30 %.

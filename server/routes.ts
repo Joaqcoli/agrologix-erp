@@ -115,6 +115,7 @@ export const ROLE_API_DENY: Record<string, string[]> = {
     "/api/dashboard/merma-detail",
     "/api/dashboard/bolsa-fv",
     "/api/commissions/",
+    "/api/caja/retiros", // 02/11/2026: tampoco ve los retiros de socios en Caja
   ],
 };
 

@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/lib/auth";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
 import { fmtPesos } from "@/lib/format";
@@ -519,6 +520,9 @@ function crxWeekRange(ws: Date): string {
 
 export default function CajaPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  // El rol administrativo no ve los retiros de socios (ni la sección ni los datos).
+  const verRetiros = user?.role !== "administrativo";
   const [viewMode, setViewMode] = useState<"day" | "week" | "month">("month");
   const [monthOffset, setMonthOffset] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -697,6 +701,7 @@ export default function CajaPage() {
   const { data: retiros } = useQuery<any[]>({
     queryKey: ["/api/caja/retiros"],
     queryFn: () => fetch("/api/caja/retiros", { credentials: "include" }).then(r => r.json()),
+    enabled: verRetiros,
   });
 
   const addRetiroMut = useMutation({
@@ -1801,6 +1806,7 @@ export default function CajaPage() {
         </Dialog>
 
         {/* ── Retiros de socios (malva) ──────────────────────────────────── */}
+        {verRetiros && (
         <div className="crx-block">
           <div className="crx-sechead" style={{ marginBottom: 6 }}>
             <h2 className="crx-h2">Retiros de socios</h2>
@@ -1831,6 +1837,7 @@ export default function CajaPage() {
             </div>
           )}
         </div>
+        )}
 
         {/* Dialog: agregar retiro manual */}
         <Dialog open={retiroDialogOpen} onOpenChange={v => { setRetiroDialogOpen(v); if (!v) setRetiroForm({ socioId: "", monto: "", fecha: new Date().toISOString().slice(0,10), notas: "" }); }}>
