@@ -2,9 +2,13 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-01 (rol Administrativo y cuenta de N. Silva).
+> Última actualización: 2026-11-02 (diagnóstico: cómo se calcula el costo del stock).
 
 ## Último trabajo (sep–oct 2026)
+  02-nov **Diagnóstico costo de stock** (solo lectura, `docs/AUDITORIA-COSTO-STOCK-2026-11-02.md`): el sistema usa
+  promedio ponderado móvil desde el 15/06; FIFO no se usa. Ejemplo real con MORRON ROJO 22–30/10: costo total de lo
+  vendido $1.076.877 con promedio vs $1.077.188 con FIFO simulado (0,03 %); día por día la diferencia llega a ±30 %.
+  Joaquín decide si mantener el método.
   01-nov **Rol "administrativo"** (`561ec83`): igual que admin, sin Dashboard (no aparece en el menú, al entrar va a
   Pedidos y el servidor le niega los datos exclusivos del Dashboard y comisiones; `/api/dashboard/stats` sí, porque lo
   usa Caja) y sin el "Resumen del día" en Pedidos. `esAdmin()` reemplaza los chequeos de "solo administrador";
