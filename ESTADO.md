@@ -2,9 +2,15 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-10-30 (Galicia: extractos sin duplicar y retiros de socios).
+> Última actualización: 2026-11-01 (rol Administrativo y cuenta de N. Silva).
 
 ## Último trabajo (sep–oct 2026)
+  01-nov **Rol "administrativo"** (`561ec83`): igual que admin, sin Dashboard (no aparece en el menú, al entrar va a
+  Pedidos y el servidor le niega los datos exclusivos del Dashboard y comisiones; `/api/dashboard/stats` sí, porque lo
+  usa Caja) y sin el "Resumen del día" en Pedidos. `esAdmin()` reemplaza los chequeos de "solo administrador";
+  `ROLE_API_DENY` lista lo bloqueado. Cuenta creada: **N. Silva** (`n.silva@vegetalesargentinos.com`, id 13), con la
+  contraseña que eligió Joaquín (no se anota acá). Verificado en producción con usuario temporal: 8 módulos con
+  acceso, 6 datos del Dashboard bloqueados. No hay pantalla para cambiar contraseña: si hace falta, se cambia por script.
   30-oct **GALICIA: cada extracto agrega solo lo nuevo + toda transferencia a un socio es Retiro** (`4c918b8`).
   Causa: la clave de "movimiento ya cargado" incluía el saldo, que cambia según el día en que se baja el CSV; como cada
   CSV trae días para atrás, los movimientos de los días superpuestos entraban dos veces. Ahora `galiciaClave` = fecha +
