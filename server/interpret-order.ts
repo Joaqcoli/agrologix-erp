@@ -190,6 +190,22 @@ export function claveRenglon(s: string): string {
     .replace(/[^a-z\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+/** Unidad que el cliente escribió en el renglón ("Mandarina 1 cajón" → CAJON, "7k" → KG), o null si no puso ninguna. */
+const PALABRAS_UNIDAD: Record<string, string> = {
+  kg: "KG", kgs: "KG", kilo: "KG", kilos: "KG", k: "KG", gr: "KG", grs: "KG", g: "KG",
+  cajon: "CAJON", cajones: "CAJON", caja: "CAJON", cajas: "CAJON",
+  bolsa: "BOLSA", bolsas: "BOLSA", saco: "BOLSA", sacos: "BOLSA",
+  atado: "ATADO", atados: "ATADO",
+  unidad: "UNIDAD", unidades: "UNIDAD", unid: "UNIDAD", und: "UNIDAD", u: "UNIDAD",
+  maple: "MAPLE", maples: "MAPLE", bandeja: "BANDEJA", bandejas: "BANDEJA",
+};
+// "un"/"una" no cuentan como unidad ("un kilo de tomate" es KG); "planta"/"pieza" tampoco (los resuelve la regla de abajo).
+export function unidadEscrita(s: string): string | null {
+  const n = s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const m = n.match(/(?<![a-z])(kgs?|kilos?|k|grs?|g|cajon(?:es)?|cajas?|bolsas?|sacos?|atados?|unidad(?:es)?|unid|und|u|maples?|bandejas?)(?![a-z])/);
+  return m ? PALABRAS_UNIDAD[m[1]] ?? null : null;
+}
+
 function validateProposal(
   raw: ModelProposalT,
   catalog: CatalogRow[],
@@ -239,14 +255,30 @@ function validateProposal(
         status = "duda"; dudaType = "unidad";
       }
     }
-    // A-13 (15/10): la MEMORIA manda — el equipo ya confirmó cómo se carga este renglón
+    // A-13 (15/10): la MEMORIA manda — el equipo ya confirmó cómo se carga este renglón.
+    // 04/11: manda el PRODUCTO, no la unidad que el cliente escribió. La clave borra números y unidades, así que
+    // "Mandarina 1 cajón" coincidía con la memoria "mandarina 1 kg" y se cargaba 1 KG. Si el cliente escribió una
+    // unidad, esa queda (si el producto la tiene); la memoria solo decide cuando el renglón no trae unidad.
     const mem = memByKey.get(claveRenglon(l.rawLine));
     if (mem) {
       const mp = byId.get(mem.productId)!;
-      productId = mem.productId; unit = mem.unit;
-      if (quantity == null || !Number.isFinite(quantity) || quantity <= 0) quantity = mem.quantity;
+      const escrita = unidadEscrita(l.rawLine);
+      productId = mem.productId;
       status = "ok"; dudaType = "ninguna"; candidates = [];
-      reasons.length = 0; reasons.push(`memoria: "${mem.hint}" → ${mp.name} ${mem.unit} (confirmado por el equipo)`);
+      reasons.length = 0;
+      if (escrita && escrita !== mem.unit) {
+        unit = escrita;
+        if (mp.units.length && !mp.units.includes(escrita)) {
+          status = "duda"; dudaType = "unidad";
+          reasons.push(`memoria: "${mem.hint}" → ${mp.name}; el cliente pidió ${escrita} y ${mp.name} no tiene esa unidad cargada (tiene: ${mp.units.join(", ")})`);
+        } else {
+          reasons.push(`memoria: "${mem.hint}" → ${mp.name}; unidad ${escrita} escrita por el cliente`);
+        }
+      } else {
+        unit = mem.unit;
+        reasons.push(`memoria: "${mem.hint}" → ${mp.name} ${mem.unit} (confirmado por el equipo)`);
+      }
+      if (quantity == null || !Number.isFinite(quantity) || quantity <= 0) quantity = mem.quantity;
     }
     const productM = productId != null ? byId.get(productId)! : null;
     // "planta"/"pieza" nunca es KG: ATADO si el producto lo tiene, si no UNIDAD (regla de Joaquín, 15/10)

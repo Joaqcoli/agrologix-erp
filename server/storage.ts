@@ -1912,6 +1912,19 @@ export const storage = {
       const newProductId = patch.productId !== undefined ? patch.productId : item.productId;
       const newUnit = patch.unit ?? (item.unit as string);
 
+      // 04/11: si en un BORRADOR cambia la unidad o el producto y no viene un precio explícito, el precio se vuelve a
+      // buscar para la combinación nueva (último aprobado del grupo, igual que al crear). Antes quedaba el precio de la
+      // unidad vieja: un cajón de manzana cobrado a $6.000 (precio del kg), o repollo en UNIDAD a $1.800 (abril)
+      // que el galpón pasaba a KG con ese mismo precio. Si no hay precio para la unidad nueva queda vacío, para que
+      // Joaquín lo complete antes de aprobar. Aprobados no se tocan.
+      const cambioUnidadOProducto =
+        (patch.unit !== undefined && patch.unit.toUpperCase() !== String(item.unit).toUpperCase()) ||
+        (patch.productId !== undefined && patch.productId !== item.productId);
+      let precioReResuelto: string | null | undefined;
+      if (!isApproved && cambioUnidadOProducto && patch.pricePerUnit === undefined && newProductId && !(item as any).bolsaType && !patch.bolsaType) {
+        precioReResuelto = await this.getLastPriceByUnit(newProductId, customerId, newUnit);
+      }
+
       // Look up new cost from product_units when product or unit changes
       let newCostPerUnit: string | undefined;
       if (patch.productId !== undefined && patch.productId !== null) {
@@ -1961,7 +1974,9 @@ export const storage = {
       const newPriceRaw = patch.pricePerUnit !== undefined ? patch.pricePerUnit : null;
       const price = newPriceRaw !== undefined && newPriceRaw !== null
         ? Number(newPriceRaw)
-        : (bolsaAutoPrice ?? existingPrice);
+        : precioReResuelto !== undefined
+          ? (precioReResuelto !== null ? Number(precioReResuelto) : null)
+          : (bolsaAutoPrice ?? existingPrice);
       const margin = price && price > 0 ? (price - effectiveCost) / price : null;
 
       // El subtotal NO se calcula acá en JS: se recalcula en SQL sobre la fila ya
@@ -1972,6 +1987,7 @@ export const storage = {
       if (patch.unit !== undefined) updateData.unit = patch.unit;
       if (patch.productId !== undefined) updateData.productId = patch.productId;
       if (patch.pricePerUnit !== undefined) updateData.pricePerUnit = patch.pricePerUnit;
+      else if (precioReResuelto !== undefined) updateData.pricePerUnit = precioReResuelto;
       else if (bolsaAutoPrice !== null) updateData.pricePerUnit = bolsaAutoPrice.toFixed(2);
       if (patch.overrideCostPerUnit !== undefined) updateData.overrideCostPerUnit = patch.overrideCostPerUnit;
       if (newCostPerUnit !== undefined) updateData.costPerUnit = newCostPerUnit;
