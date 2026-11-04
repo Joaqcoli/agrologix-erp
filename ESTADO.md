@@ -6,7 +6,7 @@
 
 ## Último trabajo (sep–oct 2026)
   04-nov **Unidades mal cargadas y precios "viejos"** (diagnóstico en `docs/AUDITORIA-PEDIDOS-UNIDADES-PRECIOS-2026-11-04.md`,
-  `9d42a28`; arreglo en este commit). Causas: (1) la memoria del bot pisaba la unidad escrita por el cliente
+  `9d42a28`; arreglo `7670308`, verificado en producción con cliente temporal: 7/7). Causas: (1) la memoria del bot pisaba la unidad escrita por el cliente
   ("Mandarina 1 cajón" → 1 KG por la memoria "mandarina 1 kg"); (2) al cambiar unidad o producto de una línea (galpón al
   pesar, o en pantalla) el precio quedaba el de la unidad vieja. Por eso "repollo 4 unidades" entraba en UNIDAD con el último
   precio aprobado en UNIDAD ($1.800, de abril) y el galpón lo pasaba a KG con ese precio; y "batata" entra como BATATA (precio
