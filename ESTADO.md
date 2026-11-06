@@ -5,6 +5,10 @@
 > Última actualización: 2026-11-02 (administrativo sin Retiros de socios en Caja).
 
 ## Último trabajo (sep–oct 2026)
+  06-nov **Grupo de precios LAUNDRY-PREGO**: LAUNDRY - MORON (178) y PREGO (173) comparten precio con cuentas corrientes
+  separadas, igual que COMO SIEMPRE-MESTIZO y QUINQUELA-MARQUESA (grupo manual en `client_groups`, cargado desde
+  `server/migrate.ts` y aplicado ya en producción). Al aprobar un pedido de uno, el precio pasa a los borradores del otro y
+  los pedidos nuevos toman el último precio aprobado del grupo.
   04-nov **Unidades mal cargadas y precios "viejos"** (diagnóstico en `docs/AUDITORIA-PEDIDOS-UNIDADES-PRECIOS-2026-11-04.md`,
   `9d42a28`; arreglo `7670308`, verificado en producción con cliente temporal: 7/7). Causas: (1) la memoria del bot pisaba la unidad escrita por el cliente
   ("Mandarina 1 cajón" → 1 KG por la memoria "mandarina 1 kg"); (2) al cambiar unidad o producto de una línea (galpón al
