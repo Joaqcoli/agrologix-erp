@@ -5,6 +5,15 @@
 > Última actualización: 2026-11-02 (administrativo sin Retiros de socios en Caja).
 
 ## Último trabajo (sep–oct 2026)
+  06-nov **Costo "manual" que nadie cargó** (diagnóstico en `docs/AUDITORIA-COSTO-MANUAL-2026-11-06.md`; arreglo `e125345`,
+  verificado en producción con cliente temporal: 5/5). Caso: espinaca 12 ATADO con costo $8.000 (el del cajón). Causa: al
+  cambiar la unidad en el editor de línea de Pedido, la pantalla rellenaba el campo Costo con el de la unidad nueva y al
+  guardar lo mandaba como `overrideCostPerUnit` (costo Manual congelado); las respuestas llegaban desordenadas y podía
+  quedar el costo del cajón en una línea de atados. En 60 días, 357 de 527 líneas aprobadas con costo manual tenían el
+  mismo valor que el automático (no fue decisión de nadie). Arreglo: el costo autocompletado actualiza también la referencia
+  (`orig.cost`) y se ignora si la unidad volvió a cambiar; solo viaja como manual lo tipeado. Servidor: `updateOrderItem`
+  recalcula `cost_per_unit` al cambiar unidad en borradores (como el precio). Datos: espinaca del 2869 sin manual, $541,67.
+  Aprobados no se tocaron (inmutables).
   06-nov **Grupo de precios LAUNDRY-PREGO**: LAUNDRY - MORON (178) y PREGO (173) comparten precio con cuentas corrientes
   separadas, igual que COMO SIEMPRE-MESTIZO y QUINQUELA-MARQUESA (grupo manual en `client_groups`, cargado desde
   `server/migrate.ts` y aplicado ya en producción). Al aprobar un pedido de uno, el precio pasa a los borradores del otro y
