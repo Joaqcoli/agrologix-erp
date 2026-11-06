@@ -1116,15 +1116,20 @@ export default function OrderDetailPage({ id }: { id: number }) {
     if (field === "unit" && value && typeof value === "string") {
       const productId = drafts[itemId]?.productId ?? order?.items.find((i) => i.id === itemId)?.productId ?? null;
       if (productId) {
+        // 06/11: el costo que se rellena solo NO es un cambio del usuario: se actualiza también `orig.cost`, así al
+        // guardar no viaja como `overrideCostPerUnit` (costo "Manual" congelado: espinaca a $8.000 el atado = costo del
+        // cajón). Solo cuenta como manual lo que alguien tipea. Y si la unidad volvió a cambiar antes de que llegue la
+        // respuesta, se ignora (las respuestas no llegan en orden: ganaba la del cajón aunque quedara atado).
         fetch(`/api/products/${productId}/cost-for-unit?unit=${encodeURIComponent(value)}`, { credentials: "include" })
           .then((r) => (r.ok ? r.json() : null))
           .then((data) => {
             if (data?.cost !== undefined) {
-              setDrafts((prev) =>
-                prev[itemId]
-                  ? { ...prev, [itemId]: { ...prev[itemId]!, cost: String(Math.round(parseFloat(data.cost))) } }
-                  : prev
-              );
+              const costoAuto = String(Math.round(parseFloat(data.cost)));
+              setDrafts((prev) => {
+                const d = prev[itemId];
+                if (!d || d.unit !== value) return prev;
+                return { ...prev, [itemId]: { ...d, cost: costoAuto, orig: { ...d.orig, cost: costoAuto } } };
+              });
             }
           })
           .catch(() => {});

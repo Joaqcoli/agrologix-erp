@@ -1925,10 +1925,15 @@ export const storage = {
         precioReResuelto = await this.getLastPriceByUnit(newProductId, customerId, newUnit);
       }
 
-      // Look up new cost from product_units when product or unit changes
+      // Look up new cost from product_units when product or unit changes.
+      // 06/11: también cuando solo cambia la UNIDAD de una línea en borrador (misma regla que el precio): antes el
+      // cost_per_unit guardado quedaba el de la unidad vieja (cajón $8.000 en una línea que pasó a atados). La pantalla y
+      // la aprobación lo recalculan en vivo, pero la lista de pedidos usa el guardado. Aprobados no se tocan.
       let newCostPerUnit: string | undefined;
       if (patch.productId !== undefined && patch.productId !== null) {
         newCostPerUnit = await this._getCostForUnit(patch.productId, newUnit, tx);
+      } else if (!isApproved && cambioUnidadOProducto && newProductId && !(item as any).bolsaType && !patch.bolsaType) {
+        newCostPerUnit = await this._getCostForUnit(newProductId, newUnit, tx);
       }
 
       // Effective cost for margin calculation: override > new product cost > existing cost
