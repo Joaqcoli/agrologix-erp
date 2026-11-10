@@ -705,17 +705,25 @@ function PaymentModal({
   // Default: una línea EFECTIVO. Con una sola línea, su monto = el total (no se muestra el input).
   type PayLine = { method: string; monto: string; numero: string; fechaCobro: string; cuentaId: number | null };
   const [lines, setLines] = useState<PayLine[]>([{ method: "EFECTIVO", monto: "", numero: "", fechaCobro: "", cuentaId: null }]);
-  const addLine = () => setLines(p => {
+  // 10/11: con varios métodos, el Monto se calcula solo como la suma de las líneas (antes era un campo aparte que
+  // podía quedar desfasado: Joaquín ponía el total de las facturas en Monto, los cheques sumaban menos y el botón
+  // Guardar quedaba apagado aunque cargara la diferencia como retención). Con una sola línea sigue igual que antes.
+  const sumLines = (ls: PayLine[]) => ls.reduce((s, l) => s + (parseFloat(l.monto) || 0), 0);
+  const applyLines = (next: PayLine[]) => {
+    setLines(next);
+    if (next.length > 1) { const sum = Math.round(sumLines(next) * 100) / 100; setAmount(sum > 0 ? String(sum) : ""); }
+  };
+  const addLine = () => {
     // al pasar de 1 a varias, fijar el monto de la primera = total actual para que el usuario reparta
-    const base = p.length === 1 ? [{ ...p[0], monto: p[0].monto || amount }] : p;
-    return [...base, { method: "TRANSFERENCIA", monto: "", numero: "", fechaCobro: "", cuentaId: null }];
-  });
-  const removeLine = (i: number) => setLines(p => {
-    if (p.length <= 1) return p;
-    const next = p.filter((_, j) => j !== i);
-    return next.length === 1 ? [{ ...next[0], monto: amount }] : next; // al volver a 1, monto = total
-  });
-  const updateLine = (i: number, patch: Partial<PayLine>) => setLines(p => p.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+    const base = lines.length === 1 ? [{ ...lines[0], monto: lines[0].monto || amount }] : lines;
+    applyLines([...base, { method: "TRANSFERENCIA", monto: "", numero: "", fechaCobro: "", cuentaId: null }]);
+  };
+  const removeLine = (i: number) => {
+    if (lines.length <= 1) return;
+    const next = lines.filter((_, j) => j !== i);
+    applyLines(next.length === 1 ? [{ ...next[0], monto: amount }] : next); // al volver a 1, monto = total
+  };
+  const updateLine = (i: number, patch: Partial<PayLine>) => applyLines(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   // Setear el total y, si hay una sola línea, sincronizar su monto al total
   const setAmountSync = (v: string) => { setAmount(v); setLines(p => (p.length === 1 ? [{ ...p[0], monto: v }] : p)); };
   // Validación: Σ líneas = total; cada línea monto>0; cheques con fecha de cobro
@@ -822,7 +830,7 @@ function PaymentModal({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Registrar Pago</DialogTitle>
         </DialogHeader>
@@ -841,9 +849,12 @@ function PaymentModal({
                 onChange={(e) => setAmountSync(e.target.value)}
                 placeholder="0"
                 className="flex-1"
+                readOnly={lines.length > 1}
+                title={lines.length > 1 ? "Con varios métodos, el monto es la suma de los métodos" : undefined}
                 data-testid="input-payment-amount"
               />
-              {selectedTotal > 0 && !amount && (
+              {lines.length > 1 && <span className="text-[11px] text-muted-foreground whitespace-nowrap">= suma de métodos</span>}
+              {selectedTotal > 0 && !amount && lines.length === 1 && (
                 <Button
                   type="button"
                   variant="outline"
@@ -1002,6 +1013,16 @@ function PaymentModal({
                     data-testid="input-retention-amount"
                   />
                 </div>
+                {selectedTotal > 0 && residuo >= 1 && (
+                  <button
+                    type="button"
+                    className="mt-1 text-[11px] font-medium text-blue-600 hover:text-blue-800 text-left"
+                    onClick={() => setRetentionAmount(String(Math.round((isNaN(retAmt) ? 0 : retAmt) + residuo)))}
+                    data-testid="button-retention-autofill"
+                  >
+                    Falta ${fmtInt(residuo)} para cubrir lo seleccionado · Cargar como retención
+                  </button>
+                )}
               </div>
               <div>
                 <Label className="text-xs">Tipo</Label>

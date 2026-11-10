@@ -2,9 +2,19 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-10 (nombre del cliente en el pedido abre su cuenta corriente).
+> Última actualización: 2026-11-10 (modal Registrar Pago: monto = suma de métodos, retención con un clic, scroll).
 
 ## Último trabajo (sep–oct 2026)
+  10-nov **Modal Registrar Pago (CC)** (`PENDIENTE_HASH`): (1) con varios métodos, el Monto se calcula solo como la suma
+  de los métodos (campo de solo lectura "= suma de métodos"); antes Joaquín ponía el total de las facturas en Monto, los
+  cheques sumaban menos y Guardar quedaba apagado aunque cargara la diferencia como retención. (2) En el bloque Retención,
+  si lo cobrado no cubre las facturas seleccionadas aparece "Falta $X · Cargar como retención" que completa el campo.
+  (3) El modal tiene alto máximo 90 % de la ventana con scroll interno (antes se cortaba y había que achicar el zoom).
+  Sin cambios de lógica ni de servidor: se siguen registrando cobranza + retención como antes.
+  Verificar a mano: pago de FV del 23/10 con 4 cheques ($1.429.920) + retención IIBB $132.745 contra FC 800 y 801.
+  10-nov **Diagnóstico pedidos aprobados editados** (`864a08a`, `docs/AUDITORIA-PEDIDOS-APROBADOS-EDITADOS-2026-11-10.md`):
+  no hay proceso automático que cambie precios de aprobados; sí edición manual permitida (≈10 % de los aprobados en 6
+  meses). Decisión de Joaquín: se mantiene editable, no se bloquea.
   10-nov **Nombre del cliente en el pedido abre su CC** (`8b37793`): en el detalle de pedido (admin/administrativo),
   el nombre bajo el título y el de "Información General" son links a `/cuentas-corrientes/<cliente>` (mes actual). Si el
   cliente es una sede, va directo a la CC unificada del padre. Sin cambios de lógica ni de servidor.
