@@ -69,6 +69,7 @@ type GalponOrder = {
   id: number; folio: string; remitoNum: number | null; orderDate: string; status: string; notes: string | null; galponNotes?: string | null; source?: string | null;
   galponConfirmed: boolean; customerName: string; address: string | null; city: string | null;
   phone: string | null; createdByName: string | null; items: Item[];
+  bolsaFv?: boolean | null; remitoIssuedAt?: string | null; // 10/11: para que el remito salga igual al de admin
 };
 type Prod = { id: number; name: string; unit: string };
 
@@ -136,23 +137,37 @@ export default function GalponOrderDetail({ id }: { id: number }) {
       items: order.items.filter((it: any) => !isBolsa(it)).map((it) => ({ quantity: it.quantity, unit: it.unit, productName: it.productName ?? null })),
     }], `${d}/${m}/${y}`, { print: true });
   };
+  // 10/11: mismo remito que imprime admin, sin precios: fecha de emisión del remito (si ya está aprobado; si no, la del
+  // pedido, como admin) y, para clientes Bolsa FV, las líneas repetidas se juntan igual que en Pedidos.
   const printRemito = () => {
     if (!order) return;
+    let items = order.items.map((it) => ({
+      product: it.productName ? ({ name: it.productName } as any) : null,
+      productId: it.productId,
+      quantity: it.quantity, unit: it.unit,
+      pricePerUnit: "0", subtotal: "0", isBonification: false,
+      aliasNombre: it.aliasNombre ?? null,
+    }));
+    if (order.bolsaFv) {
+      const merged = new Map<string, (typeof items)[number]>();
+      for (const item of items) {
+        const dispName = (item.aliasNombre ?? "").trim() || item.product?.name || "";
+        const key = dispName ? `${dispName}||${item.productId ?? item.product?.name ?? "x"}` : String(Math.random());
+        const existing = merged.get(key);
+        if (existing) merged.set(key, { ...existing, quantity: String(parseFloat(existing.quantity) + parseFloat(item.quantity)) });
+        else merged.set(key, { ...item });
+      }
+      items = Array.from(merged.values());
+    }
     generateRemitoPDF({
       folio: order.remitoNum != null ? String(order.remitoNum) : order.folio,
-      issuedAt: new Date(),
+      issuedAt: order.remitoIssuedAt ?? order.orderDate,
       order: {
         folio: order.folio,
         orderDate: order.orderDate,
         notes: order.notes, source: order.source ?? null,
         customer: { name: order.customerName, address: order.address, city: order.city, phone: order.phone },
-        items: order.items.map((it) => ({
-          product: it.productName ? ({ name: it.productName } as any) : null,
-          productId: it.productId,
-          quantity: it.quantity, unit: it.unit,
-          pricePerUnit: "0", subtotal: "0", isBonification: false,
-          aliasNombre: it.aliasNombre ?? null,
-        })),
+        items,
         total: "0",
       },
     }, { hidePrecios: true, output: "print" }); // directo a imprimir, sin descargar
@@ -309,7 +324,9 @@ export default function GalponOrderDetail({ id }: { id: number }) {
           <Button variant="outline" onClick={printArmado} data-testid="button-print-armado">
             <Printer className="h-4 w-4 mr-2" /> Imprimir para armado
           </Button>
-          {order.galponConfirmed && (
+          {/* 10/11: también cuando admin ya lo aprobó (antes solo si el galpón lo había confirmado). La opción de
+              imprimir antes del cierre, al confirmar, se mantiene a pedido de Joaquín. */}
+          {(order.galponConfirmed || order.status === "approved") && (
             <Button variant="outline" onClick={printRemito}>
               <Printer className="h-4 w-4 mr-2" /> Imprimir remito
             </Button>

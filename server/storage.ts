@@ -3377,10 +3377,13 @@ export const storage = {
              o.galpon_notes AS "galponNotes", o.source,
              o.galpon_confirmed AS "galponConfirmed",
              c.name AS "customerName", c.address, c.city, c.phone,
+             c.bolsa_fv AS "bolsaFv",
+             r.issued_at AS "remitoIssuedAt",
              u.name AS "createdByName"
       FROM orders o
       JOIN customers c ON c.id = o.customer_id
       LEFT JOIN users u ON u.id = o.created_by
+      LEFT JOIN remitos r ON r.order_id = o.id
       WHERE o.id = ${id}
     `);
     const order = (ordRes.rows ?? ordRes)[0];
