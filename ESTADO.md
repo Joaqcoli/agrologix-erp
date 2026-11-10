@@ -5,7 +5,7 @@
 > Última actualización: 2026-11-10 (modal Registrar Pago: monto = suma de métodos, retención con un clic, scroll).
 
 ## Último trabajo (sep–oct 2026)
-  10-nov **Modal Registrar Pago (CC)** (`PENDIENTE_HASH`): (1) con varios métodos, el Monto se calcula solo como la suma
+  10-nov **Modal Registrar Pago (CC)** (`6a936d1`): (1) con varios métodos, el Monto se calcula solo como la suma
   de los métodos (campo de solo lectura "= suma de métodos"); antes Joaquín ponía el total de las facturas en Monto, los
   cheques sumaban menos y Guardar quedaba apagado aunque cargara la diferencia como retención. (2) En el bloque Retención,
   si lo cobrado no cubre las facturas seleccionadas aparece "Falta $X · Cargar como retención" que completa el campo.
