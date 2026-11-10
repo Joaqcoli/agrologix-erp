@@ -5,6 +5,12 @@
 > Última actualización: 2026-11-02 (administrativo sin Retiros de socios en Caja).
 
 ## Último trabajo (sep–oct 2026)
+  10-nov **Galpón imprime remitos aprobados** (`2690826`, verificado en producción con usuario galpón temporal: 4/4). El botón
+  "Imprimir remito" del detalle de galpón aparece también cuando admin aprobó el pedido (antes solo si el galpón lo había
+  confirmado; esa opción previa al cierre se mantiene a pedido de Joaquín). El remito del galpón ahora es el mismo que el de
+  admin sin precios: fecha de emisión del remito (`remitos.issued_at`, o la del pedido si no está aprobado) y fusión de
+  líneas repetidas en clientes Bolsa FV. `getGalponOrder` devuelve `remitoIssuedAt` y `bolsaFv`; ningún monto.
+  Verificar a mano: entrar como galpón a un pedido aprobado del día y que "Imprimir remito" abra el diálogo de impresión.
   06-nov **Costo "manual" que nadie cargó** (diagnóstico en `docs/AUDITORIA-COSTO-MANUAL-2026-11-06.md`; arreglo `e125345`,
   verificado en producción con cliente temporal: 5/5). Caso: espinaca 12 ATADO con costo $8.000 (el del cajón). Causa: al
   cambiar la unidad en el editor de línea de Pedido, la pantalla rellenaba el campo Costo con el de la unidad nueva y al
