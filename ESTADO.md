@@ -5,7 +5,7 @@
 > Última actualización: 2026-11-10 (buscador de clientes en Cuentas Corrientes).
 
 ## Último trabajo (sep–oct 2026)
-  10-nov **Buscador de clientes en Cuentas Corrientes** (`5f0f8c8`): campo "Buscar cliente..." arriba de la tabla,
+  10-nov **Buscador de clientes en Cuentas Corrientes** (`7b98f9b`): campo "Buscar cliente..." arriba de la tabla,
   mismo estilo que el de Proveedores (que ya existía). Filtra en pantalla sin volver a consultar, ignora mayúsculas y
   acentos; la fila Total suma solo los clientes visibles mientras hay búsqueda. No toca filtros de fecha ni el export.
   Verificar a mano: escribir parte de un nombre y que la lista se achique; borrar y que vuelva todo.
