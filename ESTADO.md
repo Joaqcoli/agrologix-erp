@@ -2,9 +2,13 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-10 (buscador de clientes en Cuentas Corrientes).
+> Última actualización: 2026-11-10 (nombre del cliente en el pedido abre su cuenta corriente).
 
 ## Último trabajo (sep–oct 2026)
+  10-nov **Nombre del cliente en el pedido abre su CC** (`PENDIENTE_HASH`): en el detalle de pedido (admin/administrativo),
+  el nombre bajo el título y el de "Información General" son links a `/cuentas-corrientes/<cliente>` (mes actual). Si el
+  cliente es una sede, va directo a la CC unificada del padre. Sin cambios de lógica ni de servidor.
+  Verificar a mano: abrir un pedido, tocar el nombre del cliente y caer en su cuenta corriente.
   10-nov **Buscador de clientes en Cuentas Corrientes** (`7b98f9b`): campo "Buscar cliente..." arriba de la tabla,
   mismo estilo que el de Proveedores (que ya existía). Filtra en pantalla sin volver a consultar, ignora mayúsculas y
   acentos; la fila Total suma solo los clientes visibles mientras hay búsqueda. No toca filtros de fecha ni el export.

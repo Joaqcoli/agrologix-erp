@@ -1440,6 +1440,8 @@ export default function OrderDetailPage({ id }: { id: number }) {
   const hasIva = hasIvaOn(order.customer, order.orderDate);
   const hasBolsaFv = !!(order.customer as any).bolsaFv;
   const parentCustomerId: number | null = (order.customer as any).parentCustomerId ?? null;
+  // Tocar el nombre del cliente abre su cuenta corriente (mes actual). Las sedes van directo a la CC unificada del padre.
+  const irACuentaCorriente = () => setLocation(`/cuentas-corrientes/${parentCustomerId ?? order.customerId}`);
 
   const statusConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" }> = {
     draft:     { label: "Borrador", variant: "secondary" },
@@ -1578,7 +1580,11 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 </Badge>
               )}
             </div>
-            <p className="text-sm text-muted-foreground mt-0.5">{order.customer?.name}</p>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              <button type="button" onClick={irACuentaCorriente} className="hover:text-foreground hover:underline underline-offset-2 text-left" title="Ver cuenta corriente" data-testid="link-customer-cc-header">
+                {order.customer?.name}
+              </button>
+            </p>
           </div>
 
           <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
@@ -1726,7 +1732,11 @@ export default function OrderDetailPage({ id }: { id: number }) {
           <CardContent className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wide">Cliente</p>
-              <p className="text-sm font-medium text-foreground mt-1">{order.customer?.name}</p>
+              <p className="text-sm font-medium text-foreground mt-1">
+                <button type="button" onClick={irACuentaCorriente} className="hover:underline underline-offset-2 text-left" title="Ver cuenta corriente" data-testid="link-customer-cc">
+                  {order.customer?.name}
+                </button>
+              </p>
             </div>
             <div>
               <p className="text-xs text-muted-foreground uppercase tracking-wide">Fecha</p>
