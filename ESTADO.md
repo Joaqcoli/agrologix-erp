@@ -2,9 +2,13 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-02 (administrativo sin Retiros de socios en Caja).
+> Última actualización: 2026-11-10 (buscador de clientes en Cuentas Corrientes).
 
 ## Último trabajo (sep–oct 2026)
+  10-nov **Buscador de clientes en Cuentas Corrientes** (`5f0f8c8`): campo "Buscar cliente..." arriba de la tabla,
+  mismo estilo que el de Proveedores (que ya existía). Filtra en pantalla sin volver a consultar, ignora mayúsculas y
+  acentos; la fila Total suma solo los clientes visibles mientras hay búsqueda. No toca filtros de fecha ni el export.
+  Verificar a mano: escribir parte de un nombre y que la lista se achique; borrar y que vuelva todo.
   10-nov **Galpón imprime remitos aprobados** (`2690826`, verificado en producción con usuario galpón temporal: 4/4). El botón
   "Imprimir remito" del detalle de galpón aparece también cuando admin aprobó el pedido (antes solo si el galpón lo había
   confirmado; esa opción previa al cierre se mantiene a pedido de Joaquín). El remito del galpón ahora es el mismo que el de

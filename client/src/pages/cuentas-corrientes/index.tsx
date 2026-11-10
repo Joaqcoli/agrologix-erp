@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Download, TrendingUp, Package, DollarSign, ChevronDown } from "lucide-react";
+import { Download, TrendingUp, Package, DollarSign, ChevronDown, Search } from "lucide-react";
 import { useState, useMemo } from "react";
 
 // ── Rediseño Cuentas Corrientes (Claude Design) — CSS de diseno-caja/cuentas-corrientes-rediseno.html ──
@@ -54,6 +54,11 @@ table.ccx-tbl{width:100%;border-collapse:collapse;}
 .ccx-fiado{color:#7a7f77;font-weight:500;}
 .ccx-tbl tfoot td{border-top:1.5px solid #eaeae6;border-bottom:none;font-weight:700;padding-top:15px;}
 .ccx-tbl tfoot td.l{font-family:'Bricolage Grotesque';text-transform:uppercase;}
+.ccx-search{position:relative;max-width:620px;margin-bottom:22px;}
+.ccx-search>svg{position:absolute;left:15px;top:50%;transform:translateY(-50%);color:#8b8f88;pointer-events:none;}
+.ccx-search input{width:100%;background:#fff;border:1px solid #ecece8;border-radius:12px;padding:13px 15px 13px 44px;font-family:'Inter';font-size:14px;color:#1e2420;}
+.ccx-search input::placeholder{color:#a9ada4;}
+.ccx-search input:focus{outline:none;border-color:#5f8020;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
 .ccx-empty{padding:40px 22px;text-align:center;color:#8b8f88;font-size:14px;}
 .ccx-err{font-size:13.5px;color:#b0553f;padding:12px 16px;background:#f8ede8;border:1px solid #e6cdc4;border-radius:12px;margin-bottom:16px;}
 `;
@@ -62,6 +67,9 @@ const MONTHS = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ];
+
+// Búsqueda sin acentos ni mayúsculas: "resi" encuentra RESIDENCIA ESTILO
+const normTxt = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 
 const fmtInt = (v: number) => Math.round(v).toLocaleString("es-AR");
 // % con coma decimal (es-AR): 49,94%
@@ -151,6 +159,7 @@ export default function CuentasCorrientesPage() {
   const [selectedDate, setSelectedDate] = useState(() => today.toISOString().split("T")[0]);
   const [selectedWeek, setSelectedWeek] = useState(() => toISOWeek(today));
   const [exporting, setExporting] = useState(false);
+  const [search, setSearch] = useState("");
 
   const years = Array.from({ length: 4 }, (_, i) => today.getFullYear() - i);
 
@@ -177,6 +186,27 @@ export default function CuentasCorrientesPage() {
       return res.json();
     },
   });
+
+  // Filtro por nombre de cliente (solo presentación: no vuelve a consultar el servidor)
+  const q = normTxt(search);
+  const rows = useMemo(() => {
+    const all = data?.customers ?? [];
+    if (!q) return all;
+    return all.filter((r) => normTxt(r.customerName).includes(q));
+  }, [data, q]);
+  // Con búsqueda activa, el Total suma solo los clientes visibles; sin búsqueda, usa el total del servidor
+  const totals = useMemo<CCTotals | null>(() => {
+    if (!data) return null;
+    if (!q) return data.totals;
+    return rows.reduce<CCTotals>((acc, r) => ({
+      saldoMesAnterior: acc.saldoMesAnterior + r.saldoMesAnterior,
+      facturacion: acc.facturacion + r.facturacion,
+      cobranza: acc.cobranza + r.cobranza,
+      retenciones: acc.retenciones + r.retenciones,
+      saldo: acc.saldo + r.saldo,
+      fiado: acc.fiado + r.fiado,
+    }), { saldoMesAnterior: 0, facturacion: 0, cobranza: 0, retenciones: 0, saldo: 0, fiado: 0 });
+  }, [data, q, rows]);
 
   const handleExport = async () => {
     setExporting(true);
@@ -250,6 +280,12 @@ export default function CuentasCorrientesPage() {
             </div>
           </div>
 
+          {/* Buscador */}
+          <div className="ccx-search">
+            <Search className="h-[17px] w-[17px]" />
+            <input placeholder="Buscar cliente..." value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-cc" />
+          </div>
+
           {error && <div className="ccx-err">Error al cargar: {String(error)}</div>}
 
           <div className="ccx-card">
@@ -271,9 +307,9 @@ export default function CuentasCorrientesPage() {
                         ))}
                       </tr>
                     ))
-                  ) : data?.customers.length === 0 ? (
-                    <tr><td colSpan={7} style={{ textAlign: "center", padding: "40px 22px", color: "#8b8f88" }}>Sin movimientos en este período</td></tr>
-                  ) : data?.customers.map((row) => (
+                  ) : rows.length === 0 ? (
+                    <tr><td colSpan={7} style={{ textAlign: "center", padding: "40px 22px", color: "#8b8f88" }}>{search ? "Ningún cliente coincide con la búsqueda" : "Sin movimientos en este período"}</td></tr>
+                  ) : rows.map((row) => (
                     <tr
                       key={row.customerId}
                       onClick={() => setLocation(`/cuentas-corrientes/${row.customerId}?dateFrom=${dateFrom}&dateTo=${dateTo}&month=${selectedMonth}&year=${selectedYear}`)}
@@ -289,15 +325,15 @@ export default function CuentasCorrientesPage() {
                     </tr>
                   ))}
                 </tbody>
-                {data && data.customers.length > 0 && (
+                {totals && rows.length > 0 && (
                   <tfoot>
                     <tr>
                       <td className="l">Total</td>
-                      <td><SaldoBadge saldo={data.totals.saldoMesAnterior} /></td>
-                      <td><span className="ccx-fac ccx-num">${fmtInt(data.totals.facturacion)}</span></td>
-                      <td>{data.totals.cobranza > 0 ? <span className="ccx-cob ccx-num">${fmtInt(data.totals.cobranza)}</span> : <span className="ccx-dash">—</span>}</td>
-                      <td>{data.totals.retenciones > 0 ? <span className="ccx-ret ccx-num">${fmtInt(data.totals.retenciones)}</span> : <span className="ccx-dash">—</span>}</td>
-                      <td><SaldoBadge saldo={data.totals.saldo} /></td>
+                      <td><SaldoBadge saldo={totals.saldoMesAnterior} /></td>
+                      <td><span className="ccx-fac ccx-num">${fmtInt(totals.facturacion)}</span></td>
+                      <td>{totals.cobranza > 0 ? <span className="ccx-cob ccx-num">${fmtInt(totals.cobranza)}</span> : <span className="ccx-dash">—</span>}</td>
+                      <td>{totals.retenciones > 0 ? <span className="ccx-ret ccx-num">${fmtInt(totals.retenciones)}</span> : <span className="ccx-dash">—</span>}</td>
+                      <td><SaldoBadge saldo={totals.saldo} /></td>
                       <td><span className="ccx-dash">—</span></td>
                     </tr>
                   </tfoot>
