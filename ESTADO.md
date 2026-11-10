@@ -5,7 +5,7 @@
 > Última actualización: 2026-11-10 (nombre del cliente en el pedido abre su cuenta corriente).
 
 ## Último trabajo (sep–oct 2026)
-  10-nov **Nombre del cliente en el pedido abre su CC** (`PENDIENTE_HASH`): en el detalle de pedido (admin/administrativo),
+  10-nov **Nombre del cliente en el pedido abre su CC** (`8b37793`): en el detalle de pedido (admin/administrativo),
   el nombre bajo el título y el de "Información General" son links a `/cuentas-corrientes/<cliente>` (mes actual). Si el
   cliente es una sede, va directo a la CC unificada del padre. Sin cambios de lógica ni de servidor.
   Verificar a mano: abrir un pedido, tocar el nombre del cliente y caer en su cuenta corriente.
