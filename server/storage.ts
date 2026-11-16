@@ -30,6 +30,7 @@ type InvoiceQueueRow = typeof invoiceQueue.$inferSelect;
 import { eq, desc, asc, and, or, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
 import { ivaRateOf, hasIvaOn } from "@shared/iva";
+import * as comisiones from "./comisiones";
 import bcrypt from "bcryptjs";
 import { getHistoricalMonthStats, isHistoricalMonth, listHistoricalMonths } from "./historical-stats";
 
@@ -1512,11 +1513,13 @@ export const storage = {
       GROUP BY to_char(o.order_date, 'YYYY-MM')
     `);
     const map = new Map((rows.rows as any[]).map((r) => [String(r.ym), { facturacion: Number(r.facturacion), comisiones: Number(r.comisiones) }]));
+    // 16/11: la comisión del mes es la habilitada por cobranzas de ese mes (+ pedidos saldados por facturación)
+    const porMes = await comisiones.comisionesPorMes(salespersonName, year);
     const MES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
     const out: { month: string; label: string; facturacion: number; comisiones: number }[] = [];
     for (let m = 1; m <= curMonth; m++) {
       const ym = `${year}-${String(m).padStart(2, "0")}`;
-      const v = this.vendedorHistOverride(salespersonName, ym) ?? (map.get(ym) ?? { facturacion: 0, comisiones: 0 });
+      const v = this.vendedorHistOverride(salespersonName, ym) ?? { facturacion: map.get(ym)?.facturacion ?? 0, comisiones: porMes.get(ym) ?? 0 };
       out.push({ month: ym, label: MES[m - 1], facturacion: v.facturacion, comisiones: v.comisiones });
     }
     return out;
@@ -1650,6 +1653,7 @@ export const storage = {
       remitoNum,
       source: data.source ?? null,
     }).returning();
+    await comisiones.fijarComisionPedido(order.id); // 16/11: alta del cliente (si falta) y % de comisión del pedido
 
     const itemsToInsert = await Promise.all(
       data.items.map(async (item) => {
@@ -2345,6 +2349,7 @@ export const storage = {
       status: "draft",
       remitoNum,
     }).returning();
+    await comisiones.fijarComisionPedido(order.id); // 16/11: alta del cliente (si falta) y % de comisión del pedido
 
     await db.insert(orderItems).values(
       itemsEnriched.map((item) => ({
@@ -2366,6 +2371,7 @@ export const storage = {
     const order = await this.getOrder(id, { sinCostos: true }); // el costo se recalcula acá por línea; el de getOrder no se usa
     if (!order) throw new Error("Order not found");
     if (order.status !== "draft") throw new Error("Order is not in draft status");
+    await comisiones.fijarComisionPedido(id, true); // 16/11: red de seguridad si el pedido quedó sin % (no pisa uno fijado)
 
     // Guard: all items must have a price before approval
     const unpricedItems = order.items.filter((i) => !i.pricePerUnit || parseFloat(i.pricePerUnit as string) === 0);
@@ -6162,21 +6168,12 @@ export const storage = {
       WHERE pu.stock_qty::numeric > 0 AND pu.is_active = true
     `);
 
-    // 9) Comisiones por vendedor (período)
-    const comisionesRows = await db.execute(drizzleSql`
-      SELECT
-        c.salesperson_name AS vendedor,
-        COALESCE(SUM(o.total::numeric * c.commission_pct::numeric / 100), 0) AS comision_total
-      FROM customers c
-      JOIN orders o ON o.customer_id = c.id
-      WHERE c.commission_pct::numeric > 0
-        AND c.salesperson_name IS NOT NULL
-        AND o.status = 'approved'
-        AND o.order_date >= ${from}::timestamp
-        AND o.order_date < ${to}::timestamp
-      GROUP BY c.salesperson_name
-      ORDER BY comision_total DESC
-    `);
+    // 9) Comisiones por vendedor (período). 16/11: habilitadas por cobranzas del período + saldadas por facturación.
+    const comisionesRows = {
+      rows: (await Promise.all((await comisiones.getVendedores()).map(async (v) => ({
+        vendedor: v, comision_total: (await comisiones.comisionesEnRango(v, from.slice(0, 10), to.slice(0, 10))).total,
+      })))).filter((r) => r.comision_total > 0).sort((a, b) => b.comision_total - a.comision_total),
+    };
 
     const s = (salesRow.rows[0] as any) ?? {};
     const dt = (diasRow.rows[0] as any) ?? {};
@@ -6407,57 +6404,12 @@ export const storage = {
 
   // ─── Commissions Detail ───────────────────────────────────────────────────
   async getSalespersons(): Promise<string[]> {
-    const rows = await db.execute(drizzleSql`
-      SELECT DISTINCT salesperson_name
-      FROM customers
-      WHERE salesperson_name IS NOT NULL
-        AND commission_pct::numeric > 0
-        AND active = true
-      ORDER BY salesperson_name
-    `);
-    return rows.rows.map((r: any) => String(r.salesperson_name));
+    return comisiones.getVendedores();
   },
 
-  async getCommissionDetail(salesperson: string, month: number, year: number): Promise<{
-    rows: { orderDate: string; customerName: string; total: number; commissionPct: number; commissionAmount: number }[];
-    totalVentas: number;
-    totalComision: number;
-  }> {
-    const from = `${year}-${String(month).padStart(2, "0")}-01`;
-    const nextM = month === 12 ? 1 : month + 1;
-    const nextY = month === 12 ? year + 1 : year;
-    const to = `${nextY}-${String(nextM).padStart(2, "0")}-01`;
-
-    const result = await db.execute(drizzleSql`
-      SELECT
-        o.order_date::date::text AS order_date,
-        c.name AS customer_name,
-        o.total::numeric AS total,
-        c.commission_pct::numeric AS commission_pct,
-        o.total::numeric * c.commission_pct::numeric / 100 AS commission_amount
-      FROM orders o
-      JOIN customers c ON c.id = o.customer_id
-      WHERE c.salesperson_name = ${salesperson}
-        AND c.commission_pct::numeric > 0
-        AND o.status = 'approved'
-        AND o.order_date >= ${from}::timestamp
-        AND o.order_date < ${to}::timestamp
-      ORDER BY o.order_date, c.name
-    `);
-
-    const rows = result.rows.map((r: any) => ({
-      orderDate: String(r.order_date),
-      customerName: String(r.customer_name),
-      total: parseFloat(r.total ?? "0"),
-      commissionPct: parseFloat(r.commission_pct ?? "0"),
-      commissionAmount: parseFloat(r.commission_amount ?? "0"),
-    }));
-
-    return {
-      rows,
-      totalVentas: rows.reduce((sum, r) => sum + r.total, 0),
-      totalComision: rows.reduce((sum, r) => sum + r.commissionAmount, 0),
-    };
+  // 16/11: detalle del mes = cobranzas que habilitaron comisión + pedidos saldados (por facturación). Ver server/comisiones.ts.
+  async getCommissionDetail(salesperson: string, month: number, year: number) {
+    return comisiones.detalleMes(salesperson, year, month);
   },
 
   // ─── Lista de Precios ──────────────────────────────────────────────────────

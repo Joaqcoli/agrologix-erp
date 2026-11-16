@@ -1,7 +1,7 @@
 import { ReactNode } from "react";
 import { Link, useLocation, Redirect } from "wouter";
 import { useAuth } from "@/lib/auth";
-import { Loader2, LayoutDashboard, FileText, Users, LogOut } from "lucide-react";
+import { Loader2, LayoutDashboard, FileText, Users, LogOut, Wallet } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 
@@ -9,6 +9,7 @@ const navItems = [
   { title: "Dashboard", url: "/vendedor/dashboard", icon: LayoutDashboard },
   { title: "Pedidos", url: "/vendedor/orders", icon: FileText },
   { title: "Clientes", url: "/vendedor/customers", icon: Users },
+  { title: "Comisiones", url: "/vendedor/comisiones", icon: Wallet },
 ];
 
 export function VendedorLayout({ children, title }: { children: ReactNode; title?: string }) {

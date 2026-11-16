@@ -1742,5 +1742,36 @@ export async function runNcMigrations() {
     }
   } catch (e) { console.error("A-13 defaults failed:", e); }
 
+  // ─── Comisiones por cobranza (16/11/2026) — ver docs/AUDITORIA-COMISIONES-POR-COBRANZA-2026-11-16.md ──
+  for (const stmt of [
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS comision_alta date`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS comision_pct numeric(5,2)`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS comision_saldada boolean NOT NULL DEFAULT false`,
+    `CREATE TABLE IF NOT EXISTS comision_liquidaciones (id SERIAL PRIMARY KEY, vendedor TEXT NOT NULL, periodo TEXT NOT NULL, total NUMERIC(14,2) NOT NULL DEFAULT 0, cerrada_at TIMESTAMP NOT NULL DEFAULT NOW(), cerrada_by INTEGER, UNIQUE (vendedor, periodo))`,
+    `CREATE TABLE IF NOT EXISTS comision_liquidacion_items (id SERIAL PRIMARY KEY, liquidacion_id INTEGER NOT NULL REFERENCES comision_liquidaciones(id) ON DELETE CASCADE, order_id INTEGER NOT NULL, payment_id INTEGER, fecha_cobro TEXT NOT NULL, cobrado NUMERIC(14,2) NOT NULL, pct NUMERIC(5,2) NOT NULL, comision NUMERIC(14,2) NOT NULL, ajuste BOOLEAN NOT NULL DEFAULT false)`,
+    `CREATE INDEX IF NOT EXISTS comision_liq_items_liq_idx ON comision_liquidacion_items (liquidacion_id)`,
+    // Un cliente cargado con el vendedor en mayúsculas quedaba fuera de la vista del vendedor
+    `UPDATE customers SET salesperson_name = 'Juan' WHERE salesperson_name = 'JUAN'`,
+    // Fecha de alta: primer pedido (no cancelado). Quien ya compraba antes de octubre 2026 → 2026-10-01.
+    `UPDATE customers c SET comision_alta = GREATEST(f.primero, DATE '2026-10-01')
+       FROM (SELECT customer_id, MIN(order_date::date) AS primero FROM orders WHERE status <> 'cancelled' GROUP BY customer_id) f
+       WHERE f.customer_id = c.id AND c.comision_alta IS NULL`,
+    // % de cada pedido según la alta del cliente (misma regla que shared/comisiones.ts). Solo los que no lo tienen.
+    `UPDATE orders o SET comision_pct = CASE WHEN o.order_date::date < (c.comision_alta + interval '6 months')::date THEN 5 ELSE 1 END
+       FROM customers c WHERE c.id = o.customer_id AND o.comision_pct IS NULL AND c.comision_alta IS NOT NULL`,
+  ]) { try { await db.execute(sql.raw(stmt)); } catch (e) { console.error("Comisiones migration failed:", stmt.slice(0, 70), e); } }
+  // Transición de Juan, UNA sola vez: octubre 2026 ya se le pagó por lo facturado → sus pedidos hasta el 31/10/2026
+  // quedan saldados (no generan comisión por cobranza). El esquema nuevo aplica a sus pedidos desde el 1/11/2026.
+  try {
+    const done = await db.execute(sql`SELECT 1 FROM app_settings WHERE key = 'comisiones_transicion_juan'`);
+    if (done.rows.length === 0) {
+      const r = await db.execute(sql`
+        UPDATE orders o SET comision_saldada = true FROM customers c
+        WHERE c.id = o.customer_id AND c.salesperson_name = 'Juan' AND o.order_date::date < DATE '2026-11-01' AND NOT o.comision_saldada`);
+      await db.execute(sql`INSERT INTO app_settings (key, value) VALUES ('comisiones_transicion_juan', 'true'::jsonb)`);
+      console.log(`Comisiones: transición de Juan aplicada (${(r as any).rowCount ?? "?"} pedidos saldados)`);
+    }
+  } catch (e) { console.error("Comisiones transición Juan failed:", e); }
+
   console.log("NC migrations complete.");
 }

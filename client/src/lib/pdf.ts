@@ -358,11 +358,13 @@ export async function generatePriceListPDF(items: PriceListPdfItem[], dateLabel:
 }
 
 export type ComisionRow = {
-  orderDate: string;
+  orderDate: string;       // fecha de cobro (tipo cobranza) o del pedido (tipo facturado)
   customerName: string;
-  total: number;
+  total: number;           // cobrado (cobranza) o neto facturado (facturado)
   commissionPct: number;
   commissionAmount: number;
+  tipo?: "cobranza" | "facturado"; // 16/11/2026: comisión habilitada por cobranza / pedido saldado por facturación
+  folio?: string;
 };
 
 export function generateComisionesPDF(
@@ -409,8 +411,8 @@ export function generateComisionesPDF(
   doc.setFontSize(7);
   doc.setFont("helvetica", "bold");
   doc.text("Fecha",    cols.fecha + 1,    y + 4.5);
-  doc.text("Cliente",  cols.cliente + 1,  y + 4.5);
-  doc.text("Total",    cols.total + 1,    y + 4.5);
+  doc.text("Cliente / remito",  cols.cliente + 1,  y + 4.5);
+  doc.text("Cobrado",  cols.total + 1,    y + 4.5);
   doc.text("%",        cols.pct + 1,      y + 4.5);
   doc.text("Comisión", cols.comision + 1, y + 4.5);
   y += 9;
@@ -425,7 +427,8 @@ export function generateComisionesPDF(
     }
     doc.setTextColor(30, 30, 30);
     doc.text(fmtDate(row.orderDate),                  cols.fecha + 1,    y + 3);
-    doc.text((row.customerName ?? "").slice(0, 42),   cols.cliente + 1,  y + 3);
+    const etiqueta = row.tipo === "facturado" ? " (facturado)" : "";
+    doc.text(`${(row.customerName ?? "").slice(0, 32)}${row.folio ? ` · ${row.folio}` : ""}${etiqueta}`.slice(0, 50), cols.cliente + 1, y + 3);
     doc.text(fmtMoney(row.total),                     cols.total + 24,   y + 3, { align: "right" });
     doc.text(`${row.commissionPct.toFixed(1)}%`,      cols.pct + 1,      y + 3);
     doc.text(fmtMoney(row.commissionAmount),          pageW - margin - 2, y + 3, { align: "right" });

@@ -13,6 +13,10 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Pencil, Phone, Mail, MapPin, Users } from "lucide-react";
+import { comisionPctEn, fechaBajaComision } from "@shared/comisiones";
+
+const hoyAR = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" });
+const fmtFechaCorta = (s: string) => { const [y, m, d] = s.slice(0, 10).split("-"); return `${d}/${m}/${y}`; };
 
 type Customer = {
   id: number;
@@ -26,6 +30,7 @@ type Customer = {
   hasIva: boolean;
   bolsaFv: boolean | null;
   commissionPct: string | null;
+  comisionAlta: string | null; // 16/11: fecha de alta a efectos de comisión (primer pedido)
   salespersonName: string | null;
   active: boolean;
 };
@@ -157,7 +162,7 @@ export default function VendedorCustomers() {
           <div className="space-y-3">
             {filtered.map((c) => {
               const initials = c.name.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase();
-              const commPct = parseFloat(c.commissionPct ?? "0");
+              const pctVigente = c.comisionAlta ? comisionPctEn(c.comisionAlta, hoyAR()) : null;
               return (
                 <Card key={c.id} className="hover-elevate">
                   <CardContent className="p-4 flex items-center gap-4">
@@ -173,8 +178,12 @@ export default function VendedorCustomers() {
                         {c.hasIva && (
                           <Badge variant="outline" className="text-[10px] text-primary border-primary/40">IVA</Badge>
                         )}
-                        {commPct > 0 && (
-                          <Badge variant="secondary" className="text-[10px]">{commPct}% comisión</Badge>
+                        {c.comisionAlta ? (
+                          <Badge variant={pctVigente === 5 ? "default" : "secondary"} className="text-[10px]" title="Alta = primer pedido. 5 % los primeros 6 meses, después 1 %" data-testid={`badge-comision-${c.id}`}>
+                            {pctVigente} % · alta {fmtFechaCorta(c.comisionAlta)} · 1 % desde {fmtFechaCorta(fechaBajaComision(c.comisionAlta))}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px]" title="La fecha de alta se fija con el primer pedido">sin pedidos aún</Badge>
                         )}
                       </div>
                       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">

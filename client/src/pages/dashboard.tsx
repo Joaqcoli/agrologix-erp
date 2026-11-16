@@ -1,5 +1,8 @@
 import { useState, useMemo, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { ComisionesVista, type ComisionesData } from "@/pages/vendedor/comisiones";
 import { Layout } from "@/components/layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -90,10 +93,13 @@ type Stats = {
 
 type TrendPoint = { ym: string; ventas: number; margen: number };
 
-// ─── Comisiones Modal (sin cambios — misma lógica/datos) ──────────────────────
+// ─── Comisiones Modal. 16/11/2026: detalle = cobranzas que habilitaron comisión (+ pedidos saldados por
+// facturación), botón "Cerrar mes" (liquidación), lista de cierres y vista completa del vendedor ──────────
 function ComisionesModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const d0 = new Date();
+  const { toast } = useToast();
   const [selectedVendedor, setSelectedVendedor] = useState("");
+  const [vistaCompleta, setVistaCompleta] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(
     `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, "0")}`
   );
@@ -127,9 +133,39 @@ function ComisionesModal({ open, onClose }: { open: boolean; onClose: () => void
   const monthOptions = buildMonthOptions();
   const monthLabel = monthOptions.find((o) => o.value === selectedMonth)?.label ?? selectedMonth;
 
+  type Liq = { id: number; periodo: string; total: number; cerradaAt: string; items: any[] };
+  const { data: liquidaciones } = useQuery<Liq[]>({
+    queryKey: ["/api/commissions/liquidaciones", selectedVendedor],
+    queryFn: () => fetch(`/api/commissions/liquidaciones?salesperson=${encodeURIComponent(selectedVendedor)}`, { credentials: "include" }).then((r) => r.json()),
+    enabled: open && !!selectedVendedor,
+  });
+  const { data: vista, isLoading: vistaLoading } = useQuery<ComisionesData>({
+    queryKey: ["/api/commissions/vendedor", selectedVendedor],
+    queryFn: () => fetch(`/api/commissions/vendedor?salesperson=${encodeURIComponent(selectedVendedor)}`, { credentials: "include" }).then((r) => r.json()),
+    enabled: open && !!selectedVendedor && vistaCompleta,
+  });
+  const mesActual = new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" }).slice(0, 7);
+  const yaCerrado = (Array.isArray(liquidaciones) ? liquidaciones : []).some((l) => l.periodo === selectedMonth);
+  const ultimoCierre = (Array.isArray(liquidaciones) ? liquidaciones : []).reduce((m, l) => (l.periodo > m ? l.periodo : m), "");
+  const puedeCerrar = !!selectedVendedor && selectedMonth < mesActual && !yaCerrado && selectedMonth > ultimoCierre;
+  const cerrar = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/commissions/cerrar", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ salesperson: selectedVendedor, periodo: selectedMonth }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "No se pudo cerrar el mes");
+      return j as { id: number; total: number; items: number; ajustes: number };
+    },
+    onSuccess: (j) => {
+      toast({ title: `Mes cerrado: ${monthLabel}`, description: `${selectedVendedor}: ${fmt(j.total)} en ${j.items} cobranza${j.items !== 1 ? "s" : ""}${j.ajustes ? ` (${j.ajustes} ajuste${j.ajustes !== 1 ? "s" : ""})` : ""}` });
+      queryClient.invalidateQueries({ queryKey: ["/api/commissions/liquidaciones", selectedVendedor] });
+      queryClient.invalidateQueries({ queryKey: ["/api/commissions/vendedor", selectedVendedor] });
+    },
+    onError: (e: any) => toast({ title: "No se pudo cerrar el mes", description: e.message, variant: "destructive" }),
+  });
+
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col gap-3">
+      <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col gap-3">
         <DialogHeader>
           <DialogTitle>Detalle de Comisiones</DialogTitle>
         </DialogHeader>
@@ -161,32 +197,49 @@ function ComisionesModal({ open, onClose }: { open: boolean; onClose: () => void
               </SelectContent>
             </Select>
           </div>
-          {detail && (detail.rows ?? []).length > 0 && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="ml-auto"
-              onClick={() => generateComisionesPDF(selectedVendedor, monthLabel, detail.rows, detail.totalVentas, detail.totalComision)}
-            >
-              <Download className="h-3.5 w-3.5 mr-1" /> PDF
+          <div className="ml-auto flex flex-wrap gap-2">
+            <Button size="sm" variant={vistaCompleta ? "default" : "outline"} onClick={() => setVistaCompleta((v) => !v)} data-testid="button-vista-vendedor">
+              {vistaCompleta ? "Detalle del mes" : "Vista del vendedor"}
             </Button>
-          )}
+            {!vistaCompleta && detail && (detail.rows ?? []).length > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => generateComisionesPDF(selectedVendedor, monthLabel, detail.rows, detail.totalVentas, detail.totalComision)}
+              >
+                <Download className="h-3.5 w-3.5 mr-1" /> PDF
+              </Button>
+            )}
+            {!vistaCompleta && (
+              <Button
+                size="sm"
+                disabled={!puedeCerrar || cerrar.isPending}
+                title={yaCerrado ? "Este mes ya está cerrado" : selectedMonth >= mesActual ? "Solo se cierra un mes terminado" : selectedMonth <= ultimoCierre ? `Ya hay un cierre posterior (${ultimoCierre})` : "Liquida todo lo habilitado por cobranzas hasta fin de este mes"}
+                onClick={() => { if (window.confirm(`¿Cerrar ${monthLabel} para ${selectedVendedor}? Se liquida todo lo habilitado por cobranzas hasta fin de mes que no esté en un cierre anterior. No se puede deshacer.`)) cerrar.mutate(); }}
+                data-testid="button-cerrar-mes"
+              >
+                {yaCerrado ? "Mes cerrado" : cerrar.isPending ? "Cerrando..." : `Cerrar ${monthLabel}`}
+              </Button>
+            )}
+          </div>
         </div>
 
         <div className="overflow-y-auto flex-1">
-          {detailLoading ? (
+          {vistaCompleta ? (
+            <ComisionesVista data={vista} isLoading={vistaLoading} />
+          ) : detailLoading ? (
             <div className="space-y-2">
               {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
             </div>
           ) : !detail || (detail.rows ?? []).length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-8">Sin pedidos en el período</p>
+            <p className="text-sm text-muted-foreground text-center py-8">Sin cobranzas con comisión en el período</p>
           ) : (
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="text-left pb-1.5 text-xs text-muted-foreground font-medium">Fecha</th>
+                  <th className="text-left pb-1.5 text-xs text-muted-foreground font-medium">Fecha cobro</th>
                   <th className="text-left pb-1.5 text-xs text-muted-foreground font-medium">Cliente</th>
-                  <th className="text-right pb-1.5 text-xs text-muted-foreground font-medium">Total</th>
+                  <th className="text-right pb-1.5 text-xs text-muted-foreground font-medium">Cobrado</th>
                   <th className="text-right pb-1.5 text-xs text-muted-foreground font-medium">%</th>
                   <th className="text-right pb-1.5 text-xs text-muted-foreground font-medium">Comisión</th>
                 </tr>
@@ -197,7 +250,7 @@ function ComisionesModal({ open, onClose }: { open: boolean; onClose: () => void
                     <td className="py-1.5 text-xs text-muted-foreground whitespace-nowrap pr-3">
                       {new Date(row.orderDate + "T12:00:00").toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit" })}
                     </td>
-                    <td className="py-1.5 pr-2">{row.customerName}</td>
+                    <td className="py-1.5 pr-2">{row.customerName}{row.folio ? <span className="text-xs text-muted-foreground ml-1 font-mono">{row.folio}</span> : null}{row.tipo === "facturado" ? <span className="text-[10px] text-muted-foreground ml-1" title="Pedido saldado: comisionado por facturación (esquema anterior)">(facturado)</span> : null}</td>
                     <td className="py-1.5 text-right text-xs tabular-nums">{fmt(row.total)}</td>
                     <td className="py-1.5 text-right text-xs text-muted-foreground tabular-nums pl-3">{row.commissionPct.toFixed(1)}%</td>
                     <td className="py-1.5 text-right font-medium tabular-nums pl-3">{fmt(row.commissionAmount)}</td>
@@ -213,6 +266,19 @@ function ComisionesModal({ open, onClose }: { open: boolean; onClose: () => void
                 </tr>
               </tfoot>
             </table>
+          )}
+          {!vistaCompleta && Array.isArray(liquidaciones) && liquidaciones.length > 0 && (
+            <div className="mt-4 border-t border-border pt-3">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Cierres de {selectedVendedor}</p>
+              <ul className="text-sm space-y-0.5">
+                {liquidaciones.map((l) => (
+                  <li key={l.id} className="flex justify-between gap-3">
+                    <span>{monthOptions.find((o) => o.value === l.periodo)?.label ?? l.periodo} <span className="text-xs text-muted-foreground">· {l.items.length} cobranza{l.items.length !== 1 ? "s" : ""} · cerrado el {new Date(l.cerradaAt).toLocaleDateString("es-AR")}</span></span>
+                    <span className="font-semibold tabular-nums text-green-600">{fmt(l.total)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
       </DialogContent>

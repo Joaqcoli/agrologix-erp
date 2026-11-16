@@ -38,7 +38,9 @@ export const customers = pgTable("customers", {
   bolsaFv: boolean("bolsa_fv").default(false),
   blackPot: boolean("black_pot").default(false),
   salespersonName: text("salesperson_name"),
-  commissionPct: numeric("commission_pct", { precision: 5, scale: 2 }).default("0"),
+  commissionPct: numeric("commission_pct", { precision: 5, scale: 2 }).default("0"), // obsoleto desde 16/11/2026: el % lo fija cada pedido (ver shared/comisiones.ts)
+  // 16/11/2026: fecha de alta a efectos de comisión = primer pedido del cliente (no se recalcula). Ver shared/comisiones.ts.
+  comisionAlta: date("comision_alta"),
   openingBalance: numeric("opening_balance", { precision: 12, scale: 2 }).notNull().default("0"),
   parentCustomerId: integer("parent_customer_id").references(() => customers.id),
   active: boolean("active").notNull().default(true),
@@ -187,6 +189,10 @@ export const orders = pgTable("orders", {
   // A-13: notas del encargado del galpón y aviso de faltantes para el cliente (editable antes de aprobar; vacío = sin aviso)
   galponNotes: text("galpon_notes"),
   avisoFaltantes: text("aviso_faltantes"),
+  // 16/11/2026 comisiones por cobranza: % fijado al crear el pedido (5 | 1; NULL = sin alta todavía) y marca
+  // "saldada" (pedidos de Juan hasta el 31/10/2026, ya pagados por facturación: no generan comisión por cobranza).
+  comisionPct: numeric("comision_pct", { precision: 5, scale: 2 }),
+  comisionSaldada: boolean("comision_saldada").notNull().default(false),
 });
 
 export const orderItems = pgTable("order_items", {
@@ -515,6 +521,33 @@ export const paymentLines = pgTable("payment_lines", {
   cuentaId: integer("cuenta_id").references(() => cuentasFinancieras.id), // mov. de cuenta (efectivo/transf)
   chequeId: integer("cheque_id"),          // cheque creado (líneas CHEQUE)
 });
+
+// ─── Comisiones: liquidaciones mensuales cerradas (16/11/2026) ────────────────
+// Una cabecera por vendedor y período (YYYY-MM). Los items congelan qué cobranza (pago × pedido) habilitó
+// cuánta comisión. Inmutables: si después se borra o cambia un pago ya liquidado, el cierre siguiente
+// agrega un item de ajuste (ajuste = true, comisión negativa o positiva por la diferencia).
+export const comisionLiquidaciones = pgTable("comision_liquidaciones", {
+  id: serial("id").primaryKey(),
+  vendedor: text("vendedor").notNull(),
+  periodo: text("periodo").notNull(), // YYYY-MM
+  total: numeric("total", { precision: 14, scale: 2 }).notNull().default("0"),
+  cerradaAt: timestamp("cerrada_at").notNull().default(sql`now()`),
+  cerradaBy: integer("cerrada_by"),
+});
+export type ComisionLiquidacion = typeof comisionLiquidaciones.$inferSelect;
+
+export const comisionLiquidacionItems = pgTable("comision_liquidacion_items", {
+  id: serial("id").primaryKey(),
+  liquidacionId: integer("liquidacion_id").notNull().references(() => comisionLiquidaciones.id, { onDelete: "cascade" }),
+  orderId: integer("order_id").notNull(),
+  paymentId: integer("payment_id"),
+  fechaCobro: text("fecha_cobro").notNull(), // YYYY-MM-DD
+  cobrado: numeric("cobrado", { precision: 14, scale: 2 }).notNull(),
+  pct: numeric("pct", { precision: 5, scale: 2 }).notNull(),
+  comision: numeric("comision", { precision: 14, scale: 2 }).notNull(),
+  ajuste: boolean("ajuste").notNull().default(false),
+});
+export type ComisionLiquidacionItem = typeof comisionLiquidacionItems.$inferSelect;
 
 export const withholdings = pgTable("withholdings", {
   id: serial("id").primaryKey(),

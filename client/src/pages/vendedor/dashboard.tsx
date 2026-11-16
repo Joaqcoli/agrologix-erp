@@ -178,8 +178,9 @@ export default function VendedorDashboard() {
                   <p className="text-lg font-bold text-foreground mt-1">{fmt(stats.ventas)}</p>
                 </div>
                 <div className="rounded-md bg-background border border-border p-3">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Comisión</p>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Comisión habilitada</p>
                   <p className="text-lg font-bold text-green-600 dark:text-green-400 mt-1">{fmt(stats.comisiones)}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">por cobranzas del período</p>
                 </div>
                 <div className="rounded-md bg-background border border-border p-3">
                   <p className="text-xs text-muted-foreground uppercase tracking-wide">Clientes</p>

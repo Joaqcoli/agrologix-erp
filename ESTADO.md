@@ -2,9 +2,33 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-16 (sesión que vencía a los 7 días, costo manual al cambiar producto, compra 1630 del anco).
+> Última actualización: 2026-11-16 (comisiones por cobranza; sesión que vencía a los 7 días; costo manual al cambiar producto; compra 1630).
 
 ## Último trabajo (sep–oct 2026)
+  16-nov **Comisiones de vendedores: devengada por pedido, habilitada por cobranza** (diagnóstico `cd3eca2` →
+  `docs/AUDITORIA-COMISIONES-POR-COBRANZA-2026-11-16.md`; implementación en este commit). Reglas: cada pedido fija su %
+  al crearse según la antigüedad del cliente (5 % los primeros 6 meses exactos desde `customers.comision_alta`, después
+  1 %; alta = primer pedido, no se recalcula; quien ya compraba antes de octubre 2026 → alta 01/10/2026). La comisión
+  es sobre el neto sin IVA y se habilita proporcional a lo cobrado (retenciones y "DIFERENCIA" cubren el pedido pero no
+  comisionan); no vence. Pago sin remitos elegidos → ya iba FIFO al pedido impago más viejo (sin cambios). Liquidación
+  por mes calendario de cobranza con botón "Cerrar mes" (admin, Dashboard → Comisiones → Detalle). Datos nuevos:
+  `customers.comision_alta`, `orders.comision_pct`, `orders.comision_saldada`, tablas `comision_liquidaciones` +
+  `comision_liquidacion_items` (migración aditiva en `server/migrate.ts`, ya corrida contra producción el 16/11).
+  Motor en `server/comisiones.ts`: mismo reparto de cobranzas que la CC (vínculos explícitos + FIFO), pero pago por
+  pago para saber la fecha de cobro; verificado 0 diferencias con `getPendingOrdersForCustomer` en 89 cuentas / 2.154
+  pedidos. Transición de Juan: 86 pedidos hasta el 31/10 marcados `comision_saldada` (octubre ya se le pagó por
+  facturado); el gráfico mensual del vendedor y el Dashboard muestran para esos meses lo viejo (% × facturado) y desde
+  noviembre lo habilitado por cobranza. Pantallas: vendedor → nueva entrada "Comisiones" (resumen del mes, por
+  cliente con alta/% vigente/fecha de baja al 1 %, por pedido, cierres); "Mis Clientes" muestra alta y fecha de baja;
+  ficha de cliente (admin) reemplaza "% Comisión" por "Fecha de alta (comisión)" (`commission_pct` queda sin uso).
+  `/api/vendedor/customers` ahora devuelve `hasIva`/`comisionAlta` en camelCase (antes el badge IVA nunca salía).
+  Cuenta de Ceci creada (usuario id 30, rol vendedor, `name = 'Ceci'` = `salesperson_name` de sus 3 clientes); sin
+  pedidos saldados: su primer cierre incluye las cobranzas de octubre. Cliente con vendedor `JUAN` normalizado a `Juan`.
+  Pendiente: Joaquín cierra octubre de Ceci y noviembre de ambos cuando termine el mes (botón Cerrar mes); un cobro
+  cargado tarde entra en el cierre siguiente; editar/borrar un pago ya liquidado genera un ajuste en el cierre
+  siguiente. Cambiar a mano la fecha de alta NO recalcula el % de pedidos ya creados.
+  Verificar a mano: entrar como Juan → Comisiones (nov: 49 pedidos, habilitadas ≈ $51.558 al 16/11; octubre "Saldado");
+  entrar como Ceci → Comisiones (oct ≈ $70.215 habilitadas, nov ≈ $10.050); Dashboard admin → Comisiones → Detalle.
   16-nov **401 en medio del trabajo + costos manuales falsos + anco** (`6e21342`, verificado en producción). (1) La sesión
   vencía a los 7 días exactos del login sin renovarse (`rolling: false`): Joaquín y N. Silva quedaron con "401 Not
   authenticated" el 16/11 a la misma hora en que se habían logueado el 9/11, y la pantalla no mandaba al login. Ahora la

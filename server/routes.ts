@@ -2,6 +2,7 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import { createServer, type Server } from "http";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
+import * as comisionesMod from "./comisiones";
 import { storage } from "./storage";
 import { db } from "./db";
 import { sql as drizzleSql } from "drizzle-orm";
@@ -345,6 +346,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       return res.json(await storage.getSalespersons());
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // 16/11/2026 comisiones por cobranza: vista completa de un vendedor (admin), cierres y cierre de mes
+  app.get("/api/commissions/vendedor", requireAuth, async (req, res) => {
+    try {
+      const { salesperson } = req.query as { salesperson?: string };
+      if (!salesperson) return res.status(400).json({ error: "salesperson is required" });
+      return res.json(await comisionesMod.getComisionesVendedor(salesperson));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+  app.get("/api/commissions/liquidaciones", requireAuth, async (req, res) => {
+    try {
+      const { salesperson } = req.query as { salesperson?: string };
+      if (!salesperson) return res.status(400).json({ error: "salesperson is required" });
+      return res.json(await comisionesMod.getLiquidaciones(salesperson));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+  app.post("/api/commissions/cerrar", requireAuth, async (req, res) => {
+    try {
+      if (req.session.userRole !== "admin") return res.status(403).json({ error: "Solo admin puede cerrar un mes" });
+      const { salesperson, periodo } = req.body as { salesperson?: string; periodo?: string };
+      if (!salesperson || !periodo) return res.status(400).json({ error: "salesperson y periodo son obligatorios" });
+      return res.json(await comisionesMod.cerrarLiquidacion(salesperson, periodo, req.session.userId!));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   app.get("/api/commissions/detail", requireAuth, async (req, res) => {
@@ -2332,7 +2357,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const r = (salesRow.rows as any[])[0] ?? {};
       const clientesTotal = ((clientesRow.rows as any[])[0]?.total) ?? 0;
       let ventas = parseFloat(r.ventas ?? "0");
-      let comisiones = parseFloat(r.comisiones ?? "0");
+      // 16/11: comisión del período = habilitada por cobranzas de esas fechas (+ pedidos saldados por facturación)
+      let comisiones = (await comisionesMod.comisionesEnRango(user.name, from.slice(0, 10), to.slice(0, 10))).total;
       // Si el rango es exactamente un mes con histórico cargado (sin pedidos), usar esos valores
       const ym = from.slice(0, 7);
       const [yy, mm] = from.split("-").map(Number);
@@ -2345,6 +2371,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         comisiones,
         clientesAsignados: Number(clientesTotal),
       });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // 16/11/2026: comisiones del vendedor logueado (por cliente, por pedido, resumen del mes, cierres)
+  app.get("/api/vendedor/comisiones", requireVendedor, async (req, res) => {
+    try {
+      const user = await storage.getUserById(req.session.userId!);
+      if (!user) return res.status(401).json({ error: "User not found" });
+      return res.json(await comisionesMod.getComisionesVendedor(user.name));
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
@@ -2380,7 +2415,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           o.remito_num AS "remitoNum",
           c.name AS "customerName",
           (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) AS "hasIva",
-          c.commission_pct::text AS "commissionPct",
+          COALESCE(o.comision_pct, 0)::text AS "commissionPct",
+          o.comision_saldada AS "comisionSaldada",
           COUNT(oi.id)::int AS "itemCount",
           COALESCE(SUM(
             CASE
@@ -2395,7 +2431,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         LEFT JOIN products p ON p.id = oi.product_id
         WHERE c.salesperson_name = ${user.name}
           ${date ? drizzleSql`AND o.order_date::date = ${date}::date` : drizzleSql``}
-        GROUP BY o.id, o.folio, o.order_date, o.status, o.total, o.remito_num, c.name, c.has_iva, c.iva_since, c.commission_pct
+        GROUP BY o.id, o.folio, o.order_date, o.status, o.total, o.remito_num, c.name, c.has_iva, c.iva_since, o.comision_pct, o.comision_saldada
         ORDER BY o.order_date DESC, o.id DESC
       `);
       return res.json(rows.rows);
@@ -2421,8 +2457,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const user = await storage.getUserById(req.session.userId!);
       if (!user) return res.status(401).json({ error: "User not found" });
+      // 16/11: alias camelCase de los campos que usa la pantalla (SELECT * devuelve snake_case)
       const rows = await db.execute(drizzleSql`
-        SELECT * FROM customers
+        SELECT *, has_iva AS "hasIva", bolsa_fv AS "bolsaFv", salesperson_name AS "salespersonName", comision_alta::text AS "comisionAlta"
+        FROM customers
         WHERE salesperson_name = ${user.name} AND active = true
         ORDER BY name
       `);

@@ -54,6 +54,7 @@ import VendedorDashboard from "@/pages/vendedor/dashboard";
 import VendedorOrders from "@/pages/vendedor/orders";
 import VendedorOrderDetail from "@/pages/vendedor/order-detail";
 import VendedorCustomers from "@/pages/vendedor/customers";
+import VendedorComisiones from "@/pages/vendedor/comisiones";
 import GalponStock from "@/pages/galpon/stock";
 import GalponOrders from "@/pages/galpon/orders";
 import GalponOrderDetail from "@/pages/galpon/order-detail";
@@ -129,6 +130,7 @@ function Router() {
         {(params) => <VendedorOrderDetail id={Number(params.id)} />}
       </Route>
       <Route path="/vendedor/customers" component={VendedorCustomers} />
+      <Route path="/vendedor/comisiones" component={VendedorComisiones} />
       <Route path="/galpon/stock" component={GalponStock} />
       <Route path="/galpon/orders" component={GalponOrders} />
       <Route path="/galpon/orders/:id">

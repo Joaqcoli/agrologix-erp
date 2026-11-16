@@ -16,6 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Search, Pencil, Trash2, Users, Building2, Phone, Mail, MapPin, MessageCircle, X, Check } from "lucide-react";
 import type { Customer, CustomerContact } from "@shared/schema";
+import { comisionPctEn, fechaBajaComision } from "@shared/comisiones";
 import { formatArPhone } from "@shared/phone";
 
 // ── A-01: Teléfonos de PEDIDO (customer_contacts). Distintos del teléfono de administración. ──
@@ -97,7 +98,7 @@ function CustomerContactsSection({ customerId }: { customerId: number }) {
   );
 }
 
-const EMPTY: Partial<Customer> = { name: "", rfc: "", cuit: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ivaSince: null, ccType: "por_saldo", bolsaFv: false, blackPot: false, salespersonName: "", commissionPct: "0", parentCustomerId: null };
+const EMPTY: Partial<Customer> = { name: "", rfc: "", cuit: "", email: "", phone: "", address: "", city: "", notes: "", hasIva: false, ivaSince: null, ccType: "por_saldo", bolsaFv: false, blackPot: false, salespersonName: "", commissionPct: "0", comisionAlta: null, parentCustomerId: null };
 
 // ── Rediseño Clientes (Claude Design) — CSS de diseno-caja/clientes-rediseno.html ──
 const CLX_CSS = `
@@ -498,7 +499,7 @@ export default function CustomersPage() {
                   </div>
                   <Switch
                     checked={!!form.salespersonName}
-                    onCheckedChange={(v) => setForm({ ...form, salespersonName: v ? " " : "", commissionPct: v ? (form.commissionPct ?? "0") : "0" })}
+                    onCheckedChange={(v) => setForm({ ...form, salespersonName: v ? " " : "" })}
                   />
                 </div>
               </div>
@@ -514,17 +515,19 @@ export default function CustomersPage() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="commission">% Comisión</Label>
+                    <Label htmlFor="comision-alta">Fecha de alta (comisión)</Label>
                     <Input
-                      id="commission"
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.1"
-                      value={form.commissionPct ?? "0"}
-                      onChange={(e) => setForm({ ...form, commissionPct: e.target.value as any })}
-                      placeholder="Ej: 5"
+                      id="comision-alta"
+                      type="date"
+                      value={(form.comisionAlta as string | null) ?? ""}
+                      onChange={(e) => setForm({ ...form, comisionAlta: e.target.value || null })}
+                      data-testid="input-comision-alta"
                     />
+                    <p className="text-[11px] text-muted-foreground">
+                      {form.comisionAlta
+                        ? `5 % hasta el ${(() => { const [y, m, d] = fechaBajaComision(form.comisionAlta as string).split("-"); const prev = new Date(Number(y), Number(m) - 1, Number(d) - 1); return `${String(prev.getDate()).padStart(2, "0")}/${String(prev.getMonth() + 1).padStart(2, "0")}/${prev.getFullYear()}`; })()} · pasa al 1 % el ${(() => { const [y, m, d] = fechaBajaComision(form.comisionAlta as string).split("-"); return `${d}/${m}/${y}`; })()} · hoy ${comisionPctEn(form.comisionAlta as string, new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" }))} %`
+                        : "Se fija sola con el primer pedido del cliente. Cada pedido guarda el % que le tocó al crearse."}
+                    </p>
                   </div>
                 </>
               )}

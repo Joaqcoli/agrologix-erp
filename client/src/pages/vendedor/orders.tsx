@@ -31,7 +31,8 @@ type VendedorOrder = {
   remitoNum: number | null;
   customerName: string;
   hasIva: boolean;
-  commissionPct: string;
+  commissionPct: string;      // 16/11: % fijado en el pedido (5 | 1), ya no el del cliente
+  comisionSaldada: boolean;   // pedidos de Juan hasta el 31/10/2026: comisionados por facturación
   itemCount: number;
   totalConIva: string;
 };
@@ -118,8 +119,9 @@ export default function VendedorOrders() {
                   <p className="text-lg font-bold text-foreground mt-1">{fmt(totalVendido)}</p>
                 </div>
                 <div className="rounded-md bg-background border border-border p-3">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Comisión</p>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Comisión devengada</p>
                   <p className="text-lg font-bold text-green-600 dark:text-green-400 mt-1">{fmt(totalComisiones)}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">se habilita al cobrar</p>
                 </div>
                 <div className="rounded-md bg-background border border-border p-3">
                   <p className="text-xs text-muted-foreground uppercase tracking-wide">Pedidos / Clientes</p>
@@ -189,7 +191,7 @@ export default function VendedorOrders() {
                               </span>
                               {commPct > 0 && order.status === "approved" && (
                                 <span className="text-xs text-green-600 dark:text-green-400 font-medium">
-                                  Comisión: {fmt(comision)}
+                                  Comisión {commPct} %: {fmt(comision)}{order.comisionSaldada ? " (saldada)" : ""}
                                 </span>
                               )}
                             </div>
