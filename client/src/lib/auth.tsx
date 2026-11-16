@@ -31,6 +31,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
+  // 16/11: sesión vencida en medio del trabajo → al login con aviso (evento que dispara queryClient ante un 401)
+  useEffect(() => {
+    const onExpired = () => {
+      setUser(null);
+      setLocation("/login?vencida=1");
+    };
+    window.addEventListener("agrologix:sesion-vencida", onExpired);
+    return () => window.removeEventListener("agrologix:sesion-vencida", onExpired);
+  }, [setLocation]);
+
   const login = async (email: string, password: string) => {
     const r = await fetch("/api/auth/login", {
       method: "POST",

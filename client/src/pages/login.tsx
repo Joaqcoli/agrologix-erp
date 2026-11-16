@@ -15,6 +15,8 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // 16/11: llegamos acá porque la sesión venció en medio del trabajo (ver AuthProvider)
+  const sesionVencida = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("vencida");
 
   if (user) {
     const home = user.role === "vendedor" ? "/vendedor/dashboard"
@@ -51,6 +53,12 @@ export default function LoginPage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
+              {sesionVencida && !error && (
+                <Alert>
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>Tu sesión venció. Volvé a ingresar para seguir.</AlertDescription>
+                </Alert>
+              )}
               {error && (
                 <Alert variant="destructive">
                   <AlertCircle className="h-4 w-4" />

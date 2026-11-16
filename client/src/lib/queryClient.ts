@@ -1,7 +1,14 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
+// 16/11: sesión vencida (401 en cualquier llamada que no sea el login) → aviso global; AuthProvider lleva al login.
+// Antes la pantalla seguía mostrando datos cacheados y cada acción fallaba con "401: Not authenticated".
+export function notifySessionExpired(): void {
+  try { window.dispatchEvent(new CustomEvent("agrologix:sesion-vencida")); } catch { /* noop */ }
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
+    if (res.status === 401 && !res.url.includes("/api/auth/login")) notifySessionExpired();
     const text = (await res.text()) || res.statusText;
     throw new Error(`${res.status}: ${text}`);
   }

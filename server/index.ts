@@ -58,6 +58,9 @@ app.use(session({
   secret: process.env.SESSION_SECRET || "fallback-dev-secret",
   resave: false,
   saveUninitialized: false,
+  // 16/11: la sesión se renueva con cada request. Antes vencía a los 7 días exactos del login, en medio del
+  // trabajo (Joaquín y N. Silva el 16/11 a la misma hora que se habían logueado el 9/11): todo daba 401.
+  rolling: true,
   cookie: {
     secure: process.env.NODE_ENV === "production",
     httpOnly: true,

@@ -1257,7 +1257,17 @@ export default function OrderDetailPage({ id }: { id: number }) {
         }
         if (costRes.ok) {
           const data = await costRes.json();
-          if (data?.cost !== undefined) handleFieldChange(itemId, "cost", String(Math.round(parseFloat(data.cost))));
+          // 16/11: el costo del producto nuevo actualiza también la referencia (orig): NO es un cambio del usuario y
+          // no viaja como costo manual. Antes quedaba congelado como "Manual" (cebollón a $0 porque en ese momento
+          // no había stock; papa a $17.000 redondeado). Misma regla que el cambio de unidad (06/11).
+          if (data?.cost !== undefined) {
+            const costoAuto = String(Math.round(parseFloat(data.cost)));
+            setDrafts((prev) => {
+              const d = prev[itemId];
+              if (!d || d.productId !== productId) return prev; // respuesta vieja: el producto volvió a cambiar
+              return { ...prev, [itemId]: { ...d, cost: costoAuto, orig: { ...d.orig, cost: costoAuto } } };
+            });
+          }
         }
       } catch { /* noop */ }
     }
