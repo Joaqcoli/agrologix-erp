@@ -2,9 +2,21 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-10 (modal Registrar Pago: monto = suma de métodos, retención con un clic, scroll).
+> Última actualización: 2026-11-16 (sesión que vencía a los 7 días, costo manual al cambiar producto, compra 1630 del anco).
 
 ## Último trabajo (sep–oct 2026)
+  16-nov **401 en medio del trabajo + costos manuales falsos + anco** (`6e21342`, verificado en producción). (1) La sesión
+  vencía a los 7 días exactos del login sin renovarse (`rolling: false`): Joaquín y N. Silva quedaron con "401 Not
+  authenticated" el 16/11 a la misma hora en que se habían logueado el 9/11, y la pantalla no mandaba al login. Ahora la
+  sesión se renueva con cada request y ante un 401 el front va a `/login?vencida=1` con aviso. (2) Al cambiar el
+  PRODUCTO de una línea, el costo buscado se guardaba como manual (`handleProductSelect` → `handleFieldChange("cost")`);
+  si no había stock en ese momento quedaba "Manual $0" (cebollón de COLCAR). Mismo arreglo que el 06/11 para unidad:
+  actualiza `orig.cost` y descarta respuestas viejas. Datos: 18 líneas de borradores con manual = 0 o = automático
+  redondeado limpiadas (override NULL). (3) Compra 1630 (Sanjuaninos, 16/11): anco cargado como 20 KG a $28.000/kg
+  (eran 20 BOLSA × 15 kg a $28.000/bolsa); el aviso CONFIRM_REQUIRED se aceptó igual. Corregida por API: stock 300 kg,
+  costo $1.866,67/kg ($28.000/bolsa), total de la compra sin cambios. Verificado: COLCAR 2964 muestra cebollón $14.000
+  y anco $28.000 de costo, sin manuales. El precio del anco ($42.000) es el último de COLCAR (30/09); la lista dice
+  $39.000: se dejó como estaba a la espera de Joaquín.
   10-nov **Modal Registrar Pago (CC)** (`6a936d1`): (1) con varios métodos, el Monto se calcula solo como la suma
   de los métodos (campo de solo lectura "= suma de métodos"); antes Joaquín ponía el total de las facturas en Monto, los
   cheques sumaban menos y Guardar quedaba apagado aunque cargara la diferencia como retención. (2) En el bloque Retención,
