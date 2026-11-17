@@ -170,7 +170,7 @@ export default function VendedorDashboard() {
 
           {extra && extra.ventasPorDia.length > 0 && (
             <div className="vx-card">
-              <div className="vx-chead"><span className="t"><BarChart3 className="h-4 w-4" /> Mis ventas del mes (por día)</span></div>
+              <div className="vx-chead"><span className="t"><BarChart3 className="h-4 w-4" /> Mis ventas del mes (por día)</span><span className="n">neto sin IVA</span></div>
               <div className="vx-chart">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={extra.ventasPorDia} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>

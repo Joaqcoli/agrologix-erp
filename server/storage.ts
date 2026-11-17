@@ -1424,9 +1424,11 @@ export const storage = {
       ORDER BY dias DESC
     `);
 
-    // 2) Ventas por día del mes actual (solo sus ventas aprobadas)
+    // 2) Ventas por día del mes actual (solo sus ventas aprobadas). 17/11: NETO sin IVA (pedido de Joaquín);
+    //    el resto del dashboard sigue con IVA.
+    const neto = drizzleSql`CASE WHEN oi.price_per_unit::numeric = 0 THEN 0 ELSE oi.quantity::numeric * oi.price_per_unit::numeric END`;
     const ventasPorDia = await db.execute(drizzleSql`
-      SELECT o.order_date::date::text AS dia, COALESCE(SUM(${iva}), 0)::float AS total
+      SELECT o.order_date::date::text AS dia, COALESCE(SUM(${neto}), 0)::float AS total
       FROM orders o
       JOIN customers c ON c.id = o.customer_id
       JOIN order_items oi ON oi.order_id = o.id
