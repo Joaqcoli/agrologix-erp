@@ -43,8 +43,9 @@ function yearRange(): [string, string] {
   return [`${y}-01-01`, `${y + 1}-01-01`];
 }
 
-type VendedorStats = { ventas: number; comisiones: number; clientesAsignados: number };
-type MonthlyData = { month: string; label: string; facturacion: number; comisiones: number }[];
+type VendedorStats = { ventas: number; comisiones: number; comisionTotal: number; comisionPendiente: number; clientesAsignados: number };
+type MonthlyData = { month: string; label: string; facturacion: number; comisiones: number; comisionTotal: number }[];
+const SERIE: Record<string, string> = { facturacion: "Facturación", comisiones: "Comisión habilitada", comisionTotal: "Comisión total" };
 type RangeMode = "hoy" | "semana" | "mes" | "pormes" | "año" | "rango";
 
 function currentYM() {
@@ -141,23 +142,28 @@ export default function VendedorDashboard() {
           </div>
 
           {isLoading || !stats ? (
-            <div className="vx-kpis">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 w-full rounded-2xl" />)}</div>
+            <div className="vx-kpis c4">{[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-24 w-full rounded-2xl" />)}</div>
           ) : (
-            <div className="vx-kpis">
+            <div className="vx-kpis c4">
               <div className="vx-kpi">
                 <div className="lab">Total ventas</div>
                 <div className="val">{fmt(stats.ventas)}</div>
-                <div className="note">neto sin IVA, del período</div>
+                <div className="note">con IVA · {stats.clientesAsignados} clientes asignados</div>
+              </div>
+              <div className="vx-kpi">
+                <div className="lab">Comisión total</div>
+                <div className="val">{fmt(stats.comisionTotal)}</div>
+                <div className="note">devengada por los pedidos del período</div>
               </div>
               <div className="vx-kpi main">
                 <div className="lab">Comisión habilitada</div>
                 <div className="val">{fmt(stats.comisiones)}</div>
                 <div className="note">por cobranzas del período</div>
               </div>
-              <div className="vx-kpi">
-                <div className="lab">Clientes</div>
-                <div className="val">{stats.clientesAsignados}</div>
-                <div className="note">asignados</div>
+              <div className={`vx-kpi${stats.comisionPendiente > 0 ? " warn" : ""}`}>
+                <div className="lab">Pendiente de cobro</div>
+                <div className="val">{fmt(stats.comisionPendiente)}</div>
+                <div className="note">de los pedidos del período que aún no se pagaron</div>
               </div>
             </div>
           )}
@@ -189,9 +195,10 @@ export default function VendedorDashboard() {
                     <XAxis dataKey="label" fontSize={11} tickLine={false} axisLine={false} />
                     <YAxis yAxisId="fact" tickFormatter={(v) => "$" + Math.round(Number(v) / 1000) + "k"} fontSize={11} tickLine={false} axisLine={false} width={50} />
                     <YAxis yAxisId="com" orientation="right" tickFormatter={(v) => "$" + Math.round(Number(v) / 1000) + "k"} fontSize={11} tickLine={false} axisLine={false} width={50} />
-                    <Tooltip formatter={(v: number, name: string) => [fmt(v), name === "facturacion" ? "Facturación" : "Comisión"]} />
-                    <Legend formatter={(val) => (val === "facturacion" ? "Facturación" : "Comisión")} wrapperStyle={{ fontSize: 11 }} />
+                    <Tooltip formatter={(v: number, name: string) => [fmt(v), SERIE[name] ?? name]} />
+                    <Legend formatter={(val) => SERIE[val] ?? val} wrapperStyle={{ fontSize: 11 }} />
                     <Bar yAxisId="fact" dataKey="facturacion" fill="#bcc79e" radius={[3, 3, 0, 0]} maxBarSize={36} />
+                    <Line yAxisId="com" type="monotone" dataKey="comisionTotal" stroke="#c08a1e" strokeWidth={2} strokeDasharray="5 4" dot={{ r: 3 }} />
                     <Line yAxisId="com" type="monotone" dataKey="comisiones" stroke="#5f8020" strokeWidth={2} dot={{ r: 3 }} />
                   </ComposedChart>
                 </ResponsiveContainer>
@@ -265,7 +272,7 @@ export default function VendedorDashboard() {
               </div>
             </div>
           )}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 14, fontSize: 12.5, color: "#8b8f88" }}><Users className="h-3.5 w-3.5" /> Los montos son netos sin IVA.</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 14, fontSize: 12.5, color: "#8b8f88" }}><Users className="h-3.5 w-3.5" /> Ventas con IVA (como la cuenta corriente). Las comisiones se calculan sobre el neto sin IVA.</div>
         </div>
       </div>
     </VendedorLayout>

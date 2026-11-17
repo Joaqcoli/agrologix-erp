@@ -294,6 +294,30 @@ async function saldadasPorMes(vendedor: string, from: string, to: string): Promi
   return new Map(rows.map((r) => [String(r.ym), Number(r.comision)]));
 }
 
+/** 17/11: comisión TOTAL devengada por mes de pedido (YYYY-MM → % × neto de todos los pedidos aprobados con %, saldados incluidos). */
+export async function devengadasPorMes(vendedor: string, from: string, to: string): Promise<Map<string, number>> {
+  const rows = (await db.execute(sql`
+    SELECT to_char(o.order_date, 'YYYY-MM') AS ym,
+      COALESCE(SUM(CASE WHEN oi.price_per_unit::numeric = 0 THEN 0 ELSE COALESCE(o.comision_pct::numeric, 0) / 100 * oi.quantity::numeric * oi.price_per_unit::numeric END), 0)::float AS comision
+    FROM orders o JOIN customers c ON c.id = o.customer_id JOIN order_items oi ON oi.order_id = o.id
+    WHERE o.status = 'approved' AND c.salesperson_name = ${vendedor}
+      AND o.order_date >= ${from}::timestamp AND o.order_date < ${to}::timestamp
+    GROUP BY 1`)).rows as any[];
+  return new Map(rows.map((r) => [String(r.ym), r2(Number(r.comision))]));
+}
+
+/** 17/11: de los pedidos con fecha en [from, to): comisión total devengada (saldados: % × neto) y lo que todavía falta cobrar. */
+export async function pedidosEnRango(vendedor: string, from: string, to: string): Promise<{ total: number; pendiente: number }> {
+  const { pedidos } = await cobranzasVendedor(vendedor);
+  let total = 0, pendiente = 0;
+  for (const p of pedidos) {
+    if (p.orderDate < from || p.orderDate >= to) continue;
+    total += p.saldada && p.pct ? r2((p.pct / 100) * p.neto) : p.devengada;
+    pendiente += p.pendiente;
+  }
+  return { total: r2(total), pendiente: r2(pendiente) };
+}
+
 /** Comisiones de un vendedor en [from, to): habilitadas por cobranzas de esas fechas + saldadas por facturación. */
 export async function comisionesEnRango(vendedor: string, from: string, to: string): Promise<{ porCobranza: number; saldadas: number; total: number }> {
   const [{ cobranzas }, sal] = await Promise.all([cobranzasVendedor(vendedor), saldadasPorMes(vendedor, from, to)]);

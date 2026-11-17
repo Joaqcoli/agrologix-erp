@@ -1515,12 +1515,15 @@ export const storage = {
     const map = new Map((rows.rows as any[]).map((r) => [String(r.ym), { facturacion: Number(r.facturacion), comisiones: Number(r.comisiones) }]));
     // 16/11: la comisión del mes es la habilitada por cobranzas de ese mes (+ pedidos saldados por facturación)
     const porMes = await comisiones.comisionesPorMes(salespersonName, year);
+    // 17/11: comisión total devengada por los pedidos de cada mes (para el tooltip del gráfico)
+    const devengadas = await comisiones.devengadasPorMes(salespersonName, `${year}-01-01`, `${year + 1}-01-01`);
     const MES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
-    const out: { month: string; label: string; facturacion: number; comisiones: number }[] = [];
+    const out: { month: string; label: string; facturacion: number; comisiones: number; comisionTotal: number }[] = [];
     for (let m = 1; m <= curMonth; m++) {
       const ym = `${year}-${String(m).padStart(2, "0")}`;
-      const v = this.vendedorHistOverride(salespersonName, ym) ?? { facturacion: map.get(ym)?.facturacion ?? 0, comisiones: porMes.get(ym) ?? 0 };
-      out.push({ month: ym, label: MES[m - 1], facturacion: v.facturacion, comisiones: v.comisiones });
+      const ov = this.vendedorHistOverride(salespersonName, ym);
+      const v = ov ?? { facturacion: map.get(ym)?.facturacion ?? 0, comisiones: porMes.get(ym) ?? 0 };
+      out.push({ month: ym, label: MES[m - 1], facturacion: v.facturacion, comisiones: v.comisiones, comisionTotal: ov ? ov.comisiones : (devengadas.get(ym) ?? 0) });
     }
     return out;
   },

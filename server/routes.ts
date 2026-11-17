@@ -2359,16 +2359,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let ventas = parseFloat(r.ventas ?? "0");
       // 16/11: comisión del período = habilitada por cobranzas de esas fechas (+ pedidos saldados por facturación)
       let comisiones = (await comisionesMod.comisionesEnRango(user.name, from.slice(0, 10), to.slice(0, 10))).total;
+      // 17/11: comisión total devengada por los pedidos del período y lo que de esos pedidos falta cobrar
+      let { total: comisionTotal, pendiente: comisionPendiente } = await comisionesMod.pedidosEnRango(user.name, from.slice(0, 10), to.slice(0, 10));
       // Si el rango es exactamente un mes con histórico cargado (sin pedidos), usar esos valores
       const ym = from.slice(0, 7);
       const [yy, mm] = from.split("-").map(Number);
       const nextFirst = mm === 12 ? `${yy + 1}-01-01` : `${yy}-${String(mm + 1).padStart(2, "0")}-01`;
       const isFullMonth = from === `${ym}-01` && to === nextFirst;
       const ov = storage.vendedorHistOverride(user.name, ym);
-      if (isFullMonth && ov) { ventas = ov.facturacion; comisiones = ov.comisiones; }
+      if (isFullMonth && ov) { ventas = ov.facturacion; comisiones = ov.comisiones; comisionTotal = ov.comisiones; comisionPendiente = 0; }
       return res.json({
         ventas,
         comisiones,
+        comisionTotal,
+        comisionPendiente,
         clientesAsignados: Number(clientesTotal),
       });
     } catch (e: any) { return res.status(500).json({ error: e.message }); }

@@ -25,6 +25,11 @@
   retenciones, sedes). El detalle tarda ~8 s como el del admin (carga todos los ítems aprobados). Verificado en local
   contra la base de producción con un usuario temporal `name='Juan'` (borrado después) y en producción tras el deploy.
   Verificar a mano: entrar como Juan/Ceci desde el celular → menú, Comisiones (nov/oct), Cuentas Corrientes → un cliente.
+  Mismo día, segundo commit: el Dashboard del vendedor muestra 4 números (ventas con IVA, **comisión total** devengada
+  por los pedidos del período, **habilitada** por cobranzas del período, **pendiente de cobro** de esos pedidos) y el
+  gráfico mensual suma la línea punteada "Comisión total" (`comisionTotal` en `/api/vendedor/dashboard` y
+  `dashboard-monthly`, via `pedidosEnRango` / `devengadasPorMes` en `server/comisiones.ts`). Aclarado que Comisiones
+  muestra el facturado neto sin IVA y Cuentas Corrientes con IVA (la diferencia de noviembre de Juan era el IVA).
   16-nov **Comisiones de vendedores: devengada por pedido, habilitada por cobranza** (diagnóstico `cd3eca2` →
   `docs/AUDITORIA-COMISIONES-POR-COBRANZA-2026-11-16.md`; implementación en este commit). Reglas: cada pedido fija su %
   al crearse según la antigüedad del cliente (5 % los primeros 6 meses exactos desde `customers.comision_alta`, después
