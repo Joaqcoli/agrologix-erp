@@ -30,8 +30,9 @@
   gráfico mensual suma la línea punteada "Comisión total" (`comisionTotal` en `/api/vendedor/dashboard` y
   `dashboard-monthly`, via `pedidosEnRango` / `devengadasPorMes` en `server/comisiones.ts`). Aclarado que Comisiones
   muestra el facturado neto sin IVA y Cuentas Corrientes con IVA (la diferencia de noviembre de Juan era el IVA).
-  Tercer commit: el gráfico "Mis ventas del mes (por día)" del vendedor pasa a neto sin IVA (pedido de Joaquín); el
-  resto del dashboard (ventas del período, gráfico mensual, top clientes) sigue con IVA.
+  Tercer y cuarto commit: el gráfico "Mis ventas del mes (por día)" y el KPI "Total ventas" del dashboard del
+  vendedor pasan a neto sin IVA (pedido de Joaquín), con la aclaración en pantalla; el gráfico mensual y los top
+  clientes siguen con IVA. (El modal de comisiones del admin y el Dashboard admin no cambian.)
   16-nov **Comisiones de vendedores: devengada por pedido, habilitada por cobranza** (diagnóstico `cd3eca2` →
   `docs/AUDITORIA-COMISIONES-POR-COBRANZA-2026-11-16.md`; implementación en este commit). Reglas: cada pedido fija su %
   al crearse según la antigüedad del cliente (5 % los primeros 6 meses exactos desde `customers.comision_alta`, después

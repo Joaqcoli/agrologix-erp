@@ -148,7 +148,7 @@ export default function VendedorDashboard() {
               <div className="vx-kpi">
                 <div className="lab">Total ventas</div>
                 <div className="val">{fmt(stats.ventas)}</div>
-                <div className="note">con IVA · {stats.clientesAsignados} clientes asignados</div>
+                <div className="note">neto sin IVA · {stats.clientesAsignados} clientes asignados</div>
               </div>
               <div className="vx-kpi">
                 <div className="lab">Comisión total</div>
@@ -272,7 +272,7 @@ export default function VendedorDashboard() {
               </div>
             </div>
           )}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 14, fontSize: 12.5, color: "#8b8f88" }}><Users className="h-3.5 w-3.5" /> Ventas con IVA (como la cuenta corriente). Las comisiones se calculan sobre el neto sin IVA.</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 14, fontSize: 12.5, color: "#8b8f88" }}><Users className="h-3.5 w-3.5" /> Total ventas, ventas por día y comisiones: neto sin IVA. El gráfico mensual y los top clientes van con IVA, como la cuenta corriente.</div>
         </div>
       </div>
     </VendedorLayout>

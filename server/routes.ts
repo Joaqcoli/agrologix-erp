@@ -2323,12 +2323,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { from, to } = req.query as { from?: string; to?: string };
       if (!from || !to) return res.status(400).json({ error: "from and to are required" });
 
+      // 17/11: "Total ventas" del vendedor en NETO sin IVA (pedido de Joaquín). Antes iba con IVA.
       const salesRow = await db.execute(drizzleSql`
         SELECT
           COALESCE(SUM(
             CASE
               WHEN oi.price_per_unit::numeric = 0 THEN 0
-              WHEN (c.has_iva = true AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
               ELSE oi.quantity::numeric * oi.price_per_unit::numeric
             END
           ), 0) AS ventas,
