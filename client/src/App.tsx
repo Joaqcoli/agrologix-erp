@@ -55,6 +55,8 @@ import VendedorOrders from "@/pages/vendedor/orders";
 import VendedorOrderDetail from "@/pages/vendedor/order-detail";
 import VendedorCustomers from "@/pages/vendedor/customers";
 import VendedorComisiones from "@/pages/vendedor/comisiones";
+import VendedorCC from "@/pages/vendedor/cc";
+import VendedorCCDetail from "@/pages/vendedor/cc-detail";
 import GalponStock from "@/pages/galpon/stock";
 import GalponOrders from "@/pages/galpon/orders";
 import GalponOrderDetail from "@/pages/galpon/order-detail";
@@ -131,6 +133,18 @@ function Router() {
       </Route>
       <Route path="/vendedor/customers" component={VendedorCustomers} />
       <Route path="/vendedor/comisiones" component={VendedorComisiones} />
+      <Route path="/vendedor/cc" component={VendedorCC} />
+      <Route path="/vendedor/cc/:id">
+        {(params) => {
+          const search = new URLSearchParams(window.location.search);
+          const today = new Date();
+          const month = parseInt(search.get("month") ?? String(today.getMonth() + 1));
+          const year = parseInt(search.get("year") ?? String(today.getFullYear()));
+          const dateFrom = search.get("dateFrom") ?? undefined;
+          const dateTo = search.get("dateTo") ?? undefined;
+          return <VendedorCCDetail customerId={Number(params.id)} month={month} year={year} dateFrom={dateFrom} dateTo={dateTo} />;
+        }}
+      </Route>
       <Route path="/galpon/stock" component={GalponStock} />
       <Route path="/galpon/orders" component={GalponOrders} />
       <Route path="/galpon/orders/:id">

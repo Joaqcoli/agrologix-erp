@@ -1,12 +1,12 @@
+// Clientes del vendedor. 17/11: estilo del admin (solo presentación; misma lógica de alta/edición).
+// La info de comisión (alta, % vigente, fecha de paso al 1 %) vive acá, no en Comisiones.
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { VendedorLayout } from "./layout";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
@@ -14,9 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Pencil, Phone, Mail, MapPin, Users } from "lucide-react";
 import { comisionPctEn, fechaBajaComision } from "@shared/comisiones";
-
-const hoyAR = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" });
-const fmtFechaCorta = (s: string) => { const [y, m, d] = s.slice(0, 10).split("-"); return `${d}/${m}/${y}`; };
+import { VX_CSS, fmtFechaCorta, hoyAR } from "./rx";
 
 type Customer = {
   id: number;
@@ -39,6 +37,9 @@ const EMPTY: Partial<Customer> = {
   name: "", rfc: "", email: "", phone: "", address: "", city: "",
   notes: "", hasIva: false, bolsaFv: false, commissionPct: "0",
 };
+
+// Búsqueda sin acentos ni mayúsculas
+const normTxt = (v: string) => v.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
 
 export default function VendedorCustomers() {
   const { toast } = useToast();
@@ -100,127 +101,78 @@ export default function VendedorCustomers() {
     else createMutation.mutate(form);
   };
 
+  const q = normTxt(search);
   const filtered = customers.filter(
-    (c) => !search ||
-      c.name.toLowerCase().includes(search.toLowerCase()) ||
-      (c.city ?? "").toLowerCase().includes(search.toLowerCase())
+    (c) => !q || normTxt(c.name).includes(q) || normTxt(c.city ?? "").includes(q)
   );
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
+  const hoy = hoyAR();
 
   return (
     <VendedorLayout title="Mis Clientes">
-      <div className="p-6 space-y-5">
-
-        {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">Mis Clientes</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              {customers.length} cliente{customers.length !== 1 ? "s" : ""} asignado{customers.length !== 1 ? "s" : ""}
-            </p>
+      <div className="vx">
+        <style>{VX_CSS}</style>
+        <div className="vx-wrap">
+          <div className="vx-top">
+            <div>
+              <h1 className="vx-title">Mis clientes</h1>
+              <div className="vx-subtitle">{customers.length} cliente{customers.length !== 1 ? "s" : ""} asignado{customers.length !== 1 ? "s" : ""}</div>
+            </div>
+            <button className="vx-btn primary" onClick={openCreate} data-testid="button-add-customer"><Plus className="h-4 w-4" /> Nuevo cliente</button>
           </div>
-          <Button size="sm" onClick={openCreate}>
-            <Plus className="h-4 w-4 mr-1.5" />
-            Nuevo Cliente
-          </Button>
-        </div>
 
-        {/* Search */}
-        <div className="relative max-w-xs">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar por nombre o ciudad..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-8"
-          />
-        </div>
-
-        {/* List */}
-        {isLoading ? (
-          <div className="space-y-3">
-            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-20 w-full rounded-lg" />)}
+          <div className="vx-search">
+            <Search className="h-[17px] w-[17px]" />
+            <input placeholder="Buscar por nombre o ciudad..." value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-customers" />
           </div>
-        ) : filtered.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-14 gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-                <Users className="h-6 w-6 text-muted-foreground" />
-              </div>
-              <p className="text-sm font-medium text-foreground">
-                {search ? "Sin resultados" : "No tenés clientes asignados"}
-              </p>
-              {!search && (
-                <Button size="sm" onClick={openCreate}>
-                  <Plus className="h-4 w-4 mr-1.5" /> Crear primer cliente
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-3">
-            {filtered.map((c) => {
-              const initials = c.name.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase();
-              const pctVigente = c.comisionAlta ? comisionPctEn(c.comisionAlta, hoyAR()) : null;
-              return (
-                <Card key={c.id} className="hover-elevate">
-                  <CardContent className="p-4 flex items-center gap-4">
-                    {/* Avatar */}
-                    <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 shrink-0">
-                      <span className="text-sm font-semibold text-primary">{initials}</span>
-                    </div>
 
-                    {/* Info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2 mb-0.5">
-                        <p className="font-semibold text-sm text-foreground truncate">{c.name}</p>
-                        {c.hasIva && (
-                          <Badge variant="outline" className="text-[10px] text-primary border-primary/40">IVA</Badge>
-                        )}
+          {isLoading ? (
+            <div className="vx-grid">{[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-24 w-full rounded-2xl" />)}</div>
+          ) : filtered.length === 0 ? (
+            <div className="vx-empty">
+              <div className="vx-emptyic"><Users className="h-6 w-6" /></div>
+              <div className="big">{search ? "Sin resultados" : "No tenés clientes asignados"}</div>
+              {!search && <button className="vx-btn primary" style={{ marginTop: 6 }} onClick={openCreate}><Plus className="h-4 w-4" /> Crear primer cliente</button>}
+            </div>
+          ) : (
+            <div className="vx-grid">
+              {filtered.map((c) => {
+                const initials = c.name.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase();
+                const pctVigente = c.comisionAlta ? comisionPctEn(c.comisionAlta, hoy) : null;
+                const baja = c.comisionAlta ? fechaBajaComision(c.comisionAlta) : null;
+                return (
+                  <div key={c.id} className="vx-ccard" data-testid={`card-customer-${c.id}`}>
+                    <div className="vx-cube">{initials}</div>
+                    <div className="vx-cinfo">
+                      <div className="vx-cname" title={c.name}>{c.name}</div>
+                      {c.city && <div className="vx-csub">{c.city}</div>}
+                      <div className="vx-cbadges">
+                        {c.hasIva && <span className="vx-chip iva">Con IVA</span>}
                         {c.comisionAlta ? (
-                          <Badge variant={pctVigente === 5 ? "default" : "secondary"} className="text-[10px]" title="Alta = primer pedido. 5 % los primeros 6 meses, después 1 %" data-testid={`badge-comision-${c.id}`}>
-                            {pctVigente} % · alta {fmtFechaCorta(c.comisionAlta)} · 1 % desde {fmtFechaCorta(fechaBajaComision(c.comisionAlta))}
-                          </Badge>
+                          <span className={`vx-chip ${pctVigente === 5 ? "ok" : "gris"}`} title="Alta = primer pedido. 5 % los primeros 6 meses, después 1 %" data-testid={`badge-comision-${c.id}`}>
+                            Comisión {pctVigente} %
+                          </span>
                         ) : (
-                          <Badge variant="outline" className="text-[10px]" title="La fecha de alta se fija con el primer pedido">sin pedidos aún</Badge>
+                          <span className="vx-chip line" title="La fecha de alta se fija con el primer pedido">sin pedidos aún</span>
                         )}
                       </div>
-                      <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                        {c.city && (
-                          <span className="flex items-center gap-1">
-                            <MapPin className="h-3 w-3" />{c.city}
-                          </span>
-                        )}
-                        {c.phone && (
-                          <span className="flex items-center gap-1">
-                            <Phone className="h-3 w-3" />{c.phone}
-                          </span>
-                        )}
-                        {c.email && (
-                          <span className="flex items-center gap-1">
-                            <Mail className="h-3 w-3" />{c.email}
-                          </span>
-                        )}
-                      </div>
+                      {c.comisionAlta && (
+                        <div className="vx-csub" style={{ marginTop: 6 }}>
+                          Alta {fmtFechaCorta(c.comisionAlta)} · {pctVigente === 5 ? `5 % hasta el ${fmtFechaCorta(baja && new Date(baja + "T12:00:00").getTime() ? restarDia(baja) : baja)}` : `1 % desde el ${fmtFechaCorta(baja)}`}
+                        </div>
+                      )}
+                      {c.phone && <div className="vx-ctel"><Phone className="h-[13px] w-[13px]" /><span>{c.phone}</span></div>}
+                      {c.email && <div className="vx-ctel" style={{ marginTop: 4 }}><Mail className="h-[13px] w-[13px]" /><span>{c.email}</span></div>}
+                      {c.address && <div className="vx-ctel" style={{ marginTop: 4 }}><MapPin className="h-[13px] w-[13px]" /><span>{c.address}</span></div>}
                     </div>
-
-                    {/* Edit button */}
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-8 w-8 shrink-0"
-                      onClick={() => openEdit(c)}
-                      title="Editar cliente"
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        )}
+                    <button className="vx-ic" onClick={() => openEdit(c)} title="Editar cliente" data-testid={`button-edit-${c.id}`}><Pencil className="h-4 w-4" /></button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Create / Edit dialog */}
@@ -308,4 +260,11 @@ export default function VendedorCustomers() {
       </Dialog>
     </VendedorLayout>
   );
+}
+
+/** Día anterior a YYYY-MM-DD (el último día al 5 % es el anterior a la fecha de baja). */
+function restarDia(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d - 1));
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}-${String(t.getUTCDate()).padStart(2, "0")}`;
 }

@@ -1,16 +1,14 @@
+// Dashboard del vendedor. 17/11: estilo del admin (solo presentación; mismas consultas y rangos).
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { VendedorLayout } from "./layout";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Users, AlertTriangle, Trophy, ListOrdered, Clock, MessageCircle } from "lucide-react";
+import { BarChart3, Users, AlertTriangle, Trophy, ListOrdered, MessageCircle } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ComposedChart, Line, Legend } from "recharts";
-
 import { fmtPesos } from "@/lib/format";
+import { VX_CSS, fmtDiaMes } from "./rx";
+
 const fmt = fmtPesos;
 
 type ExtraData = {
@@ -111,259 +109,164 @@ export default function VendedorDashboard() {
   };
   const inacNaranja = (extra?.inactivos ?? []).filter((c) => c.bucket === "naranja");
   const inacRoja = (extra?.inactivos ?? []).filter((c) => c.bucket === "roja");
-  const fmtFecha = (s: string) => { const [y, m, d] = s.split("-"); return `${d}/${m}`; };
-
+  const fmtFecha = (s: string) => fmtDiaMes(s);
 
   return (
     <VendedorLayout title="Dashboard">
-      <div className="p-6 space-y-6">
+      <div className="vx">
+        <style>{VX_CSS}</style>
+        <div className="vx-wrap">
+          <div className="vx-top">
+            <div>
+              <h1 className="vx-title">Mi resumen</h1>
+              <div className="vx-subtitle">Ventas y comisiones por período</div>
+            </div>
+            <div className="vx-controls">
+              <div className="vx-seg">
+                {RANGE_BTNS.map((b) => (
+                  <button key={b.value} className={mode === b.value ? "on" : ""} onClick={() => setMode(b.value)}>{b.label}</button>
+                ))}
+              </div>
+              {mode === "rango" && (
+                <>
+                  <input type="date" className="vx-input" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+                  <span style={{ color: "#8b8f88" }}>→</span>
+                  <input type="date" className="vx-input" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+                </>
+              )}
+              {mode === "pormes" && (
+                <input type="month" className="vx-input" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value || currentYM())} />
+              )}
+            </div>
+          </div>
 
-        {/* Header */}
-        <div>
-          <h2 className="text-xl font-semibold text-foreground">Mi Resumen</h2>
-          <p className="text-sm text-muted-foreground mt-0.5">Ventas y comisiones por período</p>
-        </div>
-
-        {/* Period selector */}
-        <div className="flex flex-wrap items-center gap-2">
-          {RANGE_BTNS.map((b) => (
-            <Button
-              key={b.value}
-              size="sm"
-              variant={mode === b.value ? "default" : "outline"}
-              onClick={() => setMode(b.value)}
-            >
-              {b.label}
-            </Button>
-          ))}
-          {mode === "rango" && (
-            <div className="flex items-center gap-2 ml-2">
-              <Input
-                type="date"
-                value={customFrom}
-                onChange={(e) => setCustomFrom(e.target.value)}
-                className="h-8 w-36 text-sm"
-              />
-              <span className="text-muted-foreground text-sm">→</span>
-              <Input
-                type="date"
-                value={customTo}
-                onChange={(e) => setCustomTo(e.target.value)}
-                className="h-8 w-36 text-sm"
-              />
+          {isLoading || !stats ? (
+            <div className="vx-kpis">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 w-full rounded-2xl" />)}</div>
+          ) : (
+            <div className="vx-kpis">
+              <div className="vx-kpi">
+                <div className="lab">Total ventas</div>
+                <div className="val">{fmt(stats.ventas)}</div>
+                <div className="note">neto sin IVA, del período</div>
+              </div>
+              <div className="vx-kpi main">
+                <div className="lab">Comisión habilitada</div>
+                <div className="val">{fmt(stats.comisiones)}</div>
+                <div className="note">por cobranzas del período</div>
+              </div>
+              <div className="vx-kpi">
+                <div className="lab">Clientes</div>
+                <div className="val">{stats.clientesAsignados}</div>
+                <div className="note">asignados</div>
+              </div>
             </div>
           )}
-          {mode === "pormes" && (
-            <input
-              type="month"
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value || currentYM())}
-              className="h-8 rounded-md border border-input bg-background px-3 text-sm ml-2"
-            />
-          )}
-        </div>
 
-        {/* Summary banner */}
-        {!isLoading && stats && (
-          <Card className="border-primary/20 bg-primary/5">
-            <CardHeader className="pb-2 pt-4">
-              <CardTitle className="text-sm font-semibold text-primary flex items-center gap-2">
-                <BarChart3 className="h-4 w-4" /> Resumen del período
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pb-4">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <div className="rounded-md bg-background border border-border p-3">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Ventas</p>
-                  <p className="text-lg font-bold text-foreground mt-1">{fmt(stats.ventas)}</p>
-                </div>
-                <div className="rounded-md bg-background border border-border p-3">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Comisión habilitada</p>
-                  <p className="text-lg font-bold text-green-600 dark:text-green-400 mt-1">{fmt(stats.comisiones)}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">por cobranzas del período</p>
-                </div>
-                <div className="rounded-md bg-background border border-border p-3">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Clientes</p>
-                  <p className="text-lg font-bold text-foreground mt-1">{stats.clientesAsignados}</p>
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <Users className="h-3 w-3 text-muted-foreground" />
-                    <p className="text-[10px] text-muted-foreground">asignados</p>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {isLoading && (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-20 w-full rounded-lg" />)}
-          </div>
-        )}
-
-        {/* Gráfico de ventas por día del mes */}
-        {extra && extra.ventasPorDia.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2 pt-4">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <BarChart3 className="h-4 w-4 text-primary" /> Mis ventas del mes (por día)
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="h-56">
+          {extra && extra.ventasPorDia.length > 0 && (
+            <div className="vx-card">
+              <div className="vx-chead"><span className="t"><BarChart3 className="h-4 w-4" /> Mis ventas del mes (por día)</span></div>
+              <div className="vx-chart">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={extra.ventasPorDia} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#eeeeea" />
                     <XAxis dataKey="dia" tickFormatter={fmtFecha} fontSize={11} tickLine={false} axisLine={false} />
                     <YAxis tickFormatter={(v) => "$" + Math.round(Number(v) / 1000) + "k"} fontSize={11} tickLine={false} axisLine={false} width={48} />
                     <Tooltip formatter={(v: number) => [fmt(v), "Ventas"]} labelFormatter={(l) => fmtFecha(String(l))} />
-                    <Bar dataKey="total" fill="hsl(var(--primary))" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="total" fill="#6b8a2a" radius={[3, 3, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            </CardContent>
-          </Card>
-        )}
+            </div>
+          )}
 
-        {/* Facturación y comisiones mes a mes (año en curso) */}
-        {monthly && monthly.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2 pt-4">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <BarChart3 className="h-4 w-4 text-primary" /> Facturación y comisiones por mes
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="h-64">
+          {monthly && monthly.length > 0 && (
+            <div className="vx-card">
+              <div className="vx-chead"><span className="t"><BarChart3 className="h-4 w-4" /> Facturación y comisiones por mes</span></div>
+              <div className="vx-chart" style={{ height: 260 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={monthly} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#eeeeea" />
                     <XAxis dataKey="label" fontSize={11} tickLine={false} axisLine={false} />
                     <YAxis yAxisId="fact" tickFormatter={(v) => "$" + Math.round(Number(v) / 1000) + "k"} fontSize={11} tickLine={false} axisLine={false} width={50} />
                     <YAxis yAxisId="com" orientation="right" tickFormatter={(v) => "$" + Math.round(Number(v) / 1000) + "k"} fontSize={11} tickLine={false} axisLine={false} width={50} />
                     <Tooltip formatter={(v: number, name: string) => [fmt(v), name === "facturacion" ? "Facturación" : "Comisión"]} />
                     <Legend formatter={(val) => (val === "facturacion" ? "Facturación" : "Comisión")} wrapperStyle={{ fontSize: 11 }} />
-                    <Bar yAxisId="fact" dataKey="facturacion" fill="hsl(var(--primary))" radius={[3, 3, 0, 0]} maxBarSize={36} />
-                    <Line yAxisId="com" type="monotone" dataKey="comisiones" stroke="#16a34a" strokeWidth={2} dot={{ r: 3 }} />
+                    <Bar yAxisId="fact" dataKey="facturacion" fill="#bcc79e" radius={[3, 3, 0, 0]} maxBarSize={36} />
+                    <Line yAxisId="com" type="monotone" dataKey="comisiones" stroke="#5f8020" strokeWidth={2} dot={{ r: 3 }} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
-            </CardContent>
-          </Card>
-        )}
+            </div>
+          )}
 
-        {/* Últimos pedidos + Top clientes */}
-        <div className="grid gap-4 lg:grid-cols-2">
-          {/* Últimos pedidos */}
-          <Card>
-            <CardHeader className="pb-2 pt-4">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <ListOrdered className="h-4 w-4 text-primary" /> Últimos pedidos
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
+          <div className="vx-two">
+            <div className="vx-card">
+              <div className="vx-chead"><span className="t"><ListOrdered className="h-4 w-4" /> Últimos pedidos</span></div>
               {!extra ? (
-                <div className="p-4 space-y-2">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+                <div style={{ padding: "0 22px 16px" }} className="space-y-2">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
               ) : extra.ultimosPedidos.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-6">Sin pedidos</p>
+                <div style={{ padding: "20px 22px", textAlign: "center", color: "#8b8f88", fontSize: 13.5 }}>Sin pedidos</div>
               ) : (
-                <div className="divide-y divide-border">
+                <div className="vx-rows">
                   {extra.ultimosPedidos.map((o) => (
-                    <button
-                      key={o.id}
-                      onClick={() => setLocation(`/vendedor/orders/${o.id}`)}
-                      className="w-full flex items-center gap-2 px-4 py-2 hover:bg-muted/30 transition-colors text-left"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-foreground truncate">{o.cliente}</p>
-                        <p className="text-[11px] text-muted-foreground">{fmtFecha(o.fecha)} · {o.folio}</p>
-                      </div>
-                      <Badge variant="outline" className={`text-[9px] ${o.status === "approved" ? "text-green-600 border-green-400/40" : "text-muted-foreground"}`}>
-                        {o.status === "approved" ? "Aprobado" : o.status === "draft" ? "Borrador" : o.status}
-                      </Badge>
-                      <span className="text-sm font-semibold tabular-nums whitespace-nowrap">{fmt(o.total)}</span>
+                    <button key={o.id} className="vx-row" onClick={() => setLocation(`/vendedor/orders/${o.id}`)}>
+                      <div className="main">{o.cliente}<div className="sub">{fmtFecha(o.fecha)} · {o.folio}</div></div>
+                      <span className={`vx-chip ${o.status === "approved" ? "ok" : o.status === "draft" ? "par" : "gris"}`}>{o.status === "approved" ? "Aprobado" : o.status === "draft" ? "Borrador" : o.status}</span>
+                      <span className="amt">{fmt(o.total)}</span>
                     </button>
                   ))}
                 </div>
               )}
-            </CardContent>
-          </Card>
+            </div>
 
-          {/* Top clientes del mes */}
-          <Card>
-            <CardHeader className="pb-2 pt-4">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <Trophy className="h-4 w-4 text-amber-500" /> Top clientes del mes
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
+            <div className="vx-card">
+              <div className="vx-chead"><span className="t"><Trophy className="h-4 w-4" style={{ color: "#c08a1e" }} /> Top clientes del mes</span></div>
               {!extra ? (
-                <div className="p-4 space-y-2">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+                <div style={{ padding: "0 22px 16px" }} className="space-y-2">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
               ) : extra.topClientes.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-6">Sin ventas este mes</p>
+                <div style={{ padding: "20px 22px", textAlign: "center", color: "#8b8f88", fontSize: 13.5 }}>Sin ventas este mes</div>
               ) : (
-                <div className="divide-y divide-border">
+                <div className="vx-rows">
                   {extra.topClientes.map((c, i) => (
-                    <button
-                      key={c.id}
-                      onClick={() => verCliente(c.name)}
-                      className="w-full flex items-center gap-2.5 px-4 py-2 hover:bg-muted/30 transition-colors text-left"
-                    >
-                      <span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold shrink-0 ${i === 0 ? "bg-amber-100 text-amber-700" : "bg-muted text-muted-foreground"}`}>
-                        {i + 1}
-                      </span>
-                      <span className="text-sm font-medium text-foreground truncate flex-1">{c.name}</span>
-                      <span className="text-sm font-semibold tabular-nums whitespace-nowrap">{fmt(c.total)}</span>
+                    <button key={c.id} className="vx-row" onClick={() => verCliente(c.name)}>
+                      <span className={`rank${i === 0 ? " top" : ""}`}>{i + 1}</span>
+                      <span className="main">{c.name}</span>
+                      <span className="amt">{fmt(c.total)}</span>
                     </button>
                   ))}
                 </div>
               )}
-            </CardContent>
-          </Card>
-        </div>
+            </div>
+          </div>
 
-        {/* Clientes sin pedir (último) */}
-        {extra && extra.inactivos.length > 0 && (
-          <Card className="border-amber-300/50">
-            <CardHeader className="pb-2 pt-4">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-amber-600" /> Clientes sin pedir
-              </CardTitle>
-              <p className="text-xs text-muted-foreground">
-                <span className="font-semibold text-amber-600">{inacNaranja.length}</span> sin pedir hace 1 semana
-                {" · "}
-                <span className="font-semibold text-red-600">{inacRoja.length}</span> hace 2+ semanas
-              </p>
-            </CardHeader>
-            <CardContent className="pb-4 space-y-1.5">
-              {[...inacRoja, ...inacNaranja].map((c) => {
-                const roja = c.bucket === "roja";
-                const wa = waLink(c.phone);
-                return (
-                  <div
-                    key={c.id}
-                    className={`flex items-center gap-2 rounded-md border px-3 py-2 ${roja ? "border-red-300/50 bg-red-50/40 dark:bg-red-950/10" : "border-amber-300/50 bg-amber-50/40 dark:bg-amber-950/10"}`}
-                  >
-                    <span className={`h-2 w-2 rounded-full shrink-0 ${roja ? "bg-red-500" : "bg-amber-500"}`} />
-                    <span className="font-medium text-sm text-foreground truncate flex-1">{c.name}</span>
-                    <span className={`text-xs whitespace-nowrap flex items-center gap-1 ${roja ? "text-red-600" : "text-amber-600"}`}>
-                      <Clock className="h-3 w-3" /> hace {c.dias} días
-                    </span>
-                    {wa ? (
-                      <a href={wa} target="_blank" rel="noopener noreferrer" className="shrink-0">
-                        <Button size="sm" className="h-7 text-xs bg-green-600 hover:bg-green-700 text-white">
-                          <MessageCircle className="h-3.5 w-3.5 mr-1" /> WhatsApp
-                        </Button>
-                      </a>
-                    ) : (
-                      <span className="text-[10px] text-muted-foreground shrink-0 italic px-1">sin teléfono</span>
-                    )}
-                  </div>
-                );
-              })}
-            </CardContent>
-          </Card>
-        )}
+          {extra && extra.inactivos.length > 0 && (
+            <div className="vx-card" style={{ marginTop: 18, borderColor: "#f3d9d0" }}>
+              <div className="vx-chead">
+                <span className="t"><AlertTriangle className="h-4 w-4" style={{ color: "#d4742e" }} /> Clientes sin pedir</span>
+                <span className="n"><b style={{ color: "#d4742e" }}>{inacNaranja.length}</b> hace 1 semana · <b style={{ color: "#c05e42" }}>{inacRoja.length}</b> hace 2+ semanas</span>
+              </div>
+              <div className="vx-rows">
+                {[...inacRoja, ...inacNaranja].map((c) => {
+                  const roja = c.bucket === "roja";
+                  const wa = waLink(c.phone);
+                  return (
+                    <div key={c.id} className="vx-row" style={{ cursor: "default" }}>
+                      <span className={`dot ${roja ? "roja" : "naranja"}`} />
+                      <span className="main">{c.name}</span>
+                      <span className={`dias ${roja ? "roja" : "naranja"}`}>hace {c.dias} días</span>
+                      {wa ? (
+                        <a href={wa} target="_blank" rel="noopener noreferrer" className="vx-btn wa"><MessageCircle className="h-3.5 w-3.5" /> WhatsApp</a>
+                      ) : (
+                        <span style={{ fontSize: 11, color: "#8b8f88", fontStyle: "italic" }}>sin teléfono</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 14, fontSize: 12.5, color: "#8b8f88" }}><Users className="h-3.5 w-3.5" /> Los montos son netos sin IVA.</div>
+        </div>
       </div>
     </VendedorLayout>
   );

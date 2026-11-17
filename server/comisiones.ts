@@ -235,12 +235,24 @@ export async function getComisionesVendedor(vendedor: string) {
     };
   }).sort((a, b) => a.name.localeCompare(b.name));
   const habilitadasMes = r2(cobranzas.filter((c) => c.comisiona && c.fecha.slice(0, 7) === mes).reduce((s, c) => s + c.comision, 0));
+  // 17/11: habilitadas por mes (YYYY-MM → $) para el selector de mes de la pantalla del vendedor: cobranzas por mes
+  // de cobro + pedidos saldados (esquema anterior, % × facturado) por mes de pedido. Misma regla que comisionesPorMes.
+  const habilitadasPorMes: Record<string, number> = {};
+  for (const c of cobranzas) {
+    if (!c.comisiona) continue;
+    const ym = c.fecha.slice(0, 7);
+    habilitadasPorMes[ym] = r2((habilitadasPorMes[ym] ?? 0) + c.comision);
+  }
+  for (const [ym, v] of Array.from((await saldadasPorMes(vendedor, "2000-01-01", "2100-01-01")).entries())) {
+    habilitadasPorMes[ym] = r2((habilitadasPorMes[ym] ?? 0) + v);
+  }
   const pendientes = r2(pedidos.reduce((s, p) => s + p.pendiente, 0));
   const liquidado = (await db.execute(sql`SELECT COALESCE(SUM(total::numeric), 0) AS t FROM comision_liquidaciones WHERE vendedor = ${vendedor}`)).rows[0] as any;
   const habilitadasTotal = r2(pedidos.reduce((s, p) => s + p.habilitada, 0));
   return {
     hoy, mes,
     resumen: { habilitadasMes, pendientes, habilitadasTotal, liquidado: r2(Number(liquidado?.t ?? 0)), sinLiquidar: r2(habilitadasTotal - Number(liquidado?.t ?? 0)) },
+    habilitadasPorMes,
     clientes: clientesOut,
     pedidos: pedidos.filter((p) => p.orderDate >= "2026-10-01" || p.pendiente > 0).sort((a, b) => b.orderDate.localeCompare(a.orderDate) || b.id - a.id),
     liquidaciones: await getLiquidaciones(vendedor),

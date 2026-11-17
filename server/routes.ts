@@ -2468,6 +2468,63 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 
+  // ─── Cuenta corriente del vendedor (17/11): solo lectura, solo sus clientes ─────────────
+  // Misma fuente que la CC del admin (getCCSummary / getCCCustomerDetail / getPendingOrdersForCustomer).
+  // La CC se unifica en el padre: si el vendedor tiene una sede, ve la cuenta del padre (como el admin).
+  // NUNCA se devuelven ganancia/margen/promedios del resumen: el vendedor no ve costos ni márgenes.
+  async function cuentasDelVendedor(name: string): Promise<Set<number>> {
+    const rows = await db.execute(drizzleSql`
+      SELECT c.id, c.parent_customer_id AS pid FROM customers c WHERE c.salesperson_name = ${name} AND c.active = true`);
+    const ids = new Set<number>();
+    for (const r of rows.rows as any[]) ids.add(Number(r.pid ?? r.id));
+    return ids;
+  }
+
+  app.get("/api/vendedor/cc/summary", requireVendedor, async (req, res) => {
+    try {
+      const user = await storage.getUserById(req.session.userId!);
+      if (!user) return res.status(401).json({ error: "User not found" });
+      const range = parseCCDateRange(req.query as Record<string, any>);
+      if (!range) return res.status(400).json({ error: "Invalid date params" });
+      const [data, mias] = await Promise.all([storage.getCCSummary(range.startDate, range.endDate), cuentasDelVendedor(user.name)]);
+      const customersOut = data.customers.filter((r: any) => mias.has(Number(r.customerId)));
+      const totals = customersOut.reduce((a: any, r: any) => ({
+        saldoMesAnterior: a.saldoMesAnterior + r.saldoMesAnterior, facturacion: a.facturacion + r.facturacion,
+        cobranza: a.cobranza + r.cobranza, retenciones: a.retenciones + r.retenciones, saldo: a.saldo + r.saldo, fiado: a.fiado + r.fiado,
+      }), { saldoMesAnterior: 0, facturacion: 0, cobranza: 0, retenciones: 0, saldo: 0, fiado: 0 });
+      return res.json({ month: data.month, year: data.year, customers: customersOut, totals });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/vendedor/cc/customer/:id", requireVendedor, async (req, res) => {
+    try {
+      const user = await storage.getUserById(req.session.userId!);
+      if (!user) return res.status(401).json({ error: "User not found" });
+      const customerId = Number(req.params.id);
+      const range = parseCCDateRange(req.query as Record<string, any>);
+      if (!range) return res.status(400).json({ error: "Invalid date params" });
+      const mias = await cuentasDelVendedor(user.name);
+      if (!mias.has(customerId) && !esAdmin(req.session.userRole)) return res.status(403).json({ error: "Forbidden" });
+      const data = await storage.getCCCustomerDetail(customerId, range.startDate, range.endDate);
+      if (!data) return res.status(404).json({ error: "Customer not found" });
+      if ((data as any).isChild) return res.json(data);
+      // Ficha del cliente: solo lo que la pantalla muestra (sin notas internas ni campos administrativos)
+      const c = (data as any).customer;
+      return res.json({ ...data, customer: { id: c.id, name: c.name, hasIva: !!c.hasIva, ccType: c.ccType ?? null, phone: c.phone ?? null, city: c.city ?? null } });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/vendedor/cc/pending-orders/:id", requireVendedor, async (req, res) => {
+    try {
+      const user = await storage.getUserById(req.session.userId!);
+      if (!user) return res.status(401).json({ error: "User not found" });
+      const customerId = Number(req.params.id);
+      const mias = await cuentasDelVendedor(user.name);
+      if (!mias.has(customerId) && !esAdmin(req.session.userRole)) return res.status(403).json({ error: "Forbidden" });
+      return res.json(await storage.getPendingOrdersForCustomer(customerId));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
   // ─── Lista de Precios ──────────────────────────────────────────────────────
   app.get("/api/price-list", requireAuth, async (_req, res) => {
     try { return res.json(await storage.getPriceList()); }

@@ -2,9 +2,29 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-16 (comisiones por cobranza; sesión que vencía a los 7 días; costo manual al cambiar producto; compra 1630).
+> Última actualización: 2026-11-17 (rediseño de la vista del vendedor + Cuentas Corrientes del vendedor + Comisiones simplificada).
 
 ## Último trabajo (sep–oct 2026)
+  17-nov **Vista del vendedor con el estilo del admin, Comisiones simplificada y Cuentas Corrientes del vendedor**
+  (solo presentación + una sección nueva de lectura; ningún cálculo cambió). (1) Las 5 pantallas del vendedor
+  (Dashboard, Pedidos, detalle de pedido, Clientes, Comisiones) pasan al sistema visual de las pantallas rediseñadas del
+  admin (fondo crema, Inter + Bricolage Grotesque, verde oliva, tarjetas y chips): CSS compartido en
+  `client/src/pages/vendedor/rx.ts` (clases `vx-*`), con breakpoint de celular. El menú lateral del vendedor ahora es
+  el mismo `AppSidebar` del admin (props `items`/`roleLabel`): plegable, drawer en celular, botón de modo oscuro
+  (antes era una barra fija de 224 px). (2) Comisiones: sin solapas; selector de mes, 3 números (habilitadas en el mes,
+  devengadas en el mes, pendientes de cobro), una tabla con SOLO los clientes que pidieron ese mes (expandible a sus
+  pedidos) y las liquidaciones abajo. La info de alta / % vigente / fecha de paso al 1 % se muestra en Clientes
+  ("Comisión 5 %" + "Alta dd/mm · 5 % hasta el dd/mm"). `/api/vendedor/comisiones` suma `habilitadasPorMes`
+  (cobranzas por mes de cobro + saldados por facturación por mes de pedido, misma regla que el gráfico mensual); el modal
+  del admin "Vista del vendedor" usa la misma pantalla. (3) Nueva sección **Cuentas Corrientes** del vendedor
+  (`/vendedor/cc` y `/vendedor/cc/:id`): misma fuente que la CC del admin (`getCCSummary`, `getCCCustomerDetail`,
+  `getPendingOrdersForCustomer`) vía rutas nuevas `/api/vendedor/cc/summary|customer/:id|pending-orders/:id`, filtradas
+  a los clientes del vendedor (padre de la sede si corresponde) y solo lectura: nunca devuelven ganancia/margen ni
+  campos internos del cliente. Lista por cliente (saldo anterior, facturación, cobranza, retenciones, saldo, % fiado) y
+  detalle (pendientes de períodos anteriores, pedidos del período con estado, pagos con los remitos que cubrieron,
+  retenciones, sedes). El detalle tarda ~8 s como el del admin (carga todos los ítems aprobados). Verificado en local
+  contra la base de producción con un usuario temporal `name='Juan'` (borrado después) y en producción tras el deploy.
+  Verificar a mano: entrar como Juan/Ceci desde el celular → menú, Comisiones (nov/oct), Cuentas Corrientes → un cliente.
   16-nov **Comisiones de vendedores: devengada por pedido, habilitada por cobranza** (diagnóstico `cd3eca2` →
   `docs/AUDITORIA-COMISIONES-POR-COBRANZA-2026-11-16.md`; implementación en este commit). Reglas: cada pedido fija su %
   al crearse según la antigüedad del cliente (5 % los primeros 6 meses exactos desde `customers.comision_alta`, después

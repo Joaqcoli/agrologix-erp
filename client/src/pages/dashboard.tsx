@@ -226,7 +226,7 @@ function ComisionesModal({ open, onClose }: { open: boolean; onClose: () => void
 
         <div className="overflow-y-auto flex-1">
           {vistaCompleta ? (
-            <ComisionesVista data={vista} isLoading={vistaLoading} />
+            <ComisionesVista data={vista} isLoading={vistaLoading} embed />
           ) : detailLoading ? (
             <div className="space-y-2">
               {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}

@@ -1,25 +1,19 @@
+// Pedidos del vendedor. 17/11: mismo estilo que Pedidos del admin (solo presentación; misma lógica).
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { VendedorLayout } from "./layout";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  ChevronRight, CheckCircle2, Clock, XCircle,
-  FileText, Calendar, TrendingUp, Users,
-} from "lucide-react";
-
+import { ChevronRight, FileText, Calendar, TrendingUp } from "lucide-react";
 import { fmtPesos } from "@/lib/format";
+import { VX_CSS, formatRemito } from "./rx";
+
 const fmt = fmtPesos;
 
 const STATUS_CONFIG = {
-  draft:     { label: "Borrador",  icon: Clock,         variant: "secondary"    as const },
-  approved:  { label: "Aprobado",  icon: CheckCircle2,  variant: "default"      as const },
-  cancelled: { label: "Cancelado", icon: XCircle,       variant: "destructive"  as const },
+  draft:     { label: "Borrador",  cls: "par" },
+  approved:  { label: "Aprobado",  cls: "ok" },
+  cancelled: { label: "Cancelado", cls: "bad" },
 };
 
 type VendedorOrder = {
@@ -42,15 +36,9 @@ function localStr(d: Date) {
 }
 
 function formatDate(s: string) {
-  return new Date(s.slice(0, 10) + "T12:00:00").toLocaleDateString("es-MX", {
+  return new Date(s.slice(0, 10) + "T12:00:00").toLocaleDateString("es-AR", {
     weekday: "long", day: "2-digit", month: "long",
   });
-}
-
-function formatRemito(order: VendedorOrder) {
-  if (order.remitoNum != null) return `VA-${String(order.remitoNum).padStart(6, "0")}`;
-  const m = (order.folio ?? "").match(/^(?:VA|PV)-?(\d+)$/);
-  return m ? `VA-${m[1].padStart(6, "0")}` : (order.folio || "-");
 }
 
 export default function VendedorOrders() {
@@ -74,144 +62,83 @@ export default function VendedorOrders() {
 
   return (
     <VendedorLayout title="Pedidos">
-      <div className="p-6 space-y-5">
-
-        {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">Mis Pedidos</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">Vista por fecha</p>
-          </div>
-        </div>
-
-        {/* Date picker */}
-        <div className="flex items-end gap-3">
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground uppercase tracking-wide">Fecha</Label>
-            <div className="flex items-center gap-2">
-              <Calendar className="h-4 w-4 text-muted-foreground shrink-0" />
-              <Input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="w-40"
-              />
+      <div className="vx">
+        <style>{VX_CSS}</style>
+        <div className="vx-wrap">
+          <div className="vx-top">
+            <div>
+              <h1 className="vx-title">Mis pedidos</h1>
+              <div className="vx-subtitle" style={{ textTransform: "capitalize" }}>{formatDate(date)}</div>
+            </div>
+            <div className="vx-controls">
+              <Calendar className="h-4 w-4" style={{ color: "#8b8f88" }} />
+              <input type="date" className="vx-input" value={date} onChange={(e) => setDate(e.target.value)} data-testid="input-date" />
+              <button className="vx-btn" onClick={() => setDate(today)}>Hoy</button>
             </div>
           </div>
-          <Button variant="outline" size="sm" onClick={() => setDate(today)}>Hoy</Button>
-        </div>
 
-        {/* Day summary */}
-        {!isLoading && approved.length > 0 && (
-          <Card className="border-primary/20 bg-primary/5">
-            <div className="px-4 pt-4 pb-2">
-              <p className="text-sm font-semibold text-primary flex items-center gap-2">
-                <TrendingUp className="h-4 w-4" /> Resumen del Día
-                <span className="text-xs font-normal text-muted-foreground ml-1">
-                  {formatDate(date)}
-                </span>
-              </p>
+          {!isLoading && approved.length > 0 && (
+            <div className="vx-kpis">
+              <div className="vx-kpi">
+                <div className="lab">Total vendido</div>
+                <div className="val">{fmt(totalVendido)}</div>
+                <div className="note">neto sin IVA</div>
+              </div>
+              <div className="vx-kpi main">
+                <div className="lab">Comisión devengada</div>
+                <div className="val">{fmt(totalComisiones)}</div>
+                <div className="note">se habilita cuando el cliente paga</div>
+              </div>
+              <div className="vx-kpi">
+                <div className="lab">Pedidos</div>
+                <div className="val">{approved.length}</div>
+                <div className="note">{customerCount} cliente{customerCount !== 1 ? "s" : ""}</div>
+              </div>
             </div>
-            <CardContent className="pb-4">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <div className="rounded-md bg-background border border-border p-3">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Vendido</p>
-                  <p className="text-lg font-bold text-foreground mt-1">{fmt(totalVendido)}</p>
-                </div>
-                <div className="rounded-md bg-background border border-border p-3">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Comisión devengada</p>
-                  <p className="text-lg font-bold text-green-600 dark:text-green-400 mt-1">{fmt(totalComisiones)}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">se habilita al cobrar</p>
-                </div>
-                <div className="rounded-md bg-background border border-border p-3">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Pedidos / Clientes</p>
-                  <p className="text-lg font-bold text-foreground mt-1">{approved.length}</p>
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <Users className="h-3 w-3 text-muted-foreground" />
-                    <p className="text-xs text-muted-foreground">{customerCount} cliente{customerCount !== 1 ? "s" : ""}</p>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
+          )}
 
-        {/* Orders list */}
-        {isLoading ? (
-          <div className="space-y-3">
-            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 w-full rounded-lg" />)}
-          </div>
-        ) : orders.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-14 gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-                <FileText className="h-6 w-6 text-muted-foreground" />
-              </div>
-              <p className="text-sm font-medium text-foreground">Sin pedidos para esta fecha</p>
-              <p className="text-sm text-muted-foreground">No hay pedidos registrados para el {formatDate(date)}.</p>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-3">
-            {orders.map((order) => {
-              const cfg = STATUS_CONFIG[order.status] ?? STATUS_CONFIG.draft;
-              const StatusIcon = cfg.icon;
-              const commPct = parseFloat(order.commissionPct || "0");
-              const comision = parseFloat(order.total || "0") * (commPct / 100);
-
-              return (
-                <Link key={order.id} href={`/vendedor/orders/${order.id}`}>
-                  <Card className="hover-elevate cursor-pointer">
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex items-start gap-4 flex-1 min-w-0">
-                          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 shrink-0">
-                            <FileText className="h-5 w-5 text-primary" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Badge variant={cfg.variant} className="text-[10px] flex items-center gap-1">
-                                <StatusIcon className="h-2.5 w-2.5" />
-                                {cfg.label}
-                              </Badge>
-                              <Badge variant="secondary" className="text-[10px]">
-                                {order.itemCount} prod.
-                              </Badge>
-                            </div>
-                            <p className="text-sm font-semibold text-foreground mt-1 truncate">
-                              {order.customerName}
-                            </p>
-                            <div className="flex flex-wrap items-center gap-3 mt-0.5">
-                              <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                                <Calendar className="h-3 w-3" />
-                                {formatDate(order.orderDate)}
-                              </span>
-                              <span className="text-xs text-muted-foreground font-mono">
-                                Remito: <span className="font-semibold text-foreground">{formatRemito(order)}</span>
-                              </span>
-                              {commPct > 0 && order.status === "approved" && (
-                                <span className="text-xs text-green-600 dark:text-green-400 font-medium">
-                                  Comisión {commPct} %: {fmt(comision)}{order.comisionSaldada ? " (saldada)" : ""}
-                                </span>
-                              )}
-                            </div>
-                          </div>
+          {isLoading ? (
+            <div className="vx-plist">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-24 w-full rounded-2xl" />)}</div>
+          ) : orders.length === 0 ? (
+            <div className="vx-empty">
+              <div className="vx-emptyic"><FileText className="h-6 w-6" /></div>
+              <div className="big">Sin pedidos para esta fecha</div>
+              <div>No hay pedidos registrados para el {formatDate(date)}.</div>
+            </div>
+          ) : (
+            <div className="vx-plist">
+              {orders.map((order) => {
+                const cfg = STATUS_CONFIG[order.status] ?? STATUS_CONFIG.draft;
+                const commPct = parseFloat(order.commissionPct || "0");
+                const comision = parseFloat(order.total || "0") * (commPct / 100);
+                return (
+                  <Link key={order.id} href={`/vendedor/orders/${order.id}`} className="vx-pedido" data-testid={`card-order-${order.id}`}>
+                      <div className={`vx-pic${order.status === "approved" ? " ok" : ""}`}><FileText className="h-5 w-5" /></div>
+                      <div className="vx-pmid">
+                        <div className="vx-ptags">
+                          <span className={`vx-chip ${cfg.cls}`}><i />{cfg.label}</span>
+                          <span className="vx-chip gris">{order.itemCount} prod.</span>
+                          {order.hasIva && <span className="vx-chip iva">IVA</span>}
                         </div>
-                        <div className="flex items-center gap-3 shrink-0">
-                          <div className="text-right">
-                            <p className="text-xs text-muted-foreground">Total</p>
-                            <p className="text-base font-bold text-foreground">{fmt(order.total)}</p>
-                          </div>
-                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                        <div className="vx-pname">{order.customerName}</div>
+                        <div className="vx-pmeta">
+                          <span>Remito <span className="rem vx-mono">{formatRemito(order)}</span></span>
+                          {commPct > 0 && order.status === "approved" && (
+                            <span className="com">Comisión {commPct} %: {fmt(comision)}{order.comisionSaldada ? " (saldada)" : ""}</span>
+                          )}
                         </div>
                       </div>
-                    </CardContent>
-                  </Card>
-                </Link>
-              );
-            })}
-          </div>
-        )}
+                      <div className="vx-pright">
+                        <div className="rl">Total</div>
+                        <div className="rv vx-num">{fmt(order.total)}</div>
+                      </div>
+                      <div className="vx-chev"><ChevronRight className="h-5 w-5" /></div>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
     </VendedorLayout>
   );

@@ -60,9 +60,13 @@ const navItems = [
   { title: "Costos de automatización", url: "/configuracion/costos", icon: Wallet },
 ];
 
-export function AppSidebar() {
+type NavItem = { title: string; url: string; icon: typeof LayoutDashboard };
+
+// 17/11: el mismo sidebar sirve para el vendedor (items propios + etiqueta de rol). Sin props = admin.
+export function AppSidebar({ items, roleLabel }: { items?: NavItem[]; roleLabel?: string } = {}) {
   const [location] = useLocation();
   const { user, logout } = useAuth();
+  const menu = items ?? navItems;
   // En mobile el sidebar es un drawer (Sheet): al tocar una opción, lo cerramos.
   const { isMobile, setOpenMobile } = useSidebar();
   const closeOnMobile = () => { if (isMobile) setOpenMobile(false); };
@@ -87,7 +91,7 @@ export function AppSidebar() {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navItems.filter((item) => !(user?.role === "administrativo" && item.url === "/")).map((item) => {
+              {menu.filter((item) => !(user?.role === "administrativo" && item.url === "/")).map((item) => {
                 const isActive = location === item.url || (item.url !== "/" && location.startsWith(item.url));
                 return (
                   <SidebarMenuItem key={item.title}>
@@ -120,7 +124,7 @@ export function AppSidebar() {
           <div className="flex flex-col flex-1 min-w-0">
             <span className="text-sm font-medium text-sidebar-foreground truncate leading-tight">{user?.name}</span>
             <Badge variant="secondary" className="w-fit text-[10px] px-1.5 py-0 mt-0.5">
-              {user?.role === "admin" ? "Admin" : user?.role === "administrativo" ? "Administrativo" : "Operador"}
+              {roleLabel ?? (user?.role === "admin" ? "Admin" : user?.role === "administrativo" ? "Administrativo" : "Operador")}
             </Badge>
           </div>
           <Button

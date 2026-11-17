@@ -1,24 +1,22 @@
+// Detalle de pedido del vendedor. 17/11: estilo del admin (solo presentación; misma lógica y mismo PDF).
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "wouter";
+import { useLocation } from "wouter";
 import { VendedorLayout } from "./layout";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, Download, CheckCircle2, Clock, XCircle, FileText, Calendar } from "lucide-react";
+import { ArrowLeft, Download, FileText } from "lucide-react";
 import { generateRemitoPDF } from "@/lib/pdf";
 import type { Customer } from "@shared/schema";
 import { ivaRateOf, hasIvaOn } from "@shared/iva";
-
 import { fmtDecimal, fmtCantidad } from "@/lib/format";
-const fmt = (v: string | number, dec = 2) => fmtDecimal(v, dec);
+import { VX_CSS } from "./rx";
+
 const fmtMoney = (v: string | number) => "$" + fmtDecimal(v);
 // La tasa de IVA sale de product.iva_rate (helper compartido). Ver M6.
 
 const STATUS_CONFIG = {
-  draft:     { label: "Borrador",  icon: Clock,        variant: "secondary"   as const },
-  approved:  { label: "Aprobado",  icon: CheckCircle2, variant: "default"     as const },
-  cancelled: { label: "Cancelado", icon: XCircle,      variant: "destructive" as const },
+  draft:     { label: "Borrador",  cls: "par" },
+  approved:  { label: "Aprobado",  cls: "ok" },
+  cancelled: { label: "Cancelado", cls: "bad" },
 };
 
 type SafeItem = {
@@ -47,6 +45,7 @@ type FullOrder = {
 };
 
 export default function VendedorOrderDetail({ id }: { id: number }) {
+  const [, setLocation] = useLocation();
   const { data: order, isLoading } = useQuery<FullOrder>({
     queryKey: ["/api/vendedor/orders", id],
     queryFn: () =>
@@ -59,11 +58,9 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
   if (isLoading) {
     return (
       <VendedorLayout title="Pedido">
-        <div className="p-6 space-y-4">
-          <Skeleton className="h-8 w-32" />
-          <Skeleton className="h-32 w-full" />
-          <Skeleton className="h-64 w-full" />
-        </div>
+        <div className="vx"><style>{VX_CSS}</style><div className="vx-wrap space-y-4">
+          <Skeleton className="h-8 w-32" /><Skeleton className="h-32 w-full rounded-2xl" /><Skeleton className="h-64 w-full rounded-2xl" />
+        </div></div>
       </VendedorLayout>
     );
   }
@@ -71,22 +68,21 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
   if (!order) {
     return (
       <VendedorLayout title="Pedido">
-        <div className="p-6 flex flex-col items-center justify-center py-20 gap-3 text-muted-foreground">
-          <FileText className="h-10 w-10" />
-          <p className="text-sm">No se encontró el pedido.</p>
-        </div>
+        <div className="vx"><style>{VX_CSS}</style><div className="vx-wrap">
+          <div className="vx-empty"><div className="vx-emptyic"><FileText className="h-6 w-6" /></div><div className="big">No se encontró el pedido.</div></div>
+        </div></div>
       </VendedorLayout>
     );
   }
 
   const cfg = STATUS_CONFIG[order.status] ?? STATUS_CONFIG.draft;
-  const StatusIcon = cfg.icon;
   const remitoStr =
     order.remitoNum != null
       ? `VA-${String(order.remitoNum).padStart(6, "0")}`
       : order.folio || "-";
+  const conIva = hasIvaOn(order.customer, order.orderDate);
 
-  const totalConIva = hasIvaOn(order.customer, order.orderDate)
+  const totalConIva = conIva
     ? order.items.reduce((sum, item) => {
         if (!item.pricePerUnit || parseFloat(item.pricePerUnit) === 0) return sum;
         const sub = parseFloat(item.quantity) * parseFloat(item.pricePerUnit);
@@ -95,7 +91,7 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
     : parseFloat(order.total);
 
   const formatDate = (s: string) =>
-    new Date(s.slice(0, 10) + "T12:00:00").toLocaleDateString("es-MX", {
+    new Date(s.slice(0, 10) + "T12:00:00").toLocaleDateString("es-AR", {
       weekday: "long", year: "numeric", month: "long", day: "numeric",
     });
 
@@ -110,7 +106,7 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
         source: (order as any).source ?? null,
         customer: {
           name: order.customer.name,
-          hasIva: hasIvaOn(order.customer, order.orderDate),
+          hasIva: conIva,
           rfc: order.customer.rfc,
           address: order.customer.address,
           city: order.customer.city,
@@ -133,159 +129,84 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
 
   return (
     <VendedorLayout title={`Pedido ${remitoStr}`}>
-      <div className="p-6 space-y-4">
+      <div className="vx">
+        <style>{VX_CSS}</style>
+        <div className="vx-wrap">
+          <button className="vx-back" onClick={() => setLocation("/vendedor/orders")}><ArrowLeft className="h-4 w-4" /> Volver a pedidos</button>
 
-        {/* Back */}
-        <Link href="/vendedor/orders">
-          <Button variant="ghost" size="sm" className="-ml-2">
-            <ArrowLeft className="h-4 w-4 mr-1" />
-            Volver a pedidos
-          </Button>
-        </Link>
-
-        {/* Order header card */}
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="flex items-start gap-4">
-                <div className="flex h-12 w-12 items-center justify-center rounded-md bg-primary/10 shrink-0">
-                  <FileText className="h-6 w-6 text-primary" />
+          <div className="vx-card">
+            <div className="vx-detail-head">
+              <div style={{ minWidth: 0 }}>
+                <div className="vx-ptags">
+                  <span className={`vx-chip ${cfg.cls}`}><i />{cfg.label}</span>
+                  <span className="vx-chip gris">{order.items.length} productos</span>
+                  {conIva && <span className="vx-chip iva">Con IVA</span>}
                 </div>
-                <div>
-                  <div className="flex flex-wrap items-center gap-2 mb-1">
-                    <Badge variant={cfg.variant} className="flex items-center gap-1">
-                      <StatusIcon className="h-3 w-3" />
-                      {cfg.label}
-                    </Badge>
-                    <Badge variant="secondary">{order.items.length} productos</Badge>
-                    {hasIvaOn(order.customer, order.orderDate) && (
-                      <Badge variant="outline" className="text-primary border-primary/40">Con IVA</Badge>
-                    )}
-                  </div>
-                  <p className="text-lg font-semibold text-foreground">{order.customer.name}</p>
-                  <div className="flex flex-wrap items-center gap-3 mt-1 text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1">
-                      <Calendar className="h-3 w-3" />
-                      {formatDate(order.orderDate)}
-                    </span>
-                    <span className="font-mono">
-                      Remito: <span className="font-semibold text-foreground">{remitoStr}</span>
-                    </span>
-                    <span className="font-mono text-muted-foreground">
-                      Folio: {order.folio}
-                    </span>
-                  </div>
+                <div className="name">{order.customer.name}</div>
+                <div className="meta" style={{ textTransform: "capitalize" }}>
+                  <span>{formatDate(order.orderDate)}</span>
+                  <span style={{ textTransform: "none" }}>· Remito <b className="vx-mono" style={{ color: "#1e2420", fontWeight: 600 }}>{remitoStr}</b></span>
+                  <span className="vx-mono" style={{ textTransform: "none" }}>· Folio {order.folio}</span>
                 </div>
               </div>
-
-              <div className="flex flex-col items-end gap-2">
-                <div className="text-right">
-                  <p className="text-xs text-muted-foreground">{hasIvaOn(order.customer, order.orderDate) ? "Total + IVA" : "Total"}</p>
-                  <p className="text-2xl font-bold text-foreground">{fmtMoney(totalConIva)}</p>
-                  {hasIvaOn(order.customer, order.orderDate) && (
-                    <p className="text-xs text-muted-foreground">Neto: {fmtMoney(order.total)}</p>
-                  )}
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 }}>
+                <div className="tot" style={{ textAlign: "right" }}>
+                  <div className="rl">{conIva ? "Total + IVA" : "Total"}</div>
+                  <div className="rv">{fmtMoney(totalConIva)}</div>
+                  {conIva && <div className="rs">Neto: {fmtMoney(order.total)}</div>}
                 </div>
                 {order.status === "approved" && (
-                  <Button size="sm" onClick={handleDownloadRemito}>
-                    <Download className="h-4 w-4 mr-1.5" />
-                    Descargar Remito
-                  </Button>
+                  <button className="vx-btn primary" onClick={handleDownloadRemito} data-testid="button-download-remito"><Download className="h-4 w-4" /> Descargar remito</button>
                 )}
               </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
 
-        {/* Items table */}
-        <Card>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/40">
-                  <th className="py-2.5 px-4 text-left font-medium text-muted-foreground text-xs uppercase tracking-wide">Producto</th>
-                  <th className="py-2.5 px-3 text-right font-medium text-muted-foreground text-xs uppercase tracking-wide">Cant.</th>
-                  <th className="py-2.5 px-3 text-left font-medium text-muted-foreground text-xs uppercase tracking-wide">Un.</th>
-                  <th className="py-2.5 px-3 text-right font-medium text-muted-foreground text-xs uppercase tracking-wide">Precio</th>
-                  <th className="py-2.5 px-4 text-right font-medium text-muted-foreground text-xs uppercase tracking-wide">Subtotal</th>
-                </tr>
-              </thead>
-              <tbody>
-                {order.items.map((item) => {
-                  const productName = item.product?.name ?? item.rawProductName ?? "—";
-                  const isBonif = !!item.isBonification;
-                  const isBolsa = !!item.bolsaType;
-                  const price = parseFloat(item.pricePerUnit ?? "0");
-                  const subtotal = parseFloat(item.subtotal);
-                  const qty = parseFloat(item.quantity);
-
-                  return (
-                    <tr key={item.id} className="border-b border-border last:border-0 hover:bg-muted/20 transition-colors">
-                      <td className="py-2.5 px-4">
-                        <span className={isBolsa ? "text-muted-foreground italic" : ""}>
-                          {productName}
-                        </span>
-                        {isBolsa && (
-                          <span className="ml-1.5 text-xs text-blue-500">
-                            ({item.bolsaType === "bolsa_propia" ? "Bolsa propia" : "Bolsa"})
-                          </span>
-                        )}
-                        {isBonif && (
-                          <Badge variant="outline" className="ml-1.5 text-purple-600 border-purple-300 text-[10px]">
-                            Bonificación
-                          </Badge>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 text-right tabular-nums">
-                        {fmtCantidad(qty)}
-                      </td>
-                      <td className="py-2.5 px-3 text-muted-foreground">{item.unit}</td>
-                      <td className="py-2.5 px-3 text-right tabular-nums">
-                        {isBonif ? (
-                          <span className="text-purple-600 font-medium">$0</span>
-                        ) : price === 0 ? (
-                          <span className="text-muted-foreground">—</span>
-                        ) : (
-                          fmtMoney(price)
-                        )}
-                      </td>
-                      <td className="py-2.5 px-4 text-right tabular-nums font-medium">
-                        {price === 0 && !isBonif ? (
-                          <span className="text-muted-foreground">—</span>
-                        ) : (
-                          fmtMoney(subtotal)
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="bg-muted/30 border-t border-border">
-                  <td colSpan={3} className="py-3 px-4" />
-                  <td className="py-3 px-3 text-right font-semibold text-sm">Total</td>
-                  <td className="py-3 px-4 text-right">
-                    <span className="text-lg font-bold">{fmtMoney(totalConIva)}</span>
-                    {hasIvaOn(order.customer, order.orderDate) && (
-                      <span className="text-xs text-muted-foreground ml-1">c/IVA</span>
-                    )}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
+          <div className="vx-card">
+            <div className="vx-tblwrap">
+              <table className="vx-tbl" style={{ marginTop: 14 }}>
+                <thead><tr>
+                  <th className="l">Producto</th><th>Cant.</th><th className="l">Un.</th><th>Precio</th><th>Subtotal</th>
+                </tr></thead>
+                <tbody>
+                  {order.items.map((item) => {
+                    const productName = item.product?.name ?? item.rawProductName ?? "—";
+                    const isBonif = !!item.isBonification;
+                    const isBolsa = !!item.bolsaType;
+                    const price = parseFloat(item.pricePerUnit ?? "0");
+                    const subtotal = parseFloat(item.subtotal);
+                    const qty = parseFloat(item.quantity);
+                    return (
+                      <tr key={item.id}>
+                        <td className="l" style={{ whiteSpace: "normal" }}>
+                          <span style={isBolsa ? { color: "#8b8f88", fontStyle: "italic" } : undefined}>{productName}</span>
+                          {isBolsa && <span className="vx-chip info" style={{ marginLeft: 6 }}>{item.bolsaType === "bolsa_propia" ? "Bolsa propia" : "Bolsa"}</span>}
+                          {isBonif && <span className="vx-chip line" style={{ marginLeft: 6, color: "#7c5cbf", borderColor: "#d9cdf2" }}>Bonificación</span>}
+                        </td>
+                        <td>{fmtCantidad(qty)}</td>
+                        <td className="l mut">{item.unit}</td>
+                        <td className={isBonif ? "" : price === 0 ? "dash" : ""} style={isBonif ? { color: "#7c5cbf", fontWeight: 600 } : undefined}>
+                          {isBonif ? "$0" : price === 0 ? "—" : fmtMoney(price)}
+                        </td>
+                        <td className={price === 0 && !isBonif ? "dash" : ""} style={{ fontWeight: 600 }}>
+                          {price === 0 && !isBonif ? "—" : fmtMoney(subtotal)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot><tr>
+                  <td className="l" colSpan={4}>Total{conIva ? " c/IVA" : ""}</td>
+                  <td className="vx-num" style={{ fontSize: 17 }}>{fmtMoney(totalConIva)}</td>
+                </tr></tfoot>
+              </table>
             </div>
-          </CardContent>
-        </Card>
+          </div>
 
-        {order.notes && (
-          <Card>
-            <CardContent className="py-3 px-4 text-sm">
-              <span className="font-medium text-foreground">Notas: </span>
-              <span className="text-muted-foreground">{order.notes}</span>
-            </CardContent>
-          </Card>
-        )}
+          {order.notes && (
+            <div className="vx-notes"><b>Notas: </b><span style={{ color: "#4b5048" }}>{order.notes}</span></div>
+          )}
+        </div>
       </div>
     </VendedorLayout>
   );
