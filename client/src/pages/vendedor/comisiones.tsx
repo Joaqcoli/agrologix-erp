@@ -198,7 +198,7 @@ export function ComisionesVista({ data, isLoading, embed }: { data?: ComisionesD
                       <tbody>
                         {l.items.map((it, i) => (
                           <tr key={i}>
-                            <td className="l">{fmtFechaCorta(it.fecha)}{it.ajuste && <span className="vx-chip line" style={{ marginLeft: 6 }}>ajuste</span>}</td>
+                            <td className="l">{fmtFechaCorta(it.fecha)}{it.ajuste && <span className="vx-chip line" style={{ marginLeft: 6 }}>ajuste</span>}{!it.ajuste && it.paymentId == null && <span className="vx-chip line" style={{ marginLeft: 6 }} title="Comisionado por facturación (esquema anterior)">facturado</span>}</td>
                             <td className="l">{it.customerName ?? "—"}</td>
                             <td className="l vx-hide-m vx-mono" style={{ fontSize: 12 }}>{formatRemito(it)}</td>
                             <td>{fmt(it.cobrado)}</td>

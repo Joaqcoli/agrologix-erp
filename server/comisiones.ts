@@ -248,7 +248,9 @@ export async function getComisionesVendedor(vendedor: string) {
   }
   const pendientes = r2(pedidos.reduce((s, p) => s + p.pendiente, 0));
   const liquidado = (await db.execute(sql`SELECT COALESCE(SUM(total::numeric), 0) AS t FROM comision_liquidaciones WHERE vendedor = ${vendedor}`)).rows[0] as any;
-  const habilitadasTotal = r2(pedidos.reduce((s, p) => s + p.habilitada, 0));
+  // Habilitadas en total = por cobranza + lo saldado por facturación desde que arrancó el esquema (oct 2026), que es
+  // lo que entra en los cierres; así `sinLiquidar` cuadra con las liquidaciones.
+  const habilitadasTotal = r2(pedidos.reduce((s, p) => s + p.habilitada + (p.saldada && p.pct && p.orderDate >= "2026-10-01" ? (p.pct / 100) * p.neto : 0), 0));
   return {
     hoy, mes,
     resumen: { habilitadasMes, pendientes, habilitadasTotal, liquidado: r2(Number(liquidado?.t ?? 0)), sinLiquidar: r2(habilitadasTotal - Number(liquidado?.t ?? 0)) },
@@ -410,16 +412,57 @@ export async function cerrarLiquidacion(vendedor: string, periodo: string, userI
     if (cur.has(k) || Math.abs(p.comision) < 0.01) continue;
     items.push({ orderId: p.orderId, paymentId: p.paymentId, fecha: p.fecha, cobrado: r2(-p.cobrado), pct: p.pct, comision: r2(-p.comision), ajuste: true });
   }
-  const total = r2(items.reduce((s, i) => s + i.comision, 0));
+  // 17/11: pedidos SALDADOS (esquema anterior: comisionados por facturación) con fecha de pedido en el período entran
+  // al cierre como item sin pago (% × neto, fecha = fecha del pedido), una sola vez. Así el cierre de octubre de Juan
+  // muestra lo mismo que el gráfico mensual (comisionesPorMes) y `liquidado` cuadra con `habilitadasTotal`.
+  const yaSaldados = new Set(((await db.execute(sql`
+    SELECT i.order_id AS oid FROM comision_liquidacion_items i JOIN comision_liquidaciones l ON l.id = i.liquidacion_id
+    WHERE l.vendedor = ${vendedor} AND i.payment_id IS NULL AND i.ajuste = false`)).rows as any[]).map((r) => Number(r.oid)));
+  const itemsSaldados: { orderId: number; paymentId: null; fecha: string; cobrado: number; pct: number; comision: number; ajuste: boolean }[] = [];
+  for (const p of vista.pedidos) {
+    if (!p.saldada || !p.pct || p.orderDate < `${periodo}-01` || p.orderDate > fin || yaSaldados.has(p.id)) continue;
+    itemsSaldados.push({ orderId: p.id, paymentId: null, fecha: p.orderDate, cobrado: r2(p.neto), pct: p.pct, comision: r2((p.pct / 100) * p.neto), ajuste: false });
+  }
+  const total = r2([...items, ...itemsSaldados].reduce((s, i) => s + i.comision, 0));
   return db.transaction(async (tx) => {
     const cab = (await tx.execute(sql`
       INSERT INTO comision_liquidaciones (vendedor, periodo, total, cerrada_by) VALUES (${vendedor}, ${periodo}, ${total.toFixed(2)}, ${userId}) RETURNING id`)).rows[0] as any;
     const id = Number(cab.id);
-    for (const i of items) {
+    for (const i of [...items, ...itemsSaldados]) {
       await tx.execute(sql`
         INSERT INTO comision_liquidacion_items (liquidacion_id, order_id, payment_id, fecha_cobro, cobrado, pct, comision, ajuste)
         VALUES (${id}, ${i.orderId}, ${i.paymentId}, ${i.fecha}, ${i.cobrado.toFixed(2)}, ${i.pct.toFixed(2)}, ${i.comision.toFixed(2)}, ${i.ajuste})`);
     }
-    return { id, total, items: items.length, ajustes: items.filter((i) => i.ajuste).length };
+    return { id, total, items: items.length + itemsSaldados.length, ajustes: items.filter((i) => i.ajuste).length };
   });
+}
+
+/**
+ * 17/11: cierre automático. Cuando termina un mes, se liquida solo (sin esperar el botón "Cerrar mes"): para cada
+ * vendedor cierra todos los meses terminados que todavía no tengan cierre, desde el siguiente al último cerrado
+ * (o el mes recién terminado si nunca cerró) hasta el mes anterior al actual. Idempotente: se puede llamar seguido.
+ * Lo llama el programador (server/automation.ts) una vez por hora. Devuelve los cierres que hizo.
+ */
+export async function cerrarMesesVencidos(userId: number | null = null): Promise<{ vendedor: string; periodo: string; total: number }[]> {
+  const mesActual = hoyAR().slice(0, 7);
+  const mesAnterior = sumarMeses(mesActual, -1);
+  const vendedores = new Set(await getVendedores());
+  for (const r of (await db.execute(sql`SELECT DISTINCT vendedor FROM comision_liquidaciones`)).rows as any[]) vendedores.add(String(r.vendedor));
+  const hechos: { vendedor: string; periodo: string; total: number }[] = [];
+  for (const v of Array.from(vendedores)) {
+    const last = (await db.execute(sql`SELECT MAX(periodo) AS m FROM comision_liquidaciones WHERE vendedor = ${v}`)).rows[0] as any;
+    let periodo = last?.m ? sumarMeses(String(last.m), 1) : mesAnterior;
+    while (periodo <= mesAnterior) {
+      const r = await cerrarLiquidacion(v, periodo, userId as any);
+      hechos.push({ vendedor: v, periodo, total: r.total });
+      periodo = sumarMeses(periodo, 1);
+    }
+  }
+  return hechos;
+}
+
+function sumarMeses(ym: string, n: number): string {
+  const [y, m] = ym.split("-").map(Number);
+  const t = y * 12 + (m - 1) + n;
+  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
 }

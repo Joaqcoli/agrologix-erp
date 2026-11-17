@@ -14,6 +14,7 @@ import { remitoPdfBuffer, invoicePdfBuffer, argDate } from "./pdf-server";
 import * as ycloud from "./ycloud";
 import { buildBlackPotWorkbook } from "./blackpot-excel";
 import { saldoYCloud } from "./costos";
+import { cerrarMesesVencidos } from "./comisiones";
 
 const PRUEBA_ID = 167;
 const log = (m: string) => console.log(`[A-13] ${m}`);
@@ -329,7 +330,7 @@ export async function controlarSaldo(hoyISO: string): Promise<void> {
 let corriendo = false;
 export function iniciarAutomatizacion(baseUrl: string): void {
   ensureMessageTemplates().catch((e) => log(`plantillas: ${e.message}`));
-  let ultimoPoll = 0, ultimoSaldo = 0;
+  let ultimoPoll = 0, ultimoSaldo = 0, ultimoCierre = 0;
   setInterval(async () => {
     if (corriendo) return;
     corriendo = true;
@@ -345,6 +346,14 @@ export function iniciarAutomatizacion(baseUrl: string): void {
       }
       if (Date.now() - ultimoPoll > 10 * 60_000) { ultimoPoll = Date.now(); await revisarPlantillas(); }
       if (Date.now() - ultimoSaldo > 60 * 60_000) { ultimoSaldo = Date.now(); await controlarSaldo(ar.date); }
+      // 17/11: cierre mensual automático de comisiones (idempotente; solo hace algo cuando terminó un mes sin cerrar)
+      if (Date.now() - ultimoCierre > 60 * 60_000) {
+        ultimoCierre = Date.now();
+        try {
+          const hechos = await cerrarMesesVencidos();
+          for (const h of hechos) log(`comisiones: cierre automático ${h.vendedor} ${h.periodo} = $${h.total}`);
+        } catch (e: any) { log(`comisiones: cierre automático falló: ${e.message}`); }
+      }
     } catch (e: any) { log(`tick: ${e.message}`); }
     finally { corriendo = false; }
   }, 60_000);

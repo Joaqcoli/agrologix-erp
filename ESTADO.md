@@ -37,9 +37,18 @@
   con el dashboard abierto, el 401 quedaba como "datos" y la pantalla reventaba ("Cannot read properties of undefined
   (reading 'length')"), y la pantalla de error persistía al loguearse con otra cuenta (le pasó a Joaquín al entrar
   como Ceci). Ahora usan `fetchJson` (`vendedor/rx.ts`): error → estado de error; 401 → aviso de sesión vencida + login.
-  Dato: cliente ABASTO TODO CASERO (id 163) reasignado de Ceci a Juan (UPDATE directo, 17/11). Tenía 2 pedidos de
-  octubre ($514.500 neto, alta 09/10) ya pagados ($313.500 en oct + $201.000 en nov): esas comisiones por cobranza
-  ($15.675 oct + $10.050 nov) pasan de Ceci a Juan, porque la comisión sigue al vendedor actual del cliente.
+  Dato: cliente ABASTO TODO CASERO (id 163) reasignado de Ceci a Juan (UPDATE directo, 17/11): Joaquín confirma que
+  siempre fue de Juan. Sus 2 pedidos de octubre (ids 2508 y 2674, $514.500 neto) quedaron `comision_saldada` como el
+  resto de los pedidos de Juan hasta el 31/10 (comisionados por facturación), así sus cobranzas (oct y nov) no
+  generan comisión por cobranza a nadie. Ceci octubre pasa de $70.215 a $54.540.
+  Sexto commit: **cierre mensual automático**. `cerrarMesesVencidos()` (`server/comisiones.ts`) corre cada hora desde
+  el programador (`server/automation.ts`): cuando termina un mes, liquida para cada vendedor todos los meses
+  terminados sin cierre (desde el siguiente al último cerrado). El botón "Cerrar mes" del admin sigue existiendo pero
+  ya no hace falta. El cierre ahora también incluye los pedidos SALDADOS del período como ítems sin pago (% × neto,
+  chip "facturado" en el detalle del vendedor), para que el cierre de octubre de Juan cuadre con el gráfico mensual.
+  Octubre 2026 cerrado para Juan y Ceci con este mismo código (Joaquín: "octubre está cerrado para ambos"); un cobro
+  de octubre cargado tarde entra en el cierre de noviembre. El 1/12 el sistema cierra noviembre solo y los vendedores
+  arrancan diciembre en $0 habilitado.
   16-nov **Comisiones de vendedores: devengada por pedido, habilitada por cobranza** (diagnóstico `cd3eca2` →
   `docs/AUDITORIA-COMISIONES-POR-COBRANZA-2026-11-16.md`; implementación en este commit). Reglas: cada pedido fija su %
   al crearse según la antigüedad del cliente (5 % los primeros 6 meses exactos desde `customers.comision_alta`, después
