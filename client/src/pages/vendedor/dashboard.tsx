@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { BarChart3, Users, AlertTriangle, Trophy, ListOrdered, MessageCircle } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ComposedChart, Line, Legend } from "recharts";
 import { fmtPesos } from "@/lib/format";
-import { VX_CSS, fmtDiaMes } from "./rx";
+import { VX_CSS, fmtDiaMes, fetchJson } from "./rx";
 
 const fmt = fmtPesos;
 
@@ -87,19 +87,19 @@ export default function VendedorDashboard() {
 
   const { data: stats, isLoading } = useQuery<VendedorStats>({
     queryKey: ["/api/vendedor/dashboard", from, to],
-    queryFn: () => fetch(`/api/vendedor/dashboard?from=${from}&to=${to}`).then((r) => r.json()),
+    queryFn: () => fetchJson<VendedorStats>(`/api/vendedor/dashboard?from=${from}&to=${to}`),
   });
 
   const { data: monthly } = useQuery<MonthlyData>({
     queryKey: ["/api/vendedor/dashboard-monthly"],
-    queryFn: () => fetch("/api/vendedor/dashboard-monthly").then((r) => r.json()),
+    queryFn: () => fetchJson<MonthlyData>("/api/vendedor/dashboard-monthly"),
     staleTime: 60_000,
   });
 
   // Elementos extra (siempre actual: inactividad, mes en curso, últimos pedidos) — filtrados por el vendedor logueado
   const { data: extra } = useQuery<ExtraData>({
     queryKey: ["/api/vendedor/dashboard-extra"],
-    queryFn: () => fetch("/api/vendedor/dashboard-extra").then((r) => r.json()),
+    queryFn: () => fetchJson<ExtraData>("/api/vendedor/dashboard-extra"),
     staleTime: 60_000,
   });
 

@@ -8,7 +8,7 @@ import { VendedorLayout } from "./layout";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronDown, ChevronRight, ChevronLeft } from "lucide-react";
 import { fmtPesos } from "@/lib/format";
-import { VX_CSS, mesLabel, fmtFechaCorta, fmtDiaMes, hoyAR, sumarMes, formatRemito } from "./rx";
+import { VX_CSS, mesLabel, fmtFechaCorta, fmtDiaMes, hoyAR, sumarMes, formatRemito, fetchJson } from "./rx";
 
 const fmt = fmtPesos;
 
@@ -223,7 +223,7 @@ export function ComisionesVista({ data, isLoading, embed }: { data?: ComisionesD
 export default function VendedorComisiones() {
   const { data, isLoading } = useQuery<ComisionesData>({
     queryKey: ["/api/vendedor/comisiones"],
-    queryFn: () => fetch("/api/vendedor/comisiones").then((r) => r.json()),
+    queryFn: () => fetchJson<ComisionesData>("/api/vendedor/comisiones"),
     staleTime: 30_000,
   });
   return (

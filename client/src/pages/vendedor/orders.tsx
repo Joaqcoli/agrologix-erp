@@ -6,7 +6,7 @@ import { VendedorLayout } from "./layout";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronRight, FileText, Calendar, TrendingUp } from "lucide-react";
 import { fmtPesos } from "@/lib/format";
-import { VX_CSS, formatRemito } from "./rx";
+import { VX_CSS, formatRemito, fetchJson } from "./rx";
 
 const fmt = fmtPesos;
 
@@ -47,7 +47,7 @@ export default function VendedorOrders() {
 
   const { data: orders = [], isLoading } = useQuery<VendedorOrder[]>({
     queryKey: ["/api/vendedor/orders", date],
-    queryFn: () => fetch(`/api/vendedor/orders?date=${date}`).then((r) => r.json()),
+    queryFn: () => fetchJson<VendedorOrder[]>(`/api/vendedor/orders?date=${date}`),
   });
 
   const approved = orders.filter((o) => o.status === "approved");

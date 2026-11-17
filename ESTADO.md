@@ -33,6 +33,13 @@
   Tercer y cuarto commit: el gráfico "Mis ventas del mes (por día)" y el KPI "Total ventas" del dashboard del
   vendedor pasan a neto sin IVA (pedido de Joaquín), con la aclaración en pantalla; el gráfico mensual y los top
   clientes siguen con IVA. (El modal de comisiones del admin y el Dashboard admin no cambian.)
+  Quinto commit: las pantallas del vendedor hacían `fetch().then(r => r.json())` sin mirar `r.ok`; al cerrar sesión
+  con el dashboard abierto, el 401 quedaba como "datos" y la pantalla reventaba ("Cannot read properties of undefined
+  (reading 'length')"), y la pantalla de error persistía al loguearse con otra cuenta (le pasó a Joaquín al entrar
+  como Ceci). Ahora usan `fetchJson` (`vendedor/rx.ts`): error → estado de error; 401 → aviso de sesión vencida + login.
+  Dato: cliente ABASTO TODO CASERO (id 163) reasignado de Ceci a Juan (UPDATE directo, 17/11). Tenía 2 pedidos de
+  octubre ($514.500 neto, alta 09/10) ya pagados ($313.500 en oct + $201.000 en nov): esas comisiones por cobranza
+  ($15.675 oct + $10.050 nov) pasan de Ceci a Juan, porque la comisión sigue al vendedor actual del cliente.
   16-nov **Comisiones de vendedores: devengada por pedido, habilitada por cobranza** (diagnóstico `cd3eca2` →
   `docs/AUDITORIA-COMISIONES-POR-COBRANZA-2026-11-16.md`; implementación en este commit). Reglas: cada pedido fija su %
   al crearse según la antigüedad del cliente (5 % los primeros 6 meses exactos desde `customers.comision_alta`, después

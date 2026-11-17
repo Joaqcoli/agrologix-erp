@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Pencil, Phone, Mail, MapPin, Users } from "lucide-react";
 import { comisionPctEn, fechaBajaComision } from "@shared/comisiones";
-import { VX_CSS, fmtFechaCorta, hoyAR } from "./rx";
+import { VX_CSS, fmtFechaCorta, hoyAR, fetchJson } from "./rx";
 
 type Customer = {
   id: number;
@@ -53,7 +53,7 @@ export default function VendedorCustomers() {
 
   const { data: customers = [], isLoading } = useQuery<Customer[]>({
     queryKey: ["/api/vendedor/customers"],
-    queryFn: () => fetch("/api/vendedor/customers").then((r) => r.json()),
+    queryFn: () => fetchJson<Customer[]>("/api/vendedor/customers"),
   });
 
   const createMutation = useMutation({
