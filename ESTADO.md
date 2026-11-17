@@ -49,6 +49,13 @@
   Octubre 2026 cerrado para Juan y Ceci con este mismo código (Joaquín: "octubre está cerrado para ambos"); un cobro
   de octubre cargado tarde entra en el cierre de noviembre. El 1/12 el sistema cierra noviembre solo y los vendedores
   arrancan diciembre en $0 habilitado.
+  Séptimo commit: Joaquín pidió que los $25.725 de Abasto vayan a noviembre de Juan → los pedidos 2508 y 2674 vuelven a
+  comisión por cobranza (sin `comision_saldada`) y se quitaron del cierre de octubre de Juan, que queda en $1.090.754
+  (lo que realmente se le pagó). Para que "lo del mes" coincida siempre con lo que se liquida, `aplicarCierres()`:
+  los meses cerrados muestran el total de su cierre y el mes en curso muestra todo lo habilitado y no liquidado
+  (incluye cobros de meses anteriores cargados tarde). Aplica a la pantalla Comisiones, al gráfico mensual y al KPI del
+  dashboard cuando el período es un mes calendario (rangos parciales siguen por fecha de cobro). Noviembre de Juan:
+  $110.452 = $84.727 + $25.725.
   16-nov **Comisiones de vendedores: devengada por pedido, habilitada por cobranza** (diagnóstico `cd3eca2` →
   `docs/AUDITORIA-COMISIONES-POR-COBRANZA-2026-11-16.md`; implementación en este commit). Reglas: cada pedido fija su %
   al crearse según la antigüedad del cliente (5 % los primeros 6 meses exactos desde `customers.comision_alta`, después

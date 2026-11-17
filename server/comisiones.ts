@@ -234,26 +234,25 @@ export async function getComisionesVendedor(vendedor: string) {
       habilitada: r2(a.habilitada), pendiente: r2(a.pendiente),
     };
   }).sort((a, b) => a.name.localeCompare(b.name));
-  const habilitadasMes = r2(cobranzas.filter((c) => c.comisiona && c.fecha.slice(0, 7) === mes).reduce((s, c) => s + c.comision, 0));
   // 17/11: habilitadas por mes (YYYY-MM → $) para el selector de mes de la pantalla del vendedor: cobranzas por mes
-  // de cobro + pedidos saldados (esquema anterior, % × facturado) por mes de pedido. Misma regla que comisionesPorMes.
-  const habilitadasPorMes: Record<string, number> = {};
+  // de cobro + pedidos saldados (esquema anterior, % × facturado) por mes de pedido; los meses cerrados muestran el
+  // total de su cierre y el mes en curso todo lo habilitado y aún no liquidado (ver aplicarCierres).
+  const porMes = new Map<string, number>();
   for (const c of cobranzas) {
     if (!c.comisiona) continue;
     const ym = c.fecha.slice(0, 7);
-    habilitadasPorMes[ym] = r2((habilitadasPorMes[ym] ?? 0) + c.comision);
+    porMes.set(ym, r2((porMes.get(ym) ?? 0) + c.comision));
   }
   for (const [ym, v] of Array.from((await saldadasPorMes(vendedor, "2000-01-01", "2100-01-01")).entries())) {
-    habilitadasPorMes[ym] = r2((habilitadasPorMes[ym] ?? 0) + v);
+    porMes.set(ym, r2((porMes.get(ym) ?? 0) + v));
   }
+  const { liquidado, habilitadasTotal } = await aplicarCierres(vendedor, pedidos, porMes);
+  const habilitadasPorMes: Record<string, number> = Object.fromEntries(Array.from(porMes.entries()));
+  const habilitadasMes = habilitadasPorMes[mes] ?? 0;
   const pendientes = r2(pedidos.reduce((s, p) => s + p.pendiente, 0));
-  const liquidado = (await db.execute(sql`SELECT COALESCE(SUM(total::numeric), 0) AS t FROM comision_liquidaciones WHERE vendedor = ${vendedor}`)).rows[0] as any;
-  // Habilitadas en total = por cobranza + lo saldado por facturación desde que arrancó el esquema (oct 2026), que es
-  // lo que entra en los cierres; así `sinLiquidar` cuadra con las liquidaciones.
-  const habilitadasTotal = r2(pedidos.reduce((s, p) => s + p.habilitada + (p.saldada && p.pct && p.orderDate >= "2026-10-01" ? (p.pct / 100) * p.neto : 0), 0));
   return {
     hoy, mes,
-    resumen: { habilitadasMes, pendientes, habilitadasTotal, liquidado: r2(Number(liquidado?.t ?? 0)), sinLiquidar: r2(habilitadasTotal - Number(liquidado?.t ?? 0)) },
+    resumen: { habilitadasMes, pendientes, habilitadasTotal, liquidado, sinLiquidar: r2(habilitadasTotal - liquidado) },
     habilitadasPorMes,
     clientes: clientesOut,
     pedidos: pedidos.filter((p) => p.orderDate >= "2026-10-01" || p.pendiente > 0).sort((a, b) => b.orderDate.localeCompare(a.orderDate) || b.id - a.id),
@@ -320,24 +319,55 @@ export async function pedidosEnRango(vendedor: string, from: string, to: string)
   return { total: r2(total), pendiente: r2(pendiente) };
 }
 
-/** Comisiones de un vendedor en [from, to): habilitadas por cobranzas de esas fechas + saldadas por facturación. */
+/** Todo lo habilitado desde que arrancó el esquema (oct 2026): por cobranza + saldados por facturación. Es lo que entra en los cierres. */
+function habilitadasTotalDe(pedidos: PedidoComision[]): number {
+  return r2(pedidos.reduce((s, p) => s + p.habilitada + (p.saldada && p.pct && p.orderDate >= "2026-10-01" ? (p.pct / 100) * p.neto : 0), 0));
+}
+
+/**
+ * 17/11: hace que "lo del mes" coincida con lo que se liquida. Sobre un mapa YYYY-MM → $ armado por fecha de cobro,
+ * pisa los meses CERRADOS con el total de su cierre y el mes EN CURSO con todo lo habilitado y todavía no liquidado
+ * (incluye cobros de meses anteriores cargados tarde, que es lo que va a entrar en el próximo cierre). Vendedor sin
+ * ningún cierre: queda por fecha de cobro.
+ */
+async function aplicarCierres(vendedor: string, pedidos: PedidoComision[], porMes: Map<string, number>): Promise<{ liquidado: number; habilitadasTotal: number }> {
+  const cierres = (await db.execute(sql`SELECT periodo, total::float AS total FROM comision_liquidaciones WHERE vendedor = ${vendedor}`)).rows as any[];
+  const habilitadasTotal = habilitadasTotalDe(pedidos);
+  let liquidado = 0;
+  for (const c of cierres) { porMes.set(String(c.periodo), r2(Number(c.total))); liquidado = r2(liquidado + Number(c.total)); }
+  if (cierres.length > 0) porMes.set(hoyAR().slice(0, 7), r2(habilitadasTotal - liquidado));
+  return { liquidado, habilitadasTotal };
+}
+
+/** Comisiones de un vendedor en [from, to): habilitadas por cobranzas de esas fechas + saldadas por facturación.
+ *  Si el rango es exactamente un mes calendario, vale lo mismo que el gráfico mensual (cierres / mes en curso). */
 export async function comisionesEnRango(vendedor: string, from: string, to: string): Promise<{ porCobranza: number; saldadas: number; total: number }> {
-  const [{ cobranzas }, sal] = await Promise.all([cobranzasVendedor(vendedor), saldadasPorMes(vendedor, from, to)]);
+  const [{ cobranzas, pedidos }, sal] = await Promise.all([cobranzasVendedor(vendedor), saldadasPorMes(vendedor, from, to)]);
   const porCobranza = r2(cobranzas.filter((c) => c.comisiona && c.fecha >= from && c.fecha < to).reduce((s, c) => s + c.comision, 0));
   const saldadas = r2(Array.from(sal.values()).reduce((s, v) => s + v, 0));
+  const ym = from.slice(0, 7);
+  const [y, m] = from.split("-").map(Number);
+  const esMes = from === `${ym}-01` && to === (m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`);
+  if (esMes) {
+    const porMes = new Map<string, number>([[ym, r2(porCobranza + saldadas)]]);
+    await aplicarCierres(vendedor, pedidos, porMes);
+    const total = porMes.get(ym) ?? 0;
+    return { porCobranza: r2(total - saldadas), saldadas, total };
+  }
   return { porCobranza, saldadas, total: r2(porCobranza + saldadas) };
 }
 
-/** Comisiones mes a mes (YYYY-MM → $) de un año. */
+/** Comisiones mes a mes (YYYY-MM → $) de un año: por fecha de cobro, con los meses cerrados y el mes en curso ajustados a los cierres. */
 export async function comisionesPorMes(vendedor: string, year: number): Promise<Map<string, number>> {
   const from = `${year}-01-01`, to = `${year + 1}-01-01`;
-  const [{ cobranzas }, sal] = await Promise.all([cobranzasVendedor(vendedor), saldadasPorMes(vendedor, from, to)]);
+  const [{ cobranzas, pedidos }, sal] = await Promise.all([cobranzasVendedor(vendedor), saldadasPorMes(vendedor, from, to)]);
   const out = new Map<string, number>(sal);
   for (const c of cobranzas) {
     if (!c.comisiona || c.fecha < from || c.fecha >= to) continue;
     const ym = c.fecha.slice(0, 7);
     out.set(ym, (out.get(ym) ?? 0) + c.comision);
   }
+  await aplicarCierres(vendedor, pedidos, out);
   return out;
 }
 
