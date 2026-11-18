@@ -1781,6 +1781,12 @@ export async function runNcMigrations() {
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS geo_precision text`,
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS delivery_from text`,
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS delivery_to text`,
+    // Camionetas y asignación de pedidos a recorridos
+    `CREATE TABLE IF NOT EXISTS camionetas (id serial PRIMARY KEY, nombre text NOT NULL, patente text, capacidad integer NOT NULL DEFAULT 100, disponible boolean NOT NULL DEFAULT true, created_at timestamp NOT NULL DEFAULT now())`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS camioneta_id integer REFERENCES camionetas(id) ON DELETE SET NULL`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS recorrido integer`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS orden_entrega integer`,
+    `CREATE TABLE IF NOT EXISTS recorrido_salidas (id serial PRIMARY KEY, fecha date NOT NULL, camioneta_id integer NOT NULL REFERENCES camionetas(id) ON DELETE CASCADE, recorrido integer NOT NULL, salida text, UNIQUE (fecha, camioneta_id, recorrido))`,
   ]) { try { await db.execute(sql.raw(stmt)); } catch (e) { console.error("Recorridos migration failed:", stmt.slice(0, 70), e); } }
 
   console.log("NC migrations complete.");

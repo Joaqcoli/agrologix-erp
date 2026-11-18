@@ -202,6 +202,10 @@ export const orders = pgTable("orders", {
   // "saldada" (pedidos de Juan hasta el 31/10/2026, ya pagados por facturación: no generan comisión por cobranza).
   comisionPct: numeric("comision_pct", { precision: 5, scale: 2 }),
   comisionSaldada: boolean("comision_saldada").notNull().default(false),
+  // 18/11/2026 Recorridos: camioneta, número de recorrido y orden de entrega asignados desde el mapa (null = sin asignar)
+  camionetaId: integer("camioneta_id"),
+  recorrido: integer("recorrido"),
+  ordenEntrega: integer("orden_entrega"),
 });
 
 export const orderItems = pgTable("order_items", {
@@ -544,6 +548,25 @@ export const comisionLiquidaciones = pgTable("comision_liquidaciones", {
   cerradaBy: integer("cerrada_by"),
 });
 export type ComisionLiquidacion = typeof comisionLiquidaciones.$inferSelect;
+
+// 18/11/2026 Recorridos: flota fija (nombre, patente, capacidad en bultos aprox.) con flag "disponible" (taller, sin chofer)
+export const camionetas = pgTable("camionetas", {
+  id: serial("id").primaryKey(),
+  nombre: text("nombre").notNull(),
+  patente: text("patente"),
+  capacidad: integer("capacidad").notNull().default(100),
+  disponible: boolean("disponible").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+export type Camioneta = typeof camionetas.$inferSelect;
+// Hora de salida de cada recorrido (por día, camioneta y número de recorrido)
+export const recorridoSalidas = pgTable("recorrido_salidas", {
+  id: serial("id").primaryKey(),
+  fecha: date("fecha").notNull(),
+  camionetaId: integer("camioneta_id").notNull().references(() => camionetas.id, { onDelete: "cascade" }),
+  recorrido: integer("recorrido").notNull(),
+  salida: text("salida"), // HH:MM
+});
 
 export const comisionLiquidacionItems = pgTable("comision_liquidacion_items", {
   id: serial("id").primaryKey(),

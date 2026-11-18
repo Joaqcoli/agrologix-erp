@@ -2539,6 +2539,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date (YYYY-MM-DD) es obligatorio" });
       const rows = await db.execute(drizzleSql`
         SELECT o.id, o.folio, o.remito_num AS "remitoNum", o.status, o.notes,
+          o.camioneta_id AS "camionetaId", o.recorrido, o.orden_entrega AS "ordenEntrega",
           c.id AS "customerId", c.name AS "customerName", c.address, c.city, c.phone,
           c.lat::text AS lat, c.lng::text AS lng, c.geo_address AS "geoAddress", c.geo_precision AS "geoPrecision", c.delivery_from AS "deliveryFrom", c.delivery_to AS "deliveryTo",
           COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) IN ('CAJON','BOLSA','BANDEJA') THEN oi.quantity::numeric END), 0)::float AS bultos,
@@ -2563,6 +2564,92 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ORDER BY c.delivery_from NULLS LAST, c.name, o.id`);
       return res.json(rows.rows);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Camionetas (18/11/2026): flota fija + disponibilidad ───────────────────────────────────────
+  app.get("/api/camionetas", requireAuth, async (_req, res) => {
+    try {
+      const r = await db.execute(drizzleSql`SELECT id, nombre, patente, capacidad, disponible FROM camionetas ORDER BY disponible DESC, nombre`);
+      return res.json(r.rows);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+  const camionetaBody = z.object({ nombre: z.string().trim().min(1), patente: z.string().trim().nullable().optional(), capacidad: z.number().int().min(1), disponible: z.boolean().optional() });
+  app.post("/api/camionetas", requireAuth, async (req, res) => {
+    try {
+      const b = camionetaBody.parse(req.body);
+      const r = await db.execute(drizzleSql`INSERT INTO camionetas (nombre, patente, capacidad, disponible) VALUES (${b.nombre}, ${b.patente ?? null}, ${b.capacidad}, ${b.disponible ?? true}) RETURNING id, nombre, patente, capacidad, disponible`);
+      return res.status(201).json(r.rows[0]);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  app.patch("/api/camionetas/:id", requireAuth, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const b = camionetaBody.partial().parse(req.body);
+      const cur = (await db.execute(drizzleSql`SELECT id, nombre, patente, capacidad, disponible FROM camionetas WHERE id = ${id}`)).rows[0] as any;
+      if (!cur) return res.status(404).json({ error: "Camioneta no encontrada" });
+      const nombre = b.nombre ?? cur.nombre, patente = b.patente === undefined ? cur.patente : b.patente, capacidad = b.capacidad ?? cur.capacidad, disponible = b.disponible ?? cur.disponible;
+      const r = await db.execute(drizzleSql`UPDATE camionetas SET nombre = ${nombre}, patente = ${patente}, capacidad = ${capacidad}, disponible = ${disponible} WHERE id = ${id} RETURNING id, nombre, patente, capacidad, disponible`);
+      // Si deja de estar disponible, sus pedidos de hoy en adelante vuelven a "sin asignar"
+      if (cur.disponible && !disponible) {
+        await db.execute(drizzleSql`UPDATE orders SET camioneta_id = NULL, recorrido = NULL, orden_entrega = NULL WHERE camioneta_id = ${id} AND order_date::date >= CURRENT_DATE`);
+      }
+      return res.json(r.rows[0]);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  app.delete("/api/camionetas/:id", requireAuth, async (req, res) => {
+    try {
+      if (!esAdmin(req.session.userRole)) return res.status(403).json({ error: "Solo administrador" });
+      await db.execute(drizzleSql`DELETE FROM camionetas WHERE id = ${Number(req.params.id)}`); // orders.camioneta_id → NULL (ON DELETE SET NULL)
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // Horas de salida por día / camioneta / recorrido
+  app.get("/api/recorridos/salidas", requireAuth, async (req, res) => {
+    try {
+      const date = String(req.query.date ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date (YYYY-MM-DD) es obligatorio" });
+      const r = await db.execute(drizzleSql`SELECT camioneta_id AS "camionetaId", recorrido, salida FROM recorrido_salidas WHERE fecha = ${date}::date`);
+      return res.json(r.rows);
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+  app.put("/api/recorridos/salidas", requireAuth, async (req, res) => {
+    try {
+      const b = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), camionetaId: z.number().int(), recorrido: z.number().int().min(1), salida: z.string().nullable() }).parse(req.body);
+      await db.execute(drizzleSql`
+        INSERT INTO recorrido_salidas (fecha, camioneta_id, recorrido, salida) VALUES (${b.date}::date, ${b.camionetaId}, ${b.recorrido}, ${b.salida})
+        ON CONFLICT (fecha, camioneta_id, recorrido) DO UPDATE SET salida = EXCLUDED.salida`);
+      return res.json({ ok: true });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
+  // Asignar un pedido a camioneta + recorrido + orden de entrega. Renumera 1..n el recorrido destino (y el de origen
+  // si cambió) para que nunca haya dos pedidos con el mismo orden. camionetaId null = quitar la asignación.
+  app.patch("/api/recorridos/pedido/:id", requireAuth, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const b = z.object({ camionetaId: z.number().int().nullable(), recorrido: z.number().int().min(1).nullable().optional(), ordenEntrega: z.number().int().min(1).nullable().optional() }).parse(req.body);
+      const cur = (await db.execute(drizzleSql`SELECT id, order_date::date::text AS fecha, camioneta_id AS cam, recorrido AS rec FROM orders WHERE id = ${id}`)).rows[0] as any;
+      if (!cur) return res.status(404).json({ error: "Pedido no encontrado" });
+      const renumerar = async (cam: number, rec: number, primero?: number, pos?: number) => {
+        const rows = (await db.execute(drizzleSql`
+          SELECT id FROM orders WHERE order_date::date = ${cur.fecha}::date AND camioneta_id = ${cam} AND recorrido = ${rec} AND status IN ('approved','draft') AND id <> ${id}
+          ORDER BY orden_entrega NULLS LAST, id`)).rows.map((r: any) => Number(r.id));
+        if (primero != null) rows.splice(Math.min(Math.max((pos ?? rows.length + 1) - 1, 0), rows.length), 0, primero);
+        for (let i = 0; i < rows.length; i++) await db.execute(drizzleSql`UPDATE orders SET orden_entrega = ${i + 1} WHERE id = ${rows[i]}`);
+      };
+      if (b.camionetaId == null) {
+        await db.execute(drizzleSql`UPDATE orders SET camioneta_id = NULL, recorrido = NULL, orden_entrega = NULL WHERE id = ${id}`);
+        if (cur.cam != null) await renumerar(Number(cur.cam), Number(cur.rec ?? 1));
+      } else {
+        const rec = b.recorrido ?? (Number(cur.cam) === b.camionetaId && cur.rec != null ? Number(cur.rec) : 1);
+        await db.execute(drizzleSql`UPDATE orders SET camioneta_id = ${b.camionetaId}, recorrido = ${rec} WHERE id = ${id}`);
+        await renumerar(b.camionetaId, rec, id, b.ordenEntrega ?? undefined);
+        if (cur.cam != null && (Number(cur.cam) !== b.camionetaId || Number(cur.rec) !== rec)) await renumerar(Number(cur.cam), Number(cur.rec ?? 1));
+      }
+      const out = (await db.execute(drizzleSql`SELECT camioneta_id AS "camionetaId", recorrido, orden_entrega AS "ordenEntrega" FROM orders WHERE id = ${id}`)).rows[0];
+      return res.json(out);
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
   // ─── Lista de Precios ──────────────────────────────────────────────────────

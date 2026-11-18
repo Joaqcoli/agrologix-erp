@@ -34,6 +34,16 @@
   Equivalencias a bultos (Joaquín, 18/11; en el SQL de `/api/recorridos` y en las tarjetas): 10 kg sueltos = 1 bulto;
   atados por producto: puerro/verdeo/perejil/cilantro 5 = 1, espinaca/remolacha/tomillo/orégano/ciboulette/acelga 10 = 1,
   albahaca 12 = 1, rúcula 24 = 1, otros atados 10 = 1 (supuesto); 12 maples de huevos = 1 cajón; unidades no convierten.
+  **Camionetas y asignación de recorridos** (18/11, maqueta aprobada por Joaquín en `diseno-caja/recorridos-camionetas-maqueta.html`):
+  tabla `camionetas` (nombre, patente, capacidad en bultos aprox., `disponible`), `orders.camioneta_id / recorrido /
+  orden_entrega`, tabla `recorrido_salidas` (fecha, camioneta, recorrido → hora de salida). API: `/api/camionetas`
+  (GET/POST/PATCH; DELETE solo admin; al poner no disponible, sus pedidos desde hoy vuelven a sin asignar),
+  `GET/PUT /api/recorridos/salidas`, `PATCH /api/recorridos/pedido/:id` (renumera 1..n el recorrido destino y el de origen).
+  Pantalla: pestañas Mapa (en cada pedido: Camioneta · Recorrido · Orden, chip de carga vs capacidad; pines con el color
+  del recorrido y el número de orden de entrega, gris sin asignar; leyenda) y Camionetas (flota fija con alta, edición,
+  disponible; "Carga de hoy" por camioneta y recorrido con hora de salida, barra de carga y pedidos en orden de entrega,
+  link "Ver en Google Maps" por recorrido). Sin número de remito en Recorridos (pedido de Joaquín). Un pedido va entero
+  en una camioneta; la capacidad es por vuelta. Hoja de armado para el galpón: pendiente (se define desde su sesión).
   17-nov **Vista del vendedor con el estilo del admin, Comisiones simplificada y Cuentas Corrientes del vendedor**
   (solo presentación + una sección nueva de lectura; ningún cálculo cambió). (1) Las 5 pantallas del vendedor
   (Dashboard, Pedidos, detalle de pedido, Clientes, Comisiones) pasan al sistema visual de las pantallas rediseñadas del
