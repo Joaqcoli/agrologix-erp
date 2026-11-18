@@ -335,7 +335,7 @@ export default function RecorridosPage() {
                   {!isLoading && paradas.length === 0 && !mapError && <div className="rc-mapmsg">Sin pedidos para esta fecha</div>}
                 </div>
                 <div className="rc-leg">
-                  <span><i style={{ background: "#293C4B" }} /> Salida: {SALIDA.label}</span>
+                  <span><i style={{ background: "#293C4B" }} /> Salida</span>
                   {disponibles.map((c) => recsDe(c.id).filter((r) => pedidosDe(c.id, r).length).map((r) => (
                     <span key={`${c.id}-${r}`}><i style={{ background: colorRec(c.id, r) }} /> {c.nombre} · R{r}{salidaDe(c.id, r) ? ` (sale ${salidaDe(c.id, r)})` : ""}</span>
                   )))}
@@ -405,7 +405,7 @@ export default function RecorridosPage() {
           {tab === "camionetas" && (
             <div className="rc-flota">
               <div className="vx-card">
-                <div className="vx-chead"><span className="t"><Truck className="h-4 w-4" /> Mis camionetas</span><span className="n">fijas · marcá cuáles están disponibles</span></div>
+                <div className="vx-chead"><span className="t"><Truck className="h-4 w-4" /> Mis camionetas</span></div>
                 {camionetas.length === 0 && <div style={{ padding: "20px 18px", color: "#8b8f88", fontSize: 13.5 }}>Todavía no hay camionetas cargadas. Agregá la primera abajo.</div>}
                 {camionetas.map((c) => (
                   <div key={c.id} className={`rc-camrow${c.disponible ? "" : " off"}`} data-testid={`camioneta-${c.id}`}>
@@ -434,11 +434,14 @@ export default function RecorridosPage() {
                     )}
                   </div>
                 ))}
-                <div className="rc-camform rc-nueva">
-                  <label>Nombre <input className="vx-input" placeholder="Camioneta blanca" value={nueva.nombre} onChange={(e) => setNueva({ ...nueva, nombre: e.target.value })} data-testid="input-cam-nombre" /></label>
-                  <label>Patente <input className="vx-input" placeholder="AD 123 XY" value={nueva.patente} onChange={(e) => setNueva({ ...nueva, patente: e.target.value })} /></label>
-                  <label>Capacidad (bultos) <input className="vx-input" type="number" min={1} placeholder="120" value={nueva.capacidad} onChange={(e) => setNueva({ ...nueva, capacidad: e.target.value })} /></label>
-                  <button className="vx-btn primary" disabled={camMut.isPending || !nueva.nombre.trim() || !Number(nueva.capacidad)} onClick={() => camMut.mutate({ tipo: "crear", body: { nombre: nueva.nombre.trim(), patente: nueva.patente.trim() || null, capacidad: Number(nueva.capacidad) } })} data-testid="button-add-cam"><Plus className="h-4 w-4" /> Agregar</button>
+                <div className="rc-nueva">
+                  <div className="rc-nueva-t">Agregar camioneta</div>
+                  <div className="rc-camform">
+                    <label>Nombre <input className="vx-input" placeholder="Camioneta blanca" value={nueva.nombre} onChange={(e) => setNueva({ ...nueva, nombre: e.target.value })} data-testid="input-cam-nombre" /></label>
+                    <label>Patente <input className="vx-input" placeholder="AD 123 XY" value={nueva.patente} onChange={(e) => setNueva({ ...nueva, patente: e.target.value })} /></label>
+                    <label>Capacidad (bultos) <input className="vx-input" type="number" min={1} placeholder="120" value={nueva.capacidad} onChange={(e) => setNueva({ ...nueva, capacidad: e.target.value })} /></label>
+                  </div>
+                  <button className="vx-btn primary rc-addbtn" disabled={camMut.isPending || !nueva.nombre.trim() || !Number(nueva.capacidad)} onClick={() => camMut.mutate({ tipo: "crear", body: { nombre: nueva.nombre.trim(), patente: nueva.patente.trim() || null, capacidad: Number(nueva.capacidad) } })} data-testid="button-add-cam"><Plus className="h-4 w-4" /> Agregar camioneta</button>
                 </div>
               </div>
 
@@ -483,7 +486,6 @@ export default function RecorridosPage() {
             </div>
           )}
 
-          <div className="vx-note">Azul oscuro: punto de salida · cada recorrido tiene su color; el número del pin es el orden de entrega (1 = se entrega primero) · gris: sin asignar. Equivalencias aproximadas: 10 kg sueltos = 1 bulto; atados: puerro, verdeo, perejil y cilantro 5 = 1, espinaca, remolacha, tomillo, orégano, ciboulette y acelga 10 = 1, albahaca 12 = 1, rúcula 24 = 1 (otros atados 10 = 1); 12 maples de huevos = 1 cajón. "aprox." = Google estimó la altura dentro de la cuadra: verificá el pin y ajustalo a mano si hace falta. Pedidos en borrador incluidos.</div>
         </div>
       </div>
     </Layout>
@@ -549,6 +551,9 @@ const RC_CSS = `
 .rc-sw input::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s;}
 .rc-sw input:checked::after{left:18px;}
 .rc-camform{display:grid;grid-template-columns:1.4fr 1fr .9fr auto;gap:8px;align-items:end;grid-column:1 / -1;}
+.rc-nueva .rc-camform{grid-template-columns:1.4fr 1fr .9fr;}
+.rc-nueva-t{font-family:'Bricolage Grotesque','Inter',sans-serif;font-size:14px;font-weight:700;margin-bottom:10px;}
+.rc-addbtn{margin-top:12px;width:100%;justify-content:center;padding:10px 14px;}
 .rc-camform label{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#9a9e96;display:flex;flex-direction:column;gap:4px;}
 .rc-camform .vx-input{font-size:13px;padding:7px 10px;}
 .rc-nueva{padding:14px 18px 18px;border-top:1px solid #f1f1ec;background:#fbfaf7;}
@@ -571,5 +576,5 @@ const RC_CSS = `
 .rc-ped .cli small{display:block;font-weight:400;color:#8b8f88;font-size:11.5px;white-space:normal;}
 .rc-ped .bul{font-weight:700;white-space:nowrap;}
 .rc-vacio{font-size:12.5px;color:#a9ada4;padding:6px 0;font-style:italic;}
-@media(max-width:1000px){.rc-grid,.rc-flota{grid-template-columns:1fr}.rc-map{height:420px}.rc-list{max-height:none}.rc-camform{grid-template-columns:1fr 1fr}}
+@media(max-width:1000px){.rc-grid,.rc-flota{grid-template-columns:1fr}.rc-map{height:420px}.rc-list{max-height:none}.rc-camform,.rc-nueva .rc-camform{grid-template-columns:1fr 1fr}}
 `;
