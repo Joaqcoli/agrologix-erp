@@ -537,16 +537,18 @@ export function generateArmadoPDF(orders: ArmadoOrder[], dateLabel: string, opts
 
 // ─── Hoja de recorridos del galpón (18/11/2026) ─────────────────────────────────────────────────────
 // Una sola hoja (sigue en la siguiente si no entra), blanco y negro: por camioneta → por recorrido (hora de salida
-// destacada) → pedidos en orden de entrega con cliente, dirección, ≈ bultos y casilla "Cargado". Sin productos ni
+// destacada) → pedidos en orden de entrega con cliente, dirección, bultos aprox. y casilla "Cargado". Sin productos ni
 // horarios de entrega (pedido de Joaquín, maqueta diseno-caja/hoja-recorridos-galpon-maqueta.html v3).
+// OJO: la Helvetica de jsPDF no tiene el glifo "≈" (salía como "H y desarmaba el espaciado): acá se escribe "aprox.".
 export type RecorridoPedido = { id: number; customerName: string; address: string | null; city: string | null; camionetaId: number | null; recorrido: number | null; ordenEntrega: number | null; bultosAprox: number };
 export type RecorridoCamioneta = { id: number; nombre: string; patente: string | null; capacidad: number };
 export type RecorridoSalida = { camionetaId: number; recorrido: number; salida: string | null };
-export function generateRecorridosPDF(data: { pedidos: RecorridoPedido[]; camionetas: RecorridoCamioneta[]; salidas: RecorridoSalida[] }, dateLabel: string, opts?: { print?: boolean }) {
+export function generateRecorridosPDF(data: { pedidos: RecorridoPedido[]; camionetas: RecorridoCamioneta[]; salidas: RecorridoSalida[] }, dateLabel: string, opts?: { print?: boolean; returnDoc?: boolean }) {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
-  const pageW = 210, pageH = 297, margin = 14, bottom = pageH - margin;
+  const pageW = 210, pageH = 297, margin = 14, bottom = pageH - margin, right = pageW - margin;
   const fmtA = (v: number) => (Math.round(v * 2) / 2).toLocaleString("es-AR");
-  const col = { ent: margin, cli: margin + 14, bul: pageW - margin - 28, chk: pageW - margin - 6 };
+  // Columnas: nº de entrega · cliente (hasta colBul) · bultos (alineado a la derecha en colBul) · casilla
+  const col = { ent: margin, cli: margin + 16, bul: right - 20, chkX: right - 6 };
   let y = margin;
   const salto = (alto: number) => { if (y + alto > bottom) { doc.addPage(); y = margin; } };
 
@@ -556,29 +558,28 @@ export function generateRecorridosPDF(data: { pedidos: RecorridoPedido[]; camion
   const camsConPedidos = data.camionetas.filter((c) => asignados.some((p) => p.camionetaId === c.id));
 
   doc.setFont("helvetica", "bold"); doc.setFontSize(15);
-  doc.text(`RECORRIDOS — ${dateLabel.toUpperCase()}`, pageW / 2, y + 2, { align: "center" }); y += 8;
+  doc.text(`RECORRIDOS - ${dateLabel.toUpperCase()}`, pageW / 2, y + 2, { align: "center" }); y += 8;
   doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor(60);
-  doc.text(`${camsConPedidos.length} camioneta${camsConPedidos.length !== 1 ? "s" : ""} · ${data.pedidos.length} pedido${data.pedidos.length !== 1 ? "s" : ""} · ≈ ${fmtA(totalBultos)} bultos`, pageW / 2, y, { align: "center" });
+  doc.text(`${camsConPedidos.length} camioneta${camsConPedidos.length !== 1 ? "s" : ""}  ·  ${data.pedidos.length} pedido${data.pedidos.length !== 1 ? "s" : ""}  ·  ${fmtA(totalBultos)} bultos aprox.`, pageW / 2, y, { align: "center" });
   doc.setTextColor(0); y += 9;
 
   for (const c of camsConPedidos) {
     const recs = Array.from(new Set(asignados.filter((p) => p.camionetaId === c.id).map((p) => p.recorrido ?? 1))).sort((a, b) => a - b);
-    // Alto estimado de la camioneta completa; si entra en una hoja vacía y no en lo que queda, salta de hoja
-    const altoCam = 12 + recs.reduce((s, r) => s + 12 + asignados.filter((p) => p.camionetaId === c.id && (p.recorrido ?? 1) === r).length * 11, 0);
+    const altoCam = 12 + recs.reduce((s, r) => s + 13 + asignados.filter((p) => p.camionetaId === c.id && (p.recorrido ?? 1) === r).length * 11, 0);
     if (y > margin + 20 && y + altoCam > bottom && altoCam <= bottom - margin) { doc.addPage(); y = margin; }
     // Camioneta: nombre grande + patente, línea gruesa
     y += 3;
     doc.setFont("helvetica", "bold"); doc.setFontSize(14);
     doc.text(c.nombre.toUpperCase(), margin, y);
-    if (c.patente) { doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(60); doc.text(c.patente, pageW - margin, y, { align: "right" }); doc.setTextColor(0); }
-    y += 1.8; doc.setDrawColor(0); doc.setLineWidth(0.7); doc.line(margin, y, pageW - margin, y); doc.setLineWidth(0.2); y += 6;
+    if (c.patente) { doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(60); doc.text(c.patente, right, y, { align: "right" }); doc.setTextColor(0); }
+    y += 1.8; doc.setDrawColor(0); doc.setLineWidth(0.7); doc.line(margin, y, right, y); doc.setLineWidth(0.2); y += 6.5;
 
     for (const r of recs) {
       const ps = asignados.filter((p) => p.camionetaId === c.id && (p.recorrido ?? 1) === r).sort((a, b) => (a.ordenEntrega ?? 99) - (b.ordenEntrega ?? 99));
       const salida = data.salidas.find((x) => x.camionetaId === c.id && x.recorrido === r)?.salida;
       const bul = ps.reduce((s, p) => s + p.bultosAprox, 0);
-      salto(12);
-      // Recorrido N  [SALE HH:MM]   n pedidos · ≈ X bultos
+      salto(13);
+      // Recorrido N  [SALE HH:MM]                       n pedidos · X bultos aprox.
       doc.setFont("helvetica", "bold"); doc.setFontSize(11.5);
       doc.text(`Recorrido ${r}`, margin, y);
       const lbl = `SALE ${salida || "--:--"}`;
@@ -587,29 +588,25 @@ export function generateRecorridosPDF(data: { pedidos: RecorridoPedido[]; camion
       doc.setLineWidth(0.6); doc.rect(x0, y - 4.6, w, 6.4); doc.setLineWidth(0.2);
       doc.text(lbl, x0 + 2.5, y);
       doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(60);
-      doc.text(`${ps.length} pedido${ps.length !== 1 ? "s" : ""} · ≈ ${fmtA(bul)} bultos`, pageW - margin, y, { align: "right" });
-      doc.setTextColor(0); y += 5.5;
+      doc.text(`${ps.length} pedido${ps.length !== 1 ? "s" : ""}  ·  ${fmtA(bul)} bultos aprox.`, right, y, { align: "right" });
+      doc.setTextColor(0); y += 6;
       // Encabezados
       doc.setFont("helvetica", "bold"); doc.setFontSize(7.5); doc.setTextColor(70);
-      doc.text("ENTREGA", col.ent, y); doc.text("CLIENTE", col.cli, y); doc.text("BULTOS", col.bul + 14, y, { align: "right" }); doc.text("CARGADO", col.chk + 5, y, { align: "right" });
-      doc.setTextColor(0); y += 1.2; doc.setDrawColor(0); doc.line(margin, y, pageW - margin, y); y += 5;
+      doc.text("ENTREGA", col.ent, y); doc.text("CLIENTE", col.cli, y); doc.text("BULTOS APROX.", col.bul, y, { align: "right" }); doc.text("CARGADO", right, y, { align: "right" });
+      doc.setTextColor(0); y += 1.2; doc.setDrawColor(0); doc.line(margin, y, right, y); y += 5.5;
       for (const p of ps) {
         salto(11);
-        // círculo con el orden
         doc.setLineWidth(0.5); doc.circle(col.ent + 3.5, y - 1.3, 3.4); doc.setLineWidth(0.2);
         doc.setFont("helvetica", "bold"); doc.setFontSize(10.5);
         doc.text(String(p.ordenEntrega ?? ""), col.ent + 3.5, y, { align: "center" });
-        // cliente + dirección
-        doc.setFontSize(11); doc.text(p.customerName.toUpperCase().slice(0, 48), col.cli, y - 1.2);
+        doc.setFontSize(11); doc.text(p.customerName.toUpperCase().slice(0, 46), col.cli, y - 1.2);
         doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(60);
         const dir = [p.address, p.city].filter(Boolean).join(", ");
         doc.text(dir ? dir.slice(0, 70) : "sin dirección", col.cli, y + 2.8); doc.setTextColor(0);
-        // bultos ≈
-        doc.setFont("helvetica", "bold"); doc.setFontSize(11.5);
-        doc.text(`≈ ${fmtA(p.bultosAprox)}`, col.bul + 14, y, { align: "right" });
-        // casilla
-        doc.setLineWidth(0.4); doc.rect(col.chk - 0.5, y - 4.2, 5, 5); doc.setLineWidth(0.2);
-        y += 5.5; doc.setDrawColor(200); doc.line(margin, y, pageW - margin, y); doc.setDrawColor(0); y += 5.5;
+        doc.setFont("helvetica", "bold"); doc.setFontSize(12);
+        doc.text(fmtA(p.bultosAprox), col.bul, y, { align: "right" });
+        doc.setLineWidth(0.4); doc.rect(col.chkX, y - 4.2, 5, 5); doc.setLineWidth(0.2);
+        y += 5.5; doc.setDrawColor(200); doc.line(margin, y, right, y); doc.setDrawColor(0); y += 5.5;
       }
       y += 2;
     }
@@ -617,19 +614,19 @@ export function generateRecorridosPDF(data: { pedidos: RecorridoPedido[]; camion
   }
 
   if (sinAsignar.length) {
-    salto(16);
-    const txt = `SIN ASIGNAR A CAMIONETA (${sinAsignar.length} pedido${sinAsignar.length !== 1 ? "s" : ""} · ≈ ${fmtA(sinAsignar.reduce((s, p) => s + p.bultosAprox, 0))} bultos): ` +
-      sinAsignar.map((p) => `${p.customerName} (≈ ${fmtA(p.bultosAprox)})`).join(" · ") + ". Consultar con administración.";
     doc.setFont("helvetica", "normal"); doc.setFontSize(9.5);
-    const lines = doc.splitTextToSize(txt, pageW - margin * 2 - 6) as string[];
+    const txt = `SIN ASIGNAR A CAMIONETA (${sinAsignar.length} pedido${sinAsignar.length !== 1 ? "s" : ""} · ${fmtA(sinAsignar.reduce((s, p) => s + p.bultosAprox, 0))} bultos aprox.): ` +
+      sinAsignar.map((p) => `${p.customerName} (${fmtA(p.bultosAprox)})`).join(" · ") + ". Consultar con administración.";
+    const lines = doc.splitTextToSize(txt, right - margin - 6) as string[];
     const h = lines.length * 4.5 + 5;
-    salto(h);
-    doc.setLineDashPattern([1.5, 1.2], 0); doc.setLineWidth(0.4); doc.rect(margin, y, pageW - margin * 2, h); doc.setLineDashPattern([], 0); doc.setLineWidth(0.2);
+    salto(h + 4);
+    doc.setLineDashPattern([1.5, 1.2], 0); doc.setLineWidth(0.4); doc.rect(margin, y, right - margin, h); doc.setLineDashPattern([], 0); doc.setLineWidth(0.2);
     let yy = y + 5; for (const ln of lines) { doc.text(ln, margin + 3, yy); yy += 4.5; }
     y += h + 4;
   }
   if (camsConPedidos.length === 0 && sinAsignar.length === 0) { doc.setFont("helvetica", "normal"); doc.setFontSize(11); doc.text("No hay pedidos para este día.", pageW / 2, y + 10, { align: "center" }); }
 
+  if (opts?.returnDoc) return doc;
   if (opts?.print) { printDoc(doc); return; }
   doc.save(`recorridos-${dateLabel}.pdf`);
 }
