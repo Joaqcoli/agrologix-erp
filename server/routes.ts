@@ -2636,7 +2636,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           SELECT id FROM orders WHERE order_date::date = ${cur.fecha}::date AND camioneta_id = ${cam} AND recorrido = ${rec} AND status IN ('approved','draft') AND id <> ${id}
           ORDER BY orden_entrega NULLS LAST, id`)).rows.map((r: any) => Number(r.id));
         if (primero != null) rows.splice(Math.min(Math.max((pos ?? rows.length + 1) - 1, 0), rows.length), 0, primero);
-        for (let i = 0; i < rows.length; i++) await db.execute(drizzleSql`UPDATE orders SET orden_entrega = ${i + 1} WHERE id = ${rows[i]}`);
+        if (rows.length === 0) return;
+        // Un solo UPDATE para todo el recorrido (antes era uno por pedido: con la base lejana sumaba ~1 s)
+        const valores = drizzleSql.join(rows.map((oid, i) => drizzleSql`(${oid}::int, ${i + 1}::int)`), drizzleSql`, `);
+        await db.execute(drizzleSql`UPDATE orders AS o SET orden_entrega = v.n FROM (VALUES ${valores}) AS v(id, n) WHERE o.id = v.id`);
       };
       if (b.camionetaId == null) {
         await db.execute(drizzleSql`UPDATE orders SET camioneta_id = NULL, recorrido = NULL, orden_entrega = NULL WHERE id = ${id}`);

@@ -211,12 +211,45 @@ export default function RecorridosPage() {
     onSuccess: (p) => { setAjustando(null); invalidar(); toast({ title: "Pin ajustado", description: `${p.customerName}: posición guardada como exacta.` }); },
     onError: (e: any) => { setAjustando(null); toast({ title: "Error", description: e.message, variant: "destructive" }); },
   });
+  // Asignación con actualización OPTIMISTA: la lista y los pines cambian al instante con la misma regla que aplica el
+  // servidor (renumerar 1..n el recorrido destino y el de origen); si el servidor falla, se vuelve atrás.
+  type Asig = { id: number; camionetaId: number | null; recorrido?: number | null; ordenEntrega?: number | null };
+  const aplicarLocal = (lista: Parada[], a: Asig): Parada[] => {
+    const cur = lista.find((p) => p.id === a.id);
+    if (!cur) return lista;
+    const out = lista.map((p) => ({ ...p }));
+    const renum = (cam: number, rec: number, primero?: number, pos?: number) => {
+      const grupo = out.filter((p) => p.camionetaId === cam && p.recorrido === rec && p.id !== a.id).sort((x, y) => (x.ordenEntrega ?? 99) - (y.ordenEntrega ?? 99) || x.id - y.id);
+      const ids = grupo.map((p) => p.id);
+      if (primero != null) ids.splice(Math.min(Math.max((pos ?? ids.length + 1) - 1, 0), ids.length), 0, primero);
+      ids.forEach((id, i) => { const p = out.find((x) => x.id === id)!; p.ordenEntrega = i + 1; });
+    };
+    const me = out.find((p) => p.id === a.id)!;
+    const oldCam = cur.camionetaId, oldRec = cur.recorrido ?? 1;
+    if (a.camionetaId == null) {
+      me.camionetaId = null; me.recorrido = null; me.ordenEntrega = null;
+      if (oldCam != null) renum(oldCam, oldRec);
+    } else {
+      const rec = a.recorrido ?? (oldCam === a.camionetaId && cur.recorrido != null ? cur.recorrido : 1);
+      me.camionetaId = a.camionetaId; me.recorrido = rec;
+      renum(a.camionetaId, rec, a.id, a.ordenEntrega ?? undefined);
+      if (oldCam != null && (oldCam !== a.camionetaId || oldRec !== rec)) renum(oldCam, oldRec);
+    }
+    return out;
+  };
   const asignar = useMutation({
-    mutationFn: async ({ id, camionetaId, recorrido, ordenEntrega }: { id: number; camionetaId: number | null; recorrido?: number | null; ordenEntrega?: number | null }) => {
+    mutationFn: async ({ id, camionetaId, recorrido, ordenEntrega }: Asig) => {
       await apiRequest("PATCH", `/api/recorridos/pedido/${id}`, { camionetaId, recorrido: recorrido ?? null, ordenEntrega: ordenEntrega ?? null });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/recorridos"] }),
-    onError: (e: any) => toast({ title: "No se pudo asignar", description: e.message, variant: "destructive" }),
+    onMutate: async (a) => {
+      const key = ["/api/recorridos", date];
+      await queryClient.cancelQueries({ queryKey: key });
+      const previo = queryClient.getQueryData<Parada[]>(key);
+      if (previo) queryClient.setQueryData<Parada[]>(key, aplicarLocal(previo, a));
+      return { previo, key };
+    },
+    onError: (e: any, _a, ctx) => { if (ctx?.previo) queryClient.setQueryData(ctx.key, ctx.previo); toast({ title: "No se pudo asignar", description: e.message, variant: "destructive" }); },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["/api/recorridos"] }),
   });
   const setSalida = useMutation({
     mutationFn: async ({ camionetaId, recorrido, salida }: { camionetaId: number; recorrido: number; salida: string }) => { await apiRequest("PUT", "/api/recorridos/salidas", { date, camionetaId, recorrido, salida: normalizarHora(salida) || null }); },
