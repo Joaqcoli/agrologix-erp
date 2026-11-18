@@ -51,6 +51,10 @@
   recuadro, n pedidos · ≈ bultos) → pedidos en orden de entrega (círculo con el número, cliente + dirección, ≈ bultos,
   casilla "Cargado"); sin productos, sin horario de entrega, sin detalle de bultos, sin firmas; recuadro punteado con
   los pedidos sin asignar al final. `recorridosDelDia(date)` en routes.ts es la consulta compartida con el admin.
+  Mismo día: el galpón también reventaba ("s.filter is not a function") al entrar después de cerrar la sesión de admin
+  con una pantalla abierta (401 tomado como datos). Las 4 pantallas del galpón pasan a `fetchJson` (ahora vive en
+  `client/src/lib/queryClient.ts`; `vendedor/rx.ts` lo reexporta) y el ErrorBoundary de `App.tsx` se reinicia con cada
+  cambio de ruta (`RouteBoundary`), así un error no queda pegado al loguearse con otra cuenta.
   17-nov **Vista del vendedor con el estilo del admin, Comisiones simplificada y Cuentas Corrientes del vendedor**
   (solo presentación + una sección nueva de lectura; ningún cálculo cambió). (1) Las 5 pantallas del vendedor
   (Dashboard, Pedidos, detalle de pedido, Clientes, Comisiones) pasan al sistema visual de las pantallas rediseñadas del

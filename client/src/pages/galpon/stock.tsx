@@ -1,4 +1,5 @@
 import { useState, useMemo, Fragment } from "react";
+import { fetchJson } from "@/lib/queryClient";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -46,12 +47,12 @@ export default function GalponStock() {
 
   const { data: stock = [], isLoading } = useQuery<StockRow[]>({
     queryKey: ["/api/galpon/stock"],
-    queryFn: () => fetch("/api/galpon/stock", { credentials: "include" }).then((r) => r.json()),
+    queryFn: () => fetchJson<any>("/api/galpon/stock"),
   });
 
   const { data: history = [], isLoading: histLoading } = useQuery<HistRow[]>({
     queryKey: ["/api/galpon/products", expandedProductId, "purchase-history"],
-    queryFn: () => fetch(`/api/galpon/products/${expandedProductId}/purchase-history`, { credentials: "include" }).then((r) => r.json()),
+    queryFn: () => fetchJson<any>(`/api/galpon/products/${expandedProductId}/purchase-history`),
     enabled: expandedProductId != null,
   });
 

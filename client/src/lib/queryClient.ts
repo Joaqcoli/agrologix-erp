@@ -26,6 +26,14 @@ export function confirmWarningsFromError(e: unknown): string[] | null {
   return null;
 }
 
+/** 18/11: GET con control de error para páginas que no usan getQueryFn. Un 401/500 lanza error (y avisa sesión vencida)
+ *  en vez de devolver el JSON de error como si fueran datos (eso rompía las pantallas con "x.filter is not a function"). */
+export async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url, { credentials: "include" });
+  await throwIfResNotOk(res);
+  return res.json();
+}
+
 export async function apiRequest(
   method: string,
   url: string,

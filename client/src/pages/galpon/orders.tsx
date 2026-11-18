@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { fetchJson } from "@/lib/queryClient";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { GalponLayout } from "./layout";
@@ -34,7 +35,7 @@ export default function GalponOrders() {
 
   const { data: orders = [], isLoading } = useQuery<GalponOrderRow[]>({
     queryKey: ["/api/galpon/orders", date],
-    queryFn: () => fetch(`/api/galpon/orders?date=${date}`, { credentials: "include" }).then((r) => r.json()),
+    queryFn: () => fetchJson<any>(`/api/galpon/orders?date=${date}`),
   });
 
   const dateLabel = (() => { const [y,m,d] = date.split("-"); return `${d}/${m}/${y}`; })();
@@ -63,7 +64,7 @@ export default function GalponOrders() {
     setPrinting(true);
     try {
       const details = await Promise.all(
-        orders.map((o) => fetch(`/api/galpon/orders/${o.id}`, { credentials: "include" }).then((r) => r.json()))
+        orders.map((o) => fetchJson<any>(`/api/galpon/orders/${o.id}`))
       );
       // Bolsa / Bolsa propia (Bolsa FV): no se arman ni se sacan de stock → fuera del pedido impreso
       const isBolsa = (it: any) => it.bolsaType === "bolsa" || it.bolsaType === "bolsa_propia";

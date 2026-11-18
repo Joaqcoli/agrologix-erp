@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { fetchJson } from "@/lib/queryClient";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { GalponLayout } from "./layout";
 import { Card, CardContent } from "@/components/ui/card";
@@ -41,7 +42,7 @@ export default function GalponAjustes() {
 
   const { data: rows = [], isLoading } = useQuery<Adj[]>({
     queryKey: ["/api/galpon/stock-adjustments"],
-    queryFn: () => fetch("/api/galpon/stock-adjustments", { credentials: "include" }).then((r) => r.json()),
+    queryFn: () => fetchJson<any>("/api/galpon/stock-adjustments"),
   });
 
   // El galpón solo puede deshacer SUS ajustes de peso (no merma/rinde, que son del admin).

@@ -1,7 +1,6 @@
 // Estilo compartido de las pantallas del vendedor (17/11/2026): el mismo sistema visual que las pantallas
 // rediseñadas del admin (Clientes, Pedidos, Cuentas Corrientes): fondo crema, Inter + Bricolage Grotesque,
 // verde oliva, tarjetas blancas redondeadas, chips. Solo presentación. Cada página lo inyecta con <style>.
-import { notifySessionExpired } from "@/lib/queryClient";
 
 export const VX_CSS = `
 .vx{background:#f4f4f1;min-height:100%;padding:30px 24px 56px;font-family:'Inter',system-ui,sans-serif;color:#1e2420;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;}
@@ -172,17 +171,7 @@ table.vx-tbl{width:100%;border-collapse:collapse;}
 }
 `;
 
-/** 17/11: GET con control de error. Antes las pantallas del vendedor hacían fetch().then(r => r.json()) sin mirar
- *  r.ok: un 401 (sesión vencida) o un 500 dejaba el JSON de error como "datos" y la pantalla reventaba
- *  ("Cannot read properties of undefined (reading 'length')"). Ahora lanza error y avisa la sesión vencida. */
-export async function fetchJson<T>(url: string): Promise<T> {
-  const r = await fetch(url, { credentials: "include" });
-  if (!r.ok) {
-    if (r.status === 401 && !url.includes("/api/auth/login")) notifySessionExpired();
-    throw new Error(`${r.status}: ${(await r.text()) || r.statusText}`);
-  }
-  return r.json();
-}
+export { fetchJson } from "@/lib/queryClient";
 
 export const MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 export const mesLabel = (ym: string) => { const [y, m] = ym.split("-").map(Number); return `${MESES[m - 1] ?? ym} ${y}`; };

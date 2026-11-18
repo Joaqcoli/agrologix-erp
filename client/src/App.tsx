@@ -1,4 +1,4 @@
-import { Switch, Route, Redirect } from "wouter";
+import { Switch, Route, Redirect, useLocation } from "wouter";
 import { Component, type ReactNode } from "react";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -158,6 +158,13 @@ function Router() {
   );
 }
 
+// 18/11: si una pantalla revienta (p. ej. 401 al cerrar sesión con una página abierta), el error no debe quedar pegado
+// al entrar con otra cuenta: el boundary se reinicia con cada cambio de ruta.
+function RouteBoundary({ children }: { children: ReactNode }) {
+  const [location] = useLocation();
+  return <ErrorBoundary key={location}>{children}</ErrorBoundary>;
+}
+
 function App() {
   return (
     <ErrorBoundary>
@@ -165,7 +172,7 @@ function App() {
         <TooltipProvider>
           <AuthProvider>
             <Toaster />
-            <Router />
+            <RouteBoundary><Router /></RouteBoundary>
           </AuthProvider>
         </TooltipProvider>
       </QueryClientProvider>

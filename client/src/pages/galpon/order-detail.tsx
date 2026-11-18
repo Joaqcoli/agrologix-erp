@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { fetchJson } from "@/lib/queryClient";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -82,11 +83,11 @@ export default function GalponOrderDetail({ id }: { id: number }) {
 
   const { data: order, isLoading } = useQuery<GalponOrder>({
     queryKey: ["/api/galpon/orders", id],
-    queryFn: () => fetch(`/api/galpon/orders/${id}`, { credentials: "include" }).then((r) => r.json()),
+    queryFn: () => fetchJson<any>(`/api/galpon/orders/${id}`),
   });
   const { data: products = [] } = useQuery<Prod[]>({
     queryKey: ["/api/galpon/products"],
-    queryFn: () => fetch(`/api/galpon/products`, { credentials: "include" }).then((r) => r.json()),
+    queryFn: () => fetchJson<any>(`/api/galpon/products`),
   });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/galpon/orders", id] });
