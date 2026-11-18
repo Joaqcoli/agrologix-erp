@@ -35,6 +35,8 @@ export const customers = pgTable("customers", {
   lat: numeric("lat", { precision: 10, scale: 7 }),
   lng: numeric("lng", { precision: 10, scale: 7 }),
   geoAddress: text("geo_address"),
+  // Precisión de la ubicación: ROOFTOP (exacta) | RANGE_INTERPOLATED | GEOMETRIC_CENTER | MANUAL (pin movido a mano)
+  geoPrecision: text("geo_precision"),
   deliveryFrom: text("delivery_from"), // HH:MM
   deliveryTo: text("delivery_to"),     // HH:MM
   notes: text("notes"),

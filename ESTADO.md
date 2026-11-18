@@ -25,7 +25,12 @@
   "Abrir recorrido en Google Maps" y entra en el encuadre del mapa. Horario de entrega: campo de texto "HH:MM"
   normalizado al salir (`client/src/lib/hora.ts`: 8 → 08:00, 930 → 09:30); antes era `<input type="time">`, que en
   navegadores en inglés pide AM/PM y si no se completa manda vacío (por eso los horarios que cargó Joaquín el 18/11
-  no se guardaron; hay que volver a cargarlos).
+  no se guardaron; hay que volver a cargarlos). PRECISIÓN (pedido de Joaquín): el punto de salida es una coordenada
+  fija tomada de Google Maps (-34.468853, -58.6917694; la geocodificación en vivo caía ~1,5 km corrida); `customers.geo_precision`
+  guarda el location_type de Google (ROOFTOP exacta, RANGE_INTERPOLATED estimada en la cuadra) o MANUAL; si Google no
+  encuentra la ALTURA (solo calle o localidad) NO se guarda el pin y se avisa; en Recorridos los pines no exactos llevan
+  chip "aprox." ("verificar" si se ubicaron antes de este cambio, sin precisión conocida) y cualquier pin se corrige con
+  "Ajustar pin" (icono de mira o link del popup): queda arrastrable, al soltarlo se guarda como MANUAL.
   17-nov **Vista del vendedor con el estilo del admin, Comisiones simplificada y Cuentas Corrientes del vendedor**
   (solo presentación + una sección nueva de lectura; ningún cálculo cambió). (1) Las 5 pantallas del vendedor
   (Dashboard, Pedidos, detalle de pedido, Clientes, Comisiones) pasan al sistema visual de las pantallas rediseñadas del

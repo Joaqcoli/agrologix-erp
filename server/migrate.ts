@@ -1778,6 +1778,7 @@ export async function runNcMigrations() {
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS lat numeric(10,7)`,
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS lng numeric(10,7)`,
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS geo_address text`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS geo_precision text`,
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS delivery_from text`,
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS delivery_to text`,
   ]) { try { await db.execute(sql.raw(stmt)); } catch (e) { console.error("Recorridos migration failed:", stmt.slice(0, 70), e); } }

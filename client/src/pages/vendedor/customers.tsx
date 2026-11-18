@@ -111,7 +111,7 @@ export default function VendedorCustomers() {
     const geo = await geoParaGuardar(form, editing);
     setUbicando(false);
     if (geo.aviso) toast({ title: "Ubicación", description: geo.aviso });
-    const data = { ...form, lat: geo.lat, lng: geo.lng, geoAddress: geo.geoAddress, deliveryFrom: normalizarHora(form.deliveryFrom) || null, deliveryTo: normalizarHora(form.deliveryTo) || null };
+    const data = { ...form, lat: geo.lat, lng: geo.lng, geoAddress: geo.geoAddress, geoPrecision: geo.geoPrecision, deliveryFrom: normalizarHora(form.deliveryFrom) || null, deliveryTo: normalizarHora(form.deliveryTo) || null };
     if (editing) updateMutation.mutate({ id: editing.id, data });
     else createMutation.mutate(data);
   };

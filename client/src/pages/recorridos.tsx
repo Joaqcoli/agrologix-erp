@@ -10,13 +10,13 @@ import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MapPin, Clock, Truck, AlertTriangle, Pencil, Check, X, ExternalLink, LocateFixed } from "lucide-react";
 import { VX_CSS, fetchJson, formatRemito } from "@/pages/vendedor/rx";
-import { loadGoogleMaps, geocodeAddress, geoKey, GOOGLE_MAPS_KEY } from "@/lib/maps";
+import { loadGoogleMaps, geoParaGuardar, geoKey, GOOGLE_MAPS_KEY, esPrecisa, precisionLabel } from "@/lib/maps";
 import { normalizarHora } from "@/lib/hora";
 
 type Parada = {
   id: number; folio: string; remitoNum: number | null; status: "approved" | "draft"; notes: string | null;
   customerId: number; customerName: string; address: string | null; city: string | null; phone: string | null;
-  lat: string | null; lng: string | null; geoAddress: string | null; deliveryFrom: string | null; deliveryTo: string | null;
+  lat: string | null; lng: string | null; geoAddress: string | null; geoPrecision: string | null; deliveryFrom: string | null; deliveryTo: string | null;
   bultos: number; kg: number; atados: number; unidades: number; items: number;
 };
 
@@ -26,10 +26,9 @@ const horario = (p: { deliveryFrom: string | null; deliveryTo: string | null }) 
   p.deliveryFrom && p.deliveryTo ? `${p.deliveryFrom}–${p.deliveryTo}` : p.deliveryFrom ? `desde ${p.deliveryFrom}` : p.deliveryTo ? `hasta ${p.deliveryTo}` : "sin horario";
 const ubicada = (p: Parada) => p.lat != null && p.lng != null && !!(p.address ?? "").trim() && p.geoAddress === geoKey(p.address, p.city);
 const CENTRO = { lat: -34.62, lng: -58.46 };
-// 18/11: punto de salida (galpón). Se geocodifica una vez con Google y se guarda en el navegador; si falla, se usa la
-// posición aproximada de la cuadra (OpenStreetMap) para no dejar el recorrido sin origen.
-const SALIDA = { label: "Capitán Giachino 2380, Malvinas Argentinas", address: "Capitán Giachino 2380, Pablo Nogués, Malvinas Argentinas, Buenos Aires", fallback: { lat: -34.4805, lng: -58.6828 } };
-const SALIDA_CACHE = "agrologix-salida-v1";
+// 18/11: punto de salida (galpón). Coordenada EXACTA tomada de Google Maps para "Cap. Giachino 2380, B1616AJY Ingeniero
+// Pablo Nogués" (fija, no se geocodifica: la primera versión geocodificaba en vivo y caía ~1,5 km corrido).
+const SALIDA = { label: "Capitán Giachino 2380, Malvinas Argentinas", pos: { lat: -34.468853, lng: -58.6917694 } };
 function salidaIcon(maps: any) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="50" viewBox="0 0 40 50"><path d="M20 1C10 1 2 9 2 19c0 12.5 18 30 18 30s18-17.5 18-30C38 9 30 1 20 1z" fill="#293C4B" stroke="#fff" stroke-width="2.5"/><path d="M12 24v-7l8-6 8 6v7h-5v-5h-6v5z" fill="#fff"/></svg>`;
   return { url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg), scaledSize: new maps.Size(40, 50), anchor: new maps.Point(20, 49) };
@@ -59,10 +58,8 @@ export default function RecorridosPage() {
   const markersRef = useRef<Map<number, any>>(new Map());
   const salidaMarkerRef = useRef<any>(null);
   const infoRef = useRef<any>(null);
-  const [salida, setSalida] = useState<{ lat: number; lng: number; exacta: boolean }>(() => {
-    try { const c = JSON.parse(localStorage.getItem(SALIDA_CACHE) ?? "null"); if (c && typeof c.lat === "number" && typeof c.lng === "number") return { ...c, exacta: true }; } catch { /* noop */ }
-    return { ...SALIDA.fallback, exacta: false };
-  });
+  // Ajuste manual: id del pedido cuyo pin está en modo arrastre (se guarda al soltarlo como precisión MANUAL)
+  const [ajustando, setAjustando] = useState<number | null>(null);
 
   const { data: paradas = [], isLoading, error } = useQuery<Parada[]>({
     queryKey: ["/api/recorridos", date],
@@ -87,15 +84,6 @@ export default function RecorridosPage() {
       (window as any).gm_authFailure = () => setMapError("Google rechazó la clave para este sitio (revisá la restricción de sitios web en Google Cloud).");
       setMapError(null);
       setListo((n) => n + 1);
-      // Punto de salida: geocodificar una vez (queda en el navegador)
-      if (!salida.exacta) {
-        geocodeAddress(SALIDA.address).then((g) => {
-          if (!g || !vivo) return;
-          const pos = { lat: g.lat, lng: g.lng };
-          try { localStorage.setItem(SALIDA_CACHE, JSON.stringify(pos)); } catch { /* noop */ }
-          setSalida({ ...pos, exacta: true });
-        }).catch(() => { /* queda el aproximado */ });
-      }
     }).catch((e) => setMapError(e.message));
     return () => { vivo = false; };
   }, [mapDiv]);
@@ -110,22 +98,36 @@ export default function RecorridosPage() {
     const bounds = new maps.LatLngBounds();
     // Punto de salida (pin azul oscuro con casita)
     if (salidaMarkerRef.current) salidaMarkerRef.current.setMap(null);
-    salidaMarkerRef.current = new maps.Marker({ position: salida, map, icon: salidaIcon(maps), title: `Salida: ${SALIDA.label}`, zIndex: 2000 });
+    salidaMarkerRef.current = new maps.Marker({ position: SALIDA.pos, map, icon: salidaIcon(maps), title: `Salida: ${SALIDA.label}`, zIndex: 2000 });
     salidaMarkerRef.current.addListener("click", () => {
-      infoRef.current.setContent(`<div style="font-family:Inter,system-ui;font-size:13px"><div style="font-family:'Bricolage Grotesque',Inter;font-size:15px;font-weight:700;margin-bottom:4px">Punto de salida</div><div>${SALIDA.label}</div>${salida.exacta ? "" : '<div style="color:#c08a1e;font-size:12px;margin-top:4px">Posición aproximada de la cuadra</div>'}</div>`);
+      infoRef.current.setContent(`<div style="font-family:Inter,system-ui;font-size:13px"><div style="font-family:'Bricolage Grotesque',Inter;font-size:15px;font-weight:700;margin-bottom:4px">Punto de salida</div><div>${SALIDA.label}</div></div>`);
       infoRef.current.open({ map, anchor: salidaMarkerRef.current });
     });
-    bounds.extend(salida);
+    bounds.extend(SALIDA.pos);
     ubicadas.forEach((p, i) => {
       const pos = { lat: Number(p.lat), lng: Number(p.lng) };
-      const m = new maps.Marker({ position: pos, map, icon: pinIcon(maps, i + 1, colorDe(p)), title: p.customerName, zIndex: 1000 - i });
+      const enAjuste = ajustando === p.id;
+      const m = new maps.Marker({ position: pos, map, icon: pinIcon(maps, i + 1, enAjuste ? "#3a67a3" : colorDe(p)), title: p.customerName, zIndex: enAjuste ? 1500 : 1000 - i, draggable: enAjuste, animation: enAjuste ? maps.Animation.BOUNCE : null });
       m.addListener("click", () => abrir(p));
+      if (enAjuste) {
+        m.addListener("dragstart", () => m.setAnimation(null));
+        m.addListener("dragend", () => { const q = m.getPosition(); moverPin.mutate({ p, lat: q.lat(), lng: q.lng() }); });
+      }
       markersRef.current.set(p.id, m);
       bounds.extend(pos);
     });
-    if (ubicadas.length >= 1) map.fitBounds(bounds, 60);
-    else { map.setCenter(salida); map.setZoom(12); }
-  }, [ubicadas, listo, salida]);
+    // Sin ajuste en curso: encuadrar todo. En ajuste: no mover el mapa (el usuario está arrastrando).
+    if (ajustando == null) {
+      if (ubicadas.length >= 1) map.fitBounds(bounds, 60);
+      else { map.setCenter(SALIDA.pos); map.setZoom(12); }
+    }
+  }, [ubicadas, listo, ajustando]);
+
+  // Desde el popup (HTML plano) se llama a esta función global para entrar en modo ajuste
+  useEffect(() => {
+    (window as any).__rcAjustar = (id: number) => { setAjustando(id); infoRef.current?.close(); const m = markersRef.current.get(id); if (m && mapRef.current) { mapRef.current.panTo(m.getPosition()); if (mapRef.current.getZoom() < 17) mapRef.current.setZoom(18); } };
+    return () => { delete (window as any).__rcAjustar; };
+  }, []);
 
   const abrir = (p: Parada) => {
     setSel(p.id);
@@ -140,7 +142,11 @@ export default function RecorridosPage() {
       <div style="margin-top:4px"><b>${fmtN(p.bultos)} bultos</b> · ${fmtN(p.kg)} kg sueltos · ${fmtN(p.atados)} atados${p.unidades ? ` · ${fmtN(p.unidades)} un.` : ""}</div>
       <div style="color:#8b8f88;font-size:12px;margin-top:4px">${esc([p.address, p.city].filter(Boolean).join(", "))}</div>
       <div style="color:#8b8f88;font-size:12px">Remito ${esc(formatRemito(p))}${p.status === "draft" ? " · borrador" : ""}${p.phone ? ` · ${esc(p.phone)}` : ""}</div>
-      <a href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}" target="_blank" rel="noopener" style="display:inline-block;margin-top:8px;color:#3a67a3;font-weight:600;text-decoration:none">Cómo llegar ↗</a>
+      <div style="font-size:12px;margin-top:4px;color:${esPrecisa(p.geoPrecision) ? "#5f8020" : "#c08a1e"}">Ubicación ${esc(precisionLabel(p.geoPrecision))}</div>
+      <div style="display:flex;gap:12px;margin-top:8px">
+        <a href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}" target="_blank" rel="noopener" style="color:#3a67a3;font-weight:600;text-decoration:none">Cómo llegar ↗</a>
+        <a href="#" onclick="window.__rcAjustar && window.__rcAjustar(${p.id}); return false;" style="color:#3a67a3;font-weight:600;text-decoration:none">Ajustar pin</a>
+      </div>
     </div>`);
     infoRef.current.open({ map, anchor: m });
   };
@@ -148,17 +154,10 @@ export default function RecorridosPage() {
   const guardar = useMutation({
     mutationFn: async (e: NonNullable<typeof edit>) => {
       setUbicando(true);
-      let lat: string | null = null, lng: string | null = null, geoAddress: string | null = null, aviso: string | undefined;
-      try {
-        if (e.address.trim()) {
-          const g = await geocodeAddress(e.address, e.city);
-          if (g) { lat = g.lat.toFixed(7); lng = g.lng.toFixed(7); geoAddress = geoKey(e.address, e.city); if (g.partial) aviso = `Ubicación aproximada: Google interpretó "${g.formatted}".`; }
-          else aviso = "Google no encontró esa dirección. Probá con calle, número y localidad.";
-        }
-      } catch (err: any) { aviso = `No se pudo ubicar: ${err?.message ?? "error de Google Maps"}`; }
-      finally { setUbicando(false); }
-      await apiRequest("PATCH", `/api/customers/${e.customerId}`, { address: e.address || null, city: e.city || null, deliveryFrom: normalizarHora(e.deliveryFrom) || null, deliveryTo: normalizarHora(e.deliveryTo) || null, lat, lng, geoAddress });
-      return aviso;
+      // Mismas reglas de precisión que la ficha del cliente: sin altura exacta no se ubica (ver geoParaGuardar)
+      const geo = await geoParaGuardar({ address: e.address, city: e.city }, null).finally(() => setUbicando(false));
+      await apiRequest("PATCH", `/api/customers/${e.customerId}`, { address: e.address || null, city: e.city || null, deliveryFrom: normalizarHora(e.deliveryFrom) || null, deliveryTo: normalizarHora(e.deliveryTo) || null, lat: geo.lat, lng: geo.lng, geoAddress: geo.geoAddress, geoPrecision: geo.geoPrecision });
+      return geo.aviso;
     },
     onSuccess: (aviso) => {
       queryClient.invalidateQueries({ queryKey: ["/api/recorridos"] });
@@ -167,6 +166,16 @@ export default function RecorridosPage() {
       setEdit(null);
     },
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  // Pin movido a mano: se guarda tal cual, con precisión MANUAL (no se vuelve a geocodificar mientras no cambie la dirección)
+  const moverPin = useMutation({
+    mutationFn: async ({ p, lat, lng }: { p: Parada; lat: number; lng: number }) => {
+      await apiRequest("PATCH", `/api/customers/${p.customerId}`, { lat: lat.toFixed(7), lng: lng.toFixed(7), geoAddress: geoKey(p.address, p.city), geoPrecision: "MANUAL" });
+      return p;
+    },
+    onSuccess: (p) => { setAjustando(null); queryClient.invalidateQueries({ queryKey: ["/api/recorridos"] }); queryClient.invalidateQueries({ queryKey: ["/api/customers"] }); toast({ title: "Pin ajustado", description: `${p.customerName}: posición guardada como exacta.` }); },
+    onError: (e: any) => { setAjustando(null); toast({ title: "Error", description: e.message, variant: "destructive" }); },
   });
 
   const abrirEdicion = (p: Parada) => setEdit({ customerId: p.customerId, address: p.address ?? "", city: p.city ?? "", deliveryFrom: p.deliveryFrom ?? "", deliveryTo: p.deliveryTo ?? "" });
@@ -228,7 +237,7 @@ export default function RecorridosPage() {
 
             <div className="vx-card rc-list">
               <div className="vx-chead"><span className="t"><Truck className="h-4 w-4" /> Orden sugerido por horario</span><span className="n">tocá uno para verlo en el mapa</span></div>
-              <div className="rc-salida"><span className="rc-salida-dot" /> Salida: {SALIDA.label}{!salida.exacta && <span style={{ color: "#c08a1e" }}> · posición aproximada</span>}</div>
+              <div className="rc-salida"><span className="rc-salida-dot" /> Salida: {SALIDA.label}</div>
               <div className="rc-rows">
                 {isLoading ? <div style={{ padding: 16 }}><Skeleton className="h-24 w-full" /></div> : ubicadas.length === 0 && sinUbicar.length === 0 ? (
                   <div style={{ padding: "28px 18px", textAlign: "center", color: "#8b8f88", fontSize: 14 }}>No hay pedidos para {fechaLabel}</div>
@@ -238,10 +247,12 @@ export default function RecorridosPage() {
                     <div className="rc-main">
                       <b>{p.customerName}{p.status === "draft" && <span className="vx-chip par" style={{ marginLeft: 6 }}>borrador</span>}</b>
                       <span><Clock className="h-3 w-3" /> {horario(p)} · {formatRemito(p)}</span>
-                      <span className="rc-dir"><MapPin className="h-3 w-3" /> {[p.address, p.city].filter(Boolean).join(", ")}</span>
+                      <span className="rc-dir"><MapPin className="h-3 w-3" /> {[p.address, p.city].filter(Boolean).join(", ")}{!esPrecisa(p.geoPrecision) && <span className="vx-chip par" title={`Ubicación ${precisionLabel(p.geoPrecision)}`}>{p.geoPrecision ? "aprox." : "verificar"}</span>}</span>
+                      {ajustando === p.id && <span style={{ color: "#3a67a3", fontWeight: 600 }}>Arrastrá el pin azul en el mapa hasta el lugar exacto y soltalo · <button className="vx-link" onClick={(e) => { e.stopPropagation(); setAjustando(null); }}>cancelar</button></span>}
                       {renderEditor(p)}
                     </div>
                     <div className="rc-bul">{fmtN(p.bultos)} bultos<small>{fmtN(p.kg)} kg · {fmtN(p.atados)} at.</small></div>
+                    <button className="vx-ic" title="Ajustar el pin a mano en el mapa" onClick={(e) => { e.stopPropagation(); (window as any).__rcAjustar?.(p.id); }}><LocateFixed className="h-4 w-4" /></button>
                     <button className="vx-ic" title="Editar dirección y horario" onClick={(e) => { e.stopPropagation(); abrirEdicion(p); }}><Pencil className="h-4 w-4" /></button>
                   </div>
                 ))}
@@ -254,7 +265,7 @@ export default function RecorridosPage() {
                         <div className="rc-main">
                           <b>{p.customerName}{p.status === "draft" && <span className="vx-chip par" style={{ marginLeft: 6 }}>borrador</span>}</b>
                           <span><Clock className="h-3 w-3" /> {horario(p)} · {formatRemito(p)}</span>
-                          <span className="rc-dir">{(p.address ?? "").trim() ? <><MapPin className="h-3 w-3" /> {[p.address, p.city].filter(Boolean).join(", ")} · <i>no se pudo ubicar, revisá la dirección</i></> : <i>sin dirección cargada</i>}</span>
+                          <span className="rc-dir">{(p.address ?? "").trim() ? <><MapPin className="h-3 w-3" /> {[p.address, p.city].filter(Boolean).join(", ")} · <i>sin ubicar: Google no encontró la altura exacta, revisá la dirección</i></> : <i>sin dirección cargada</i>}</span>
                           {renderEditor(p)}
                         </div>
                         <div className="rc-bul">{fmtN(p.bultos)} bultos<small>{fmtN(p.kg)} kg · {fmtN(p.atados)} at.</small></div>
@@ -268,7 +279,7 @@ export default function RecorridosPage() {
               </div>
               {ubicadas.length > 0 && (
                 <div className="rc-foot">
-                  <a className="vx-btn" href={`https://www.google.com/maps/dir/?api=1&origin=${salida.lat},${salida.lng}&destination=${ubicadas[ubicadas.length - 1].lat},${ubicadas[ubicadas.length - 1].lng}&waypoints=${ubicadas.slice(0, -1).slice(0, 9).map((p) => `${p.lat},${p.lng}`).join("|")}&travelmode=driving`} target="_blank" rel="noopener noreferrer" title="Abre Google Maps saliendo del galpón con las primeras 10 paradas en este orden">
+                  <a className="vx-btn" href={`https://www.google.com/maps/dir/?api=1&origin=${SALIDA.pos.lat},${SALIDA.pos.lng}&destination=${ubicadas[ubicadas.length - 1].lat},${ubicadas[ubicadas.length - 1].lng}&waypoints=${ubicadas.slice(0, -1).slice(0, 9).map((p) => `${p.lat},${p.lng}`).join("|")}&travelmode=driving`} target="_blank" rel="noopener noreferrer" title="Abre Google Maps saliendo del galpón con las primeras 10 paradas en este orden">
                     <ExternalLink className="h-4 w-4" /> Abrir recorrido en Google Maps
                   </a>
                   <span className="n">Ver pedido: <button className="vx-link" onClick={() => sel && setLocation(`/orders/${sel}`)} disabled={!sel}>{sel ? formatRemito(paradas.find((p) => p.id === sel)!) : "elegí una parada"}</button></span>
@@ -276,7 +287,7 @@ export default function RecorridosPage() {
               )}
             </div>
           </div>
-          <div className="vx-note">Azul oscuro: punto de salida · Verde: entrega antes de las 10 · Naranja: después de las 10 · Gris: sin horario. Los bultos son cajones, bolsas y bandejas; las líneas de Bolsa FV no cuentan. Pedidos en borrador incluidos.</div>
+          <div className="vx-note">Azul oscuro: punto de salida · Verde: entrega antes de las 10 · Naranja: después de las 10 · Gris: sin horario. Los bultos son cajones, bolsas y bandejas; las líneas de Bolsa FV no cuentan. Pedidos en borrador incluidos. "aprox." = Google estimó la altura dentro de la cuadra: verificá el pin y ajustalo a mano si hace falta (icono de mira).</div>
         </div>
       </div>
     </Layout>

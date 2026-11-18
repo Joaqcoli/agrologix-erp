@@ -2464,7 +2464,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // 16/11: alias camelCase de los campos que usa la pantalla (SELECT * devuelve snake_case)
       const rows = await db.execute(drizzleSql`
         SELECT *, has_iva AS "hasIva", bolsa_fv AS "bolsaFv", salesperson_name AS "salespersonName", comision_alta::text AS "comisionAlta",
-          lat::text AS lat, lng::text AS lng, geo_address AS "geoAddress", delivery_from AS "deliveryFrom", delivery_to AS "deliveryTo"
+          lat::text AS lat, lng::text AS lng, geo_address AS "geoAddress", geo_precision AS "geoPrecision", delivery_from AS "deliveryFrom", delivery_to AS "deliveryTo"
         FROM customers
         WHERE salesperson_name = ${user.name} AND active = true
         ORDER BY name
@@ -2540,7 +2540,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const rows = await db.execute(drizzleSql`
         SELECT o.id, o.folio, o.remito_num AS "remitoNum", o.status, o.notes,
           c.id AS "customerId", c.name AS "customerName", c.address, c.city, c.phone,
-          c.lat::text AS lat, c.lng::text AS lng, c.geo_address AS "geoAddress", c.delivery_from AS "deliveryFrom", c.delivery_to AS "deliveryTo",
+          c.lat::text AS lat, c.lng::text AS lng, c.geo_address AS "geoAddress", c.geo_precision AS "geoPrecision", c.delivery_from AS "deliveryFrom", c.delivery_to AS "deliveryTo",
           COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) IN ('CAJON','BOLSA','BANDEJA') THEN oi.quantity::numeric END), 0)::float AS bultos,
           COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) = 'KG' THEN oi.quantity::numeric END), 0)::float AS kg,
           COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) = 'ATADO' THEN oi.quantity::numeric END), 0)::float AS atados,

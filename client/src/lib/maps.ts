@@ -31,7 +31,13 @@ export function loadGoogleMaps(): Promise<any> {
   return window.__gmapsLoading;
 }
 
-export type GeoResult = { lat: number; lng: number; formatted: string; partial: boolean };
+/** locationType de Google: ROOFTOP (número exacto) · RANGE_INTERPOLATED (estimado entre números de la cuadra) ·
+ *  GEOMETRIC_CENTER (centro de una calle/zona) · APPROXIMATE (solo la localidad). */
+export type GeoPrecision = "ROOFTOP" | "RANGE_INTERPOLATED" | "GEOMETRIC_CENTER" | "APPROXIMATE" | "MANUAL";
+export type GeoResult = { lat: number; lng: number; formatted: string; partial: boolean; precision: GeoPrecision; tieneNumero: boolean };
+export const precisionLabel = (p: string | null | undefined) =>
+  p === "ROOFTOP" ? "exacta" : p === "MANUAL" ? "ajustada a mano" : p === "RANGE_INTERPOLATED" ? "estimada en la cuadra" : p === "GEOMETRIC_CENTER" ? "aproximada (centro de la calle)" : p === "APPROXIMATE" ? "aproximada (solo localidad)" : "sin precisión conocida";
+export const esPrecisa = (p: string | null | undefined) => p === "ROOFTOP" || p === "MANUAL";
 
 /** Geocodifica "dirección, ciudad" sesgado al AMBA (Argentina). Devuelve null si Google no encuentra nada. */
 export async function geocodeAddress(address: string, city?: string | null): Promise<GeoResult | null> {
@@ -47,30 +53,46 @@ export async function geocodeAddress(address: string, city?: string | null): Pro
   const r = res?.results?.[0];
   if (!r) return null;
   const loc = r.geometry.location;
-  return { lat: typeof loc.lat === "function" ? loc.lat() : loc.lat, lng: typeof loc.lng === "function" ? loc.lng() : loc.lng, formatted: r.formatted_address, partial: !!r.partial_match };
+  const tipos: string[] = r.address_components?.flatMap((c: any) => c.types ?? []) ?? [];
+  return {
+    lat: typeof loc.lat === "function" ? loc.lat() : loc.lat, lng: typeof loc.lng === "function" ? loc.lng() : loc.lng,
+    formatted: r.formatted_address, partial: !!r.partial_match,
+    precision: (r.geometry.location_type ?? "APPROXIMATE") as GeoPrecision,
+    tieneNumero: tipos.includes("street_number"),
+  };
 }
 
 /** Clave de "dirección + ciudad" para saber si hay que volver a geocodificar. */
 export const geoKey = (address?: string | null, city?: string | null) => `${(address ?? "").trim().toLowerCase()}|${(city ?? "").trim().toLowerCase()}`;
 
-type GeoFields = { address?: string | null; city?: string | null; lat?: string | number | null; lng?: string | number | null; geoAddress?: string | null };
+type GeoFields = { address?: string | null; city?: string | null; lat?: string | number | null; lng?: string | number | null; geoAddress?: string | null; geoPrecision?: string | null };
+export type GeoGuardar = { lat: string | null; lng: string | null; geoAddress: string | null; geoPrecision: string | null; aviso?: string };
 
 /**
  * Qué coordenadas guardar con el cliente. Si la dirección está vacía → sin coordenadas. Si la dirección o la ciudad
- * cambiaron respecto de lo geocodificado (o nunca se ubicó) → geocodifica. Si Google no la encuentra o falla la carga
- * del mapa, devuelve `aviso` y deja las coordenadas en null (se puede ubicar después desde Recorridos).
+ * cambiaron respecto de lo geocodificado (o nunca se ubicó) → geocodifica. Reglas de precisión (18/11, pedido de
+ * Joaquín): solo se guarda un pin si Google encontró la ALTURA (número de calle); si solo encontró la calle o la
+ * localidad NO se guarda (un pin en el centro de la calle arma mal el recorrido) y se avisa. ROOFTOP = exacta;
+ * RANGE_INTERPOLATED = estimada en la cuadra (se guarda, marcada como aproximada, se puede ajustar a mano).
+ * Un pin ajustado a mano (MANUAL) se conserva mientras no cambie la dirección.
  */
-export async function geoParaGuardar(form: GeoFields, prev?: GeoFields | null): Promise<{ lat: string | null; lng: string | null; geoAddress: string | null; aviso?: string }> {
+export async function geoParaGuardar(form: GeoFields, prev?: GeoFields | null): Promise<GeoGuardar> {
   const addr = (form.address ?? "").trim();
-  if (!addr) return { lat: null, lng: null, geoAddress: null };
+  if (!addr) return { lat: null, lng: null, geoAddress: null, geoPrecision: null };
   const key = geoKey(form.address, form.city);
   const prevKey = prev?.geoAddress ?? null;
-  if (prevKey === key && prev?.lat != null && prev?.lng != null) return { lat: String(prev.lat), lng: String(prev.lng), geoAddress: key };
+  if (prevKey === key && prev?.lat != null && prev?.lng != null) return { lat: String(prev.lat), lng: String(prev.lng), geoAddress: key, geoPrecision: prev?.geoPrecision ?? null };
   try {
     const g = await geocodeAddress(addr, form.city);
-    if (!g) return { lat: null, lng: null, geoAddress: null, aviso: "Google no encontró esa dirección. El cliente se guardó igual; podés ubicarlo a mano desde Recorridos." };
-    return { lat: g.lat.toFixed(7), lng: g.lng.toFixed(7), geoAddress: key, aviso: g.partial ? `Ubicación aproximada: Google interpretó "${g.formatted}". Revisala en Recorridos.` : undefined };
+    if (!g) return { lat: null, lng: null, geoAddress: null, geoPrecision: null, aviso: "Google no encontró esa dirección. El cliente se guardó sin ubicar; revisá calle, altura y localidad o ubicalo a mano desde Recorridos." };
+    if (!g.tieneNumero || g.precision === "APPROXIMATE" || g.precision === "GEOMETRIC_CENTER") {
+      return { lat: null, lng: null, geoAddress: null, geoPrecision: null, aviso: `Google solo encontró "${g.formatted}", sin la altura exacta. No se ubicó en el mapa: revisá la dirección o ubicalo a mano desde Recorridos.` };
+    }
+    return {
+      lat: g.lat.toFixed(7), lng: g.lng.toFixed(7), geoAddress: key, geoPrecision: g.precision,
+      aviso: g.precision !== "ROOFTOP" || g.partial ? `Ubicación estimada en la cuadra (Google interpretó "${g.formatted}"). Verificala en Recorridos y ajustá el pin si hace falta.` : undefined,
+    };
   } catch (e: any) {
-    return { lat: null, lng: null, geoAddress: null, aviso: `No se pudo ubicar la dirección (${e?.message ?? "error de Google Maps"}). El cliente se guardó igual.` };
+    return { lat: null, lng: null, geoAddress: null, geoPrecision: null, aviso: `No se pudo ubicar la dirección (${e?.message ?? "error de Google Maps"}). El cliente se guardó sin ubicar.` };
   }
 }
