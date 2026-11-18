@@ -17,7 +17,7 @@ type Parada = {
   id: number; folio: string; remitoNum: number | null; status: "approved" | "draft"; notes: string | null;
   customerId: number; customerName: string; address: string | null; city: string | null; phone: string | null;
   lat: string | null; lng: string | null; geoAddress: string | null; geoPrecision: string | null; deliveryFrom: string | null; deliveryTo: string | null;
-  bultos: number; kg: number; atados: number; unidades: number; items: number;
+  bultos: number; kg: number; atados: number; atadosBultos: number; maples: number; unidades: number; items: number;
 };
 
 const localStr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -39,6 +39,11 @@ function pinIcon(maps: any, n: number, color: string) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="44" viewBox="0 0 34 44"><path d="M17 1C8.2 1 1 8.2 1 17c0 11 16 26 16 26s16-15 16-26C33 8.2 25.8 1 17 1z" fill="${color}" stroke="#fff" stroke-width="2"/><text x="17" y="22" text-anchor="middle" font-family="Inter,Arial" font-size="13" font-weight="700" fill="#fff">${n}</text></svg>`;
   return { url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg), scaledSize: new maps.Size(34, 44), anchor: new maps.Point(17, 43) };
 }
+// Equivalencias a bultos (18/11, Joaquín): 10 kg sueltos = 1 bulto; atados según producto (lo calcula el servidor);
+// 12 maples de huevos = 1 cajón. Las unidades sueltas no se convierten.
+const KG_POR_BULTO = 10, MAPLES_POR_CAJON = 12;
+const equivalentes = (p: { kg: number; atadosBultos: number; maples: number }) => p.kg / KG_POR_BULTO + p.atadosBultos + p.maples / MAPLES_POR_CAJON;
+const fmtAprox = (v: number) => (Math.round(v * 2) / 2).toLocaleString("es-AR"); // a medio bulto
 const colorDe = (p: Parada) => !p.deliveryFrom ? "#8b8f88" : p.deliveryFrom < "10:00" ? "#6b8a2a" : "#c08a1e";
 
 export default function RecorridosPage() {
@@ -69,7 +74,7 @@ export default function RecorridosPage() {
   const manana = localStr(new Date(Date.now() + 86400000));
   const ubicadas = useMemo(() => paradas.filter(ubicada).sort((a, b) => (a.deliveryFrom ?? "99").localeCompare(b.deliveryFrom ?? "99") || a.customerName.localeCompare(b.customerName)), [paradas]);
   const sinUbicar = useMemo(() => paradas.filter((p) => !ubicada(p)), [paradas]);
-  const tot = useMemo(() => paradas.reduce((a, p) => ({ bultos: a.bultos + p.bultos, kg: a.kg + p.kg, atados: a.atados + p.atados, unidades: a.unidades + p.unidades }), { bultos: 0, kg: 0, atados: 0, unidades: 0 }), [paradas]);
+  const tot = useMemo(() => paradas.reduce((a, p) => ({ bultos: a.bultos + p.bultos, kg: a.kg + p.kg, atados: a.atados + p.atados, atadosBultos: a.atadosBultos + p.atadosBultos, maples: a.maples + p.maples, unidades: a.unidades + p.unidades }), { bultos: 0, kg: 0, atados: 0, atadosBultos: 0, maples: 0, unidades: 0 }), [paradas]);
   const orden = useMemo(() => new Map(ubicadas.map((p, i) => [p.id, i + 1])), [ubicadas]);
 
   // Mapa: se crea cuando el div está en pantalla (una sola vez)
@@ -139,7 +144,8 @@ export default function RecorridosPage() {
     infoRef.current.setContent(`<div style="font-family:Inter,system-ui;font-size:13px;min-width:220px">
       <div style="font-family:'Bricolage Grotesque',Inter;font-size:15px;font-weight:700;margin-bottom:4px">${orden.get(p.id)}. ${esc(p.customerName)}</div>
       <div style="color:#5f8020;font-weight:600">Entrega ${esc(horario(p))}</div>
-      <div style="margin-top:4px"><b>${fmtN(p.bultos)} bultos</b> · ${fmtN(p.kg)} kg sueltos · ${fmtN(p.atados)} atados${p.unidades ? ` · ${fmtN(p.unidades)} un.` : ""}</div>
+      <div style="margin-top:4px"><b>${fmtN(p.bultos)} bultos</b> · ${fmtN(p.kg)} kg sueltos · ${fmtN(p.atados)} atados${p.maples ? ` · ${fmtN(p.maples)} maples` : ""}${p.unidades ? ` · ${fmtN(p.unidades)} un.` : ""}</div>
+      <div style="font-size:12px;color:#5f8020">≈ ${fmtAprox(p.bultos + equivalentes(p))} bultos en la camioneta</div>
       <div style="color:#8b8f88;font-size:12px;margin-top:4px">${esc([p.address, p.city].filter(Boolean).join(", "))}</div>
       <div style="color:#8b8f88;font-size:12px">Remito ${esc(formatRemito(p))}${p.status === "draft" ? " · borrador" : ""}${p.phone ? ` · ${esc(p.phone)}` : ""}</div>
       <div style="font-size:12px;margin-top:4px;color:${esPrecisa(p.geoPrecision) ? "#5f8020" : "#c08a1e"}">Ubicación ${esc(precisionLabel(p.geoPrecision))}</div>
@@ -216,9 +222,9 @@ export default function RecorridosPage() {
 
           <div className="vx-kpis c4">
             <div className="vx-kpi main"><div className="lab">Pedidos del día</div><div className="val">{paradas.length}</div><div className="note">{ubicadas.length} ubicados{sinUbicar.length ? ` · ${sinUbicar.length} sin ubicar` : ""}</div></div>
-            <div className="vx-kpi"><div className="lab">Bultos</div><div className="val">{fmtN(tot.bultos)}</div><div className="note">cajones, bolsas y bandejas</div></div>
-            <div className="vx-kpi"><div className="lab">Kilos sueltos</div><div className="val">{fmtN(tot.kg)} kg</div><div className="note">no cuentan como bulto</div></div>
-            <div className="vx-kpi"><div className="lab">Atados</div><div className="val">{fmtN(tot.atados)}</div><div className="note">{tot.unidades ? `+ ${fmtN(tot.unidades)} unidades / maples` : "verdura de hoja"}</div></div>
+            <div className="vx-kpi"><div className="lab">Bultos</div><div className="val">{fmtN(tot.bultos)}</div><div className="note">cajones, bolsas y bandejas · <b>≈ {fmtAprox(tot.bultos + equivalentes(tot))} en total</b> sumando kilos, atados y maples</div></div>
+            <div className="vx-kpi"><div className="lab">Kilos sueltos</div><div className="val">{fmtN(tot.kg)} kg</div><div className="note">Aproximadamente {fmtAprox(tot.kg / KG_POR_BULTO)} bultos (10 kg = 1 bulto)</div></div>
+            <div className="vx-kpi"><div className="lab">Atados</div><div className="val">{fmtN(tot.atados)}</div><div className="note">Aproximadamente {fmtAprox(tot.atadosBultos)} bultos según producto{tot.maples ? ` · ${fmtN(tot.maples)} maples ≈ ${fmtAprox(tot.maples / MAPLES_POR_CAJON)} cajones` : ""}{tot.unidades ? ` · ${fmtN(tot.unidades)} unidades` : ""}</div></div>
           </div>
 
           {error && <div className="vx-err">Error al cargar: {String((error as any).message ?? error)}</div>}
@@ -251,7 +257,7 @@ export default function RecorridosPage() {
                       {ajustando === p.id && <span style={{ color: "#3a67a3", fontWeight: 600 }}>Arrastrá el pin azul en el mapa hasta el lugar exacto y soltalo · <button className="vx-link" onClick={(e) => { e.stopPropagation(); setAjustando(null); }}>cancelar</button></span>}
                       {renderEditor(p)}
                     </div>
-                    <div className="rc-bul">{fmtN(p.bultos)} bultos<small>{fmtN(p.kg)} kg · {fmtN(p.atados)} at.</small></div>
+                    <div className="rc-bul">{fmtN(p.bultos)} bultos<small>{fmtN(p.kg)} kg · {fmtN(p.atados)} at.{p.maples ? ` · ${fmtN(p.maples)} mp.` : ""}</small><small>≈ {fmtAprox(p.bultos + equivalentes(p))} en total</small></div>
                     <button className="vx-ic" title="Ajustar el pin a mano en el mapa" onClick={(e) => { e.stopPropagation(); (window as any).__rcAjustar?.(p.id); }}><LocateFixed className="h-4 w-4" /></button>
                     <button className="vx-ic" title="Editar dirección y horario" onClick={(e) => { e.stopPropagation(); abrirEdicion(p); }}><Pencil className="h-4 w-4" /></button>
                   </div>
@@ -268,7 +274,7 @@ export default function RecorridosPage() {
                           <span className="rc-dir">{(p.address ?? "").trim() ? <><MapPin className="h-3 w-3" /> {[p.address, p.city].filter(Boolean).join(", ")} · <i>sin ubicar: Google no encontró la altura exacta, revisá la dirección</i></> : <i>sin dirección cargada</i>}</span>
                           {renderEditor(p)}
                         </div>
-                        <div className="rc-bul">{fmtN(p.bultos)} bultos<small>{fmtN(p.kg)} kg · {fmtN(p.atados)} at.</small></div>
+                        <div className="rc-bul">{fmtN(p.bultos)} bultos<small>{fmtN(p.kg)} kg · {fmtN(p.atados)} at.{p.maples ? ` · ${fmtN(p.maples)} mp.` : ""}</small><small>≈ {fmtAprox(p.bultos + equivalentes(p))} en total</small></div>
                         {!(edit && edit.customerId === p.customerId) && (
                           <button className="vx-btn" style={{ padding: "6px 10px", fontSize: 12.5 }} onClick={() => abrirEdicion(p)}><LocateFixed className="h-3.5 w-3.5" /> Ubicar</button>
                         )}
@@ -287,7 +293,7 @@ export default function RecorridosPage() {
               )}
             </div>
           </div>
-          <div className="vx-note">Azul oscuro: punto de salida · Verde: entrega antes de las 10 · Naranja: después de las 10 · Gris: sin horario. Los bultos son cajones, bolsas y bandejas; las líneas de Bolsa FV no cuentan. Pedidos en borrador incluidos. "aprox." = Google estimó la altura dentro de la cuadra: verificá el pin y ajustalo a mano si hace falta (icono de mira).</div>
+          <div className="vx-note">Azul oscuro: punto de salida · Verde: entrega antes de las 10 · Naranja: después de las 10 · Gris: sin horario. Los bultos son cajones, bolsas y bandejas; las líneas de Bolsa FV no cuentan. Equivalencias aproximadas: 10 kg sueltos = 1 bulto; atados: puerro, verdeo, perejil y cilantro 5 = 1, espinaca, remolacha, tomillo, orégano, ciboulette y acelga 10 = 1, albahaca 12 = 1, rúcula 24 = 1 (otros atados 10 = 1); 12 maples de huevos = 1 cajón. Pedidos en borrador incluidos. "aprox." = Google estimó la altura dentro de la cuadra: verificá el pin y ajustalo a mano si hace falta (icono de mira).</div>
         </div>
       </div>
     </Layout>

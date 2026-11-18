@@ -2544,11 +2544,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) IN ('CAJON','BOLSA','BANDEJA') THEN oi.quantity::numeric END), 0)::float AS bultos,
           COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) = 'KG' THEN oi.quantity::numeric END), 0)::float AS kg,
           COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) = 'ATADO' THEN oi.quantity::numeric END), 0)::float AS atados,
-          COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) IN ('UNIDAD','MAPLE') THEN oi.quantity::numeric END), 0)::float AS unidades,
+          -- 18/11 equivalencias de Joaquín: atados → bultos según producto (puerro/verdeo/perejil/cilantro 5 = 1;
+          -- espinaca/remolacha/tomillo/orégano/ciboulette/acelga 10 = 1; albahaca 12 = 1; rúcula 24 = 1; resto 10 = 1)
+          COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) = 'ATADO' THEN oi.quantity::numeric / (CASE
+            WHEN COALESCE(p.name, oi.raw_product_name, '') ~* 'puerro|verdeo|perejil|cilantro' THEN 5
+            WHEN COALESCE(p.name, oi.raw_product_name, '') ~* 'albahaca' THEN 12
+            WHEN COALESCE(p.name, oi.raw_product_name, '') ~* 'r[uú]cula' THEN 24
+            ELSE 10 END) END), 0)::float AS "atadosBultos",
+          COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) = 'MAPLE' THEN oi.quantity::numeric END), 0)::float AS maples,
+          COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) = 'UNIDAD' THEN oi.quantity::numeric END), 0)::float AS unidades,
           COUNT(oi.id) FILTER (WHERE oi.bolsa_type IS NULL)::int AS items
         FROM orders o
         JOIN customers c ON c.id = o.customer_id
         LEFT JOIN order_items oi ON oi.order_id = o.id
+        LEFT JOIN products p ON p.id = oi.product_id
         WHERE o.order_date::date = ${date}::date AND o.status IN ('approved', 'draft')
         GROUP BY o.id, c.id
         ORDER BY c.delivery_from NULLS LAST, c.name, o.id`);

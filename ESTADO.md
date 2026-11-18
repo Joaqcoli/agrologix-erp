@@ -31,6 +31,9 @@
   encuentra la ALTURA (solo calle o localidad) NO se guarda el pin y se avisa; en Recorridos los pines no exactos llevan
   chip "aprox." ("verificar" si se ubicaron antes de este cambio, sin precisión conocida) y cualquier pin se corrige con
   "Ajustar pin" (icono de mira o link del popup): queda arrastrable, al soltarlo se guarda como MANUAL.
+  Equivalencias a bultos (Joaquín, 18/11; en el SQL de `/api/recorridos` y en las tarjetas): 10 kg sueltos = 1 bulto;
+  atados por producto: puerro/verdeo/perejil/cilantro 5 = 1, espinaca/remolacha/tomillo/orégano/ciboulette/acelga 10 = 1,
+  albahaca 12 = 1, rúcula 24 = 1, otros atados 10 = 1 (supuesto); 12 maples de huevos = 1 cajón; unidades no convierten.
   17-nov **Vista del vendedor con el estilo del admin, Comisiones simplificada y Cuentas Corrientes del vendedor**
   (solo presentación + una sección nueva de lectura; ningún cálculo cambió). (1) Las 5 pantallas del vendedor
   (Dashboard, Pedidos, detalle de pedido, Clientes, Comisiones) pasan al sistema visual de las pantallas rediseñadas del
