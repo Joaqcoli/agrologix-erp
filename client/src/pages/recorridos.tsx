@@ -144,8 +144,8 @@ export default function RecorridosPage() {
     infoRef.current.setContent(`<div style="font-family:Inter,system-ui;font-size:13px;min-width:220px">
       <div style="font-family:'Bricolage Grotesque',Inter;font-size:15px;font-weight:700;margin-bottom:4px">${orden.get(p.id)}. ${esc(p.customerName)}</div>
       <div style="color:#5f8020;font-weight:600">Entrega ${esc(horario(p))}</div>
-      <div style="margin-top:4px"><b>${fmtN(p.bultos)} bultos</b> · ${fmtN(p.kg)} kg sueltos · ${fmtN(p.atados)} atados${p.maples ? ` · ${fmtN(p.maples)} maples` : ""}${p.unidades ? ` · ${fmtN(p.unidades)} un.` : ""}</div>
-      <div style="font-size:12px;color:#5f8020">≈ ${fmtAprox(p.bultos + equivalentes(p))} bultos en la camioneta</div>
+      <div style="margin-top:4px"><b>≈ ${fmtAprox(p.bultos + equivalentes(p))} bultos en la camioneta</b></div>
+      <div style="font-size:12px;color:#8b8f88">${fmtN(p.bultos)} bultos · ${fmtN(p.kg)} kg sueltos · ${fmtN(p.atados)} atados${p.maples ? ` · ${fmtN(p.maples)} maples` : ""}${p.unidades ? ` · ${fmtN(p.unidades)} un.` : ""}</div>
       <div style="color:#8b8f88;font-size:12px;margin-top:4px">${esc([p.address, p.city].filter(Boolean).join(", "))}</div>
       <div style="color:#8b8f88;font-size:12px">Remito ${esc(formatRemito(p))}${p.status === "draft" ? " · borrador" : ""}${p.phone ? ` · ${esc(p.phone)}` : ""}</div>
       <div style="font-size:12px;margin-top:4px;color:${esPrecisa(p.geoPrecision) ? "#5f8020" : "#c08a1e"}">Ubicación ${esc(precisionLabel(p.geoPrecision))}</div>
@@ -257,7 +257,7 @@ export default function RecorridosPage() {
                       {ajustando === p.id && <span style={{ color: "#3a67a3", fontWeight: 600 }}>Arrastrá el pin azul en el mapa hasta el lugar exacto y soltalo · <button className="vx-link" onClick={(e) => { e.stopPropagation(); setAjustando(null); }}>cancelar</button></span>}
                       {renderEditor(p)}
                     </div>
-                    <div className="rc-bul">{fmtN(p.bultos)} bultos<small>{fmtN(p.kg)} kg · {fmtN(p.atados)} at.{p.maples ? ` · ${fmtN(p.maples)} mp.` : ""}</small><small>≈ {fmtAprox(p.bultos + equivalentes(p))} en total</small></div>
+                    <div className="rc-bul">≈ {fmtAprox(p.bultos + equivalentes(p))} bultos<small>{fmtN(p.bultos)} bultos · {fmtN(p.kg)} kg · {fmtN(p.atados)} at.{p.maples ? ` · ${fmtN(p.maples)} mp.` : ""}{p.unidades ? ` · ${fmtN(p.unidades)} un.` : ""}</small></div>
                     <button className="vx-ic" title="Ajustar el pin a mano en el mapa" onClick={(e) => { e.stopPropagation(); (window as any).__rcAjustar?.(p.id); }}><LocateFixed className="h-4 w-4" /></button>
                     <button className="vx-ic" title="Editar dirección y horario" onClick={(e) => { e.stopPropagation(); abrirEdicion(p); }}><Pencil className="h-4 w-4" /></button>
                   </div>
@@ -274,7 +274,7 @@ export default function RecorridosPage() {
                           <span className="rc-dir">{(p.address ?? "").trim() ? <><MapPin className="h-3 w-3" /> {[p.address, p.city].filter(Boolean).join(", ")} · <i>sin ubicar: Google no encontró la altura exacta, revisá la dirección</i></> : <i>sin dirección cargada</i>}</span>
                           {renderEditor(p)}
                         </div>
-                        <div className="rc-bul">{fmtN(p.bultos)} bultos<small>{fmtN(p.kg)} kg · {fmtN(p.atados)} at.{p.maples ? ` · ${fmtN(p.maples)} mp.` : ""}</small><small>≈ {fmtAprox(p.bultos + equivalentes(p))} en total</small></div>
+                        <div className="rc-bul">≈ {fmtAprox(p.bultos + equivalentes(p))} bultos<small>{fmtN(p.bultos)} bultos · {fmtN(p.kg)} kg · {fmtN(p.atados)} at.{p.maples ? ` · ${fmtN(p.maples)} mp.` : ""}{p.unidades ? ` · ${fmtN(p.unidades)} un.` : ""}</small></div>
                         {!(edit && edit.customerId === p.customerId) && (
                           <button className="vx-btn" style={{ padding: "6px 10px", fontSize: 12.5 }} onClick={() => abrirEdicion(p)}><LocateFixed className="h-3.5 w-3.5" /> Ubicar</button>
                         )}
