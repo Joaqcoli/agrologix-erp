@@ -19,6 +19,7 @@ import type { Customer, CustomerContact } from "@shared/schema";
 import { comisionPctEn, fechaBajaComision } from "@shared/comisiones";
 import { formatArPhone } from "@shared/phone";
 import { geoParaGuardar, geoKey } from "@/lib/maps";
+import { normalizarHora } from "@/lib/hora";
 
 // ── A-01: Teléfonos de PEDIDO (customer_contacts). Distintos del teléfono de administración. ──
 function CustomerContactsSection({ customerId }: { customerId: number }) {
@@ -184,7 +185,7 @@ export default function CustomersPage() {
     const geo = await geoParaGuardar(form, editing);
     setUbicando(false);
     if (geo.aviso) toast({ title: "Ubicación", description: geo.aviso });
-    const data = { ...form, lat: geo.lat, lng: geo.lng, geoAddress: geo.geoAddress } as Partial<Customer>;
+    const data = { ...form, lat: geo.lat, lng: geo.lng, geoAddress: geo.geoAddress, deliveryFrom: normalizarHora(form.deliveryFrom) || null, deliveryTo: normalizarHora(form.deliveryTo) || null } as Partial<Customer>;
     if (editing) updateMutation.mutate({ id: editing.id, data });
     else createMutation.mutate(data);
   };
@@ -446,11 +447,11 @@ export default function CustomersPage() {
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="delivery-from">Entrega desde</Label>
-                <Input id="delivery-from" type="time" value={form.deliveryFrom ?? ""} onChange={(e) => setForm({ ...form, deliveryFrom: e.target.value || null })} data-testid="input-delivery-from" />
+                <Input id="delivery-from" inputMode="numeric" placeholder="08:00" value={form.deliveryFrom ?? ""} onChange={(e) => setForm({ ...form, deliveryFrom: e.target.value || null })} onBlur={(e) => setForm({ ...form, deliveryFrom: normalizarHora(e.target.value) || null })} data-testid="input-delivery-from" />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="delivery-to">Entrega hasta</Label>
-                <Input id="delivery-to" type="time" value={form.deliveryTo ?? ""} onChange={(e) => setForm({ ...form, deliveryTo: e.target.value || null })} data-testid="input-delivery-to" />
+                <Input id="delivery-to" inputMode="numeric" placeholder="10:00" value={form.deliveryTo ?? ""} onChange={(e) => setForm({ ...form, deliveryTo: e.target.value || null })} onBlur={(e) => setForm({ ...form, deliveryTo: normalizarHora(e.target.value) || null })} data-testid="input-delivery-to" />
               </div>
               <div className="sm:col-span-2 space-y-1.5">
                 <Label htmlFor="notes">Notas</Label>

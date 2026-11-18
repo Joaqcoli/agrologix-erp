@@ -22,7 +22,10 @@
   direcciones (al 18/11 solo 2 de 60 clientes activos tenían dirección); etapa 2 = ruta optimizada con Routes API.
   Punto de salida (galpón, Capitán Giachino 2380, Malvinas Argentinas) como pin azul oscuro con casita: se geocodifica
   una vez con Google en el navegador (cache localStorage) con posición aproximada de respaldo; es el origen del link
-  "Abrir recorrido en Google Maps" y entra en el encuadre del mapa.
+  "Abrir recorrido en Google Maps" y entra en el encuadre del mapa. Horario de entrega: campo de texto "HH:MM"
+  normalizado al salir (`client/src/lib/hora.ts`: 8 → 08:00, 930 → 09:30); antes era `<input type="time">`, que en
+  navegadores en inglés pide AM/PM y si no se completa manda vacío (por eso los horarios que cargó Joaquín el 18/11
+  no se guardaron; hay que volver a cargarlos).
   17-nov **Vista del vendedor con el estilo del admin, Comisiones simplificada y Cuentas Corrientes del vendedor**
   (solo presentación + una sección nueva de lectura; ningún cálculo cambió). (1) Las 5 pantallas del vendedor
   (Dashboard, Pedidos, detalle de pedido, Clientes, Comisiones) pasan al sistema visual de las pantallas rediseñadas del

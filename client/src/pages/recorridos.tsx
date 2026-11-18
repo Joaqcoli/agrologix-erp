@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { MapPin, Clock, Truck, AlertTriangle, Pencil, Check, X, ExternalLink, LocateFixed } from "lucide-react";
 import { VX_CSS, fetchJson, formatRemito } from "@/pages/vendedor/rx";
 import { loadGoogleMaps, geocodeAddress, geoKey, GOOGLE_MAPS_KEY } from "@/lib/maps";
+import { normalizarHora } from "@/lib/hora";
 
 type Parada = {
   id: number; folio: string; remitoNum: number | null; status: "approved" | "draft"; notes: string | null;
@@ -156,7 +157,7 @@ export default function RecorridosPage() {
         }
       } catch (err: any) { aviso = `No se pudo ubicar: ${err?.message ?? "error de Google Maps"}`; }
       finally { setUbicando(false); }
-      await apiRequest("PATCH", `/api/customers/${e.customerId}`, { address: e.address || null, city: e.city || null, deliveryFrom: e.deliveryFrom || null, deliveryTo: e.deliveryTo || null, lat, lng, geoAddress });
+      await apiRequest("PATCH", `/api/customers/${e.customerId}`, { address: e.address || null, city: e.city || null, deliveryFrom: normalizarHora(e.deliveryFrom) || null, deliveryTo: normalizarHora(e.deliveryTo) || null, lat, lng, geoAddress });
       return aviso;
     },
     onSuccess: (aviso) => {
@@ -177,8 +178,8 @@ export default function RecorridosPage() {
       <input className="vx-input" placeholder="Calle y número" value={edit.address} onChange={(e) => setEdit({ ...edit, address: e.target.value })} />
       <input className="vx-input" placeholder="Localidad / barrio" value={edit.city} onChange={(e) => setEdit({ ...edit, city: e.target.value })} />
       <div className="rc-hor">
-        <label>Desde <input className="vx-input" type="time" value={edit.deliveryFrom} onChange={(e) => setEdit({ ...edit, deliveryFrom: e.target.value })} /></label>
-        <label>Hasta <input className="vx-input" type="time" value={edit.deliveryTo} onChange={(e) => setEdit({ ...edit, deliveryTo: e.target.value })} /></label>
+        <label>Desde <input className="vx-input" inputMode="numeric" placeholder="08:00" value={edit.deliveryFrom} onChange={(e) => setEdit({ ...edit, deliveryFrom: e.target.value })} onBlur={(e) => setEdit({ ...edit, deliveryFrom: normalizarHora(e.target.value) })} /></label>
+        <label>Hasta <input className="vx-input" inputMode="numeric" placeholder="10:00" value={edit.deliveryTo} onChange={(e) => setEdit({ ...edit, deliveryTo: e.target.value })} onBlur={(e) => setEdit({ ...edit, deliveryTo: normalizarHora(e.target.value) })} /></label>
       </div>
       <div className="rc-acts">
         <button className="vx-btn primary" disabled={guardar.isPending || ubicando} onClick={() => guardar.mutate(edit)}><Check className="h-4 w-4" /> {ubicando ? "Ubicando..." : guardar.isPending ? "Guardando..." : "Guardar y ubicar"}</button>
