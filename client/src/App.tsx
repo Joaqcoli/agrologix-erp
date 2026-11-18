@@ -55,6 +55,7 @@ import VendedorOrders from "@/pages/vendedor/orders";
 import VendedorOrderDetail from "@/pages/vendedor/order-detail";
 import VendedorCustomers from "@/pages/vendedor/customers";
 import VendedorComisiones from "@/pages/vendedor/comisiones";
+import RecorridosPage from "@/pages/recorridos";
 import VendedorCC from "@/pages/vendedor/cc";
 import VendedorCCDetail from "@/pages/vendedor/cc-detail";
 import GalponStock from "@/pages/galpon/stock";
@@ -92,6 +93,7 @@ function Router() {
         {(params) => <OrderDetailPage id={Number(params.id)} />}
       </Route>
       <Route path="/load-list" component={LoadListPage} />
+      <Route path="/recorridos" component={RecorridosPage} />
       <Route path="/stock" component={StockPage} />
       <Route path="/ajustes-stock" component={AjustesStockPage} />
       <Route path="/intake" component={IntakePage} />

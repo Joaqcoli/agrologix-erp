@@ -2,9 +2,24 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-17 (rediseño de la vista del vendedor + Cuentas Corrientes del vendedor + Comisiones simplificada).
+> Última actualización: 2026-11-18 (Recorridos etapa 1; cierre mensual automático de comisiones; vista del vendedor rediseñada).
 
 ## Último trabajo (sep–oct 2026)
+  18-nov **Recorridos (etapa 1)**: nueva sección admin/administrativo `/recorridos` con el mapa de Google de los pedidos
+  de un día (aprobados y borradores), un pin numerado por pedido en orden de horario de entrega (verde antes de las
+  10, naranja después, gris sin horario), popup con cliente, horario, bultos / kg sueltos / atados, remito y "Cómo
+  llegar"; lista lateral con el mismo orden, botón "Abrir recorrido en Google Maps" (hasta 10 paradas) y sección
+  "Sin ubicar" con editor en línea (dirección, localidad, horario) que geocodifica y guarda. Datos nuevos en
+  `customers`: `lat`, `lng`, `geo_address` (clave dirección|ciudad con la que se geocodificó; si cambia, se vuelve a
+  ubicar), `delivery_from`, `delivery_to` (migración aditiva en `server/migrate.ts`). La geocodificación se hace en
+  el NAVEGADOR (`client/src/lib/maps.ts`, Google Geocoder sesgado al AMBA) al guardar el cliente desde Clientes
+  (admin y vendedor) o desde Recorridos; el servidor no llama a Google. Endpoint `GET /api/recorridos?date=` (bultos =
+  CAJON+BOLSA+BANDEJA como `isBulto`; líneas Bolsa FV excluidas). Clave pública de Google Maps restringida por sitio
+  (`https://sistema.vegetalesargentinos.com/*`, APIs Maps JavaScript + Geocoding + Routes) en el proyecto "My First
+  Project" de Google Cloud de la empresa: variable `VITE_GOOGLE_MAPS_KEY` (env var de Render + `.env` local; Vite la
+  lee de la raíz, `envDir`). En localhost el mapa muestra "Google rechazó la clave" porque el referrer no está
+  autorizado (agregar `http://localhost:5001/*` en la clave si se quiere probar local). Pendiente: Joaquín carga las
+  direcciones (al 18/11 solo 2 de 60 clientes activos tenían dirección); etapa 2 = ruta optimizada con Routes API.
   17-nov **Vista del vendedor con el estilo del admin, Comisiones simplificada y Cuentas Corrientes del vendedor**
   (solo presentación + una sección nueva de lectura; ningún cálculo cambió). (1) Las 5 pantallas del vendedor
   (Dashboard, Pedidos, detalle de pedido, Clientes, Comisiones) pasan al sistema visual de las pantallas rediseñadas del

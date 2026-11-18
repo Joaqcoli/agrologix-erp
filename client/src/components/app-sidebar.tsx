@@ -31,6 +31,7 @@ import {
   Scale,
   PhoneIncoming,
   Eye,
+  Route,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +48,7 @@ const navItems = [
   { title: "Stock", url: "/stock", icon: Warehouse },
   { title: "Ajustes de Stock", url: "/ajustes-stock", icon: Scale },
   { title: "Pedidos", url: "/orders", icon: FileText },
+  { title: "Recorridos", url: "/recorridos", icon: Route },
   { title: "Facturas", url: "/invoices", icon: Receipt },
   { title: "Facturas a emitir", url: "/facturas-a-emitir", icon: Receipt },
   { title: "Caja", url: "/caja", icon: Banknote },

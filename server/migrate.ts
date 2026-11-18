@@ -1773,5 +1773,14 @@ export async function runNcMigrations() {
     }
   } catch (e) { console.error("Comisiones transición Juan failed:", e); }
 
+  // 18/11/2026 Recorridos: coordenadas y horario de entrega del cliente (aditivo)
+  for (const stmt of [
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS lat numeric(10,7)`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS lng numeric(10,7)`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS geo_address text`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS delivery_from text`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS delivery_to text`,
+  ]) { try { await db.execute(sql.raw(stmt)); } catch (e) { console.error("Recorridos migration failed:", stmt.slice(0, 70), e); } }
+
   console.log("NC migrations complete.");
 }

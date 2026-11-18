@@ -15,6 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, Search, Pencil, Phone, Mail, MapPin, Users } from "lucide-react";
 import { comisionPctEn, fechaBajaComision } from "@shared/comisiones";
 import { VX_CSS, fmtFechaCorta, hoyAR, fetchJson } from "./rx";
+import { geoParaGuardar, geoKey } from "@/lib/maps";
 
 type Customer = {
   id: number;
@@ -31,6 +32,12 @@ type Customer = {
   comisionAlta: string | null; // 16/11: fecha de alta a efectos de comisión (primer pedido)
   salespersonName: string | null;
   active: boolean;
+  // 18/11 Recorridos
+  lat: string | null;
+  lng: string | null;
+  geoAddress: string | null;
+  deliveryFrom: string | null;
+  deliveryTo: string | null;
 };
 
 const EMPTY: Partial<Customer> = {
@@ -95,10 +102,17 @@ export default function VendedorCustomers() {
   const openCreate = () => { setEditing(null); setForm(EMPTY); setDialogOpen(true); };
   const openEdit = (c: Customer) => { setEditing(c); setForm(c); setDialogOpen(true); };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [ubicando, setUbicando] = useState(false);
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editing) updateMutation.mutate({ id: editing.id, data: form });
-    else createMutation.mutate(form);
+    // 18/11 Recorridos: al guardar, si la dirección cambió se geocodifica desde el navegador (Google)
+    setUbicando(true);
+    const geo = await geoParaGuardar(form, editing);
+    setUbicando(false);
+    if (geo.aviso) toast({ title: "Ubicación", description: geo.aviso });
+    const data = { ...form, lat: geo.lat, lng: geo.lng, geoAddress: geo.geoAddress };
+    if (editing) updateMutation.mutate({ id: editing.id, data });
+    else createMutation.mutate(data);
   };
 
   const q = normTxt(search);
@@ -226,6 +240,19 @@ export default function VendedorCustomers() {
                   value={form.address ?? ""}
                   onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
                 />
+                <p className="text-[11px] text-muted-foreground">
+                  {form.lat && form.lng && form.geoAddress === geoKey(form.address, form.city) ? "Ubicado en el mapa ✓" : (form.address ?? "").trim() ? "Se ubica en el mapa al guardar" : "Sin dirección: no aparece en Recorridos"}
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Entrega desde</Label>
+                <Input type="time" value={form.deliveryFrom ?? ""} onChange={(e) => setForm((f) => ({ ...f, deliveryFrom: e.target.value || null }))} data-testid="input-delivery-from" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Entrega hasta</Label>
+                <Input type="time" value={form.deliveryTo ?? ""} onChange={(e) => setForm((f) => ({ ...f, deliveryTo: e.target.value || null }))} data-testid="input-delivery-to" />
               </div>
             </div>
             <div className="space-y-1.5">
@@ -251,8 +278,8 @@ export default function VendedorCustomers() {
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
                 Cancelar
               </Button>
-              <Button type="submit" disabled={isSaving}>
-                {isSaving ? "Guardando..." : editing ? "Guardar cambios" : "Crear cliente"}
+              <Button type="submit" disabled={isSaving || ubicando}>
+                {ubicando ? "Ubicando dirección..." : isSaving ? "Guardando..." : editing ? "Guardar cambios" : "Crear cliente"}
               </Button>
             </DialogFooter>
           </form>

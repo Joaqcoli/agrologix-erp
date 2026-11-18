@@ -18,6 +18,7 @@ import { Plus, Search, Pencil, Trash2, Users, Building2, Phone, Mail, MapPin, Me
 import type { Customer, CustomerContact } from "@shared/schema";
 import { comisionPctEn, fechaBajaComision } from "@shared/comisiones";
 import { formatArPhone } from "@shared/phone";
+import { geoParaGuardar, geoKey } from "@/lib/maps";
 
 // ── A-01: Teléfonos de PEDIDO (customer_contacts). Distintos del teléfono de administración. ──
 function CustomerContactsSection({ customerId }: { customerId: number }) {
@@ -175,10 +176,17 @@ export default function CustomersPage() {
   const openCreate = () => { setEditing(null); setForm(EMPTY); setDialogOpen(true); };
   const openEdit = (c: Customer) => { setEditing(c); setForm(c); setDialogOpen(true); };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [ubicando, setUbicando] = useState(false);
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editing) updateMutation.mutate({ id: editing.id, data: form });
-    else createMutation.mutate(form);
+    // 18/11 Recorridos: al guardar, si la dirección cambió se geocodifica desde el navegador (Google) y se guardan lat/lng
+    setUbicando(true);
+    const geo = await geoParaGuardar(form, editing);
+    setUbicando(false);
+    if (geo.aviso) toast({ title: "Ubicación", description: geo.aviso });
+    const data = { ...form, lat: geo.lat, lng: geo.lng, geoAddress: geo.geoAddress } as Partial<Customer>;
+    if (editing) updateMutation.mutate({ id: editing.id, data });
+    else createMutation.mutate(data);
   };
 
   const filtered = (customers ?? []).filter((c) =>
@@ -431,7 +439,18 @@ export default function CustomersPage() {
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="address">Dirección</Label>
-                <Input id="address" value={form.address ?? ""} onChange={(e) => setForm({ ...form, address: e.target.value })} data-testid="input-customer-address" />
+                <Input id="address" value={form.address ?? ""} onChange={(e) => setForm({ ...form, address: e.target.value })} data-testid="input-customer-address" placeholder="Calle y número" />
+                <p className="text-[11px] text-muted-foreground">
+                  {form.lat && form.lng && form.geoAddress === geoKey(form.address, form.city) ? "Ubicado en el mapa ✓" : (form.address ?? "").trim() ? "Se ubica en el mapa al guardar" : "Sin dirección: no aparece en Recorridos"}
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="delivery-from">Entrega desde</Label>
+                <Input id="delivery-from" type="time" value={form.deliveryFrom ?? ""} onChange={(e) => setForm({ ...form, deliveryFrom: e.target.value || null })} data-testid="input-delivery-from" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="delivery-to">Entrega hasta</Label>
+                <Input id="delivery-to" type="time" value={form.deliveryTo ?? ""} onChange={(e) => setForm({ ...form, deliveryTo: e.target.value || null })} data-testid="input-delivery-to" />
               </div>
               <div className="sm:col-span-2 space-y-1.5">
                 <Label htmlFor="notes">Notas</Label>
@@ -534,8 +553,8 @@ export default function CustomersPage() {
             </div>
             <DialogFooter className="gap-2">
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>
-              <Button type="submit" disabled={isPending} data-testid="button-save-customer">
-                {isPending ? "Guardando..." : editing ? "Guardar cambios" : "Crear cliente"}
+              <Button type="submit" disabled={isPending || ubicando} data-testid="button-save-customer">
+                {ubicando ? "Ubicando dirección..." : isPending ? "Guardando..." : editing ? "Guardar cambios" : "Crear cliente"}
               </Button>
             </DialogFooter>
           </form>

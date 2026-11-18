@@ -2463,7 +2463,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!user) return res.status(401).json({ error: "User not found" });
       // 16/11: alias camelCase de los campos que usa la pantalla (SELECT * devuelve snake_case)
       const rows = await db.execute(drizzleSql`
-        SELECT *, has_iva AS "hasIva", bolsa_fv AS "bolsaFv", salesperson_name AS "salespersonName", comision_alta::text AS "comisionAlta"
+        SELECT *, has_iva AS "hasIva", bolsa_fv AS "bolsaFv", salesperson_name AS "salespersonName", comision_alta::text AS "comisionAlta",
+          lat::text AS lat, lng::text AS lng, geo_address AS "geoAddress", delivery_from AS "deliveryFrom", delivery_to AS "deliveryTo"
         FROM customers
         WHERE salesperson_name = ${user.name} AND active = true
         ORDER BY name
@@ -2526,6 +2527,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const mias = await cuentasDelVendedor(user.name);
       if (!mias.has(customerId) && !esAdmin(req.session.userRole)) return res.status(403).json({ error: "Forbidden" });
       return res.json(await storage.getPendingOrdersForCustomer(customerId));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ─── Recorridos (18/11/2026): pedidos de un día con ubicación, horario de entrega y bultos ─────────────
+  // Admin y administrativo (el vendedor queda afuera por la whitelist). Bultos = CAJON + BOLSA + BANDEJA (misma regla
+  // que isBulto en storage); los kilos sueltos, atados y unidades se informan aparte. Las líneas "Bolsa FV" no cuentan.
+  app.get("/api/recorridos", requireAuth, async (req, res) => {
+    try {
+      const date = String(req.query.date ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date (YYYY-MM-DD) es obligatorio" });
+      const rows = await db.execute(drizzleSql`
+        SELECT o.id, o.folio, o.remito_num AS "remitoNum", o.status, o.notes,
+          c.id AS "customerId", c.name AS "customerName", c.address, c.city, c.phone,
+          c.lat::text AS lat, c.lng::text AS lng, c.geo_address AS "geoAddress", c.delivery_from AS "deliveryFrom", c.delivery_to AS "deliveryTo",
+          COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) IN ('CAJON','BOLSA','BANDEJA') THEN oi.quantity::numeric END), 0)::float AS bultos,
+          COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) = 'KG' THEN oi.quantity::numeric END), 0)::float AS kg,
+          COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) = 'ATADO' THEN oi.quantity::numeric END), 0)::float AS atados,
+          COALESCE(SUM(CASE WHEN oi.bolsa_type IS NULL AND upper(oi.unit) IN ('UNIDAD','MAPLE') THEN oi.quantity::numeric END), 0)::float AS unidades,
+          COUNT(oi.id) FILTER (WHERE oi.bolsa_type IS NULL)::int AS items
+        FROM orders o
+        JOIN customers c ON c.id = o.customer_id
+        LEFT JOIN order_items oi ON oi.order_id = o.id
+        WHERE o.order_date::date = ${date}::date AND o.status IN ('approved', 'draft')
+        GROUP BY o.id, c.id
+        ORDER BY c.delivery_from NULLS LAST, c.name, o.id`);
+      return res.json(rows.rows);
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 

@@ -30,6 +30,13 @@ export const customers = pgTable("customers", {
   phone: text("phone"),
   address: text("address"),
   city: text("city"),
+  // 18/11/2026 Recorridos: coordenadas (geocodificadas desde el navegador con Google al guardar la dirección),
+  // dirección con la que se geocodificó (si cambia la dirección, hay que volver a ubicar) y horario de entrega.
+  lat: numeric("lat", { precision: 10, scale: 7 }),
+  lng: numeric("lng", { precision: 10, scale: 7 }),
+  geoAddress: text("geo_address"),
+  deliveryFrom: text("delivery_from"), // HH:MM
+  deliveryTo: text("delivery_to"),     // HH:MM
   notes: text("notes"),
   hasIva: boolean("has_iva").notNull().default(false),
   // Fecha desde la que aplica el IVA (NULL = siempre, incluye pedidos viejos). Ver shared/iva.ts hasIvaOn.
