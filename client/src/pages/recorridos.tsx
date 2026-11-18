@@ -251,15 +251,22 @@ export default function RecorridosPage() {
                   <div key={p.id} className={`rc-row${sel === p.id ? " on" : ""}`} onClick={() => abrir(p)} data-testid={`row-parada-${p.id}`}>
                     <div className="rc-num" style={{ background: colorDe(p) }}>{orden.get(p.id)}</div>
                     <div className="rc-main">
-                      <b>{p.customerName}{p.status === "draft" && <span className="vx-chip par" style={{ marginLeft: 6 }}>borrador</span>}</b>
+                      <div className="rc-top">
+                        <b>{p.customerName}{p.status === "draft" && <span className="vx-chip par" style={{ marginLeft: 6 }}>borrador</span>}</b>
+                        <div className="rc-right">
+                          <span className="rc-tot">≈ {fmtAprox(p.bultos + equivalentes(p))} bultos</span>
+                          <span className="rc-icons">
+                            <button className="vx-ic" title="Ajustar el pin a mano en el mapa" onClick={(e) => { e.stopPropagation(); (window as any).__rcAjustar?.(p.id); }}><LocateFixed className="h-4 w-4" /></button>
+                            <button className="vx-ic" title="Editar dirección y horario" onClick={(e) => { e.stopPropagation(); abrirEdicion(p); }}><Pencil className="h-4 w-4" /></button>
+                          </span>
+                        </div>
+                      </div>
                       <span><Clock className="h-3 w-3" /> {horario(p)} · {formatRemito(p)}</span>
                       <span className="rc-dir"><MapPin className="h-3 w-3" /> {[p.address, p.city].filter(Boolean).join(", ")}{!esPrecisa(p.geoPrecision) && <span className="vx-chip par" title={`Ubicación ${precisionLabel(p.geoPrecision)}`}>{p.geoPrecision ? "aprox." : "verificar"}</span>}</span>
+                      <span className="rc-det">{fmtN(p.bultos)} bultos · {fmtN(p.kg)} kg · {fmtN(p.atados)} at.{p.maples ? ` · ${fmtN(p.maples)} mp.` : ""}{p.unidades ? ` · ${fmtN(p.unidades)} un.` : ""}</span>
                       {ajustando === p.id && <span style={{ color: "#3a67a3", fontWeight: 600 }}>Arrastrá el pin azul en el mapa hasta el lugar exacto y soltalo · <button className="vx-link" onClick={(e) => { e.stopPropagation(); setAjustando(null); }}>cancelar</button></span>}
                       {renderEditor(p)}
                     </div>
-                    <div className="rc-bul">≈ {fmtAprox(p.bultos + equivalentes(p))} bultos<small>{fmtN(p.bultos)} bultos · {fmtN(p.kg)} kg · {fmtN(p.atados)} at.{p.maples ? ` · ${fmtN(p.maples)} mp.` : ""}{p.unidades ? ` · ${fmtN(p.unidades)} un.` : ""}</small></div>
-                    <button className="vx-ic" title="Ajustar el pin a mano en el mapa" onClick={(e) => { e.stopPropagation(); (window as any).__rcAjustar?.(p.id); }}><LocateFixed className="h-4 w-4" /></button>
-                    <button className="vx-ic" title="Editar dirección y horario" onClick={(e) => { e.stopPropagation(); abrirEdicion(p); }}><Pencil className="h-4 w-4" /></button>
                   </div>
                 ))}
                 {sinUbicar.length > 0 && (
@@ -269,15 +276,20 @@ export default function RecorridosPage() {
                       <div key={p.id} className="rc-row" data-testid={`row-sin-${p.id}`}>
                         <div className="rc-num sin">!</div>
                         <div className="rc-main">
-                          <b>{p.customerName}{p.status === "draft" && <span className="vx-chip par" style={{ marginLeft: 6 }}>borrador</span>}</b>
+                          <div className="rc-top">
+                            <b>{p.customerName}{p.status === "draft" && <span className="vx-chip par" style={{ marginLeft: 6 }}>borrador</span>}</b>
+                            <div className="rc-right">
+                              <span className="rc-tot">≈ {fmtAprox(p.bultos + equivalentes(p))} bultos</span>
+                              {!(edit && edit.customerId === p.customerId) && (
+                                <button className="vx-btn" style={{ padding: "5px 9px", fontSize: 12 }} onClick={() => abrirEdicion(p)}><LocateFixed className="h-3.5 w-3.5" /> Ubicar</button>
+                              )}
+                            </div>
+                          </div>
                           <span><Clock className="h-3 w-3" /> {horario(p)} · {formatRemito(p)}</span>
                           <span className="rc-dir">{(p.address ?? "").trim() ? <><MapPin className="h-3 w-3" /> {[p.address, p.city].filter(Boolean).join(", ")} · <i>sin ubicar: Google no encontró la altura exacta, revisá la dirección</i></> : <i>sin dirección cargada</i>}</span>
+                          <span className="rc-det">{fmtN(p.bultos)} bultos · {fmtN(p.kg)} kg · {fmtN(p.atados)} at.{p.maples ? ` · ${fmtN(p.maples)} mp.` : ""}{p.unidades ? ` · ${fmtN(p.unidades)} un.` : ""}</span>
                           {renderEditor(p)}
                         </div>
-                        <div className="rc-bul">≈ {fmtAprox(p.bultos + equivalentes(p))} bultos<small>{fmtN(p.bultos)} bultos · {fmtN(p.kg)} kg · {fmtN(p.atados)} at.{p.maples ? ` · ${fmtN(p.maples)} mp.` : ""}{p.unidades ? ` · ${fmtN(p.unidades)} un.` : ""}</small></div>
-                        {!(edit && edit.customerId === p.customerId) && (
-                          <button className="vx-btn" style={{ padding: "6px 10px", fontSize: 12.5 }} onClick={() => abrirEdicion(p)}><LocateFixed className="h-3.5 w-3.5" /> Ubicar</button>
-                        )}
                       </div>
                     ))}
                   </>
@@ -301,7 +313,7 @@ export default function RecorridosPage() {
 }
 
 const RC_CSS = `
-.rc-grid{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:16px;}
+.rc-grid{display:grid;grid-template-columns:minmax(0,1fr) 440px;gap:16px;}
 .rc-mapwrap{position:relative;}
 .rc-map{height:640px;border-radius:16px;border:1px solid #ecece8;background:#e9eae5;overflow:hidden;}
 .rc-maperr{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:12px;padding:24px;background:rgba(244,244,241,.92);border-radius:16px;color:#b0553f;font-size:13.5px;text-align:left;}
@@ -316,12 +328,17 @@ const RC_CSS = `
 .rc-row.on{background:#eef3e3;}
 .rc-num{width:26px;height:26px;border-radius:50%;background:#6b8a2a;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex:0 0 auto;margin-top:1px;}
 .rc-num.sin{background:#c05e42;}
-.rc-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
-.rc-main b{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.rc-main span{font-size:12px;color:#8b8f88;display:flex;align-items:center;gap:4px;}
-.rc-main .rc-dir{white-space:normal;}
-.rc-bul{font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums;text-align:right;}
-.rc-bul small{display:block;font-weight:400;font-size:11px;color:#8b8f88;}
+.rc-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
+.rc-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
+.rc-main b{font-weight:600;line-height:1.3;min-width:0;}
+.rc-right{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
+.rc-tot{font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums;font-size:13.5px;color:#1e2420 !important;}
+.rc-icons{display:inline-flex;gap:0;}
+.rc-icons .vx-ic{width:26px;height:26px;}
+.rc-main span{font-size:12px;color:#8b8f88;display:flex;align-items:flex-start;gap:4px;line-height:1.35;}
+.rc-main span svg{margin-top:2px;flex:0 0 auto;}
+.rc-main .rc-dir{white-space:normal;flex-wrap:wrap;}
+.rc-main .rc-det{color:#4b5048;font-variant-numeric:tabular-nums;}
 .rc-sec{display:flex;align-items:center;gap:6px;padding:10px 16px 6px;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#c05e42;border-top:1px solid #f5f5f2;background:#fdf4f1;}
 .rc-edit{display:flex;flex-direction:column;gap:6px;margin-top:8px;padding:10px;background:#fbfaf7;border:1px solid #ecece8;border-radius:10px;cursor:default;}
 .rc-edit .vx-input{width:100%;font-size:13px;padding:7px 10px;}
