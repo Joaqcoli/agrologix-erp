@@ -43,7 +43,14 @@
   del recorrido y el número de orden de entrega, gris sin asignar; leyenda) y Camionetas (flota fija con alta, edición,
   disponible; "Carga de hoy" por camioneta y recorrido con hora de salida, barra de carga y pedidos en orden de entrega,
   link "Ver en Google Maps" por recorrido). Sin número de remito en Recorridos (pedido de Joaquín). Un pedido va entero
-  en una camioneta; la capacidad es por vuelta. Hoja de armado para el galpón: pendiente (se define desde su sesión).
+  en una camioneta; la capacidad es por vuelta.
+  **Hoja de recorridos del galpón** (18/11, maqueta v3 aprobada): botón "Imprimir recorrido" junto a "Imprimir pedidos"
+  en Galpón → Pedidos; `GET /api/galpon/recorridos?date=` (pedidos con asignación sin teléfono/notas ni montos,
+  camionetas disponibles, salidas) y `generateRecorridosPDF` en `client/src/lib/pdf.ts`: una sola hoja A4 blanco y
+  negro, por camioneta (nombre grande + patente, línea gruesa, aire entre camionetas) → por recorrido ("SALE HH:MM" en
+  recuadro, n pedidos · ≈ bultos) → pedidos en orden de entrega (círculo con el número, cliente + dirección, ≈ bultos,
+  casilla "Cargado"); sin productos, sin horario de entrega, sin detalle de bultos, sin firmas; recuadro punteado con
+  los pedidos sin asignar al final. `recorridosDelDia(date)` en routes.ts es la consulta compartida con el admin.
   17-nov **Vista del vendedor con el estilo del admin, Comisiones simplificada y Cuentas Corrientes del vendedor**
   (solo presentación + una sección nueva de lectura; ningún cálculo cambió). (1) Las 5 pantallas del vendedor
   (Dashboard, Pedidos, detalle de pedido, Clientes, Comisiones) pasan al sistema visual de las pantallas rediseñadas del

@@ -2533,11 +2533,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ─── Recorridos (18/11/2026): pedidos de un día con ubicación, horario de entrega y bultos ─────────────
   // Admin y administrativo (el vendedor queda afuera por la whitelist). Bultos = CAJON + BOLSA + BANDEJA (misma regla
   // que isBulto en storage); los kilos sueltos, atados y unidades se informan aparte. Las líneas "Bolsa FV" no cuentan.
-  app.get("/api/recorridos", requireAuth, async (req, res) => {
-    try {
-      const date = String(req.query.date ?? "");
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date (YYYY-MM-DD) es obligatorio" });
-      const rows = await db.execute(drizzleSql`
+  // Pedidos del día con cliente, ubicación, asignación y bultos (compartido por admin y galpón)
+  async function recorridosDelDia(date: string) {
+    const rows = await db.execute(drizzleSql`
         SELECT o.id, o.folio, o.remito_num AS "remitoNum", o.status, o.notes,
           o.camioneta_id AS "camionetaId", o.recorrido, o.orden_entrega AS "ordenEntrega",
           c.id AS "customerId", c.name AS "customerName", c.address, c.city, c.phone,
@@ -2562,7 +2560,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         WHERE o.order_date::date = ${date}::date AND o.status IN ('approved', 'draft')
         GROUP BY o.id, c.id
         ORDER BY c.delivery_from NULLS LAST, c.name, o.id`);
-      return res.json(rows.rows);
+    return rows.rows as any[];
+  }
+  app.get("/api/recorridos", requireAuth, async (req, res) => {
+    try {
+      const date = String(req.query.date ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date (YYYY-MM-DD) es obligatorio" });
+      return res.json(await recorridosDelDia(date));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+  // Galpón (18/11): lo que necesita la hoja "Imprimir recorrido": pedidos con asignación (sin teléfono ni notas),
+  // camionetas disponibles y horas de salida del día. Nunca montos.
+  app.get("/api/galpon/recorridos", requireGalpon, async (req, res) => {
+    try {
+      const date = String(req.query.date ?? "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date (YYYY-MM-DD) es obligatorio" });
+      const [pedidos, camionetas, salidas] = await Promise.all([
+        recorridosDelDia(date),
+        db.execute(drizzleSql`SELECT id, nombre, patente, capacidad FROM camionetas WHERE disponible = true ORDER BY nombre`),
+        db.execute(drizzleSql`SELECT camioneta_id AS "camionetaId", recorrido, salida FROM recorrido_salidas WHERE fecha = ${date}::date`),
+      ]);
+      return res.json({
+        pedidos: pedidos.map(({ phone: _p, notes: _n, ...r }) => r),
+        camionetas: camionetas.rows, salidas: salidas.rows,
+      });
     } catch (e: any) { return res.status(500).json({ error: e.message }); }
   });
 

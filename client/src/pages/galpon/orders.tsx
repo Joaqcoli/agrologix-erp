@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { generateArmadoPDF } from "@/lib/pdf";
+import { generateArmadoPDF, generateRecorridosPDF } from "@/lib/pdf";
 import { Printer, ChevronRight, CheckCircle2, FileText } from "lucide-react";
 
 // Sin precios: esta vista nunca muestra ni recibe total/costo/margen.
@@ -38,6 +38,25 @@ export default function GalponOrders() {
   });
 
   const dateLabel = (() => { const [y,m,d] = date.split("-"); return `${d}/${m}/${y}`; })();
+
+  // 18/11: hoja de recorridos (camionetas, recorridos, hora de salida y orden de entrega del día)
+  const [printingRec, setPrintingRec] = useState(false);
+  const handlePrintRecorridos = async () => {
+    setPrintingRec(true);
+    try {
+      const r = await fetch(`/api/galpon/recorridos?date=${date}`, { credentials: "include" });
+      if (!r.ok) throw new Error(await r.text());
+      const d = await r.json();
+      const pedidos = (d.pedidos ?? []).map((p: any) => ({
+        id: p.id, customerName: p.customerName, address: p.address, city: p.city,
+        camionetaId: p.camionetaId, recorrido: p.recorrido, ordenEntrega: p.ordenEntrega,
+        // misma equivalencia que Recorridos (admin): bultos + kg/10 + atados según producto + maples/12
+        bultosAprox: Number(p.bultos) + Number(p.kg) / 10 + Number(p.atadosBultos) + Number(p.maples) / 12,
+      }));
+      generateRecorridosPDF({ pedidos, camionetas: d.camionetas ?? [], salidas: d.salidas ?? [] }, dateLabel, { print: true });
+    } catch (e: any) { alert(`No se pudo armar la hoja de recorridos: ${e.message}`); }
+    finally { setPrintingRec(false); }
+  };
 
   const handlePrintAll = async () => {
     if (orders.length === 0) return;
@@ -71,6 +90,9 @@ export default function GalponOrders() {
             <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-auto" />
             <Button variant="outline" onClick={handlePrintAll} disabled={printing || orders.length === 0}>
               <Printer className="h-4 w-4 mr-2" /> {printing ? "Generando..." : "Imprimir pedidos"}
+            </Button>
+            <Button variant="outline" onClick={handlePrintRecorridos} disabled={printingRec} data-testid="button-print-recorridos">
+              <Printer className="h-4 w-4 mr-2" /> {printingRec ? "Generando..." : "Imprimir recorrido"}
             </Button>
           </div>
         </div>
