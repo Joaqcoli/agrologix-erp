@@ -25,6 +25,14 @@ const horario = (p: { deliveryFrom: string | null; deliveryTo: string | null }) 
   p.deliveryFrom && p.deliveryTo ? `${p.deliveryFrom}–${p.deliveryTo}` : p.deliveryFrom ? `desde ${p.deliveryFrom}` : p.deliveryTo ? `hasta ${p.deliveryTo}` : "sin horario";
 const ubicada = (p: Parada) => p.lat != null && p.lng != null && !!(p.address ?? "").trim() && p.geoAddress === geoKey(p.address, p.city);
 const CENTRO = { lat: -34.62, lng: -58.46 };
+// 18/11: punto de salida (galpón). Se geocodifica una vez con Google y se guarda en el navegador; si falla, se usa la
+// posición aproximada de la cuadra (OpenStreetMap) para no dejar el recorrido sin origen.
+const SALIDA = { label: "Capitán Giachino 2380, Malvinas Argentinas", address: "Capitán Giachino 2380, Pablo Nogués, Malvinas Argentinas, Buenos Aires", fallback: { lat: -34.4805, lng: -58.6828 } };
+const SALIDA_CACHE = "agrologix-salida-v1";
+function salidaIcon(maps: any) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="50" viewBox="0 0 40 50"><path d="M20 1C10 1 2 9 2 19c0 12.5 18 30 18 30s18-17.5 18-30C38 9 30 1 20 1z" fill="#293C4B" stroke="#fff" stroke-width="2.5"/><path d="M12 24v-7l8-6 8 6v7h-5v-5h-6v5z" fill="#fff"/></svg>`;
+  return { url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg), scaledSize: new maps.Size(40, 50), anchor: new maps.Point(20, 49) };
+}
 
 // Pin SVG con número (verde = antes de las 10, naranja = después, gris = sin horario)
 function pinIcon(maps: any, n: number, color: string) {
@@ -48,7 +56,12 @@ export default function RecorridosPage() {
   const [mapDiv, setMapDiv] = useState<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const markersRef = useRef<Map<number, any>>(new Map());
+  const salidaMarkerRef = useRef<any>(null);
   const infoRef = useRef<any>(null);
+  const [salida, setSalida] = useState<{ lat: number; lng: number; exacta: boolean }>(() => {
+    try { const c = JSON.parse(localStorage.getItem(SALIDA_CACHE) ?? "null"); if (c && typeof c.lat === "number" && typeof c.lng === "number") return { ...c, exacta: true }; } catch { /* noop */ }
+    return { ...SALIDA.fallback, exacta: false };
+  });
 
   const { data: paradas = [], isLoading, error } = useQuery<Parada[]>({
     queryKey: ["/api/recorridos", date],
@@ -73,6 +86,15 @@ export default function RecorridosPage() {
       (window as any).gm_authFailure = () => setMapError("Google rechazó la clave para este sitio (revisá la restricción de sitios web en Google Cloud).");
       setMapError(null);
       setListo((n) => n + 1);
+      // Punto de salida: geocodificar una vez (queda en el navegador)
+      if (!salida.exacta) {
+        geocodeAddress(SALIDA.address).then((g) => {
+          if (!g || !vivo) return;
+          const pos = { lat: g.lat, lng: g.lng };
+          try { localStorage.setItem(SALIDA_CACHE, JSON.stringify(pos)); } catch { /* noop */ }
+          setSalida({ ...pos, exacta: true });
+        }).catch(() => { /* queda el aproximado */ });
+      }
     }).catch((e) => setMapError(e.message));
     return () => { vivo = false; };
   }, [mapDiv]);
@@ -85,6 +107,14 @@ export default function RecorridosPage() {
     Array.from(markersRef.current.values()).forEach((m) => m.setMap(null));
     markersRef.current.clear();
     const bounds = new maps.LatLngBounds();
+    // Punto de salida (pin azul oscuro con casita)
+    if (salidaMarkerRef.current) salidaMarkerRef.current.setMap(null);
+    salidaMarkerRef.current = new maps.Marker({ position: salida, map, icon: salidaIcon(maps), title: `Salida: ${SALIDA.label}`, zIndex: 2000 });
+    salidaMarkerRef.current.addListener("click", () => {
+      infoRef.current.setContent(`<div style="font-family:Inter,system-ui;font-size:13px"><div style="font-family:'Bricolage Grotesque',Inter;font-size:15px;font-weight:700;margin-bottom:4px">Punto de salida</div><div>${SALIDA.label}</div>${salida.exacta ? "" : '<div style="color:#c08a1e;font-size:12px;margin-top:4px">Posición aproximada de la cuadra</div>'}</div>`);
+      infoRef.current.open({ map, anchor: salidaMarkerRef.current });
+    });
+    bounds.extend(salida);
     ubicadas.forEach((p, i) => {
       const pos = { lat: Number(p.lat), lng: Number(p.lng) };
       const m = new maps.Marker({ position: pos, map, icon: pinIcon(maps, i + 1, colorDe(p)), title: p.customerName, zIndex: 1000 - i });
@@ -92,9 +122,9 @@ export default function RecorridosPage() {
       markersRef.current.set(p.id, m);
       bounds.extend(pos);
     });
-    if (ubicadas.length > 1) map.fitBounds(bounds, 60);
-    else if (ubicadas.length === 1) { map.setCenter(bounds.getCenter()); map.setZoom(15); }
-  }, [ubicadas, listo]);
+    if (ubicadas.length >= 1) map.fitBounds(bounds, 60);
+    else { map.setCenter(salida); map.setZoom(12); }
+  }, [ubicadas, listo, salida]);
 
   const abrir = (p: Parada) => {
     setSel(p.id);
@@ -197,6 +227,7 @@ export default function RecorridosPage() {
 
             <div className="vx-card rc-list">
               <div className="vx-chead"><span className="t"><Truck className="h-4 w-4" /> Orden sugerido por horario</span><span className="n">tocá uno para verlo en el mapa</span></div>
+              <div className="rc-salida"><span className="rc-salida-dot" /> Salida: {SALIDA.label}{!salida.exacta && <span style={{ color: "#c08a1e" }}> · posición aproximada</span>}</div>
               <div className="rc-rows">
                 {isLoading ? <div style={{ padding: 16 }}><Skeleton className="h-24 w-full" /></div> : ubicadas.length === 0 && sinUbicar.length === 0 ? (
                   <div style={{ padding: "28px 18px", textAlign: "center", color: "#8b8f88", fontSize: 14 }}>No hay pedidos para {fechaLabel}</div>
@@ -236,7 +267,7 @@ export default function RecorridosPage() {
               </div>
               {ubicadas.length > 0 && (
                 <div className="rc-foot">
-                  <a className="vx-btn" href={`https://www.google.com/maps/dir/?api=1&destination=${ubicadas[ubicadas.length - 1].lat},${ubicadas[ubicadas.length - 1].lng}&waypoints=${ubicadas.slice(0, -1).slice(0, 9).map((p) => `${p.lat},${p.lng}`).join("|")}&travelmode=driving`} target="_blank" rel="noopener noreferrer" title="Abre Google Maps con las primeras 10 paradas en este orden">
+                  <a className="vx-btn" href={`https://www.google.com/maps/dir/?api=1&origin=${salida.lat},${salida.lng}&destination=${ubicadas[ubicadas.length - 1].lat},${ubicadas[ubicadas.length - 1].lng}&waypoints=${ubicadas.slice(0, -1).slice(0, 9).map((p) => `${p.lat},${p.lng}`).join("|")}&travelmode=driving`} target="_blank" rel="noopener noreferrer" title="Abre Google Maps saliendo del galpón con las primeras 10 paradas en este orden">
                     <ExternalLink className="h-4 w-4" /> Abrir recorrido en Google Maps
                   </a>
                   <span className="n">Ver pedido: <button className="vx-link" onClick={() => sel && setLocation(`/orders/${sel}`)} disabled={!sel}>{sel ? formatRemito(paradas.find((p) => p.id === sel)!) : "elegí una parada"}</button></span>
@@ -244,7 +275,7 @@ export default function RecorridosPage() {
               )}
             </div>
           </div>
-          <div className="vx-note">Verde: entrega antes de las 10 · Naranja: después de las 10 · Gris: sin horario. Los bultos son cajones, bolsas y bandejas; las líneas de Bolsa FV no cuentan. Pedidos en borrador incluidos.</div>
+          <div className="vx-note">Azul oscuro: punto de salida · Verde: entrega antes de las 10 · Naranja: después de las 10 · Gris: sin horario. Los bultos son cajones, bolsas y bandejas; las líneas de Bolsa FV no cuentan. Pedidos en borrador incluidos.</div>
         </div>
       </div>
     </Layout>
@@ -260,6 +291,8 @@ const RC_CSS = `
 .rc-mapmsg{position:absolute;left:50%;top:16px;transform:translateX(-50%);background:#fff;border:1px solid #ecece8;border-radius:10px;padding:8px 14px;font-size:13px;color:#8b8f88;}
 .rc-list{display:flex;flex-direction:column;max-height:640px;margin-bottom:0;}
 .rc-rows{overflow:auto;flex:1;}
+.rc-salida{display:flex;align-items:center;gap:8px;padding:0 16px 10px;font-size:12.5px;color:#4b5048;font-weight:500;}
+.rc-salida-dot{width:12px;height:12px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#293C4B;border:2px solid #fff;box-shadow:0 0 0 1px #d9d9d3;flex:0 0 auto;}
 .rc-row{display:flex;gap:10px;align-items:flex-start;padding:11px 16px;border-top:1px solid #f5f5f2;font-size:13px;cursor:pointer;}
 .rc-row:hover{background:#f8f8f5;}
 .rc-row.on{background:#eef3e3;}

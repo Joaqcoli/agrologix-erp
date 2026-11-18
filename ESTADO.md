@@ -20,6 +20,9 @@
   lee de la raíz, `envDir`). En localhost el mapa muestra "Google rechazó la clave" porque el referrer no está
   autorizado (agregar `http://localhost:5001/*` en la clave si se quiere probar local). Pendiente: Joaquín carga las
   direcciones (al 18/11 solo 2 de 60 clientes activos tenían dirección); etapa 2 = ruta optimizada con Routes API.
+  Punto de salida (galpón, Capitán Giachino 2380, Malvinas Argentinas) como pin azul oscuro con casita: se geocodifica
+  una vez con Google en el navegador (cache localStorage) con posición aproximada de respaldo; es el origen del link
+  "Abrir recorrido en Google Maps" y entra en el encuadre del mapa.
   17-nov **Vista del vendedor con el estilo del admin, Comisiones simplificada y Cuentas Corrientes del vendedor**
   (solo presentación + una sección nueva de lectura; ningún cálculo cambió). (1) Las 5 pantallas del vendedor
   (Dashboard, Pedidos, detalle de pedido, Clientes, Comisiones) pasan al sistema visual de las pantallas rediseñadas del
