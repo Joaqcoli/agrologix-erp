@@ -26,7 +26,7 @@
   normalizado al salir (`client/src/lib/hora.ts`: 8 → 08:00, 930 → 09:30); antes era `<input type="time">`, que en
   navegadores en inglés pide AM/PM y si no se completa manda vacío (por eso los horarios que cargó Joaquín el 18/11
   no se guardaron; hay que volver a cargarlos). PRECISIÓN (pedido de Joaquín): el punto de salida es una coordenada
-  fija tomada de Google Maps (-34.468853, -58.6917694; la geocodificación en vivo caía ~1,5 km corrida); `customers.geo_precision`
+  fija: mitad de cuadra de Capitán Giachino entre República Argentina y Luis Piedra Buena, Pablo Nogués (-34.4597181, -58.6984946, punto medio de las dos esquinas según Google Maps; antes 2380 y antes geocodificación en vivo que caía ~1,5 km corrida); `customers.geo_precision`
   guarda el location_type de Google (ROOFTOP exacta, RANGE_INTERPOLATED estimada en la cuadra) o MANUAL; si Google no
   encuentra la ALTURA (solo calle o localidad) NO se guarda el pin y se avisa; en Recorridos los pines no exactos llevan
   chip "aprox." ("verificar" si se ubicaron antes de este cambio, sin precisión conocida) y cualquier pin se corrige con

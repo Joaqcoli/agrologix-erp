@@ -26,9 +26,10 @@ const horario = (p: { deliveryFrom: string | null; deliveryTo: string | null }) 
   p.deliveryFrom && p.deliveryTo ? `${p.deliveryFrom}–${p.deliveryTo}` : p.deliveryFrom ? `desde ${p.deliveryFrom}` : p.deliveryTo ? `hasta ${p.deliveryTo}` : "sin horario";
 const ubicada = (p: Parada) => p.lat != null && p.lng != null && !!(p.address ?? "").trim() && p.geoAddress === geoKey(p.address, p.city);
 const CENTRO = { lat: -34.62, lng: -58.46 };
-// 18/11: punto de salida (galpón). Coordenada EXACTA tomada de Google Maps para "Cap. Giachino 2380, B1616AJY Ingeniero
-// Pablo Nogués" (fija, no se geocodifica: la primera versión geocodificaba en vivo y caía ~1,5 km corrido).
-const SALIDA = { label: "Capitán Giachino 2380, Malvinas Argentinas", pos: { lat: -34.468853, lng: -58.6917694 } };
+// 18/11: punto de salida (galpón), coordenada FIJA (no se geocodifica). Joaquín: "Capitán Giachino entre República
+// Argentina y Luis Piedra Buena, a mitad de cuadra" → punto medio entre las dos esquinas según Google Maps
+// (Giachino & Rep. Argentina -34.4591877,-58.6989118 · Giachino & Piedrabuena -34.4602485,-58.6980774).
+const SALIDA = { label: "Capitán Giachino e/ República Argentina y Luis Piedra Buena, Pablo Nogués", pos: { lat: -34.4597181, lng: -58.6984946 } };
 function salidaIcon(maps: any) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="50" viewBox="0 0 40 50"><path d="M20 1C10 1 2 9 2 19c0 12.5 18 30 18 30s18-17.5 18-30C38 9 30 1 20 1z" fill="#293C4B" stroke="#fff" stroke-width="2.5"/><path d="M12 24v-7l8-6 8 6v7h-5v-5h-6v5z" fill="#fff"/></svg>`;
   return { url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg), scaledSize: new maps.Size(40, 50), anchor: new maps.Point(20, 49) };
