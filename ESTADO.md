@@ -2,9 +2,21 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-18 (Recorridos etapa 1; cierre mensual automático de comisiones; vista del vendedor rediseñada).
+> Última actualización: 2026-11-23 (Números por asignar agrupado por teléfono; Recorridos con camionetas y hoja del galpón; WABA desbloqueada).
 
 ## Último trabajo (sep–oct 2026)
+  23-nov **Números por asignar agrupado por teléfono** (prompt de Joaquín). Una fila por número con perfil de WhatsApp,
+  cantidad de mensajes, primero/último, vista previa del último, sugerencia de la IA por número (el cliente más
+  votado entre las sugerencias por mensaje que ya manda el bot; no hay llamada nueva a la IA) y "Ver mensajes" con
+  tildes (hoy tildados, anteriores destildados). Asignar (`POST /api/wa-pending/numero/assign` {phone, customerIds,
+  contactName, messageIds}): crea `customer_contacts`, prende `customers.bot_activo` si no estaba, deja 'assigned' solo
+  los mensajes tildados (el bot los reprocesa como borradores) y manda el resto a 'ignored'. Ignorar
+  (`POST /api/wa-pending/numero/ignore` {phone}): todos los pendientes del número → 'ignored'; un mensaje nuevo entra
+  como pendiente y el número reaparece. `GET /api/wa-pending/numeros?status=pending|assigned|ignored` (assigned =
+  assigned+processed) y `GET /api/wa-pending/count` (contador de teléfonos pendientes en el ítem del menú, cada 60 s).
+  Las rutas por mensaje que usa el bot (`POST /api/wa-pending`, `GET ?status=assigned`, `POST /:id/processed`) NO
+  cambiaron; las viejas `/:id/assign` e `/:id/ignore` siguen existiendo. Limpieza inicial hecha el 23/11: 134 mensajes
+  pendientes (39 números) pasaron a ignorados en bloque; Pendientes arrancó vacío.
   18-nov **Recorridos (etapa 1)**: nueva sección admin/administrativo `/recorridos` con el mapa de Google de los pedidos
   de un día (aprobados y borradores), un pin numerado por pedido en orden de horario de entrega (verde antes de las
   10, naranja después, gris sin horario), popup con cliente, horario, bultos / kg sueltos / atados, remito y "Cómo

@@ -5196,6 +5196,74 @@ export const storage = {
     await db.update(waPendingNumbers).set({ status }).where(eq(waPendingNumbers.id, id));
   },
 
+  // ─── 23/11: Números por asignar AGRUPADOS por teléfono (la pantalla nueva). El bot sigue usando las filas por
+  // mensaje (GET ?status=assigned, POST /:id/processed, POST /api/wa-pending): nada de eso cambia. ───────────────
+  /** Una fila por teléfono con sus mensajes. pending → status 'pending'; assigned → 'assigned' + 'processed'; ignored → 'ignored'. */
+  async listWaPendingNumeros(tab: "pending" | "assigned" | "ignored") {
+    const statuses = tab === "assigned" ? ["assigned", "processed"] : [tab];
+    const rows = await db.select().from(waPendingNumbers).where(inArray(waPendingNumbers.status, statuses));
+    const porTel = new Map<string, WaPendingNumber[]>();
+    for (const r of rows) { const a = porTel.get(r.phone) ?? []; a.push(r); porTel.set(r.phone, a); }
+    const fecha = (r: WaPendingNumber) => (r.receivedAt ?? r.createdAt)?.getTime() ?? 0;
+    const out = Array.from(porTel.entries()).map(([phone, msgs]) => {
+      msgs.sort((a, b) => fecha(a) - fecha(b) || a.id - b.id);
+      const ultimo = msgs[msgs.length - 1];
+      const perfil = [...msgs].reverse().find((m) => m.profileName)?.profileName ?? null;
+      // Sugerencia por número: el cliente más repetido entre las sugerencias de la IA de todos sus mensajes
+      // (desempate: el más reciente). Se conserva el motivo que dio la IA la última vez que lo propuso.
+      const votos = new Map<number, { name: string; reason?: string; n: number; last: number }>();
+      for (const m of msgs) for (const s of ((m.suggestions as any[]) ?? [])) {
+        const v = votos.get(s.customerId) ?? { name: s.name as string, reason: undefined as string | undefined, n: 0, last: 0 };
+        v.n += 1; if (fecha(m) >= v.last) { v.last = fecha(m); v.reason = s.reason; v.name = s.name; }
+        votos.set(s.customerId, v);
+      }
+      const sugerencias = Array.from(votos.entries()).sort((a, b) => b[1].n - a[1].n || b[1].last - a[1].last).slice(0, 3)
+        .map(([customerId, v]) => ({ customerId, name: v.name, reason: v.reason, veces: v.n }));
+      const asignados = new Set<number>();
+      for (const m of msgs) for (const id of ((m.assignedCustomerIds as number[]) ?? [])) asignados.add(Number(id));
+      return {
+        phone, profileName: perfil, cantidad: msgs.length,
+        primero: msgs[0].receivedAt ?? msgs[0].createdAt, ultimo: ultimo.receivedAt ?? ultimo.createdAt,
+        ultimoTexto: ultimo.messageText, sugerencias, contactName: [...msgs].reverse().find((m) => m.contactName)?.contactName ?? null,
+        assignedCustomerIds: Array.from(asignados), reasons: Array.from(new Set(msgs.map((m) => m.reason).filter(Boolean))),
+        mensajes: msgs.map((m) => ({ id: m.id, texto: m.messageText, fecha: m.receivedAt ?? m.createdAt, status: m.status, reason: m.reason, profileName: m.profileName })),
+      };
+    });
+    return out.sort((a, b) => (b.ultimo?.getTime() ?? 0) - (a.ultimo?.getTime() ?? 0));
+  },
+
+  /** Cantidad de teléfonos con mensajes pendientes (contador del menú). */
+  async countWaPendingNumeros(): Promise<number> {
+    const r = await db.execute(drizzleSql`SELECT COUNT(DISTINCT phone)::int AS n FROM wa_pending_numbers WHERE status = 'pending'`);
+    return Number((r.rows[0] as any)?.n ?? 0);
+  },
+
+  /**
+   * Asigna un TELÉFONO a uno o varios clientes: crea los contactos, prende "Bot activo" en esos clientes si no lo
+   * tenían, deja como 'assigned' (el bot los reprocesa → borradores pendientes de aprobación) SOLO los mensajes
+   * elegidos y manda el resto de los pendientes del número a 'ignored'.
+   */
+  async assignWaPendingNumero(phone: string, customerIds: number[], contactName: string | null, messageIds: number[]) {
+    const pend = await db.select().from(waPendingNumbers).where(and(eq(waPendingNumbers.phone, phone), eq(waPendingNumbers.status, "pending")));
+    if (!pend.length) return { asignados: 0, ignorados: 0 };
+    const perfil = [...pend].reverse().find((m) => m.profileName)?.profileName ?? null;
+    for (const cid of customerIds) {
+      await this.createCustomerContact({ customerId: cid, phone, name: contactName ?? perfil, origin: "whatsapp" });
+    }
+    await db.update(customers).set({ botActivo: true }).where(and(inArray(customers.id, customerIds), eq(customers.botActivo, false)));
+    const elegidos = pend.filter((m) => messageIds.includes(m.id)).map((m) => m.id);
+    const resto = pend.filter((m) => !messageIds.includes(m.id)).map((m) => m.id);
+    if (elegidos.length) await db.update(waPendingNumbers).set({ status: "assigned", assignedCustomerIds: customerIds, contactName }).where(inArray(waPendingNumbers.id, elegidos));
+    if (resto.length) await db.update(waPendingNumbers).set({ status: "ignored", assignedCustomerIds: customerIds, contactName }).where(inArray(waPendingNumbers.id, resto));
+    return { asignados: elegidos.length, ignorados: resto.length };
+  },
+
+  /** Ignora todos los mensajes pendientes del teléfono. Si vuelve a escribir, el mensaje nuevo entra como pendiente. */
+  async ignoreWaPendingNumero(phone: string): Promise<number> {
+    const r = await db.update(waPendingNumbers).set({ status: "ignored" }).where(and(eq(waPendingNumbers.phone, phone), eq(waPendingNumbers.status, "pending"))).returning({ id: waPendingNumbers.id });
+    return r.length;
+  },
+
   /**
    * Auto-asignación: si un número pendiente por "desconocido" ahora figura en customer_contacts (lo cargaron desde
    * Bot por cliente o desde la ficha del cliente), pasa a "assigned" con todos los clientes que tienen ese teléfono,

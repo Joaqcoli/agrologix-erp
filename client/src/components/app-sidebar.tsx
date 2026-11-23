@@ -1,4 +1,5 @@
 import { Link, useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import {
   Sidebar,
   SidebarContent,
@@ -69,6 +70,12 @@ export function AppSidebar({ items, roleLabel }: { items?: NavItem[]; roleLabel?
   const [location] = useLocation();
   const { user, logout } = useAuth();
   const menu = items ?? navItems;
+  // 23/11: contador de teléfonos pendientes en "Números por asignar" (solo admin/administrativo; se refresca cada minuto)
+  const { data: waCount } = useQuery<{ pendientes: number }>({
+    queryKey: ["/api/wa-pending/count"],
+    enabled: !items && (user?.role === "admin" || user?.role === "administrativo"),
+    refetchInterval: 60_000, staleTime: 30_000, retry: false,
+  });
   // En mobile el sidebar es un drawer (Sheet): al tocar una opción, lo cerramos.
   const { isMobile, setOpenMobile } = useSidebar();
   const closeOnMobile = () => { if (isMobile) setOpenMobile(false); };
@@ -106,6 +113,9 @@ export function AppSidebar({ items, roleLabel }: { items?: NavItem[]; roleLabel?
                       <Link href={item.url} onClick={closeOnMobile}>
                         <item.icon className="h-4 w-4 shrink-0" />
                         <span>{item.title}</span>
+                        {item.url === "/wa-pendientes" && (waCount?.pendientes ?? 0) > 0 && (
+                          <span className="ml-auto rounded-full bg-primary px-1.5 py-0 text-[10px] font-semibold leading-4 text-primary-foreground" data-testid="badge-wa-pendientes">{waCount!.pendientes}</span>
+                        )}
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>

@@ -583,6 +583,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
+  // 23/11: pantalla agrupada por teléfono (van ANTES de las rutas con :id para que "numeros" no matchee como id)
+  app.get("/api/wa-pending/numeros", requireAuth, async (req, res) => {
+    try {
+      const tab = String(req.query.status ?? "pending") as "pending" | "assigned" | "ignored";
+      if (!["pending", "assigned", "ignored"].includes(tab)) return res.status(400).json({ error: "status inválido" });
+      try { await storage.autoAssignWaPending(); } catch (e: any) { console.error("[wa-pending] auto-asignar:", e.message); }
+      return res.json(await storage.listWaPendingNumeros(tab));
+    } catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+  app.get("/api/wa-pending/count", requireAuth, async (_req, res) => {
+    try { return res.json({ pendientes: await storage.countWaPendingNumeros() }); }
+    catch (e: any) { return res.status(500).json({ error: e.message }); }
+  });
+  app.post("/api/wa-pending/numero/assign", requireAuth, async (req, res) => {
+    try {
+      const b = z.object({ phone: z.string().min(5), customerIds: z.array(z.number()).min(1), contactName: z.string().nullable().optional(), messageIds: z.array(z.number()) }).parse(req.body);
+      return res.json(await storage.assignWaPendingNumero(b.phone, b.customerIds, b.contactName ?? null, b.messageIds));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  app.post("/api/wa-pending/numero/ignore", requireAuth, async (req, res) => {
+    try {
+      const b = z.object({ phone: z.string().min(5) }).parse(req.body);
+      return res.json({ ok: true, ignorados: await storage.ignoreWaPendingNumero(b.phone) });
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+
   app.post("/api/wa-pending/:id/assign", requireAuth, async (req, res) => {
     try {
       const body = z.object({ customerIds: z.array(z.number()).min(1), contactName: z.string().nullable().optional() }).parse(req.body);
