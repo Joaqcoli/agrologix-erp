@@ -6,8 +6,7 @@
 
 ## Último trabajo (sep–oct 2026)
   23-nov **Números por asignar agrupado por teléfono** (prompt de Joaquín). Una fila por número con perfil de WhatsApp,
-  cantidad de mensajes, primero/último, vista previa del último, sugerencia de la IA por número (el cliente más
-  votado entre las sugerencias por mensaje que ya manda el bot; no hay llamada nueva a la IA) y "Ver mensajes" con
+  cantidad de mensajes, primero/último, vista previa del último y "Ver mensajes" con
   tildes (hoy tildados, anteriores destildados). Asignar (`POST /api/wa-pending/numero/assign` {phone, customerIds,
   contactName, messageIds}): crea `customer_contacts`, prende `customers.bot_activo` si no estaba, deja 'assigned' solo
   los mensajes tildados (el bot los reprocesa como borradores) y manda el resto a 'ignored'. Ignorar
@@ -17,6 +16,9 @@
   Las rutas por mensaje que usa el bot (`POST /api/wa-pending`, `GET ?status=assigned`, `POST /:id/processed`) NO
   cambiaron; las viejas `/:id/assign` e `/:id/ignore` siguen existiendo. Limpieza inicial hecha el 23/11: 134 mensajes
   pendientes (39 números) pasaron a ignorados en bloque; Pendientes arrancó vacío.
+  Sin sugerencias de la IA en pantalla (Joaquín: "prefiero ponerlo yo"); la API sigue devolviendo `sugerencias` por
+  si se quiere volver a mostrar. El bot todavía pide la sugerencia a la IA por cada mensaje desconocido: apagarlo es
+  un cambio en asistente-vegex (otra sesión).
   18-nov **Recorridos (etapa 1)**: nueva sección admin/administrativo `/recorridos` con el mapa de Google de los pedidos
   de un día (aprobados y borradores), un pin numerado por pedido en orden de horario de entrega (verde antes de las
   10, naranja después, gris sin horario), popup con cliente, horario, bultos / kg sueltos / atados, remito y "Cómo

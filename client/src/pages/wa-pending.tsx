@@ -1,7 +1,7 @@
 /**
  * A-01 · Números por asignar — mensajes de WhatsApp que llegaron de un teléfono que no está en
  * customer_contacts (o que está en varios clientes y la IA no pudo elegir). 23/11/2026: una fila por TELÉFONO
- * (no por mensaje): perfil, cantidad, primero/último, vista previa, sugerencia de la IA por número, "Ver mensajes"
+ * (no por mensaje): perfil, cantidad, primero/último, vista previa, "Ver mensajes"
  * con tildes para elegir cuáles se cargan como pedidos al asignar (hoy tildados, anteriores destildados).
  * Asignar: contacto + Bot activo + mensajes elegidos a reprocesar; Ignorar: todos los mensajes del número.
  * El bot sigue usando las rutas por mensaje (no cambiaron).
@@ -228,18 +228,7 @@ function NumeroCard({ n, tab, customers, onAssign, onIgnore, busy }: {
           </p>
         ) : (
           <>
-            {n.sugerencias.length > 0 && (
-              <>
-                <p className="wpx-sect">Sugerido por la IA</p>
-                <div className="wpx-sugs">
-                  {n.sugerencias.map((s) => (
-                    <button key={s.customerId} type="button" title={s.reason} className={`wpx-sug ${selected.includes(s.customerId) ? "sel" : ""}`} onClick={() => toggle(s.customerId)} data-testid={`suggestion-${n.phone}-${s.customerId}`}>
-                      {selected.includes(s.customerId) && <Check className="h-3.5 w-3.5" />}{s.name}{n.cantidad > 1 && <small>· {s.veces} de {n.cantidad}</small>}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
+            {/* 23/11: sin sugerencias de la IA en pantalla (Joaquín prefiere asignar a mano) */}
             <p className="wpx-sect">Asignar a</p>
             <div className="wpx-form">
               <div className="wpx-combo" ref={comboRef}>
