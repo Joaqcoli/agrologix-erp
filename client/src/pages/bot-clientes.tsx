@@ -74,7 +74,7 @@ const BCX_CSS = `
 .bcx-inputwrap>svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:#8b8f88;pointer-events:none;}
 .bcx-input{width:100%;font-family:'Inter';font-size:14px;color:#1e2420;background:#fff;border:1px solid #ecece8;border-radius:11px;padding:10px 14px 10px 40px;}
 .bcx-input:focus{outline:none;border-color:#6b8a2a;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
-.bcx-dropdown{position:absolute;left:0;right:0;top:calc(100% + 6px);background:#fff;border:1px solid #ecece8;border-radius:12px;box-shadow:0 12px 34px -12px rgba(0,0,0,.22);padding:6px;z-index:30;max-height:280px;overflow:auto;}
+.bcx-dropdown{position:absolute;left:0;right:0;top:calc(100% + 6px);background:#fff;border:1px solid #ecece8;border-radius:12px;box-shadow:0 12px 34px -12px rgba(0,0,0,.22);padding:6px;z-index:30;max-height:360px;overflow:auto;}
 .bcx-opt{padding:10px 13px;border-radius:9px;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;}
 .bcx-opt:hover{background:#eef3e3;color:#5f8020;}
 .bcx-opt .on{font-size:11px;color:#5f8020;font-weight:600;}
@@ -186,7 +186,9 @@ export default function BotClientesPage() {
   const visibles = useMemo(() => (data?.clientes ?? []).filter((c) => filtro === "todos" || c.contactos.length === 0), [data, filtro]);
   const options = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return customers.filter((c) => c.active && (!q || c.name.toLowerCase().includes(q))).sort((a, b) => a.name.localeCompare(b.name, "es")).slice(0, 12);
+    // 23/11: antes cortaba en 12 (sin buscar solo se veían los clientes de la A a la B). Ahora se listan todos los
+    // activos, con desplazamiento en el desplegable; escribir sigue filtrando.
+    return customers.filter((c) => c.active && (!q || c.name.toLowerCase().includes(q))).sort((a, b) => a.name.localeCompare(b.name, "es"));
   }, [customers, search]);
 
   return (
