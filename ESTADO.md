@@ -2,9 +2,22 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-23 (Números por asignar agrupado por teléfono; Recorridos con camionetas y hoja del galpón; WABA desbloqueada).
+> Última actualización: 2026-11-24 (nuevo cliente padre tipo Black Pot configurado en la base; grupo de precios ampliado).
 
 ## Último trabajo (sep–oct 2026)
+  24-nov **Segundo grupo "tipo Black Pot" (solo configuración en la base, sin código).** Un cliente padre nuevo
+  (empresa con CUIT, con IVA, factura A, RI, modo "diaria") y 4 sedes con `parent_customer_id` + `bill_to='padre'`,
+  con IVA, vendedor Juan 5 % y alta propia cada una. La sede que ya venía pidiendo (y tenía el CUIT) quedó colgada
+  del padre con su `iva_since` y su alta originales; sus 4 facturas ya emitidas no se tocaron. Funciona igual que
+  Black Pot sin tocar código: factura al padre con la sede en la descripción, CC unificada en el padre (el saldo de
+  la sede vieja pasó solo), precios por familia (`_getGroupPeerIds` paso 2), comisión por sede (6 meses al 5 %).
+  Verificado en prod: fila del padre en `/api/ar/cc/summary`, `getComisionesVendedor("Juan")` lista las 4 sedes,
+  `clienteFacturado` de un pedido de la sede vieja devuelve el padre. Los borradores de hoy de las 3 sedes nuevas
+  recibieron el precio de la familia en 11 líneas (misma unidad); las de otra unidad las carga Joaquín.
+  Sedes nuevas: Clientes → padre, facturar a padre, con IVA, vendedor Juan; el alta y el 5 % corren solos.
+  Borrado el usuario vendedor `tmp-vend-…@verif.local` (id 32) que quedó de la verificación del 16/11 con el mismo
+  nombre que Juan. También: un cliente más en el grupo de precios manual 3024 y precios de la lista 17/11 (v3, con
+  diferencias respecto de la del 20/11) cargados en dos borradores del día.
   23-nov **Números por asignar agrupado por teléfono** (prompt de Joaquín). Una fila por número con perfil de WhatsApp,
   cantidad de mensajes, primero/último, vista previa del último y "Ver mensajes" con
   tildes (hoy tildados, anteriores destildados). Asignar (`POST /api/wa-pending/numero/assign` {phone, customerIds,
