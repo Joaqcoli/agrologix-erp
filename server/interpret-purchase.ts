@@ -83,7 +83,9 @@ CÓMO SON LAS BOLETAS
 - En las manuscritas el número de la derecha suele ser el TOTAL del renglón (cantidad × precio): "6 criolla 72.000" = 6 cajones a 12.000 → unitPrice 12000, lineTotal 72000. Si hay dos columnas numéricas, la primera es el unitario y la segunda el total. Algunos puestos abrevian en miles ("8 zapallito 8 64" = 8 cajones a 8.000, total 64.000): devolvé siempre pesos completos.
 - Cantidades: "2c" = 2 cajones; "6p", "2 p", "+3 P" = paquetes/atados SUELTOS (purchaseUnit ATADO o UNIDAD, envase false); "J" = jaula = CAJON; "1½", "1/4", "½" fracciones (kg); "17 soja" sin unidad = unidades sueltas si el historial lo compra así.
 - ENVASES (vacíos/señas) van APARTE del precio del producto y NUNCA como renglón de producto: "2 vacíos 12.000" (2 envases a 6.000), "8 x 40.000", "13x5" (13 envases a 5.000), "34x 170000", "14x5000", "seña 32" (= 32.000 en total), "1 vacío 5.000", columna "Señas" ("s/s" = sin seña; "$5,000" = seña por envase de ese renglón). Devolvelos en "envases" y marcá envase=true en los renglones de cajón/bolsa que los pagan.
-- El total de la boleta es el último número (después de envases). Subtotales intermedios se ignoran.
+- Un renglón que solo tiene "Nx", "N x", "x5" y un importe, SIN nombre de producto escrito a mano (aunque esté sobre un nombre preimpreso de la lista), son los ENVASES, nunca un producto.
+- El total de la boleta es el último número (después de envases). Subtotales intermedios se ignoran. Si la suma de renglones + envases no da el total, volvé a mirar los números: en manuscrita suele faltar un cero ("6000" que es 60.000) o sobrar uno.
+- Medidas tipo "50x70", "45x60", "40x50" son bolsas de plástico (BOLSAS VARIAS), aunque parezcan otra palabra; nunca un producto que ese proveedor no vende.
 - Bolsas de plástico ("2 50x70 20.000", "2 45x60 10.000") son un solo renglón BOLSAS VARIAS por el total.
 - Dos renglones del mismo producto con el mismo precio ("4 banana color" y "7 banana pintón") → un solo renglón con la cantidad sumada; si el precio difiere, dos renglones.
 
@@ -212,7 +214,8 @@ export async function interpretPurchaseReceipt(opts: { imageBase64: string; supp
 
   // ── Validación en el servidor ──
   const histByProduct = new Map<number, typeof history[number]>();
-  for (const h of history) if (!histByProduct.has(h.productId)) histByProduct.set(h.productId, h);
+  const histByKey = new Map<string, typeof history[number]>();
+  for (const h of history) { if (!histByProduct.has(h.productId)) histByProduct.set(h.productId, h); const k = `${h.productId}|${h.purchaseUnit}`; if (!histByKey.has(k)) histByKey.set(k, h); }
   const memByKey = new Map<string, typeof memory[number]>();
   for (const m of memory) { const k = claveRenglon(m.hint); if (k && !memByKey.has(k)) memByKey.set(k, m); }
 
@@ -230,14 +233,24 @@ export async function interpretPurchaseReceipt(opts: { imageBase64: string; supp
       productId = mem.productId; unit = mem.unit; status = "ok"; candidates = [];
     }
     if (productId == null) { status = "duda"; if (!reasons.length) reasons.push("no se identificó el producto"); }
-    const hist = productId != null ? histByProduct.get(productId) : undefined;
-    if (!unit) { unit = hist?.purchaseUnit ?? (productId != null && catById.get(productId)!.units.includes("CAJON") ? "CAJON" : "KG"); if (!hist) { status = "duda"; reasons.push(`sin envase claro: se asumió ${unit}`); } }
-    // Cantidad y precio por envase (pesos completos; "35" abreviado → 35000)
+    const histProd = productId != null ? histByProduct.get(productId) : undefined;
+    if (!unit) { unit = histProd?.purchaseUnit ?? (productId != null && catById.get(productId)!.units.includes("CAJON") ? "CAJON" : "KG"); if (!histProd) { status = "duda"; reasons.push(`sin envase claro: se asumió ${unit}`); } }
+    // Cantidad y precio por envase (pesos completos; "35 280" abreviado → 35000 / 280000)
     let quantity = l.quantity != null && l.quantity > 0 ? l.quantity : null;
     let unitPrice = l.unitPrice != null && l.unitPrice > 0 ? l.unitPrice : null;
-    const lineTotal = l.lineTotal != null && l.lineTotal > 0 ? l.lineTotal : null;
+    let lineTotal = l.lineTotal != null && l.lineTotal > 0 ? l.lineTotal : null;
+    const histSameUnit = productId != null ? histByKey.get(`${productId}|${unit}`) : undefined;
+    if (unitPrice != null && unitPrice < 1000 && (lineTotal == null || lineTotal < 1000) && (histSameUnit?.lastCost ?? histProd?.lastCost ?? 0) >= 1000) {
+      unitPrice *= 1000; if (lineTotal != null) lineTotal *= 1000; reasons.push("precio abreviado en miles");
+    }
     if (unitPrice == null && lineTotal != null && quantity) unitPrice = r2(lineTotal / quantity);
-    if (unitPrice != null && unitPrice < 1000 && (hist?.lastCost ?? 0) >= 1000) { unitPrice *= 1000; reasons.push("precio abreviado en miles"); }
+    // Un "cajón" a menos de $1.500 no existe: son paquetes/atados sueltos ("12 rúcula 2.500" = 12 atados)
+    if (unitPrice != null && unitPrice < 1500 && PACKAGE_UNITS.has(unit) && productId != null) {
+      const us = catById.get(productId)!.units;
+      const suelto = us.includes("ATADO") ? "ATADO" : us.includes("UNIDAD") ? "UNIDAD" : null;
+      if (suelto) { unit = suelto; status = "duda"; reasons.push(`a $${unitPrice} por envase no es un cajón: se cargó como ${suelto.toLowerCase()} suelto`); }
+    }
+    const hist = (productId != null ? histByKey.get(`${productId}|${unit}`) : undefined) ?? (histSameUnit?.purchaseUnit === unit ? histSameUnit : undefined);
     if (unitPrice != null && lineTotal != null && quantity && Math.abs(unitPrice * quantity - lineTotal) > Math.max(1, lineTotal * 0.02)) { status = "duda"; reasons.push(`cantidad × precio (${quantity} × ${unitPrice}) no da el importe del renglón (${lineTotal})`); }
     if (unitPrice != null && hist?.lastCost && (unitPrice > hist.lastCost * 2.2 || unitPrice < hist.lastCost / 2.2)) { status = "duda"; reasons.push(`precio muy distinto al último ($${hist.lastCost})`); }
     if (quantity == null) { status = "duda"; reasons.push("sin cantidad legible"); }
@@ -245,7 +258,7 @@ export async function interpretPurchaseReceipt(opts: { imageBase64: string; supp
     const unitFinal: string = unit ?? "KG";
     const isPkg = PACKAGE_UNITS.has(unitFinal);
     const known = productId != null ? knownWeights.get(productId) : undefined;
-    const weightPerPackage = isPkg ? (mem?.weightPerPackage ?? hist?.lastWeight ?? known?.weight ?? null) : null;
+    const weightPerPackage = isPkg ? (mem?.weightPerPackage ?? hist?.lastWeight ?? histProd?.lastWeight ?? known?.weight ?? null) : null;
     if (isPkg && weightPerPackage == null) reasons.push("falta cuántos kg/unidades trae el envase");
     return {
       rawLine: l.rawLine, productId, productName: productId != null ? catById.get(productId)!.name : null, purchaseUnit: unitFinal,
@@ -254,6 +267,17 @@ export async function interpretPurchaseReceipt(opts: { imageBase64: string; supp
       _envase: l.envase,
     } as ReceiptLine & { _envase: boolean };
   });
+
+  // ── Bolsas de plástico (50x70, 45x60…): un solo renglón BOLSAS VARIAS por el total ──
+  const bolsas = lines.filter((l) => (l.productName ?? "").toUpperCase().includes("BOLSAS VARIAS"));
+  if (bolsas.length > 1) {
+    const total = bolsas.reduce((acc, l) => acc + (l.quantity ?? 0) * (l.costPerPurchaseUnit ?? 0), 0);
+    const first = bolsas[0];
+    first.rawLine = bolsas.map((l) => l.rawLine).join(" + "); first.quantity = 1; first.purchaseUnit = "UNIDAD"; first.costPerPurchaseUnit = r2(total); first.baseUnit = "UNIDAD"; first.weightPerPackage = null;
+    first.status = "ok"; first.reason = "bolsas de plástico: un renglón por el total";
+    const resto = new Set(bolsas.slice(1));
+    lines.splice(0, lines.length, ...lines.filter((l) => !resto.has(l)));
+  }
 
   // ── Envases: repartir por renglón si la cantidad cierra, si no como vacíos adicionales ──
   const env = p2.envases;
@@ -270,7 +294,7 @@ export async function interpretPurchaseReceipt(opts: { imageBase64: string; supp
       globalEmptyCost = r2(envTotal);
       warnings.push(`Envases: la boleta cobra ${env.texto || `$${envTotal}`} (${n} envases) y los renglones con envase suman ${nPagan}; quedaron como "vacíos adicionales" para que lo repartas.`);
     }
-  } else if (history.some((h) => (h.lastEmpty ?? 0) > 0)) {
+  } else if (history.length && history.filter((h) => (h.lastEmpty ?? 0) > 0).length * 2 >= history.length) {
     warnings.push("Este proveedor suele cobrar envases y en la boleta no se leyó ninguno: revisá.");
   }
   for (const l of lines) delete (l as any)._envase;
@@ -280,7 +304,7 @@ export async function interpretPurchaseReceipt(opts: { imageBase64: string; supp
   let paymentReason = habit ? `${habit.times} de ${habit.total} compras recientes con ${supplier?.name.trim()} fueron ${paymentMethod.replace("_", " ")}` : "sin historial: cuenta corriente";
   const pagado = p2.pagado || paso1.pagado;
   if (pagado && paymentMethod === "cuenta_corriente") { paymentMethod = "transferencia"; paymentReason = "la boleta dice PAGADO: se marca pagada (transferencia); cambiá a efectivo si corresponde"; }
-  if (habit && habit.total >= 3 && habit.times / habit.total < 0.75) warnings.push(`Forma de pago: ${supplier?.name.trim()} se cargó de formas distintas últimamente (${paymentReason}); confirmala.`);
+  if (habit && habit.total >= 3 && habit.times / habit.total < 0.6) warnings.push(`Forma de pago a confirmar: ${paymentReason}.`);
 
   // ── Total ──
   const receiptTotal = p2.receiptTotal ?? paso1.receiptTotal ?? null;

@@ -2,9 +2,26 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-25 (dudas del bot visibles para el galpón; endpoint bot-cancel; cantidad vaga → última cantidad).
+> Última actualización: 2026-11-25 (Compras desde la foto de la boleta con Claude; dudas del bot visibles para el galpón).
 
 ## Último trabajo (sep–oct 2026)
+  25-nov **Compras desde la foto de la boleta** (pedido de Joaquín). Compras → "Cargar desde boleta" (`/purchases/boleta`):
+  foto (cámara o archivo, se achica a 1600 px en el navegador) → `POST /api/purchases/interpret` → "Nueva compra" abre
+  PRECARGADA (proveedor, fecha de hoy, forma de pago habitual, renglones con envase/precio/peso por envase, vacíos,
+  notas con fecha y N° de boleta) y se confirma como siempre (`POST /api/purchases` + `receiptLogId`). "Nueva compra" a
+  mano sigue igual. `server/interpret-purchase.ts`: dos llamadas a Claude (1: proveedor + cabecera con la lista de
+  proveedores y `supplier_receipt_hints`; 2: renglones con catálogo cacheado, historial de compras del proveedor
+  (`getSupplierPurchaseHistory`, 120 días), `supplier_product_memory` y forma de pago habitual). Validación en el
+  servidor: memoria manda; "35 280" abreviado → ×1000; cajón a < $1.500 → atado/unidad suelto; bolsas 50x70/45x60 → un
+  renglón BOLSAS VARIAS; envases ("13x5", "34x 170000", "seña 32", columna Señas) repartidos por cajón si la cantidad
+  cierra, si no como "vacíos adicionales" con aviso; control suma vs total de la boleta; sello PAGADO → pagada. Aprende al
+  confirmar: renglón → producto/envase por proveedor y pista de membrete si el proveedor se cambió. Tablas nuevas
+  (migrate): `purchase_receipt_logs`, `supplier_product_memory` (sembrada con 80 apodos de las boletas del 23–25/11),
+  `supplier_receipt_hints` (16 pistas). Tokens a `ai_usage` source `boleta_compra`. Probado contra las 23 boletas de esos
+  tres días con un script fuera del repo: proveedor 23/23; el total cierra en 19; las manuscritas muy borrosas (lápiz,
+  letra mala) quedan en amarillo con el aviso de que la suma no da. Costo ≈ 20 s y unos centavos de dólar por boleta.
+  Pendiente de ver por Joaquín/Nico en pantalla: la tarjeta "Precargado desde la boleta", líneas en amarillo, botón
+  "Releer con el proveedor elegido" cuando la confianza no es alta.
   25-nov **Dudas del bot que nadie corrigió, visibles para el galpón** (pedido de Joaquín, caso Munchis "una ramita de
   jengibre" → 1 kg). `order_items.duda_bot` (migrate, IF NOT EXISTS): true cuando el intake del bot deja la línea en duda;
   pasa a false solo si alguien cambia cantidad/unidad/producto (`updateOrderItem`, también vía bot-item). "Confirmar" sin
