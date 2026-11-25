@@ -2,9 +2,18 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-24 (nuevo cliente padre tipo Black Pot configurado en la base; grupo de precios ampliado).
+> Última actualización: 2026-11-25 (dudas del bot visibles para el galpón; endpoint bot-cancel; cantidad vaga → última cantidad).
 
 ## Último trabajo (sep–oct 2026)
+  25-nov **Dudas del bot que nadie corrigió, visibles para el galpón** (pedido de Joaquín, caso Munchis "una ramita de
+  jengibre" → 1 kg). `order_items.duda_bot` (migrate, IF NOT EXISTS): true cuando el intake del bot deja la línea en duda;
+  pasa a false solo si alguien cambia cantidad/unidad/producto (`updateOrderItem`, también vía bot-item). "Confirmar" sin
+  tocar nada la deja marcada. El galpón (detalle y hoja de armado) ve debajo de la línea, chico y gris: *pidió: "una ramita
+  de jenjibre"* (`getGalponOrder` devuelve rawProductName + dudaBot; `generateArmadoPDF` items.pidio). Admin no cambia.
+  `interpret-order`: cantidad VAGA sin número (ramita, un poco, poquito, algo de, manojo, pizca, puñado) → se carga la
+  última cantidad del cliente para ese producto, en duda (antes el modelo ponía 1). Nuevo `POST /api/orders/bot-cancel`
+  (`storage.botCancelOrder`, solo borradores, agrega nota): lo usa el bot cuando el equipo responde "mañana" a
+  "¿lo hacemos hoy?" (ver ESTADO del bot). Pendiente de verificar con un caso real: la línea "pidió:" en galpón.
   24-nov **Segundo grupo "tipo Black Pot" (solo configuración en la base, sin código).** Un cliente padre nuevo
   (empresa con CUIT, con IVA, factura A, RI, modo "diaria") y 4 sedes con `parent_customer_id` + `bill_to='padre'`,
   con IVA, vendedor Juan 5 % y alta propia cada una. La sede que ya venía pidiendo (y tenía el CUIT) quedó colgada

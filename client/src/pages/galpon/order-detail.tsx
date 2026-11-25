@@ -17,7 +17,9 @@ import { ArrowLeft, Trash2, Plus, CheckCircle2, Printer, Wand2, X } from "lucide
 
 const UNITS = ["KG", "UNIDAD", "CAJON", "BOLSA", "ATADO", "MAPLE", "BANDEJA"];
 
-type Item = { id: number; productId: number | null; productName: string | null; quantity: string; unit: string; aliasNombre?: string | null };
+type Item = { id: number; productId: number | null; productName: string | null; quantity: string; unit: string; aliasNombre?: string | null; rawProductName?: string | null; dudaBot?: boolean | null };
+// 25/11: duda del bot que nadie corrigió → el galpón ve cómo lo pidió el cliente y decide
+const pidio = (it: Item) => it.dudaBot && (it.rawProductName ?? "").trim() ? (it.rawProductName ?? "").trim() : null;
 
 // Varita de alias de nombre (solo remito/factura). Operable únicamente en borrador.
 function AliasWand({ alias, realName, canEdit, onSave }: {
@@ -254,6 +256,7 @@ export default function GalponOrderDetail({ id }: { id: number }) {
                                 {alias && <span className="text-[10px] text-muted-foreground italic whitespace-nowrap">real: {realName}</span>}
                               </>
                             )}
+                            {pidio(it) && <span className="basis-full text-[11px] text-muted-foreground italic" data-testid={`pidio-${it.id}`}>pidió: “{pidio(it)}”</span>}
                           </div>
                         );
                       })()}

@@ -225,6 +225,9 @@ export const orderItems = pgTable("order_items", {
   isBonification: boolean("is_bonification").default(false),
   // Alias de nombre SOLO para remito y factura-PDF. NO reemplaza productId ni toca stock/costo.
   aliasNombre: text("alias_nombre"),
+  // 25/11/2026: la línea nació como duda del bot y nadie le cambió cantidad/unidad/producto (aunque la hayan
+  // "confirmado"). El galpón ve "pidió: <texto del cliente>" debajo de la línea y aplica su criterio.
+  dudaBot: boolean("duda_bot").default(false),
 });
 
 // ─── Log de interpretación IA en Carga Pedido (A-04) ────────────────────────────

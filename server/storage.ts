@@ -1689,6 +1689,7 @@ export const storage = {
           subtotal,
           rawProductName: item.rawProductName ?? null,
           parseStatus: item.parseStatus ?? "ok",
+          dudaBot: item.parseStatus === "duda",
         };
       })
     );
@@ -1752,6 +1753,7 @@ export const storage = {
           subtotal,
           rawProductName: item.rawProductName ?? null,
           parseStatus: item.parseStatus ?? "ok",
+          dudaBot: item.parseStatus === "duda",
         };
       })
     );
@@ -2014,6 +2016,9 @@ export const storage = {
         updateData.aliasNombre = a ? a : null;
       }
       // A-01: una línea que el bot dejó en duda queda revisada si la confirman o si le cambian cantidad/unidad/producto
+      // 25/11: si cambian cantidad/unidad/producto, la duda del bot quedó resuelta de verdad (el galpón ya no ve "pidió: …");
+      // "confirmar" sin tocar nada la deja marcada para que el galpón aplique su criterio.
+      if (hasStructuralChange && (item as any).dudaBot) updateData.dudaBot = false;
       if ((item as any).parseStatus === "duda" && (patch.parseStatus === "ok" || hasStructuralChange)) {
         updateData.parseStatus = "ok";
         // A-13 (15/10): el bot aprende de la confirmación o corrección: ese renglón del cliente → este producto/unidad/cantidad
@@ -3403,7 +3408,8 @@ export const storage = {
       SELECT oi.id, oi.product_id AS "productId", oi.quantity, oi.unit,
              COALESCE(p.name, oi.raw_product_name) AS "productName",
              oi.alias_nombre AS "aliasNombre",
-             oi.bolsa_type AS "bolsaType"
+             oi.bolsa_type AS "bolsaType",
+             oi.raw_product_name AS "rawProductName", oi.duda_bot AS "dudaBot"
       FROM order_items oi
       LEFT JOIN products p ON p.id = oi.product_id
       WHERE oi.order_id = ${id}
@@ -4817,6 +4823,16 @@ export const storage = {
     // Misma hora interna que usa /intake (new Date('YYYY-MM-DD') = medianoche UTC) para que se vea bien en Pedidos
     await db.update(orders).set({ orderDate: new Date(date) }).where(eq(orders.id, orderId));
     return { ok: true, note: `fecha ${date}` };
+  },
+
+  /** 25/11: el equipo respondió "mañana/no" a "¿lo hacemos hoy?": el borrador del bot se cancela (no toca stock ni CC). */
+  async botCancelOrder(orderId: number, motivo: string): Promise<{ ok: boolean; note: string }> {
+    const [o] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!o) return { ok: false, note: "El pedido no existe" };
+    if (o.status !== "draft") return { ok: false, note: `El pedido ${o.folio} ya está ${o.status}` };
+    const nota = `• Cancelado por el bot: ${motivo}`;
+    await db.update(orders).set({ status: "cancelled", notes: [o.notes?.trim() || "", nota].filter(Boolean).join("\n") }).where(eq(orders.id, orderId));
+    return { ok: true, note: `pedido ${o.folio} cancelado` };
   },
 
   /** "Pasar pedido" (Joaquín, 19/10): mover la fecha de entrega de un pedido en borrador o aprobado (no facturado). */

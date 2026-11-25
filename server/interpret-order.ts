@@ -286,6 +286,15 @@ function validateProposal(
       unit = productM.units.includes("ATADO") ? "ATADO" : productM.units.includes("UNIDAD") ? "UNIDAD" : "ATADO";
       reasons.push(`"planta" no es KG: se cargó en ${unit}`);
     }
+    // 25/11 (Munchis, "una ramita de jengibre" → cargó 1 kg): cantidad VAGA sin número ("una ramita", "un poco", "un poquito",
+    // "algo de", "un manojo", "una pizca"). El modelo suele poner 1; acá manda la última cantidad del cliente, en duda.
+    const vaga = !/\d/.test(l.rawLine) && /\b(ramitas?|un poco|poquito|algo de|manojos?|manojitos?|pizca|puñado|punado)\b/i.test(l.rawLine.normalize("NFD").replace(/[̀-ͯ]/g, ""));
+    if (vaga && productM && !mem) {
+      const lq = lastQty.get(productM.id);
+      if (lq && lq > 0) { quantity = lq; reasons.unshift(`Cantidad vaga ("${l.rawLine.trim()}"): se cargó como la última vez (${lq})`); }
+      else reasons.unshift(`Cantidad vaga ("${l.rawLine.trim()}") y sin historial: se cargó ${quantity ?? 1}`);
+      status = "duda"; if (dudaType !== "cambio") dudaType = "cantidad";
+    }
     if (quantity == null || !Number.isFinite(quantity) || quantity <= 0) {
       // Siempre se carga: última cantidad del cliente para ese producto, o 1 — en duda para que lo revisen
       const lq = productM ? lastQty.get(productM.id) : undefined;

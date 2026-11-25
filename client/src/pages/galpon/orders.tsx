@@ -72,7 +72,7 @@ export default function GalponOrders() {
         .map((d: any) => ({
           folio: remitoLabel(d), customerName: d.customerName, createdByName: d.createdByName,
           notes: d.notes ?? null, galponNotes: d.galponNotes ?? null,
-          items: (d.items ?? []).filter((it: any) => !isBolsa(it)),
+          items: (d.items ?? []).filter((it: any) => !isBolsa(it)).map((it: any) => ({ ...it, pidio: it.dudaBot && (it.rawProductName ?? "").trim() ? String(it.rawProductName).trim() : null })),
         }))
         .filter((d) => d.items.length > 0); // pedidos que quedan solo con bolsa no se imprimen
       if (armado.length === 0) return; // nada para armar (todo era bolsa)

@@ -96,6 +96,7 @@ export const ROLE_API_WHITELIST: Record<string, string[]> = {
     "/api/orders/draft-items",
     "/api/orders/bot-item",
     "/api/orders/bot-date",
+    "/api/orders/bot-cancel",
     "/api/wa-inbox",
     "/api/wa-sent",
     "/api/settings",
@@ -1078,6 +1079,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const body = z.object({ orderId: z.number(), date: z.string() }).parse(req.body);
       return res.json(await storage.botSetOrderDate(body.orderId, body.date));
+    } catch (e: any) { return res.status(400).json({ error: e.message }); }
+  });
+  app.post("/api/orders/bot-cancel", requireAuth, async (req, res) => {
+    try {
+      const body = z.object({ orderId: z.number(), motivo: z.string().max(300).optional() }).parse(req.body);
+      return res.json(await storage.botCancelOrder(body.orderId, body.motivo ?? "el equipo respondió que hoy no se puede"));
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
   app.post("/api/orders/bot-item", requireAuth, async (req, res) => {

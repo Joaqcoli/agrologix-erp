@@ -179,6 +179,7 @@ export async function runMigrations() {
     )
   `);
 
+  await db.execute(sql`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS duda_bot BOOLEAN DEFAULT FALSE`); // 25/11: duda del bot sin corregir (la ve el galpón)
   await db.execute(sql`ALTER TABLE order_items ALTER COLUMN product_id DROP NOT NULL`);
   await db.execute(sql`ALTER TABLE order_items ALTER COLUMN price_per_unit DROP NOT NULL`);
   await db.execute(sql`ALTER TABLE order_items ALTER COLUMN cost_per_unit SET DEFAULT 0`);

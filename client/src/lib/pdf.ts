@@ -458,7 +458,8 @@ export type ArmadoOrder = {
   folio: string;
   customerName: string;
   createdByName?: string | null;
-  items: { quantity: string; unit: string; productName: string | null }[];
+  /** pidio (25/11): cómo lo escribió el cliente cuando el bot lo cargó en duda y nadie lo corrigió. */
+  items: { quantity: string; unit: string; productName: string | null; pidio?: string | null }[];
   /** Notas del bot (qué asumió) y del encargado: se imprimen en la hoja de armado, no en el remito (20/10). */
   notes?: string | null;
   galponNotes?: string | null;
@@ -486,7 +487,8 @@ export function generateArmadoPDF(orders: ArmadoOrder[], dateLabel: string, opts
     if (ord.notes?.trim()) notasLineas.push(...(doc.splitTextToSize(`Notas: ${ord.notes.trim().replace(/\s*\n\s*/g, " · ")}`, pageW - margin * 2) as string[]));
     if (ord.galponNotes?.trim()) notasLineas.push(...(doc.splitTextToSize(`Galpón: ${ord.galponNotes.trim().replace(/\s*\n\s*/g, " · ")}`, pageW - margin * 2) as string[]));
     // Alto COMPLETO del pedido (separador + header + encabezados + ítems + notas + espacio)
-    const fullBlockH = 5 + 5 + 5.5 + ord.items.length * lineH + (notasLineas.length ? notasLineas.length * 3.8 + 2 : 0) + 5;
+    const conPidio = ord.items.filter((it) => (it.pidio ?? "").trim()).length;
+    const fullBlockH = 5 + 5 + 5.5 + ord.items.length * lineH + conPidio * 3.5 + (notasLineas.length ? notasLineas.length * 3.8 + 2 : 0) + 5;
     const fitsOnEmptyPage = fullBlockH <= bottom - margin;
     // Si el pedido NO entra completo en lo que queda de la hoja, y sí entra en una hoja
     // vacía → arrancar en hoja nueva. Así nunca se parte un mismo pedido entre dos hojas.
@@ -521,6 +523,13 @@ export function generateArmadoPDF(orders: ArmadoOrder[], dateLabel: string, opts
       doc.text(it.unit ?? "", margin + 18, y);
       doc.text(it.productName ?? "—", margin + 32, y);
       y += lineH;
+      if ((it.pidio ?? "").trim()) {
+        // duda del bot sin corregir: cómo lo pidió el cliente, chico y gris, para que el galpón aplique su criterio
+        doc.setFont("helvetica", "italic"); doc.setFontSize(7.5); doc.setTextColor(120);
+        doc.text(`pidió: "${(it.pidio ?? "").trim()}"`, margin + 32, y - 1.5);
+        doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor(0);
+        y += 3.5;
+      }
     }
     if (notasLineas.length) {
       doc.setFont("helvetica", "italic"); doc.setFontSize(8); doc.setTextColor(90);
