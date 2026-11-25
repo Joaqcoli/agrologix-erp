@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { Plus, ShoppingCart, Calendar, ChevronRight, Package, DollarSign, Users } from "lucide-react";
+import { Plus, ShoppingCart, Calendar, ChevronRight, Package, DollarSign, Users, Camera } from "lucide-react";
 import type { Purchase } from "@shared/schema";
 
 const fmtInt = (n: number) => Math.round(n).toLocaleString("es-AR");
@@ -31,6 +31,8 @@ const CMX_CSS = `
 .cmx-datepick:focus-within{border-color:#5f8020;box-shadow:0 0 0 3px rgba(107,138,42,.14);}
 .cmx-btnnew{display:inline-flex;align-items:center;gap:8px;background:#6b8a2a;color:#fff;border:none;border-radius:11px;padding:11px 18px;font-family:'Inter';font-size:14px;font-weight:600;cursor:pointer;text-decoration:none;}
 .cmx-btnnew:hover{background:#5f7d24;}
+.cmx-btnboleta{background:#fff;color:#1e2420;border:1px solid #ecece8;}
+.cmx-btnboleta:hover{background:#f6f6f2;}
 .cmx-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px;}
 @media(max-width:760px){.cmx-summary{grid-template-columns:1fr;}}
 .cmx-sum{background:#fff;border:1px solid #ecece8;border-radius:16px;padding:20px 22px;}
@@ -104,6 +106,9 @@ export default function PurchasesPage() {
                 <Calendar className="h-4 w-4" />
                 <input type="date" value={date} onChange={(e) => setDate(e.target.value)} data-testid="input-date-filter" />
               </div>
+              <Link href="/purchases/boleta" className="cmx-btnnew cmx-btnboleta" data-testid="button-boleta">
+                <Camera className="h-[17px] w-[17px]" /> Cargar desde boleta
+              </Link>
               <Link href="/purchases/new" className="cmx-btnnew" data-testid="button-new-purchase">
                 <Plus className="h-[17px] w-[17px]" /> Nueva Compra
               </Link>

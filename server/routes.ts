@@ -19,6 +19,8 @@ import { buildBlackPotWorkbook } from "./blackpot-excel";
 import { resumenCostos } from "./costos";
 import { syncMpReport } from "./mp-report-sync";
 import { interpretOrder, aiEnabled } from "./interpret-order";
+import { interpretPurchaseReceipt } from "./interpret-purchase";
+import { claveRenglon } from "./interpret-order";
 import { timingSafeEqual } from "crypto";
 import { normalizeArPhone } from "@shared/phone";
 import multer from "multer";
@@ -999,6 +1001,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
+  // 25/11: compras desde la foto de la boleta (Claude). Devuelve la propuesta para precargar "Nueva compra"; no guarda nada.
+  app.post("/api/purchases/interpret", express.json({ limit: "12mb" }), requireAuth, async (req, res) => {
+    try {
+      if (!aiEnabled()) return res.status(503).json({ error: "IA no configurada (ANTHROPIC_API_KEY)" });
+      const body = z.object({ imageBase64: z.string().min(100), supplierId: z.number().int().nullable().optional() }).parse(req.body);
+      const result = await interpretPurchaseReceipt({ imageBase64: body.imageBase64, supplierId: body.supplierId ?? null, userId: req.session.userId ?? null });
+      let logId: number | null = null;
+      try {
+        const { usage, model, ...proposal } = result;
+        logId = await storage.createReceiptLog({ userId: req.session.userId ?? null, supplierId: result.supplier.id, model, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: usage.cacheReadTokens, cacheWriteTokens: usage.cacheWriteTokens, proposal });
+        await storage.addAiUsage({ source: "boleta_compra", model, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: usage.cacheReadTokens, cacheWriteTokens: usage.cacheWriteTokens });
+      } catch (e: any) { console.error("[boleta] no se pudo guardar el log:", e.message); }
+      return res.json({ ...result, logId });
+    } catch (e: any) {
+      console.error("[boleta] error:", e.message);
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
   app.post("/api/purchases", requireAuth, async (req, res) => {
     try {
       const data = insertPurchaseSchema.parse(req.body);
@@ -1014,6 +1035,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         items: data.items as any,
         confirm: req.body?.confirm === true,
       });
+      // 25/11 boleta: cerrar el log y aprender por proveedor (renglón de la boleta → producto/envase; pistas del membrete)
+      if (data.receiptLogId) {
+        try {
+          const log = await storage.getReceiptLog(data.receiptLogId);
+          const sid = (data as any).supplierId ?? null;
+          await storage.finishReceiptLog(data.receiptLogId, { purchaseId: purchase.id, supplierId: sid, final: data.items });
+          if (log && sid) {
+            for (const it of data.items as any[]) {
+              if (it.rawLine && it.productId) await storage.upsertSupplierMemory({ supplierId: sid, hint: claveRenglon(it.rawLine), productId: it.productId, unit: it.purchaseUnit ?? it.unit, weightPerPackage: it.weightPerPackage ? Number(it.weightPerPackage) : null, source: "compra" });
+            }
+            const prop: any = log.proposal ?? {};
+            if (prop.supplier && (prop.supplier.id !== sid || prop.supplier.confidence !== "alta") && prop.supplier.headerText) await storage.addSupplierReceiptHint(sid, prop.supplier.headerText);
+          }
+        } catch (e: any) { console.error("[boleta] no se pudo cerrar el log:", e.message); }
+      }
       return res.status(201).json(purchase);
     } catch (e: any) {
       // Advertencias (unidad de compra inusual / costo muy distinto): el front las muestra y reenvía con confirm=true

@@ -619,8 +619,46 @@ export const insertPurchaseSchema = createInsertSchema(purchases).omit({ id: tru
     weightPerPackage: z.string().optional(),
     emptyCost: z.string().optional(),
     costPerPurchaseUnit: z.string().optional(),
+    rawLine: z.string().max(200).optional(), // 25/11 boleta: renglón tal cual lo leyó la IA (para aprender por proveedor)
   })).min(1, "Must have at least one item"),
+  receiptLogId: z.number().int().optional(), // 25/11 boleta: log del análisis que precargó esta compra
 });
+
+// ─── 25/11/2026 · Compras desde la foto de la boleta (Claude) ─────────────────
+// Un log por análisis (como order_intake_logs): proveedor elegido, propuesta, tokens y, al crear la compra, lo final.
+export const purchaseReceiptLogs = pgTable("purchase_receipt_logs", {
+  id: serial("id").primaryKey(),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  supplierId: integer("supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
+  purchaseId: integer("purchase_id").references(() => purchases.id, { onDelete: "set null" }),
+  model: text("model"),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  cacheReadTokens: integer("cache_read_tokens"),
+  cacheWriteTokens: integer("cache_write_tokens"),
+  proposal: jsonb("proposal"),
+  final: jsonb("final"),
+});
+// Memoria por proveedor: cómo escribe cada puesto un producto en su boleta → producto/envase del sistema.
+export const supplierProductMemory = pgTable("supplier_product_memory", {
+  id: serial("id").primaryKey(),
+  supplierId: integer("supplier_id").notNull().references(() => suppliers.id, { onDelete: "cascade" }),
+  hint: text("hint").notNull(), // clave del renglón (sin números ni unidades), ej. "red sol"
+  productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+  unit: text("unit").notNull(), // unidad de compra (CAJON, BOLSA, KG…)
+  weightPerPackage: numeric("weight_per_package", { precision: 12, scale: 4 }),
+  source: text("source"), // seed | compra
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (t) => ({ uq: unique().on(t.supplierId, t.hint) }));
+// Pistas para reconocer la boleta de cada proveedor (membrete, sello, puesto, estilo) cuando no coincide el nombre.
+export const supplierReceiptHints = pgTable("supplier_receipt_hints", {
+  id: serial("id").primaryKey(),
+  supplierId: integer("supplier_id").notNull().references(() => suppliers.id, { onDelete: "cascade" }),
+  hint: text("hint").notNull(),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (t) => ({ uq: unique().on(t.supplierId, t.hint) }));
+export type PurchaseReceiptLog = typeof purchaseReceiptLogs.$inferSelect;
 export const insertOrderSchema = z.object({
   customerId: z.number(),
   orderDate: z.union([z.string(), z.date()]),

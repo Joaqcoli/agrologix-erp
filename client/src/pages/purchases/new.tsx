@@ -13,7 +13,8 @@ import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
-import { Plus, Trash2, ArrowLeft, PackagePlus, Calculator, Info } from "lucide-react";
+import { Plus, Trash2, ArrowLeft, PackagePlus, Calculator, Info, Camera, AlertTriangle, CheckCircle2, RefreshCw, Loader2 } from "lucide-react";
+import { takeBoleta, type BoletaData } from "@/lib/boleta-store";
 import type { Product, ProductUnit, Supplier } from "@shared/schema";
 
 // Todas las unidades disponibles para compra
@@ -52,6 +53,10 @@ type PurchaseItem = {
   emptyCost: string;
   // true cuando el usuario tipeó el peso a mano → la sugerencia async no lo pisa
   wpuTouched?: boolean;
+  // 25/11 boleta: renglón tal cual lo leyó Claude, si quedó en duda y por qué (amarillo hasta que lo toquen)
+  rawLine?: string;
+  duda?: boolean;
+  reason?: string;
 };
 
 const isPackageUnit = (unit: string) => PACKAGE_UNIT_SET.has(unit);
@@ -124,6 +129,11 @@ export default function NewPurchasePage() {
   const [newSupplierOpen, setNewSupplierOpen] = useState(false);
   // Advertencias del servidor (unidad inusual / costo muy distinto) pendientes de confirmar
   const [confirmReq, setConfirmReq] = useState<{ warnings: string[]; payload: any } | null>(null);
+  // 25/11: compra precargada desde la foto de la boleta (ver pages/purchases/boleta.tsx y lib/boleta-store.ts)
+  const [boleta, setBoletaState] = useState<BoletaData | null>(() => takeBoleta());
+  const [boletaAplicada, setBoletaAplicada] = useState(false);
+  const [reanalizando, setReanalizando] = useState(false);
+  const [verFoto, setVerFoto] = useState(false);
 
   const { data: products } = useQuery<Product[]>({ queryKey: ["/api/products"] });
   const { data: suppliers } = useQuery<Supplier[]>({ queryKey: ["/api/suppliers"] });
@@ -152,6 +162,48 @@ export default function NewPurchasePage() {
   };
 
   useEffect(() => { if (folioData?.folio) setFolio(folioData.folio); }, [folioData]);
+
+  // 25/11 boleta: cuando están los productos y el stock, se precarga todo lo que leyó Claude (sigue 100 % editable)
+  useEffect(() => {
+    if (!boleta || boletaAplicada || !products || !stockData) return;
+    setBoletaAplicada(true);
+    if (boleta.supplier.id) { setSupplierId(boleta.supplier.id); setSupplierName(""); }
+    setPaymentMethod(boleta.paymentMethod || "cuenta_corriente");
+    setPurchaseDate(boleta.purchaseDate || todayLocal());
+    setNotes(boleta.notes || "");
+    setGlobalEmptyCost(boleta.globalEmptyCost > 0 ? String(boleta.globalEmptyCost) : "0");
+    setItems(boleta.lines.map((l) => {
+      const pid = l.productId ?? 0;
+      const pkg = isPackageUnit(l.purchaseUnit);
+      const eggs = pid ? isEggsProduct(pid) : false;
+      return {
+        productId: pid, productSearch: l.productName ?? l.rawLine, quantity: l.quantity != null ? String(l.quantity) : "",
+        unit: l.purchaseUnit || "KG",
+        weightPerPackage: pkg ? (l.weightPerPackage != null ? String(l.weightPerPackage) : (eggs && l.purchaseUnit === "CAJON" ? "12" : getKnownWPU(pid))) : "",
+        baseUnit: pkg ? (eggs && l.purchaseUnit === "CAJON" ? "MAPLE" : (pid ? getKnownBaseUnit(pid) : (l.baseUnit ?? "KG"))) : (l.purchaseUnit || "KG"),
+        costPerUnit: l.costPerPurchaseUnit != null ? String(Math.round(l.costPerPurchaseUnit * 100) / 100) : "",
+        emptyCost: l.emptyCost != null && l.emptyCost > 0 ? String(l.emptyCost) : "",
+        wpuTouched: l.weightPerPackage != null,
+        rawLine: l.rawLine, duda: l.status === "duda", reason: l.reason,
+      };
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boleta, boletaAplicada, products, stockData]);
+
+  // Volver a leer la boleta con el proveedor elegido en pantalla (usa su historial y su memoria)
+  const reanalizar = async () => {
+    if (!boleta || !supplierId) return;
+    setReanalizando(true);
+    try {
+      const res = await fetch("/api/purchases/interpret", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ imageBase64: boleta.imageDataUrl, supplierId }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `Error ${res.status}`);
+      setBoletaState({ ...data, imageDataUrl: boleta.imageDataUrl });
+      setBoletaAplicada(false);
+      toast({ title: "Boleta releída", description: `${data.lines?.length ?? 0} renglones con el historial de ${data.supplier?.name ?? "este proveedor"}.` });
+    } catch (e: any) { toast({ title: "No se pudo releer la boleta", description: e.message, variant: "destructive" }); }
+    finally { setReanalizando(false); }
+  };
 
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/purchases", data),
@@ -184,6 +236,8 @@ export default function NewPurchasePage() {
   const updateItem = (i: number, field: keyof PurchaseItem, value: string | number) => {
     const updated = [...items];
     updated[i] = { ...updated[i], [field]: String(value) };
+    // 25/11 boleta: cuando corrigen producto, cantidad, envase o costo, la línea deja de estar en duda
+    if (updated[i].duda && ["productId", "quantity", "unit", "costPerUnit", "weightPerPackage"].includes(field)) updated[i].duda = false;
 
     // El usuario tipeó el peso a mano → no dejar que la sugerencia async lo pise.
     if (field === "weightPerPackage") updated[i].wpuTouched = true;
@@ -315,11 +369,13 @@ export default function NewPurchasePage() {
       paymentMethod,
       notes: notes || undefined,
       totalEmptyCostExtra: parseFloat(globalEmptyCost) > 0 ? globalEmptyCost : undefined,
+      receiptLogId: boleta?.logId ?? undefined,
       items: validItems.map((i) => {
         if (isPackageUnit(i.unit)) {
           const totalBaseQty = getTotalBaseUnits(i);
           const costPerBase = getCostPerBaseUnit(i);
           return {
+            rawLine: i.rawLine,
             productId: Number(i.productId),
             quantity: totalBaseQty.toFixed(4),
             unit: i.baseUnit,
@@ -332,6 +388,7 @@ export default function NewPurchasePage() {
           };
         } else {
           return {
+            rawLine: i.rawLine,
             productId: Number(i.productId),
             quantity: parseFloat(i.quantity).toFixed(4),
             unit: i.unit,
@@ -360,6 +417,57 @@ export default function NewPurchasePage() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
+          {boleta && (() => {
+            // 25/11: resumen de lo leído en la boleta + control del total en vivo
+            const totalPantalla = grandTotal + grandEmptyCost;
+            const totalBoleta = boleta.receipt.total;
+            const cierra = totalBoleta != null ? Math.abs(totalPantalla - totalBoleta) <= Math.max(1, totalBoleta * 0.005) : null;
+            const dudas = items.filter((i) => i.duda).length;
+            const proveedorCambiado = supplierId != null && supplierId !== boleta.supplier.id;
+            const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-AR")}`;
+            return (
+              <Card className="border-amber-300/70 bg-amber-50/40 dark:bg-amber-950/10" data-testid="card-boleta">
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex items-start gap-3">
+                    <button type="button" onClick={() => setVerFoto(true)} className="shrink-0" title="Ver la boleta">
+                      <img src={boleta.imageDataUrl} alt="Boleta" className="h-20 w-16 object-cover rounded-md border border-border" data-testid="img-boleta-thumb" />
+                    </button>
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Camera className="h-4 w-4 text-amber-700" />
+                        <span className="text-sm font-semibold">Precargado desde la boleta</span>
+                        <Badge variant="secondary" className="text-[10px]">proveedor: {boleta.supplier.name ?? "no reconocido"} · confianza {boleta.supplier.confidence}</Badge>
+                        {boleta.receipt.pagado && <Badge variant="secondary" className="text-[10px]">sello PAGADO</Badge>}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {boleta.supplier.nameRead ? `Membrete: ${boleta.supplier.nameRead}. ` : ""}{boleta.supplier.reason}. Forma de pago: {boleta.paymentReason}.
+                      </p>
+                      <div className="flex items-center gap-2 text-sm">
+                        {cierra === null ? <AlertTriangle className="h-4 w-4 text-amber-600" /> : cierra ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <AlertTriangle className="h-4 w-4 text-red-600" />}
+                        <span data-testid="text-boleta-total-check">
+                          {totalBoleta == null ? `No se leyó el total de la boleta. En pantalla: ${fmt(totalPantalla)}.`
+                            : cierra ? `Cierra con la boleta: ${fmt(totalBoleta)}.`
+                            : `La boleta dice ${fmt(totalBoleta)} y la pantalla suma ${fmt(totalPantalla)} (diferencia ${fmt(totalPantalla - totalBoleta)}).`}
+                        </span>
+                        {dudas > 0 && <span className="text-xs text-amber-700">· {dudas} {dudas === 1 ? "línea en duda" : "líneas en duda"}</span>}
+                      </div>
+                    </div>
+                  </div>
+                  {boleta.warnings.length > 0 && (
+                    <ul className="list-disc pl-5 text-xs text-amber-800 dark:text-amber-300 space-y-0.5">
+                      {boleta.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                    </ul>
+                  )}
+                  {(proveedorCambiado || boleta.supplier.confidence !== "alta" || !boleta.supplier.id) && (
+                    <Button type="button" variant="outline" size="sm" onClick={reanalizar} disabled={!supplierId || reanalizando} data-testid="button-reanalizar">
+                      {reanalizando ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
+                      {reanalizando ? "Releyendo..." : `Releer la boleta con ${selectedSupplier?.name?.trim() ?? "el proveedor elegido"}`}
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })()}
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold">Datos Generales</CardTitle>
@@ -477,9 +585,9 @@ export default function NewPurchasePage() {
                 const baseUnitLabel = labelFor(item.baseUnit);
 
                 return (
-                  <div key={idx} className="rounded-md border border-border bg-card/50 p-4 space-y-3" data-testid={`purchase-item-${idx}`}>
+                  <div key={idx} className={`rounded-md border p-4 space-y-3 ${item.duda ? "border-amber-400 bg-amber-50/60 dark:bg-amber-950/20" : "border-border bg-card/50"}`} data-testid={`purchase-item-${idx}`}>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Producto #{idx + 1}</span>
+                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Producto #{idx + 1}{item.duda && <span className="ml-2 normal-case tracking-normal text-amber-700">· en duda</span>}</span>
                       {items.length > 1 && (
                         <Button type="button" size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => removeItem(idx)} data-testid={`button-remove-item-${idx}`}>
                           <Trash2 className="h-3.5 w-3.5" />
@@ -487,6 +595,11 @@ export default function NewPurchasePage() {
                       )}
                     </div>
 
+                    {item.rawLine && (
+                      <p className={`text-xs ${item.duda ? "text-amber-800 dark:text-amber-300" : "text-muted-foreground"}`} data-testid={`text-rawline-${idx}`}>
+                        Boleta: “{item.rawLine}”{item.reason ? ` · ${item.reason}` : ""}
+                      </p>
+                    )}
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
                       <div className="sm:col-span-2 space-y-1.5">
                         <Label>Producto *</Label>
@@ -733,6 +846,13 @@ export default function NewPurchasePage() {
             </Button>
           </div>
         </form>
+
+        <Dialog open={verFoto} onOpenChange={setVerFoto}>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader><DialogTitle>Boleta</DialogTitle></DialogHeader>
+            {boleta && <img src={boleta.imageDataUrl} alt="Boleta" className="max-h-[75vh] w-auto mx-auto object-contain rounded-md" />}
+          </DialogContent>
+        </Dialog>
 
         <NewSupplierModal
           open={newSupplierOpen}

@@ -28,6 +28,7 @@ import CustomersPage from "@/pages/customers";
 import ProductsPage from "@/pages/products";
 import PurchasesPage from "@/pages/purchases/index";
 import NewPurchasePage from "@/pages/purchases/new";
+import BoletaPage from "@/pages/purchases/boleta";
 import PurchaseDetailPage from "@/pages/purchases/detail";
 import EditPurchasePage from "@/pages/purchases/edit";
 import OrdersPage from "@/pages/orders/index";
@@ -81,6 +82,7 @@ function Router() {
       <Route path="/products" component={ProductsPage} />
       <Route path="/purchases" component={PurchasesPage} />
       <Route path="/purchases/new" component={NewPurchasePage} />
+      <Route path="/purchases/boleta" component={BoletaPage} />
       <Route path="/purchases/:id/edit">
         {(params) => <EditPurchasePage id={Number(params.id)} />}
       </Route>

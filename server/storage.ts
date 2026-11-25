@@ -9,7 +9,8 @@ import {
   creditNotes,
   cuentasFinancieras,
   orderIntakeLogs, customerContacts, waPendingNumbers, waQuestions, customerProductMemory, customerAliases, waInbox, botRules,
-  type OrderIntakeLog, type CustomerContact, type WaPendingNumber, type WaQuestion,
+  purchaseReceiptLogs, supplierProductMemory, supplierReceiptHints,
+  type OrderIntakeLog, type CustomerContact, type WaPendingNumber, type WaQuestion, type PurchaseReceiptLog,
   type User, type Customer, type Product, type Purchase,
   type PurchaseItem, type Order,
   type OrderItem, type PriceHistory, type Remito, type ProductUnit,
@@ -3253,6 +3254,73 @@ export const storage = {
 
   // Último weight_per_package usado para un producto + proveedor (sugerencia de compra).
   // Devuelve null si no hay compras previas de esa combinación.
+  // ─── 25/11: compras desde la foto de la boleta ──────────────────────────────
+  /** Qué le compramos a este proveedor (últimos `days` días): producto + envase, veces, último costo por envase, peso y vacío. */
+  async getSupplierPurchaseHistory(supplierId: number, days = 120): Promise<{ productId: number; name: string; purchaseUnit: string; times: number; lastDate: string; lastCost: number | null; lastWeight: number | null; lastEmpty: number | null }[]> {
+    const rows = await db.execute(drizzleSql`
+      SELECT pi.product_id AS "productId", p.name, COALESCE(pi.purchase_unit, pi.unit)::text AS "purchaseUnit", count(*)::int AS times,
+             to_char(max(pu.purchase_date), 'YYYY-MM-DD') AS "lastDate",
+             (array_agg(COALESCE(pi.cost_per_purchase_unit, pi.cost_per_unit)::float ORDER BY pu.purchase_date DESC, pi.id DESC))[1] AS "lastCost",
+             (array_agg(pi.weight_per_package::float ORDER BY pu.purchase_date DESC, pi.id DESC) FILTER (WHERE pi.weight_per_package IS NOT NULL))[1] AS "lastWeight",
+             (array_agg(pi.empty_cost::float ORDER BY pu.purchase_date DESC, pi.id DESC))[1] AS "lastEmpty"
+      FROM purchase_items pi JOIN purchases pu ON pu.id = pi.purchase_id JOIN products p ON p.id = pi.product_id
+      WHERE pu.supplier_id = ${supplierId} AND pu.purchase_date >= now() - make_interval(days => ${days}::int)
+      GROUP BY pi.product_id, p.name, COALESCE(pi.purchase_unit, pi.unit)
+      ORDER BY count(*) DESC, max(pu.purchase_date) DESC`);
+    return (rows.rows as any[]).map((r) => ({
+      productId: Number(r.productId), name: String(r.name), purchaseUnit: String(r.purchaseUnit), times: Number(r.times), lastDate: String(r.lastDate),
+      lastCost: r.lastCost == null ? null : Number(r.lastCost), lastWeight: r.lastWeight == null ? null : Number(r.lastWeight), lastEmpty: r.lastEmpty == null ? null : Number(r.lastEmpty),
+    }));
+  },
+  /** Forma de pago más usada con el proveedor (últimos 120 días) y cuántas veces. */
+  async getSupplierPaymentHabit(supplierId: number): Promise<{ method: string; times: number; total: number } | null> {
+    const rows = await db.execute(drizzleSql`
+      SELECT payment_method AS method, count(*)::int AS times, (SELECT count(*)::int FROM purchases WHERE supplier_id = ${supplierId} AND purchase_date >= now() - interval '120 days') AS total
+      FROM purchases WHERE supplier_id = ${supplierId} AND purchase_date >= now() - interval '120 days'
+      GROUP BY payment_method ORDER BY count(*) DESC, max(purchase_date) DESC LIMIT 1`);
+    const r = (rows.rows as any[])[0];
+    return r ? { method: String(r.method ?? "cuenta_corriente"), times: Number(r.times), total: Number(r.total) } : null;
+  },
+  /** Peso por envase conocido del producto (fila base de product_units) para cuando el proveedor nunca lo trajo. */
+  async getKnownWeightsPerPackage(): Promise<Map<number, { weight: number; baseUnit: string }>> {
+    const rows = await db.execute(drizzleSql`
+      SELECT DISTINCT ON (product_id) product_id AS "productId", weight_per_unit::float AS w, unit
+      FROM product_units WHERE base_unit IS NOT NULL AND unit NOT IN ('CAJON','BOLSA','BANDEJA') AND weight_per_unit::numeric > 0
+      ORDER BY product_id, stock_qty DESC, id`);
+    return new Map((rows.rows as any[]).map((r) => [Number(r.productId), { weight: Number(r.w), baseUnit: String(r.unit) }]));
+  },
+  async getSupplierMemory(supplierId: number): Promise<{ hint: string; productId: number; unit: string; weightPerPackage: number | null }[]> {
+    const rows = await db.select().from(supplierProductMemory).where(eq(supplierProductMemory.supplierId, supplierId)).orderBy(desc(supplierProductMemory.updatedAt));
+    return rows.map((r) => ({ hint: r.hint, productId: r.productId, unit: r.unit, weightPerPackage: r.weightPerPackage == null ? null : Number(r.weightPerPackage) }));
+  },
+  async upsertSupplierMemory(d: { supplierId: number; hint: string; productId: number; unit: string; weightPerPackage?: number | null; source?: string }): Promise<void> {
+    const hint = d.hint.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().slice(0, 120);
+    if (!hint) return;
+    await db.insert(supplierProductMemory)
+      .values({ supplierId: d.supplierId, hint, productId: d.productId, unit: d.unit, weightPerPackage: d.weightPerPackage == null ? null : String(d.weightPerPackage), source: d.source ?? "compra" })
+      .onConflictDoUpdate({ target: [supplierProductMemory.supplierId, supplierProductMemory.hint], set: { productId: d.productId, unit: d.unit, weightPerPackage: d.weightPerPackage == null ? null : String(d.weightPerPackage), source: d.source ?? "compra", updatedAt: new Date() } });
+  },
+  async getSupplierReceiptHints(): Promise<{ supplierId: number; hint: string }[]> {
+    const rows = await db.select({ supplierId: supplierReceiptHints.supplierId, hint: supplierReceiptHints.hint }).from(supplierReceiptHints).orderBy(asc(supplierReceiptHints.id));
+    return rows;
+  },
+  async addSupplierReceiptHint(supplierId: number, hint: string): Promise<void> {
+    const h = hint.replace(/\s+/g, " ").trim().slice(0, 200);
+    if (!h) return;
+    await db.insert(supplierReceiptHints).values({ supplierId, hint: h }).onConflictDoNothing();
+  },
+  async createReceiptLog(d: { userId: number | null; supplierId: number | null; model: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; proposal: unknown }): Promise<number> {
+    const [row] = await db.insert(purchaseReceiptLogs).values(d as any).returning({ id: purchaseReceiptLogs.id });
+    return row.id;
+  },
+  async getReceiptLog(id: number): Promise<PurchaseReceiptLog | undefined> {
+    const [row] = await db.select().from(purchaseReceiptLogs).where(eq(purchaseReceiptLogs.id, id)).limit(1);
+    return row;
+  },
+  async finishReceiptLog(id: number, d: { purchaseId: number; supplierId: number | null; final: unknown }): Promise<void> {
+    await db.update(purchaseReceiptLogs).set({ purchaseId: d.purchaseId, supplierId: d.supplierId, final: d.final as any }).where(eq(purchaseReceiptLogs.id, id));
+  },
+
   async getLastWeightForProductSupplier(productId: number, supplierId: number): Promise<number | null> {
     const [row] = await db
       .select({ wpp: purchaseItems.weightPerPackage })

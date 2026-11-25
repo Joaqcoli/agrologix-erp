@@ -179,7 +179,23 @@ export async function runMigrations() {
     )
   `);
 
-  await db.execute(sql`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS duda_bot BOOLEAN DEFAULT FALSE`); // 25/11: duda del bot sin corregir (la ve el galpón)
+  await db.execute(sql`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS duda_bot BOOLEAN DEFAULT FALSE`);
+  // 25/11: compras desde la foto de la boleta
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS purchase_receipt_logs (
+    id SERIAL PRIMARY KEY, created_at TIMESTAMP NOT NULL DEFAULT now(),
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+    purchase_id INTEGER REFERENCES purchases(id) ON DELETE SET NULL,
+    model TEXT, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER,
+    proposal JSONB, final JSONB)`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS supplier_product_memory (
+    id SERIAL PRIMARY KEY, supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+    hint TEXT NOT NULL, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    unit TEXT NOT NULL, weight_per_package NUMERIC(12,4), source TEXT, updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    UNIQUE (supplier_id, hint))`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS supplier_receipt_hints (
+    id SERIAL PRIMARY KEY, supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+    hint TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT now(), UNIQUE (supplier_id, hint))`); // 25/11: duda del bot sin corregir (la ve el galpón)
   await db.execute(sql`ALTER TABLE order_items ALTER COLUMN product_id DROP NOT NULL`);
   await db.execute(sql`ALTER TABLE order_items ALTER COLUMN price_per_unit DROP NOT NULL`);
   await db.execute(sql`ALTER TABLE order_items ALTER COLUMN cost_per_unit SET DEFAULT 0`);

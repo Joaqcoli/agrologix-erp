@@ -153,7 +153,7 @@ function buildCustomerBlock(
   return parts.join("\n");
 }
 
-function parseImage(imageBase64: string): { media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string } {
+export function parseImage(imageBase64: string): { media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string } {
   const m = imageBase64.match(/^data:(image\/(?:jpeg|jpg|png|gif|webp));base64,([\s\S]+)$/);
   let mediaType = m ? m[1] : "image/jpeg";
   if (mediaType === "image/jpg") mediaType = "image/jpeg";
