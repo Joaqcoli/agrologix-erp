@@ -4696,12 +4696,13 @@ export const storage = {
     const before = opts.before && /^\d{4}-\d{2}-\d{2}$/.test(opts.before) ? opts.before : null;
     // lastDates: las 5 fechas más recientes en que compró ese producto+unidad (para la regla de variantes:
     // "la que más se repite en los últimos 5 pedidos con ese producto; empate → la más reciente").
-    // lastQuantity: cantidad de la última vez (para "como siempre" / "un poco").
+    // lastQuantity: cantidad de la última vez (para "como siempre" / "un poco"). 25/11: sin contar renglones que el bot
+    // dejó en duda y nadie corrigió (duda_bot): "una ramita" cargada como 1 kg no debe enseñar que una ramita es 1 kg.
     const rows = await db.execute(drizzleSql`
       SELECT oi.product_id AS "productId", oi.unit, count(*)::int AS times,
              to_char(max(o.order_date), 'YYYY-MM-DD') AS "lastDate",
              (array_agg(DISTINCT to_char(o.order_date, 'YYYY-MM-DD') ORDER BY to_char(o.order_date, 'YYYY-MM-DD') DESC))[1:5] AS "lastDates",
-             (array_agg(oi.quantity::float ORDER BY o.order_date DESC, oi.id DESC))[1] AS "lastQuantity"
+             (array_agg(oi.quantity::float ORDER BY o.order_date DESC, oi.id DESC) FILTER (WHERE oi.duda_bot IS NOT TRUE))[1] AS "lastQuantity"
       FROM order_items oi
       JOIN orders o ON o.id = oi.order_id
       WHERE oi.product_id IS NOT NULL
@@ -4904,7 +4905,7 @@ export const storage = {
     const rows = await db.execute(drizzleSql`
       SELECT oi.quantity::float AS quantity, oi.unit, to_char(o.order_date, 'YYYY-MM-DD') AS date
       FROM order_items oi JOIN orders o ON o.id = oi.order_id
-      WHERE o.customer_id = ${customerId} AND oi.product_id = ${productId} AND o.status <> 'cancelled' AND oi.parse_status IS DISTINCT FROM 'duda'
+      WHERE o.customer_id = ${customerId} AND oi.product_id = ${productId} AND o.status <> 'cancelled' AND oi.parse_status IS DISTINCT FROM 'duda' AND oi.duda_bot IS NOT TRUE
       ORDER BY o.order_date DESC, oi.id DESC LIMIT 1`);
     const r = (rows.rows as any[])[0];
     return r ? { quantity: Number(r.quantity), unit: r.unit, date: r.date } : null;
