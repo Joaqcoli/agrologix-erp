@@ -30,6 +30,7 @@ type InvoiceQueueRow = typeof invoiceQueue.$inferSelect;
 import { eq, desc, asc, and, or, sql as drizzleSql, ne, gte, lt, lte, between, inArray } from "drizzle-orm";
 import { dbEnumToCanonical } from "@shared/units";
 import { ivaRateOf, hasIvaOn } from "@shared/iva";
+import { esCantidadVaga } from "@shared/cantidad-vaga";
 import * as comisiones from "./comisiones";
 import bcrypt from "bcryptjs";
 import { getHistoricalMonthStats, isHistoricalMonth, listHistoricalMonths } from "./historical-stats";
@@ -2023,7 +2024,8 @@ export const storage = {
         updateData.parseStatus = "ok";
         // A-13 (15/10): el bot aprende de la confirmación o corrección: ese renglón del cliente → este producto/unidad/cantidad
         const raw = (item as any).rawProductName as string | null;
-        if (raw && newProductId) {
+        // 25/11: confirmar sin cambios un renglón de cantidad vaga ("una ramita") no enseña nada (memorizaría el 1 del modelo)
+        if (raw && newProductId && !(!hasStructuralChange && esCantidadVaga(raw))) {
           const qtyFinal = patch.quantity !== undefined ? parseFloat(patch.quantity) : Number(item.quantity);
           this.upsertCustomerMemory({ customerId, productId: newProductId, hint: raw, quantity: qtyFinal, unit: newUnit, source: hasStructuralChange ? "correccion" : "confirmacion" })
             .catch((e: any) => console.error("[memoria] no se pudo guardar:", e.message));
@@ -4886,7 +4888,7 @@ export const storage = {
   // ─── A-12/A-05: memoria por cliente ("un poco de perejil" = 1 ATADO) ─────────
   async getCustomerMemory(customerId: number): Promise<{ productId: number; hint: string; quantity: number; unit: string }[]> {
     const rows = await db.select().from(customerProductMemory).where(eq(customerProductMemory.customerId, customerId)).orderBy(desc(customerProductMemory.updatedAt));
-    return rows.map((r) => ({ productId: r.productId, hint: r.hint, quantity: Number(r.quantity), unit: r.unit }));
+    return rows.map((r) => ({ productId: r.productId, hint: r.hint, quantity: Number(r.quantity), unit: r.unit, source: r.source ?? undefined }));
   },
 
   async upsertCustomerMemory(data: { customerId: number; productId: number; hint: string; quantity: number; unit: string; source?: string }): Promise<void> {

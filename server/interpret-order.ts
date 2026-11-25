@@ -16,6 +16,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod/v4"; // el helper zodOutputFormat del SDK está tipado contra zod v4 (zod 3.25 lo trae en este subpath)
 import { storage } from "./storage";
 import { ALL_CANONICAL_UNITS, canonicalizeUnit } from "@shared/units";
+import { esCantidadVaga } from "@shared/cantidad-vaga";
 
 export const DEFAULT_AI_MODEL = "claude-sonnet-5-5";
 export const HISTORY_DAYS = 180;
@@ -211,7 +212,7 @@ function validateProposal(
   catalog: CatalogRow[],
   history: { productId: number; unit: string; times: number; lastQuantity?: number | null }[],
   globalUnits: Map<number, string>,
-  memory: { productId: number; hint: string; quantity: number; unit: string }[] = [],
+  memory: { productId: number; hint: string; quantity: number; unit: string; source?: string }[] = [],
 ): Pick<InterpretResult, "lines" | "ignoredLines" | "notes" | "multiLocalWarning"> {
   const byId = new Map<number, CatalogRow>(catalog.map((p) => [p.id, p] as [number, CatalogRow]));
   // unidad más usada por el cliente por producto (history ya viene ordenado por veces desc)
@@ -219,7 +220,7 @@ function validateProposal(
   const lastQty = new Map<number, number>();
   for (const h of history) { if (!custUnit.has(h.productId)) custUnit.set(h.productId, h.unit); if (h.lastQuantity != null && !lastQty.has(h.productId)) lastQty.set(h.productId, Number(h.lastQuantity)); }
   // memoria por clave de renglón ("espinaca" → ESPINACA KG, confirmado por el equipo)
-  const memByKey = new Map<string, { productId: number; quantity: number; unit: string; hint: string }>();
+  const memByKey = new Map<string, { productId: number; quantity: number; unit: string; hint: string; source?: string }>();
   for (const m of memory) { const k = claveRenglon(m.hint); if (k && byId.has(m.productId) && !memByKey.has(k)) memByKey.set(k, m); }
 
   const lines: InterpretedLine[] = raw.lines.map((l) => {
@@ -260,7 +261,9 @@ function validateProposal(
     // "Mandarina 1 cajón" coincidía con la memoria "mandarina 1 kg" y se cargaba 1 KG. Si el cliente escribió una
     // unidad, esa queda (si el producto la tiene); la memoria solo decide cuando el renglón no trae unidad.
     const mem = memByKey.get(claveRenglon(l.rawLine));
-    if (mem) {
+    // 25/11: una memoria nacida de CONFIRMAR (sin corregir) un renglón de cantidad vaga no vale para la cantidad: la trae el historial
+    const memAplicada = !!mem && !(esCantidadVaga(l.rawLine) && mem.source === "confirmacion");
+    if (mem && memAplicada) {
       const mp = byId.get(mem.productId)!;
       const escrita = unidadEscrita(l.rawLine);
       productId = mem.productId;
@@ -288,8 +291,8 @@ function validateProposal(
     }
     // 25/11 (Munchis, "una ramita de jengibre" → cargó 1 kg): cantidad VAGA sin número ("una ramita", "un poco", "un poquito",
     // "algo de", "un manojo", "una pizca"). El modelo suele poner 1; acá manda la última cantidad del cliente, en duda.
-    const vaga = !/\d/.test(l.rawLine) && /\b(ramitas?|un poco|poquito|algo de|manojos?|manojitos?|pizca|puñado|punado)\b/i.test(l.rawLine.normalize("NFD").replace(/[̀-ͯ]/g, ""));
-    if (vaga && productM && !mem) {
+    const vaga = esCantidadVaga(l.rawLine);
+    if (vaga && productM && !memAplicada) {
       const lq = lastQty.get(productM.id);
       if (lq && lq > 0) { quantity = lq; reasons.unshift(`Cantidad vaga ("${l.rawLine.trim()}"): se cargó como la última vez (${lq})`); }
       else reasons.unshift(`Cantidad vaga ("${l.rawLine.trim()}") y sin historial: se cargó ${quantity ?? 1}`);
