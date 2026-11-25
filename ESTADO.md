@@ -14,6 +14,10 @@
   última cantidad del cliente para ese producto, en duda (antes el modelo ponía 1). Nuevo `POST /api/orders/bot-cancel`
   (`storage.botCancelOrder`, solo borradores, agrega nota): lo usa el bot cuando el equipo responde "mañana" a
   "¿lo hacemos hoy?" (ver ESTADO del bot). Pendiente de verificar con un caso real: la línea "pidió:" en galpón.
+  Memoria del cliente (`shared/cantidad-vaga.ts`): confirmar sin cambios un renglón vago no memoriza, y una memoria nacida
+  así (source confirmacion) no fija la cantidad; la "últ. cant." del historial y "como siempre" ignoran renglones duda_bot.
+  Borrada la memoria "una ramita de jenjibre → 1 kg" de Munchis y marcado duda_bot su renglón del 24/11. Verificado en prod
+  con /api/orders/interpret: "una ramita de jenjibre" → JENGIBRE 0,35 KG en duda. Commits 952f044, 96136b0, 2ba5fd3.
   24-nov **Segundo grupo "tipo Black Pot" (solo configuración en la base, sin código).** Un cliente padre nuevo
   (empresa con CUIT, con IVA, factura A, RI, modo "diaria") y 4 sedes con `parent_customer_id` + `bill_to='padre'`,
   con IVA, vendedor Juan 5 % y alta propia cada una. La sede que ya venía pidiendo (y tenía el CUIT) quedó colgada
