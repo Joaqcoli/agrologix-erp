@@ -80,7 +80,7 @@ export default function VendedorOrderDetail({ id }: { id: number }) {
     order.remitoNum != null
       ? `VA-${String(order.remitoNum).padStart(6, "0")}`
       : order.folio || "-";
-  const conIva = hasIvaOn(order.customer, order.orderDate);
+  const conIva = hasIvaOn(order.customer, order.orderDate, (order as any).ivaOverride ?? null);
 
   const totalConIva = conIva
     ? order.items.reduce((sum, item) => {

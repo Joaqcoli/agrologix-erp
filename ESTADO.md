@@ -2,9 +2,24 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-25 (Compras desde la foto de la boleta con Claude; dudas del bot visibles para el galpón).
+> Última actualización: 2026-11-26 (IVA por pedido + guardia al prender IVA a un cliente; cuenta corriente restaurada).
 
 ## Último trabajo (sep–oct 2026)
+  26-nov **IVA por pedido y arreglo de una cuenta corriente** (pedido de Joaquín). Causa: a un cliente que siempre llevó la
+  CC sin IVA le prendieron "Factura con IVA" con "IVA desde" vacío → TODOS sus remitos viejos se recalcularon con IVA y,
+  como los cobros ya estaban imputados en neto, decenas de remitos pagos volvieron a figurar pendientes. Se revisaron todos
+  los clientes con saldo: era el único caso. Arreglo de datos: cliente de vuelta sin IVA, el último cobro desestimado
+  (pago + bank_payment_links borrados; el movimiento vuelve a quedar para asignar en Bancos) y los dos remitos ya
+  facturados con factura A marcados "+ IVA" por pedido. Código: `orders.iva_override` (NULL = según el cliente, true/false
+  manda) en la regla única `hasIvaOn(customer, orderDate, ivaOverride)` y en los 12 predicados SQL
+  (`COALESCE(o.iva_override, (c.has_iva AND …))`: CC, pendientes de cobro, dashboards, comisiones, exportaciones, remito PDF).
+  Detalle del pedido: botón "pasar a + IVA" / "pasar a sin IVA" (confirma si está aprobado; si coincide con el cliente guarda
+  NULL), badge "Con IVA · solo este pedido". `PATCH /api/orders/:id/iva`. Guardia: `PATCH /api/customers/:id` que prende
+  has_iva sin iva_since a un cliente que no tenía IVA pone iva_since = hoy (AR); la ficha precarga la fecha y explica qué
+  hace vaciarla. Flujo para remitos sueltos con factura: en el pedido "pasar a + IVA" → emitir factura → asignar el cobro
+  desde Bancos (coincide con el total con IVA). Pendiente de Joaquín: reasignar desde Bancos ese cobro a los dos remitos
+  facturados y revisar los remitos sueltos sin cobrar más viejos que otros ya cobrados (lista en el chat del 26/11; no son
+  error de cálculo). Script de control de "huecos": scratchpad `cc-check.ts` (correr dentro del repo).
   25-nov **Compras desde la foto de la boleta** (pedido de Joaquín). Compras → "Cargar desde boleta" (`/purchases/boleta`):
   foto (cámara o archivo, se achica a 1600 px en el navegador) → `POST /api/purchases/interpret` → "Nueva compra" abre
   PRECARGADA (proveedor, fecha de hoy, forma de pago habitual, renglones con envase/precio/peso por envase, vacíos,

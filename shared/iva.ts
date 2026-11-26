@@ -17,11 +17,16 @@ export function ivaRateOf(product?: { ivaRate?: string | number | null } | null)
 // (iva_since), el pedido es de esa fecha o posterior. Sin fecha → aplica a todos sus pedidos,
 // viejos incluidos (ej. Bonafide Paso del Rey). Con fecha → solo desde ese día (ej. Fabric
 // Sushi desde 2026-10-02), los pedidos anteriores y su cuenta corriente no cambian.
-// En SQL la misma regla es: (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)).
+// Excepción por pedido (orders.iva_override, 26/11/2026): true/false manda sobre el cliente; NULL = según el cliente.
+// Sirve para facturar con IVA remitos sueltos de un cliente que lleva la cuenta corriente sin IVA (ej. Laguna):
+// se pasa ESE pedido a "+ IVA", se factura y el cobro coincide con el total facturado.
+// En SQL la misma regla es: COALESCE(o.iva_override, (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since))).
 export function hasIvaOn(
   customer: { hasIva?: boolean | null; ivaSince?: string | Date | null } | null | undefined,
   orderDate: string | Date | null | undefined,
+  ivaOverride?: boolean | null,
 ): boolean {
+  if (typeof ivaOverride === "boolean") return ivaOverride;
   if (!customer?.hasIva) return false;
   if (!customer.ivaSince) return true;
   const since = customer.ivaSince instanceof Date ? customer.ivaSince.toISOString().slice(0, 10) : String(customer.ivaSince).slice(0, 10);

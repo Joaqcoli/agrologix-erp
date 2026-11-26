@@ -1669,7 +1669,7 @@ export default function CCCustomerDetailPage({
           order: {
             folio: order.folio, orderDate: order.orderDate, notes: order.notes, source: (order as any).source ?? null,
             customer: {
-              name: order.customer.name, hasIva: hasIvaOn(order.customer, order.orderDate),
+              name: order.customer.name, hasIva: hasIvaOn(order.customer, order.orderDate, (order as any).ivaOverride ?? null),
               rfc: order.customer.rfc ?? null, address: order.customer.address ?? null,
               city: order.customer.city ?? null, phone: order.customer.phone ?? null,
             },

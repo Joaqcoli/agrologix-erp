@@ -1004,6 +1004,18 @@ export default function OrderDetailPage({ id }: { id: number }) {
     onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  // IVA por pedido (26/11/2026): PATCH /api/orders/:id/iva { ivaOverride: true | false | null }
+  const ivaMutation = useMutation({
+    mutationFn: (ivaOverride: boolean | null) =>
+      apiRequest("PATCH", `/api/orders/${id}/iva`, { ivaOverride }),
+    onSuccess: (_r, v) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/orders", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      toast({ title: v === null ? "IVA según el cliente" : v ? "Este pedido va con IVA" : "Este pedido va sin IVA" });
+    },
+    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const approveMutation = useMutation({
     mutationFn: (body: { decisions?: Record<number, ApprovalDecision> }) =>
       apiRequest("POST", `/api/orders/${id}/approve`, body),
@@ -1328,7 +1340,7 @@ export default function OrderDetailPage({ id }: { id: number }) {
           source: (order as any).source ?? null,
           customer: {
             name: order.customer.name,
-            hasIva: hasIvaOn(order.customer, order.orderDate),
+            hasIva: hasIvaOn(order.customer, order.orderDate, (order as any).ivaOverride ?? null),
             rfc: (order.customer as any).rfc ?? null,
             address: (order.customer as any).address ?? null,
             city: (order.customer as any).city ?? null,
@@ -1447,7 +1459,10 @@ export default function OrderDetailPage({ id }: { id: number }) {
 
   const isDraft = order.status === "draft";
   const isApproved = order.status === "approved";
-  const hasIva = hasIvaOn(order.customer, order.orderDate);
+  const hasIva = hasIvaOn(order.customer, order.orderDate, (order as any).ivaOverride ?? null);
+  // IVA por pedido: null = según el cliente. Si el valor elegido coincide con el del cliente se guarda null.
+  const ivaOverride: boolean | null = (order as any).ivaOverride ?? null;
+  const ivaSegunCliente = hasIvaOn(order.customer, order.orderDate);
   const hasBolsaFv = !!(order.customer as any).bolsaFv;
   const parentCustomerId: number | null = (order.customer as any).parentCustomerId ?? null;
   // Tocar el nombre del cliente abre su cuenta corriente (mes actual). Las sedes van directo a la CC unificada del padre.
@@ -1577,7 +1592,21 @@ export default function OrderDetailPage({ id }: { id: number }) {
               )}
               <Badge variant={sc.variant}>{sc.label}</Badge>
               {(order as any).galponConfirmed && <Badge variant="outline" className="text-[10px] text-blue-700 border-blue-400/50">Confirmado galpón</Badge>}
-              {hasIva && <Badge variant="outline" className="text-[10px] text-primary border-primary/40">Con IVA</Badge>}
+              {hasIva && <Badge variant="outline" className="text-[10px] text-primary border-primary/40">Con IVA{ivaOverride != null && " · solo este pedido"}</Badge>}
+              {!hasIva && ivaOverride === false && <Badge variant="outline" className="text-[10px] text-muted-foreground">Sin IVA · solo este pedido</Badge>}
+              {order.status !== "cancelled" && (
+                <button
+                  type="button"
+                  disabled={ivaMutation.isPending}
+                  onClick={() => {
+                    const next = !hasIva;
+                    const msg = `Este remito ya está aprobado. Pasarlo a ${next ? "+ IVA" : "sin IVA"} cambia su total en la cuenta corriente${next ? " (el cobro tiene que coincidir con el total con IVA)" : ""}. ¿Seguir?`;
+                    if (!isApproved || window.confirm(msg)) ivaMutation.mutate(next === ivaSegunCliente ? null : next);
+                  }}
+                  className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                  title={hasIva ? "Este pedido pasa a sin IVA" : "Solo este pedido pasa a + IVA (para emitir factura A y que el cobro coincida)"}
+                >{hasIva ? "pasar a sin IVA" : "pasar a + IVA"}</button>
+              )}
               {hasBolsaFv && <Badge variant="outline" className="text-[10px] text-green-600 border-green-300">Bolsa FV</Badge>}
               {order.lowMarginConfirmed && (
                 <Badge variant="outline" className="text-[10px] text-destructive border-destructive/50">

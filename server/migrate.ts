@@ -1803,6 +1803,8 @@ export async function runNcMigrations() {
     `ALTER TABLE orders ADD COLUMN IF NOT EXISTS camioneta_id integer REFERENCES camionetas(id) ON DELETE SET NULL`,
     `ALTER TABLE orders ADD COLUMN IF NOT EXISTS recorrido integer`,
     `ALTER TABLE orders ADD COLUMN IF NOT EXISTS orden_entrega integer`,
+    // 26/11/2026 IVA por pedido (NULL = según el cliente)
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS iva_override boolean`,
     `CREATE TABLE IF NOT EXISTS recorrido_salidas (id serial PRIMARY KEY, fecha date NOT NULL, camioneta_id integer NOT NULL REFERENCES camionetas(id) ON DELETE CASCADE, recorrido integer NOT NULL, salida text, UNIQUE (fecha, camioneta_id, recorrido))`,
   ]) { try { await db.execute(sql.raw(stmt)); } catch (e) { console.error("Recorridos migration failed:", stmt.slice(0, 70), e); } }
 

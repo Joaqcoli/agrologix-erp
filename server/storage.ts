@@ -52,6 +52,7 @@ type RawOrderItem = {
   productName: string;
   productCategory: string;
   ivaRate?: string | null; // tasa del producto (products.iva_rate)
+  ivaOverride?: boolean | null; // orders.iva_override (IVA forzado por pedido; null = según el cliente)
 };
 
 // Compute billing amount for one item (with or without IVA)
@@ -1409,7 +1410,7 @@ export const storage = {
     // Venta con IVA (misma lógica que /api/vendedor/dashboard)
     const iva = drizzleSql`CASE
       WHEN oi.price_per_unit::numeric = 0 THEN 0
-      WHEN (c.has_iva = true AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+      WHEN COALESCE(o.iva_override, COALESCE(o.iva_override, (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)))) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
       ELSE oi.quantity::numeric * oi.price_per_unit::numeric END`;
     const monthStart = drizzleSql`date_trunc('month', CURRENT_DATE)`;
     const monthEnd = drizzleSql`date_trunc('month', CURRENT_DATE) + interval '1 month'`;
@@ -1500,7 +1501,7 @@ export const storage = {
         COALESCE(SUM(
           CASE
             WHEN oi.price_per_unit::numeric = 0 THEN 0
-            WHEN (c.has_iva = true AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+            WHEN COALESCE(o.iva_override, COALESCE(o.iva_override, (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)))) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
             ELSE oi.quantity::numeric * oi.price_per_unit::numeric
           END
         ), 0)::float AS facturacion,
@@ -1575,7 +1576,7 @@ export const storage = {
         // Compute IVA total and costo for this order
         let totalConIva = parseFloat(o.total as string);
         let totalCosto = 0;
-        const orderHasIva = hasIvaOn(customer, o.orderDate);
+        const orderHasIva = hasIvaOn(customer, o.orderDate, o.ivaOverride);
         if (orderHasIva) {
           totalConIva = items.reduce((sum, item) => {
             if (!item.pricePerUnit) return sum;
@@ -4050,7 +4051,7 @@ export const storage = {
           o.order_date,
           o.invoice_number,
           o.customer_id AS "customerId",
-          CASE WHEN (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN
+          CASE WHEN COALESCE(o.iva_override, (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since))) THEN
             COALESCE(ROUND(SUM(CASE
               WHEN oi.price_per_unit::numeric = 0 THEN 0
               ELSE oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
@@ -4207,6 +4208,13 @@ export const storage = {
     await db.execute(drizzleSql`UPDATE orders SET remito_num = ${remitoNum} WHERE id = ${id}`);
   },
 
+  // IVA por pedido: true = con IVA, false = sin IVA, null = según el cliente. Solo pedidos no cancelados.
+  // Cambia la facturación del pedido en la cuenta corriente (y por eso lo que figura pendiente de cobro).
+  async updateOrderIvaOverride(id: number, ivaOverride: boolean | null): Promise<void> {
+    const r = await db.execute(drizzleSql`UPDATE orders SET iva_override = ${ivaOverride} WHERE id = ${id} AND status <> 'cancelled' RETURNING id`);
+    if (!r.rows.length) throw new Error("Pedido no encontrado o cancelado");
+  },
+
   // fromDate: inclusive (>=), toDate: exclusive (<)
   async getCustomerWithholdings(customerId: number, fromDate?: string, toDate?: string): Promise<Withholding[]> {
     const conds = [eq(withholdings.customerId, customerId)];
@@ -4237,7 +4245,8 @@ export const storage = {
         oi.unit::text AS "unit",
         COALESCE(p.name, oi.raw_product_name, '') AS "productName",
         COALESCE(p.category, '') AS "productCategory",
-        p.iva_rate::text AS "ivaRate"
+        p.iva_rate::text AS "ivaRate",
+        o.iva_override AS "ivaOverride"
       FROM orders o
       JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN products p ON p.id = oi.product_id
@@ -4319,14 +4328,14 @@ export const storage = {
     for (const item of itemsInPeriod) {
       const c = customerMap.get(item.customerId);
       if (!c) continue;
-      const b = itemBilling(item, hasIvaOn(c, item.orderDate));
+      const b = itemBilling(item, hasIvaOn(c, item.orderDate, item.ivaOverride));
       const eid = effectiveId(item.customerId);
       billingInMap.set(eid, (billingInMap.get(eid) ?? 0) + b);
     }
     for (const item of itemsBefore) {
       const c = customerMap.get(item.customerId);
       if (!c) continue;
-      const b = itemBilling(item, hasIvaOn(c, item.orderDate));
+      const b = itemBilling(item, hasIvaOn(c, item.orderDate, item.ivaOverride));
       const eid = effectiveId(item.customerId);
       billingBeforeMap.set(eid, (billingBeforeMap.get(eid) ?? 0) + b);
     }
@@ -4402,7 +4411,7 @@ export const storage = {
         const d = item.orderDate.substring(0, 10); // YYYY-MM-DD
         if (d >= wStart && d < wEnd) {
           const c = customerMap.get(item.customerId);
-          total += itemBilling(item, hasIvaOn(c, item.orderDate));
+          total += itemBilling(item, hasIvaOn(c, item.orderDate, item.ivaOverride));
         }
       }
       return { ...w, total: Math.round(total) };
@@ -4421,7 +4430,7 @@ export const storage = {
     let gananciaMes = 0;
     for (const item of itemsInPeriod) {
       const c = customerMap.get(item.customerId);
-      gananciaMes += itemProfit(item, hasIvaOn(c, item.orderDate));
+      gananciaMes += itemProfit(item, hasIvaOn(c, item.orderDate, item.ivaOverride));
     }
     gananciaMes = Math.round(gananciaMes);
 
@@ -4490,11 +4499,11 @@ export const storage = {
 
     const facturacion = Math.round(myItemsInPeriod.reduce((s, i) => {
       const cust = allCustomersMap.get(i.customerId);
-      return s + itemBilling(i, hasIvaOn(cust ?? c, i.orderDate));
+      return s + itemBilling(i, hasIvaOn(cust ?? c, i.orderDate, i.ivaOverride));
     }, 0));
     const facturacionBefore = Math.round(myItemsBefore.reduce((s, i) => {
       const cust = allCustomersMap.get(i.customerId);
-      return s + itemBilling(i, hasIvaOn(cust ?? c, i.orderDate));
+      return s + itemBilling(i, hasIvaOn(cust ?? c, i.orderDate, i.ivaOverride));
     }, 0));
 
     // Multi-ID raw SQL queries (allIds are validated integers from DB)
@@ -4627,7 +4636,7 @@ export const storage = {
     const orderBillingMap = new Map<number, number>();
     for (const item of myItemsInPeriod) {
       const cust = allCustomersMap.get(item.customerId);
-      orderBillingMap.set(item.orderId, (orderBillingMap.get(item.orderId) ?? 0) + itemBilling(item, hasIvaOn(cust ?? c, item.orderDate)));
+      orderBillingMap.set(item.orderId, (orderBillingMap.get(item.orderId) ?? 0) + itemBilling(item, hasIvaOn(cust ?? c, item.orderDate, item.ivaOverride)));
     }
 
     // isPaid via running balance (consistente con getPendingOrdersForCustomer)
@@ -4657,8 +4666,8 @@ export const storage = {
       const cust = allCustomersMap.get(cid)!;
       const cidItemsIn = myItemsInPeriod.filter((i) => i.customerId === cid);
       const cidItemsBef = myItemsBefore.filter((i) => i.customerId === cid);
-      const cidFact = Math.round(cidItemsIn.reduce((s, i) => s + itemBilling(i, hasIvaOn(cust, i.orderDate)), 0));
-      const cidFactBef = Math.round(cidItemsBef.reduce((s, i) => s + itemBilling(i, hasIvaOn(cust, i.orderDate)), 0));
+      const cidFact = Math.round(cidItemsIn.reduce((s, i) => s + itemBilling(i, hasIvaOn(cust, i.orderDate, i.ivaOverride)), 0));
+      const cidFactBef = Math.round(cidItemsBef.reduce((s, i) => s + itemBilling(i, hasIvaOn(cust, i.orderDate, i.ivaOverride)), 0));
       const cidPayIn = (paymentsIn.rows as any[]).filter((p) => Number(p.customer_id) === cid).reduce((s, p) => s + parseFloat(p.amount ?? "0"), 0);
       const cidPayBef = (paymentsBef.rows as any[]).filter((p) => Number(p.customer_id) === cid).reduce((s, p) => s + parseFloat(p.amount ?? "0"), 0);
       const cidWitIn = (withholdingsIn.rows as any[]).filter((w) => Number(w.customer_id) === cid).reduce((s, w) => s + parseFloat(w.amount ?? "0"), 0);
@@ -6177,14 +6186,14 @@ export const storage = {
         COALESCE(SUM(
           CASE
             WHEN oi.price_per_unit::numeric = 0 THEN 0
-            WHEN (c.has_iva = true AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+            WHEN COALESCE(o.iva_override, COALESCE(o.iva_override, (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)))) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
             ELSE oi.quantity::numeric * oi.price_per_unit::numeric
           END
         ), 0) AS ventas,
         COALESCE(SUM(
           CASE
             WHEN oi.price_per_unit::numeric = 0 THEN 0
-            WHEN (c.has_iva = true AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+            WHEN COALESCE(o.iva_override, COALESCE(o.iva_override, (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)))) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
             ELSE oi.quantity::numeric * oi.price_per_unit::numeric
           END
           - oi.quantity::numeric * COALESCE(oi.override_cost_per_unit, oi.cost_per_unit)::numeric
@@ -6276,7 +6285,7 @@ export const storage = {
           SUM(
             CASE
               WHEN oi.price_per_unit::numeric = 0 THEN 0
-              WHEN (c.has_iva = true AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+              WHEN COALESCE(o.iva_override, COALESCE(o.iva_override, (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)))) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
               ELSE oi.quantity::numeric * oi.price_per_unit::numeric
             END
           ) AS facturacion
@@ -6393,7 +6402,7 @@ export const storage = {
         COALESCE(SUM(
           CASE
             WHEN oi.price_per_unit::numeric = 0 THEN 0
-            WHEN (c.has_iva = true AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+            WHEN COALESCE(o.iva_override, COALESCE(o.iva_override, (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)))) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
             ELSE oi.quantity::numeric * oi.price_per_unit::numeric
           END
         ), 0) AS ventas
@@ -6521,14 +6530,14 @@ export const storage = {
         COALESCE(SUM(
           CASE
             WHEN oi.price_per_unit::numeric = 0 THEN 0
-            WHEN (c.has_iva = true AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+            WHEN COALESCE(o.iva_override, COALESCE(o.iva_override, (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)))) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
             ELSE oi.quantity::numeric * oi.price_per_unit::numeric
           END
         ), 0) AS ventas,
         COALESCE(SUM(
           CASE
             WHEN oi.price_per_unit::numeric = 0 THEN 0
-            WHEN (c.has_iva = true AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+            WHEN COALESCE(o.iva_override, COALESCE(o.iva_override, (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)))) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
             ELSE oi.quantity::numeric * oi.price_per_unit::numeric
           END
           - oi.quantity::numeric * COALESCE(oi.override_cost_per_unit, oi.cost_per_unit)::numeric

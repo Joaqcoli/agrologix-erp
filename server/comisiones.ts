@@ -83,7 +83,7 @@ export async function cobranzasDeGrupos(rootIds: number[]): Promise<{ orders: Or
         c.name AS "customerName", o.comision_pct::numeric AS pct, o.comision_saldada AS saldada,
         ROUND(SUM(CASE
           WHEN oi.price_per_unit::numeric = 0 THEN 0
-          WHEN (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+          WHEN COALESCE(o.iva_override, (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since))) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
           ELSE oi.quantity::numeric * oi.price_per_unit::numeric END)) AS billing,
         SUM(CASE WHEN oi.price_per_unit::numeric = 0 THEN 0 ELSE oi.quantity::numeric * oi.price_per_unit::numeric END) AS neto
       FROM orders o

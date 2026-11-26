@@ -203,7 +203,7 @@ export default function InvoicesPage() {
             source: (order as any).source ?? null,
             customer: {
               name: order.customer.name,
-              hasIva: hasIvaOn(order.customer, order.orderDate),
+              hasIva: hasIvaOn(order.customer, order.orderDate, (order as any).ivaOverride ?? null),
               rfc: order.customer.rfc ?? null,
               address: order.customer.address ?? null,
               city: order.customer.city ?? null,

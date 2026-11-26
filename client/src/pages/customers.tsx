@@ -465,7 +465,7 @@ export default function CustomersPage() {
                   </div>
                   <Switch
                     checked={!!form.hasIva}
-                    onCheckedChange={(v) => setForm({ ...form, hasIva: v })}
+                    onCheckedChange={(v) => setForm({ ...form, hasIva: v, ivaSince: v && !form.ivaSince ? new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" }) : form.ivaSince })}
                     data-testid="switch-has-iva"
                   />
                 </div>
@@ -473,7 +473,7 @@ export default function CustomersPage() {
                   <div className="mt-2 flex items-center gap-3 rounded-md border border-border p-3">
                     <div className="flex-1">
                       <p className="text-sm font-medium text-foreground">IVA desde</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">Vacío = aplica a todos los pedidos, viejos incluidos. Con fecha = solo pedidos desde ese día; los anteriores y su cuenta corriente no cambian.</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Con fecha = solo pedidos desde ese día; los anteriores y su cuenta corriente no cambian. Vacío = recalcula con IVA TODOS los pedidos viejos y los cobros ya imputados dejan de cubrirlos (remitos pagos vuelven a pendientes). Para facturar con IVA un remito suelto, usá "pasar a + IVA" en ese pedido.</p>
                     </div>
                     <Input
                       type="date"

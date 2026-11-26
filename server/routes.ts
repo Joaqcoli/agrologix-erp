@@ -693,6 +693,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/customers/:id", requireAuth, async (req, res) => {
     try {
       const data = insertCustomerSchema.partial().parse(req.body);
+      // 26/11/2026: prender "Factura con IVA" sin "IVA desde" recalculaba con IVA TODOS los pedidos viejos y
+      // rompía la cuenta corriente (cobros ya imputados en neto → remitos pagos volvían a pendientes; caso Laguna).
+      // Si el cliente no tenía IVA y no mandan fecha, arranca hoy. Vaciar la fecha a propósito sigue siendo posible
+      // en una segunda edición (el cliente ya tiene has_iva = true y no entra acá).
+      const d = data as Record<string, unknown>;
+      if (d.hasIva === true && !d.ivaSince) {
+        const actual = await storage.getCustomer(Number(req.params.id));
+        if (actual && !actual.hasIva) d.ivaSince = new Date().toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" });
+      }
       return res.json(await storage.updateCustomer(Number(req.params.id), data));
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
@@ -1513,6 +1522,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (e: any) { return res.status(400).json({ error: e.message }); }
   });
 
+  // IVA por pedido (26/11/2026): { ivaOverride: true | false | null }. null = vuelve a "según el cliente".
+  app.patch("/api/orders/:id/iva", requireAuth, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const v = (req.body as { ivaOverride?: boolean | null }).ivaOverride;
+      if (v !== null && typeof v !== "boolean") return res.status(400).json({ error: "ivaOverride debe ser true, false o null" });
+      await storage.updateOrderIvaOverride(id, v);
+      return res.json({ ok: true });
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
   app.patch("/api/orders/:id/remito-num", requireAuth, async (req, res) => {
     try {
       const id = Number(req.params.id);
@@ -1541,7 +1563,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     for (const order of dayOrders) {
       const fullOrder = await storage.getOrder(order.id);
       if (!fullOrder) continue;
-      const hasIva = hasIvaOn(fullOrder.customer, fullOrder.orderDate);
+      const hasIva = hasIvaOn(fullOrder.customer, fullOrder.orderDate, fullOrder.ivaOverride);
 
       rows.push([`Cliente: ${fullOrder.customer.name}`, hasIva ? "Con IVA" : "Sin IVA", `Pedido: ${order.folio}`, `Fecha: ${new Date(fullOrder.orderDate).toLocaleDateString("es-MX")}`]);
       rows.push(hasIva ? [...headerIva, ...headerPurchase] : [...headerBase, ...headerPurchase]);
@@ -1592,7 +1614,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const fullOrder = await storage.getOrder(Number(req.params.id));
     if (!fullOrder) return res.status(404).json({ error: "Not found" });
 
-    const hasIva = hasIvaOn(fullOrder.customer, fullOrder.orderDate);
+    const hasIva = hasIvaOn(fullOrder.customer, fullOrder.orderDate, fullOrder.ivaOverride);
     const wb = XLSX.utils.book_new();
     const rows: any[][] = [];
 
@@ -2487,14 +2509,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           o.total::text AS total,
           o.remito_num AS "remitoNum",
           c.name AS "customerName",
-          (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) AS "hasIva",
+          COALESCE(o.iva_override, (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since))) AS "hasIva",
           COALESCE(o.comision_pct, 0)::text AS "commissionPct",
           o.comision_saldada AS "comisionSaldada",
           COUNT(oi.id)::int AS "itemCount",
           COALESCE(SUM(
             CASE
               WHEN oi.price_per_unit::numeric = 0 THEN 0
-              WHEN (c.has_iva = true AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
+              WHEN COALESCE(o.iva_override, COALESCE(o.iva_override, (c.has_iva AND (c.iva_since IS NULL OR o.order_date::date >= c.iva_since)))) THEN oi.quantity::numeric * oi.price_per_unit::numeric * (1 + COALESCE(p.iva_rate, 0.105))
               ELSE oi.quantity::numeric * oi.price_per_unit::numeric
             END
           ), 0)::text AS "totalConIva"

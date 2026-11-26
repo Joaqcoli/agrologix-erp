@@ -206,6 +206,9 @@ export const orders = pgTable("orders", {
   camionetaId: integer("camioneta_id"),
   recorrido: integer("recorrido"),
   ordenEntrega: integer("orden_entrega"),
+  // 26/11/2026 IVA por pedido: NULL = según el cliente (has_iva/iva_since) · true = este pedido con IVA ·
+  // false = este pedido sin IVA. Para facturar remitos sueltos a clientes sin IVA (ej. Laguna). Ver shared/iva.ts.
+  ivaOverride: boolean("iva_override"),
 });
 
 export const orderItems = pgTable("order_items", {
