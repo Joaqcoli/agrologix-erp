@@ -3,6 +3,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Layout } from "@/components/layout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -1592,20 +1593,25 @@ export default function OrderDetailPage({ id }: { id: number }) {
               )}
               <Badge variant={sc.variant}>{sc.label}</Badge>
               {(order as any).galponConfirmed && <Badge variant="outline" className="text-[10px] text-blue-700 border-blue-400/50">Confirmado galpón</Badge>}
-              {hasIva && <Badge variant="outline" className="text-[10px] text-primary border-primary/40">Con IVA{ivaOverride != null && " · solo este pedido"}</Badge>}
-              {!hasIva && ivaOverride === false && <Badge variant="outline" className="text-[10px] text-muted-foreground">Sin IVA · solo este pedido</Badge>}
-              {order.status !== "cancelled" && (
-                <button
-                  type="button"
-                  disabled={ivaMutation.isPending}
-                  onClick={() => {
-                    const next = !hasIva;
-                    const msg = `Este remito ya está aprobado. Pasarlo a ${next ? "+ IVA" : "sin IVA"} cambia su total en la cuenta corriente${next ? " (el cobro tiene que coincidir con el total con IVA)" : ""}. ¿Seguir?`;
-                    if (!isApproved || window.confirm(msg)) ivaMutation.mutate(next === ivaSegunCliente ? null : next);
-                  }}
-                  className="text-[10px] text-muted-foreground hover:text-foreground underline"
-                  title={hasIva ? "Este pedido pasa a sin IVA" : "Solo este pedido pasa a + IVA (para emitir factura A y que el cobro coincida)"}
-                >{hasIva ? "pasar a sin IVA" : "pasar a + IVA"}</button>
+              {order.status !== "cancelled" ? (
+                <label
+                  className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-medium select-none cursor-pointer transition-colors ${hasIva ? "border-primary/40 bg-primary/10 text-primary" : "border-border bg-muted/40 text-muted-foreground"} ${ivaMutation.isPending ? "opacity-60" : ""}`}
+                  title={hasIva ? "Este pedido se factura con IVA. Tocá para pasarlo a sin IVA." : "Este pedido se factura sin IVA. Tocá para pasarlo a + IVA (factura A; el cobro coincide con el total con IVA)."}
+                >
+                  <span>{hasIva ? "Con IVA" : "Sin IVA"}{ivaOverride != null && <span className="font-normal opacity-70"> · solo este pedido</span>}</span>
+                  <Switch
+                    className="h-4 w-7 [&>span]:h-3 [&>span]:w-3 [&>span]:data-[state=checked]:translate-x-3"
+                    checked={hasIva}
+                    disabled={ivaMutation.isPending}
+                    onCheckedChange={(next) => {
+                      const msg = `Este remito ya está aprobado. Pasarlo a ${next ? "+ IVA" : "sin IVA"} cambia su total en la cuenta corriente${next ? " (el cobro tiene que coincidir con el total con IVA)" : ""}. ¿Seguir?`;
+                      if (!isApproved || window.confirm(msg)) ivaMutation.mutate(next === ivaSegunCliente ? null : next);
+                    }}
+                    data-testid="switch-order-iva"
+                  />
+                </label>
+              ) : (
+                hasIva && <Badge variant="outline" className="text-[10px] text-primary border-primary/40">Con IVA</Badge>
               )}
               {hasBolsaFv && <Badge variant="outline" className="text-[10px] text-green-600 border-green-300">Bolsa FV</Badge>}
               {order.lowMarginConfirmed && (
