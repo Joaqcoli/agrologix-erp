@@ -2,9 +2,19 @@
 
 > Archivo vivo. Claude Code lo actualiza al cerrar cada tarea (y lo commitea con el cambio).
 > Para retomar en un chat nuevo: pegá este archivo como primer mensaje.
-> Última actualización: 2026-11-26 (IVA por pedido + guardia al prender IVA a un cliente; cuenta corriente restaurada).
+> Última actualización: 2026-11-26 (IVA por pedido; casilla "ya incluye IVA" bloqueada en pedidos con IVA; 123 facturas A a corregir).
 
 ## Último trabajo (sep–oct 2026)
+  26-nov **Facturas A sin el IVA ("ya incluye IVA" en clientes con IVA)**. Diagnóstico: desde la tanda del 10/11, 123
+  facturas A de un cliente padre con IVA sumado se emitieron con la casilla "El total del remito ya incluye IVA" marcada
+  → el total facturado quedó igual al neto del remito (le falta el IVA, ~$6,9M en total). Los pedidos están bien; la CC y
+  el Excel también (usan el pedido, no la factura). Para clientes que llevan la CC sin IVA esa casilla SÍ corresponde.
+  Hecho: en Emitir Factura la casilla queda bloqueada y desmarcada si el pedido lleva IVA (cliente con IVA o pedido
+  "+ IVA") y el diálogo muestra neto / IVA / total a facturar; `emitirFactura` rechaza ivaIncluido en factura A de un
+  pedido con IVA (cualquier camino). Pendiente (decisión de Joaquín con la administración del cliente): corregir las 123
+  facturas con nota de débito por período, nota de débito por remito, o NC total + refacturación. El sistema hoy no emite
+  notas de débito: hay que agregarlo (CbteTipo 2/3 con comprobantes asociados). Scripts de control en scratchpad:
+  `bp-invoices.cjs` (facturas de un cliente: OK / IVA incluido) e `inv-all.cjs` (todas las facturas A desde octubre).
   26-nov **IVA por pedido y arreglo de una cuenta corriente** (pedido de Joaquín). Causa: a un cliente que siempre llevó la
   CC sin IVA le prendieron "Factura con IVA" con "IVA desde" vacío → TODOS sus remitos viejos se recalcularon con IVA y,
   como los cobros ya estaban imputados en neto, decenas de remitos pagos volvieron a figurar pendientes. Se revisaron todos

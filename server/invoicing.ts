@@ -10,7 +10,7 @@
  * - Fecha del comprobante en hora Argentina (antes usaba la hora del servidor, UTC: después de las 21 h salía con fecha del día siguiente).
  */
 import { storage } from "./storage";
-import { ivaRateOf } from "@shared/iva";
+import { ivaRateOf, hasIvaOn } from "@shared/iva";
 import { getLastVoucher, createVoucher } from "./arca";
 import type { Customer, Invoice } from "@shared/schema";
 
@@ -84,6 +84,12 @@ export async function emitirFactura(input: EmitirFacturaInput): Promise<Invoice 
   if (invoiceType === "A" && !billingCustomer.cuit) throw new Error("El cliente (ni su cliente padre) tiene CUIT registrado");
   const condicionIva = input.condicionIva ?? ((billingCustomer as any).condicionIva as number | null) ?? (invoiceType === "A" ? 1 : 5);
   const ivaIncluido = input.ivaIncluido ?? !!(customer as any).pricesIncludeIva;
+  // 26/11/2026: un pedido que lleva IVA sumado (cliente con IVA o pedido "+ IVA") no puede facturarse como
+  // "IVA incluido": la factura saldría sin el IVA (123 facturas de un cliente quedaron así). Se rechaza siempre.
+  if (ivaIncluido && invoiceType === "A") {
+    const conIva = orders.find((o) => hasIvaOn(o.customer as Customer, o.orderDate, (o as any).ivaOverride ?? null));
+    if (conIva) throw new Error(`El pedido ${conIva.folio} lleva IVA sumado: no se puede facturar como "IVA incluido". Desmarcá esa casilla.`);
+  }
   const detailMode = input.detailMode ?? (((billingCustomer as any).invoiceDetail as "completo" | "agrupado" | null) ?? "agrupado");
 
   // Descripción: nombre de la sede (si se factura al padre) + remitos incluidos cuando son varios

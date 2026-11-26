@@ -2229,21 +2229,38 @@ export default function OrderDetailPage({ id }: { id: number }) {
                 placeholder="Descripción del servicio o productos"
               />
             </div>
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
+            {/* 26/11/2026: si el pedido lleva IVA sumado (cliente con IVA o pedido "+ IVA"), "ya incluye IVA" es una
+                contradicción y dejaba la factura sin el IVA (caso Black Pot): la casilla queda bloqueada y desmarcada. */}
+            <label className={`flex items-center gap-2 text-sm ${hasIva ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}>
               <input type="checkbox"
-                checked={invoiceForm.ivaIncluido}
+                checked={hasIva ? false : invoiceForm.ivaIncluido}
+                disabled={hasIva}
                 onChange={(e) => setInvoiceForm({ ...invoiceForm, ivaIncluido: e.target.checked })} />
-              El total del remito ya incluye IVA
+              El total del remito ya incluye IVA{hasIva && <span className="text-xs text-muted-foreground">(no aplica: este pedido lleva IVA sumado)</span>}
             </label>
-            <div className="flex items-center justify-between rounded-md bg-muted px-4 py-3">
-              <span className="text-sm text-muted-foreground">Total del pedido</span>
-              <span className="font-semibold">${grandTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span>
+            <div className="rounded-md bg-muted px-4 py-3 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">{hasIva ? "Neto del pedido" : "Total del pedido"}</span>
+                <span className={hasIva ? "text-sm" : "font-semibold"}>${grandTotal.toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span>
+              </div>
+              {hasIva && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">IVA</span>
+                    <span className="text-sm">${(grandTotalConIva - grandTotal).toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-border pt-1">
+                    <span className="text-sm font-medium">Total a facturar</span>
+                    <span className="font-semibold">${grandTotalConIva.toLocaleString("es-MX", { minimumFractionDigits: 2 })}</span>
+                  </div>
+                </>
+              )}
             </div>
           </div>
           <DialogFooter className="mt-4">
             <Button variant="outline" onClick={() => setInvoiceDialog(false)}>Cancelar</Button>
             <Button
-              onClick={() => invoiceMutation.mutate({ orderId: id, invoiceType: invoiceForm.type, description: invoiceForm.description, condicionIva: invoiceForm.condicionIva, ivaIncluido: invoiceForm.ivaIncluido, detailMode: invoiceForm.detailMode })}
+              onClick={() => invoiceMutation.mutate({ orderId: id, invoiceType: invoiceForm.type, description: invoiceForm.description, condicionIva: invoiceForm.condicionIva, ivaIncluido: hasIva ? false : invoiceForm.ivaIncluido, detailMode: invoiceForm.detailMode })}
               disabled={invoiceMutation.isPending}
             >
               <Receipt className="mr-2 h-4 w-4" />
